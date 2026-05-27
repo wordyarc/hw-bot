@@ -1,0 +1,23 @@
+mod academic;
+mod assignment;
+mod attempts;
+mod error;
+mod ids;
+mod submission;
+mod text;
+mod user;
+
+#[cfg(test)]
+mod tests;
+
+pub use academic::{EducationLevel, StudentGroup, StudyProgram, Subject, TeachingCourse};
+pub use assignment::{Assignment, AssignmentStatus};
+pub use attempts::ExtraAttemptGrant;
+pub use error::{DomainError, DomainResult};
+pub use ids::{
+    AssignmentId, ExtraAttemptGrantId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId,
+    TelegramUserId, UserId,
+};
+pub use submission::{Submission, SubmissionHistory, SubmissionStatus};
+pub use text::NonEmptyString;
+pub use user::{Role, User};
