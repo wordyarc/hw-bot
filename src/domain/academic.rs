@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
@@ -127,7 +129,7 @@ pub struct TeachingCourse {
     id: TeachingCourseId,
     subject_id: SubjectId,
     student_group_id: StudentGroupId,
-    teacher_id: UserId,
+    teacher_ids: HashSet<UserId>,
     created_at: DateTime<Utc>,
 }
 
@@ -145,18 +147,39 @@ impl TeachingCourse {
             });
         }
 
+        let mut teacher_ids = HashSet::new();
+        teacher_ids.insert(teacher.id());
+
         Ok(Self {
             id,
             subject_id: subject.id(),
             student_group_id: student_group.id(),
-            teacher_id: teacher.id(),
+            teacher_ids,
             created_at,
         })
     }
 
+    pub fn add_teacher(&mut self, actor: &User, teacher: &User) -> DomainResult<()> {
+        if !self.can_be_managed_by(actor) {
+            return Err(DomainError::PermissionDenied {
+                action: "add course teacher",
+            });
+        }
+
+        if !teacher.role().can_manage_assignments() {
+            return Err(DomainError::PermissionDenied {
+                action: "teach course",
+            });
+        }
+
+        self.teacher_ids.insert(teacher.id());
+
+        Ok(())
+    }
+
     pub fn can_be_managed_by(&self, actor: &User) -> bool {
         actor.role().can_manage_all_teaching_courses()
-            || (actor.role().can_manage_assignments() && actor.id() == self.teacher_id)
+            || (actor.role().can_manage_assignments() && self.teacher_ids.contains(&actor.id()))
     }
 
     pub fn id(&self) -> TeachingCourseId {
@@ -171,8 +194,8 @@ impl TeachingCourse {
         self.student_group_id
     }
 
-    pub fn teacher_id(&self) -> UserId {
-        self.teacher_id
+    pub fn teacher_ids(&self) -> &HashSet<UserId> {
+        &self.teacher_ids
     }
 
     pub fn created_at(&self) -> DateTime<Utc> {

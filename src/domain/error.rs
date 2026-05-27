@@ -23,6 +23,7 @@ pub enum DomainError {
         value: u16,
     },
     AssignmentDeadlineMustBeAfterCreatedAt,
+    AssignmentDoesNotBelongToTeachingCourse,
     AssignmentIsNotPublished,
     AssignmentDeadlineExceeded {
         deadline_at: chrono::DateTime<chrono::Utc>,
@@ -65,6 +66,9 @@ impl Display for DomainError {
             }
             Self::AssignmentDeadlineMustBeAfterCreatedAt => {
                 write!(formatter, "assignment deadline must be after created_at")
+            }
+            Self::AssignmentDoesNotBelongToTeachingCourse => {
+                write!(formatter, "assignment does not belong to teaching course")
             }
             Self::AssignmentIsNotPublished => write!(formatter, "assignment is not published"),
             Self::AssignmentDeadlineExceeded {

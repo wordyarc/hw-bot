@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, ExtraAttemptGrantId, NonEmptyString, User,
-    UserId,
+    Assignment, AssignmentId, DomainError, DomainResult, ExtraAttemptGrantId, NonEmptyString,
+    TeachingCourse, User, UserId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +20,7 @@ impl ExtraAttemptGrant {
     pub fn new(
         id: ExtraAttemptGrantId,
         assignment: &Assignment,
+        teaching_course: &TeachingCourse,
         student: &User,
         granted_by: &User,
         amount: u16,
@@ -36,7 +37,9 @@ impl ExtraAttemptGrant {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
         }
 
-        if !assignment.can_be_managed_by(granted_by) {
+        assignment.ensure_belongs_to_course(teaching_course)?;
+
+        if !teaching_course.can_be_managed_by(granted_by) {
             return Err(DomainError::PermissionDenied {
                 action: "grant extra attempts",
             });

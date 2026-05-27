@@ -73,7 +73,7 @@ fn published_assignment(
     )
     .unwrap();
 
-    assignment.publish(teacher, now()).unwrap();
+    assignment.publish(teaching_course, teacher, now()).unwrap();
     assignment
 }
 
@@ -123,7 +123,7 @@ fn only_course_teacher_or_admin_can_publish_assignment() {
     )
     .unwrap();
 
-    let result = assignment.publish(&other_teacher, now());
+    let result = assignment.publish(&course, &other_teacher, now());
 
     assert_eq!(
         result.unwrap_err(),
@@ -132,7 +132,34 @@ fn only_course_teacher_or_admin_can_publish_assignment() {
         }
     );
 
-    assignment.publish(&admin, now()).unwrap();
+    assignment.publish(&course, &admin, now()).unwrap();
+}
+
+#[test]
+fn added_course_teacher_can_review_and_manage_assignment() {
+    let course_teacher = user(1, Role::Teacher);
+    let reviewer = user(2, Role::Teacher);
+    let group = student_group("B9122-02.03.21");
+    let mut course = teaching_course(&course_teacher, &group);
+    course.add_teacher(&course_teacher, &reviewer).unwrap();
+    let student = student(3, &group);
+    let assignment = published_assignment(&course_teacher, &course, 2);
+    let mut submission = Submission::submit(
+        SubmissionId::new(),
+        &assignment,
+        &student,
+        SubmissionHistory::default(),
+        "https://github.com/course/hw/pull/1",
+        now(),
+    )
+    .unwrap();
+
+    submission
+        .accept(&assignment, &course, &reviewer, "95/100", now())
+        .unwrap();
+
+    assert_eq!(submission.status(), SubmissionStatus::Accepted);
+    assert_eq!(submission.reviewed_by(), Some(reviewer.id()));
 }
 
 #[test]
@@ -193,7 +220,7 @@ fn student_cannot_submit_assignment_after_deadline() {
         deadline_at,
     )
     .unwrap();
-    assignment.publish(&teacher, created_at).unwrap();
+    assignment.publish(&course, &teacher, created_at).unwrap();
     let submitted_at = deadline_at + Duration::seconds(1);
 
     let result = Submission::submit(
@@ -237,15 +264,17 @@ fn course_teacher_or_admin_can_move_deadline_both_ways() {
 
     let earlier_deadline = created_at + Duration::days(3);
     assignment
-        .change_deadline(&teacher, earlier_deadline)
+        .change_deadline(&course, &teacher, earlier_deadline)
         .unwrap();
     assert_eq!(assignment.deadline_at(), earlier_deadline);
 
     let later_deadline = created_at + Duration::days(14);
-    assignment.change_deadline(&admin, later_deadline).unwrap();
+    assignment
+        .change_deadline(&course, &admin, later_deadline)
+        .unwrap();
     assert_eq!(assignment.deadline_at(), later_deadline);
 
-    let result = assignment.change_deadline(&other_teacher, initial_deadline);
+    let result = assignment.change_deadline(&course, &other_teacher, initial_deadline);
     assert_eq!(
         result.unwrap_err(),
         DomainError::PermissionDenied {
@@ -303,6 +332,7 @@ fn only_course_teacher_or_admin_can_grant_extra_attempts() {
     let result = ExtraAttemptGrant::new(
         ExtraAttemptGrantId::new(),
         &assignment,
+        &course,
         &student,
         &other_teacher,
         1,
@@ -320,6 +350,7 @@ fn only_course_teacher_or_admin_can_grant_extra_attempts() {
     ExtraAttemptGrant::new(
         ExtraAttemptGrantId::new(),
         &assignment,
+        &course,
         &student,
         &admin,
         1,
@@ -340,6 +371,7 @@ fn extra_attempt_grant_extends_submission_limit() {
     let grant = ExtraAttemptGrant::new(
         ExtraAttemptGrantId::new(),
         &assignment,
+        &course,
         &student,
         &teacher,
         1,
@@ -421,7 +453,7 @@ fn accepted_review_requires_comment_and_stores_it() {
     )
     .unwrap();
 
-    let empty_comment = submission.accept(&assignment, &teacher, " ", now());
+    let empty_comment = submission.accept(&assignment, &course, &teacher, " ", now());
 
     assert_eq!(
         empty_comment.unwrap_err(),
@@ -432,7 +464,7 @@ fn accepted_review_requires_comment_and_stores_it() {
     assert_eq!(submission.status(), SubmissionStatus::PendingReview);
 
     submission
-        .accept(&assignment, &teacher, "95/100", now())
+        .accept(&assignment, &course, &teacher, "95/100", now())
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -457,7 +489,13 @@ fn teacher_can_review_pending_submission_once() {
     .unwrap();
 
     submission
-        .reject(&assignment, &teacher, "Add tests for parser errors.", now())
+        .reject(
+            &assignment,
+            &course,
+            &teacher,
+            "Add tests for parser errors.",
+            now(),
+        )
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Rejected);
@@ -467,7 +505,7 @@ fn teacher_can_review_pending_submission_once() {
         "Add tests for parser errors."
     );
 
-    let second_review = submission.accept(&assignment, &teacher, "95/100", now());
+    let second_review = submission.accept(&assignment, &course, &teacher, "95/100", now());
     assert_eq!(
         second_review.unwrap_err(),
         DomainError::SubmissionIsNotPendingReview
@@ -493,7 +531,13 @@ fn only_course_teacher_or_admin_can_review_submission() {
     )
     .unwrap();
 
-    let result = submission.accept(&assignment, &other_teacher, "Accepted, 95/100", now());
+    let result = submission.accept(
+        &assignment,
+        &course,
+        &other_teacher,
+        "Accepted, 95/100",
+        now(),
+    );
 
     assert_eq!(
         result.unwrap_err(),
@@ -503,7 +547,7 @@ fn only_course_teacher_or_admin_can_review_submission() {
     );
 
     submission
-        .reject(&assignment, &admin, "Fix CI", now())
+        .reject(&assignment, &course, &admin, "Fix CI", now())
         .unwrap();
 }
 
@@ -524,7 +568,7 @@ fn student_cannot_review_submission() {
     )
     .unwrap();
 
-    let result = submission.accept(&assignment, &student, "95/100", now());
+    let result = submission.accept(&assignment, &course, &student, "95/100", now());
 
     assert_eq!(
         result.unwrap_err(),

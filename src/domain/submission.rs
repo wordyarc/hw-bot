@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, NonEmptyString, SubmissionId, User, UserId,
+    Assignment, AssignmentId, DomainError, DomainResult, NonEmptyString, SubmissionId,
+    TeachingCourse, User, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -134,12 +135,14 @@ impl Submission {
     pub fn accept(
         &mut self,
         assignment: &Assignment,
+        teaching_course: &TeachingCourse,
         reviewer: &User,
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
         self.complete_review(
             assignment,
+            teaching_course,
             reviewer,
             SubmissionStatus::Accepted,
             comment,
@@ -150,12 +153,14 @@ impl Submission {
     pub fn reject(
         &mut self,
         assignment: &Assignment,
+        teaching_course: &TeachingCourse,
         reviewer: &User,
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
         self.complete_review(
             assignment,
+            teaching_course,
             reviewer,
             SubmissionStatus::Rejected,
             comment,
@@ -166,6 +171,7 @@ impl Submission {
     fn complete_review(
         &mut self,
         assignment: &Assignment,
+        teaching_course: &TeachingCourse,
         reviewer: &User,
         status: SubmissionStatus,
         comment: impl Into<String>,
@@ -175,7 +181,9 @@ impl Submission {
             return Err(DomainError::SubmissionDoesNotBelongToAssignment);
         }
 
-        if !assignment.can_be_managed_by(reviewer) {
+        assignment.ensure_belongs_to_course(teaching_course)?;
+
+        if !teaching_course.can_be_managed_by(reviewer) {
             return Err(DomainError::PermissionDenied {
                 action: "review homework",
             });
