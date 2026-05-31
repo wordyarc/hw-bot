@@ -1,0 +1,11 @@
+[app]
+name = "hw-bot"
+
+[server]
+host = "127.0.0.1"
+port = 3000
+
+[database]
+url = "postgres://postgres:postgres@localhost:5432/hw-bot"
+max_connections = 5
+run_migrations = true
