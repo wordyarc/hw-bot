@@ -52,3 +52,39 @@ impl TelegramUserId {
         self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_heavy_entity_ids_are_uuid_v7() {
+        assert_eq!(UserId::new().as_uuid().get_version_num(), 7);
+        assert_eq!(TeachingCourseId::new().as_uuid().get_version_num(), 7);
+        assert_eq!(AssignmentId::new().as_uuid().get_version_num(), 7);
+        assert_eq!(SubmissionId::new().as_uuid().get_version_num(), 7);
+        assert_eq!(ExtraAttemptGrantId::new().as_uuid().get_version_num(), 7);
+    }
+
+    #[test]
+    fn low_write_dictionary_ids_remain_uuid_v4() {
+        assert_eq!(StudentGroupId::new().as_uuid().get_version_num(), 4);
+        assert_eq!(SubjectId::new().as_uuid().get_version_num(), 4);
+    }
+
+    #[test]
+    fn typed_ids_can_be_restored_from_uuid() {
+        let uuid = Uuid::now_v7();
+
+        assert_eq!(AssignmentId::from_uuid(uuid).as_uuid(), uuid);
+    }
+
+    #[test]
+    fn telegram_user_id_must_be_positive() {
+        assert_eq!(
+            TelegramUserId::new(0).unwrap_err(),
+            DomainError::InvalidTelegramUserId { value: 0 }
+        );
+        assert_eq!(TelegramUserId::new(42).unwrap().as_i64(), 42);
+    }
+}

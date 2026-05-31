@@ -202,3 +202,28 @@ impl TeachingCourse {
         self.created_at
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn study_program_validates_year_by_education_level() {
+        assert_eq!(
+            StudyProgram::new(EducationLevel::Master, 3).unwrap_err(),
+            DomainError::InvalidStudyYear {
+                education_level: "master",
+                value: 3,
+                max: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn study_program_accepts_valid_year() {
+        let program = StudyProgram::new(EducationLevel::Bachelor, 4).unwrap();
+
+        assert_eq!(program.education_level(), EducationLevel::Bachelor);
+        assert_eq!(program.year(), 4);
+    }
+}

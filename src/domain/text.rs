@@ -22,3 +22,30 @@ impl NonEmptyString {
         self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trims_value() {
+        let value = NonEmptyString::new("field", "  text  ").unwrap();
+
+        assert_eq!(value.as_str(), "text");
+    }
+
+    #[test]
+    fn rejects_empty_value_after_trim() {
+        assert_eq!(
+            NonEmptyString::new("field", "   ").unwrap_err(),
+            DomainError::EmptyField { field: "field" }
+        );
+    }
+
+    #[test]
+    fn returns_owned_string() {
+        let value = NonEmptyString::new("field", "text").unwrap();
+
+        assert_eq!(value.into_string(), "text");
+    }
+}

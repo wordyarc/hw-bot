@@ -308,18 +308,6 @@ fn student_from_another_group_cannot_submit_assignment() {
 }
 
 #[test]
-fn study_program_validates_year_by_education_level() {
-    assert_eq!(
-        StudyProgram::new(EducationLevel::Master, 3).unwrap_err(),
-        DomainError::InvalidStudyYear {
-            education_level: "master",
-            value: 3,
-            max: 2,
-        }
-    );
-}
-
-#[test]
 fn only_course_teacher_or_admin_can_grant_extra_attempts() {
     let course_teacher = user(1, Role::Teacher);
     let other_teacher = user(2, Role::Teacher);
