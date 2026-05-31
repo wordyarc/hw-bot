@@ -1,0 +1,8 @@
+drop table if exists student_assignment_progress;
+drop table if exists submissions;
+drop table if exists assignments;
+drop table if exists teaching_course_teachers;
+drop table if exists teaching_courses;
+drop table if exists users;
+drop table if exists subjects;
+drop table if exists student_groups;
