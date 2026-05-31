@@ -38,6 +38,7 @@ pub enum DomainError {
     SubmissionDoesNotBelongToAssignment,
     SubmissionIsNotPendingReview,
     StudentDoesNotBelongToAssignmentGroup,
+    StudentProgressDoesNotBelongToAssignment,
     PermissionDenied {
         action: &'static str,
     },
@@ -98,6 +99,12 @@ impl Display for DomainError {
             }
             Self::StudentDoesNotBelongToAssignmentGroup => {
                 write!(formatter, "student does not belong to assignment group")
+            }
+            Self::StudentProgressDoesNotBelongToAssignment => {
+                write!(
+                    formatter,
+                    "student assignment progress does not belong to assignment"
+                )
             }
             Self::PermissionDenied { action } => {
                 write!(formatter, "permission denied for {action}")

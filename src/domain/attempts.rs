@@ -1,32 +1,16 @@
-use chrono::{DateTime, Utc};
-
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, ExtraAttemptGrantId, NonEmptyString,
-    TeachingCourse, User, UserId,
+    Assignment, AssignmentId, DomainError, DomainResult, TeachingCourse, User, UserId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExtraAttemptGrant {
-    id: ExtraAttemptGrantId,
+pub struct StudentAssignmentProgress {
     assignment_id: AssignmentId,
     student_id: UserId,
-    granted_by: UserId,
-    amount: u16,
-    reason: Option<NonEmptyString>,
-    granted_at: DateTime<Utc>,
+    extra_attempts: u16,
 }
 
-impl ExtraAttemptGrant {
-    pub fn new(
-        id: ExtraAttemptGrantId,
-        assignment: &Assignment,
-        teaching_course: &TeachingCourse,
-        student: &User,
-        granted_by: &User,
-        amount: u16,
-        reason: Option<String>,
-        granted_at: DateTime<Utc>,
-    ) -> DomainResult<Self> {
+impl StudentAssignmentProgress {
+    pub fn new(assignment: &Assignment, student: &User, extra_attempts: u16) -> DomainResult<Self> {
         if !student.role().can_submit_homework() {
             return Err(DomainError::PermissionDenied {
                 action: "receive extra attempts",
@@ -35,6 +19,24 @@ impl ExtraAttemptGrant {
 
         if student.student_group_id() != Some(assignment.student_group_id()) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
+        }
+
+        Ok(Self {
+            assignment_id: assignment.id(),
+            student_id: student.id(),
+            extra_attempts,
+        })
+    }
+
+    pub fn grant_extra_attempts(
+        &mut self,
+        assignment: &Assignment,
+        teaching_course: &TeachingCourse,
+        granted_by: &User,
+        amount: u16,
+    ) -> DomainResult<()> {
+        if self.assignment_id != assignment.id() {
+            return Err(DomainError::StudentProgressDoesNotBelongToAssignment);
         }
 
         assignment.ensure_belongs_to_course(teaching_course)?;
@@ -49,21 +51,9 @@ impl ExtraAttemptGrant {
             return Err(DomainError::InvalidAttemptGrant { value: amount });
         }
 
-        Ok(Self {
-            id,
-            assignment_id: assignment.id(),
-            student_id: student.id(),
-            granted_by: granted_by.id(),
-            amount,
-            reason: reason
-                .map(|value| NonEmptyString::new("extra_attempt_grant.reason", value))
-                .transpose()?,
-            granted_at,
-        })
-    }
+        self.extra_attempts = self.extra_attempts.saturating_add(amount);
 
-    pub fn id(&self) -> ExtraAttemptGrantId {
-        self.id
+        Ok(())
     }
 
     pub fn assignment_id(&self) -> AssignmentId {
@@ -74,19 +64,7 @@ impl ExtraAttemptGrant {
         self.student_id
     }
 
-    pub fn granted_by(&self) -> UserId {
-        self.granted_by
-    }
-
-    pub fn amount(&self) -> u16 {
-        self.amount
-    }
-
-    pub fn reason(&self) -> Option<&NonEmptyString> {
-        self.reason.as_ref()
-    }
-
-    pub fn granted_at(&self) -> DateTime<Utc> {
-        self.granted_at
+    pub fn extra_attempts(&self) -> u16 {
+        self.extra_attempts
     }
 }

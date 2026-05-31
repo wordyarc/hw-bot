@@ -12,11 +12,10 @@ mod tests;
 
 pub use academic::{EducationLevel, StudentGroup, StudyProgram, Subject, TeachingCourse};
 pub use assignment::{Assignment, AssignmentStatus};
-pub use attempts::ExtraAttemptGrant;
+pub use attempts::StudentAssignmentProgress;
 pub use error::{DomainError, DomainResult};
 pub use ids::{
-    AssignmentId, ExtraAttemptGrantId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId,
-    TelegramUserId, UserId,
+    AssignmentId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
 };
 pub use submission::{Submission, SubmissionHistory, SubmissionStatus};
 pub use text::NonEmptyString;

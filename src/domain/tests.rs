@@ -1,10 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, EducationLevel, ExtraAttemptGrant, ExtraAttemptGrantId,
-    Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission,
-    SubmissionHistory, SubmissionId, SubmissionStatus, TeachingCourse, TeachingCourseId,
-    TelegramUserId, User, UserId,
+    Assignment, AssignmentId, DomainError, EducationLevel, Role, StudentAssignmentProgress,
+    StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission, SubmissionHistory,
+    SubmissionId, SubmissionStatus, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
 };
 
 fn now() -> DateTime<Utc> {
@@ -317,16 +316,8 @@ fn only_course_teacher_or_admin_can_grant_extra_attempts() {
     let student = student(4, &group);
     let assignment = published_assignment(&course_teacher, &course, 1);
 
-    let result = ExtraAttemptGrant::new(
-        ExtraAttemptGrantId::new(),
-        &assignment,
-        &course,
-        &student,
-        &other_teacher,
-        1,
-        None,
-        now(),
-    );
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let result = progress.grant_extra_attempts(&assignment, &course, &other_teacher, 1);
 
     assert_eq!(
         result.unwrap_err(),
@@ -335,44 +326,30 @@ fn only_course_teacher_or_admin_can_grant_extra_attempts() {
         }
     );
 
-    ExtraAttemptGrant::new(
-        ExtraAttemptGrantId::new(),
-        &assignment,
-        &course,
-        &student,
-        &admin,
-        1,
-        None,
-        now(),
-    )
-    .unwrap();
+    progress
+        .grant_extra_attempts(&assignment, &course, &admin, 1)
+        .unwrap();
+    assert_eq!(progress.extra_attempts(), 1);
 }
 
 #[test]
-fn extra_attempt_grant_extends_submission_limit() {
+fn extra_attempts_extend_submission_limit() {
     let teacher = user(1, Role::Teacher);
     let group = student_group("B9122-02.03.21");
     let course = teaching_course(&teacher, &group);
     let student = student(2, &group);
     let assignment = published_assignment(&teacher, &course, 1);
 
-    let grant = ExtraAttemptGrant::new(
-        ExtraAttemptGrantId::new(),
-        &assignment,
-        &course,
-        &student,
-        &teacher,
-        1,
-        Some("Fixed CI setup".to_owned()),
-        now(),
-    )
-    .unwrap();
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    progress
+        .grant_extra_attempts(&assignment, &course, &teacher, 1)
+        .unwrap();
 
     let second_attempt = Submission::submit(
         SubmissionId::new(),
         &assignment,
         &student,
-        SubmissionHistory::new(1, grant.amount(), false, false),
+        SubmissionHistory::new(1, progress.extra_attempts(), false, false),
         "https://github.com/course/hw/pull/3",
         now(),
     )
