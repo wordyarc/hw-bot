@@ -5,6 +5,7 @@ pub struct AppConfig {
     pub app: AppInfoConfig,
     pub server: ServerConfig,
     pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -23,6 +24,34 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
     pub run_migrations: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub format: LoggingFormat,
+    pub file_enabled: bool,
+    pub file_dir: String,
+    pub file_prefix: String,
+    pub file_suffix: String,
+    pub rotation: LogRotation,
+    pub also_stdout: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoggingFormat {
+    Compact,
+    Pretty,
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogRotation {
+    Daily,
+    Hourly,
+    Never,
 }
 
 impl AppConfig {
@@ -60,6 +89,16 @@ mod tests {
                 url = "postgres://postgres:postgres@localhost:5432/hw-bot"
                 max_connections = 5
                 run_migrations = true
+
+                [logging]
+                level = "hw_bot=info,tower_http=info,sqlx=warn"
+                format = "compact"
+                file_enabled = true
+                file_dir = "logs/hw-bot"
+                file_prefix = "hw-bot"
+                file_suffix = "log"
+                rotation = "daily"
+                also_stdout = true
                 "#,
                 ::config::FileFormat::Toml,
             ))
@@ -77,5 +116,16 @@ mod tests {
         );
         assert_eq!(config.database.max_connections, 5);
         assert!(config.database.run_migrations);
+        assert_eq!(
+            config.logging.level,
+            "hw_bot=info,tower_http=info,sqlx=warn"
+        );
+        assert!(matches!(config.logging.format, LoggingFormat::Compact));
+        assert!(config.logging.file_enabled);
+        assert_eq!(config.logging.file_dir, "logs/hw-bot");
+        assert_eq!(config.logging.file_prefix, "hw-bot");
+        assert_eq!(config.logging.file_suffix, "log");
+        assert!(matches!(config.logging.rotation, LogRotation::Daily));
+        assert!(config.logging.also_stdout);
     }
 }
