@@ -1,5 +1,7 @@
+name: hw-bot
+
 services:
-  postgres:
+  database:
     image: postgres:18.4-bookworm
     container_name: postgres
     restart: unless-stopped
@@ -13,10 +15,10 @@ services:
       - "5432:5432"
 
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - db_data:/var/lib/postgresql
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d appdb"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hw-bot"]
       interval: 10s
       timeout: 5s
       retries: 5
