@@ -1,139 +1,74 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use chrono::{DateTime, Utc};
+use thiserror::Error;
 
 pub type DomainResult<T> = Result<T, DomainError>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum DomainError {
-    EmptyField {
-        field: &'static str,
-    },
-    InvalidTelegramUserId {
-        value: i64,
-    },
+    #[error("{field} must not be empty")]
+    EmptyField { field: &'static str },
+
+    #[error("telegram user id must be positive, got {value}")]
+    InvalidTelegramUserId { value: i64 },
+
+    #[error("{education_level} study year must be in 1..={max}, got {value}")]
     InvalidStudyYear {
         education_level: &'static str,
         value: u8,
         max: u8,
     },
-    InvalidAttemptLimit {
-        value: u16,
-    },
-    InvalidAttemptGrant {
-        value: u16,
-    },
+
+    #[error("attempt limit must be positive, got {value}")]
+    InvalidAttemptLimit { value: u16 },
+
+    #[error("attempt grant must be positive, got {value}")]
+    InvalidAttemptGrant { value: u16 },
+
+    #[error("assignment deadline must be after created_at")]
     AssignmentDeadlineMustBeAfterCreatedAt,
+
+    #[error("assignment does not belong to teaching course")]
     AssignmentDoesNotBelongToTeachingCourse,
+
+    #[error("assignment is not published")]
     AssignmentIsNotPublished,
+
+    #[error("assignment published_at does not match assignment status")]
     InvalidAssignmentPublishedState,
+
+    #[error("assignment deadline exceeded: deadline_at {deadline_at}, submitted_at {submitted_at}")]
     AssignmentDeadlineExceeded {
-        deadline_at: chrono::DateTime<chrono::Utc>,
-        submitted_at: chrono::DateTime<chrono::Utc>,
+        deadline_at: DateTime<Utc>,
+        submitted_at: DateTime<Utc>,
     },
-    AttemptsExhausted {
-        allowed: u16,
-        used: u16,
-    },
-    InvalidSubmissionAttemptNumber {
-        value: u16,
-    },
+
+    #[error("attempts exhausted: allowed {allowed}, used {used}")]
+    AttemptsExhausted { allowed: u16, used: u16 },
+
+    #[error("submission attempt number must be positive, got {value}")]
+    InvalidSubmissionAttemptNumber { value: u16 },
+
+    #[error("submission review fields do not match submission status")]
     InvalidSubmissionReviewState,
+
+    #[error("assignment already has an accepted submission")]
     SubmissionAlreadyAccepted,
+
+    #[error("assignment already has a pending submission")]
     SubmissionAlreadyPendingReview,
+
+    #[error("submission does not belong to assignment")]
     SubmissionDoesNotBelongToAssignment,
+
+    #[error("submission is not pending review")]
     SubmissionIsNotPendingReview,
+
+    #[error("student does not belong to assignment group")]
     StudentDoesNotBelongToAssignmentGroup,
+
+    #[error("student assignment progress does not belong to assignment")]
     StudentProgressDoesNotBelongToAssignment,
-    PermissionDenied {
-        action: &'static str,
-    },
-}
 
-impl Display for DomainError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EmptyField { field } => write!(formatter, "{field} must not be empty"),
-            Self::InvalidTelegramUserId { value } => {
-                write!(formatter, "telegram user id must be positive, got {value}")
-            }
-            Self::InvalidStudyYear {
-                education_level,
-                value,
-                max,
-            } => write!(
-                formatter,
-                "{education_level} study year must be in 1..={max}, got {value}"
-            ),
-            Self::InvalidAttemptLimit { value } => {
-                write!(formatter, "attempt limit must be positive, got {value}")
-            }
-            Self::InvalidAttemptGrant { value } => {
-                write!(formatter, "attempt grant must be positive, got {value}")
-            }
-            Self::AssignmentDeadlineMustBeAfterCreatedAt => {
-                write!(formatter, "assignment deadline must be after created_at")
-            }
-            Self::AssignmentDoesNotBelongToTeachingCourse => {
-                write!(formatter, "assignment does not belong to teaching course")
-            }
-            Self::AssignmentIsNotPublished => write!(formatter, "assignment is not published"),
-            Self::InvalidAssignmentPublishedState => {
-                write!(
-                    formatter,
-                    "assignment published_at does not match assignment status"
-                )
-            }
-            Self::AssignmentDeadlineExceeded {
-                deadline_at,
-                submitted_at,
-            } => write!(
-                formatter,
-                "assignment deadline exceeded: deadline_at {deadline_at}, submitted_at {submitted_at}"
-            ),
-            Self::AttemptsExhausted { allowed, used } => {
-                write!(
-                    formatter,
-                    "attempts exhausted: allowed {allowed}, used {used}"
-                )
-            }
-            Self::InvalidSubmissionAttemptNumber { value } => {
-                write!(
-                    formatter,
-                    "submission attempt number must be positive, got {value}"
-                )
-            }
-            Self::InvalidSubmissionReviewState => {
-                write!(
-                    formatter,
-                    "submission review fields do not match submission status"
-                )
-            }
-            Self::SubmissionAlreadyAccepted => {
-                write!(formatter, "assignment already has an accepted submission")
-            }
-            Self::SubmissionAlreadyPendingReview => {
-                write!(formatter, "assignment already has a pending submission")
-            }
-            Self::SubmissionDoesNotBelongToAssignment => {
-                write!(formatter, "submission does not belong to assignment")
-            }
-            Self::SubmissionIsNotPendingReview => {
-                write!(formatter, "submission is not pending review")
-            }
-            Self::StudentDoesNotBelongToAssignmentGroup => {
-                write!(formatter, "student does not belong to assignment group")
-            }
-            Self::StudentProgressDoesNotBelongToAssignment => {
-                write!(
-                    formatter,
-                    "student assignment progress does not belong to assignment"
-                )
-            }
-            Self::PermissionDenied { action } => {
-                write!(formatter, "permission denied for {action}")
-            }
-        }
-    }
+    #[error("permission denied for {action}")]
+    PermissionDenied { action: &'static str },
 }
-
-impl Error for DomainError {}

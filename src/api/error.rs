@@ -132,16 +132,12 @@ impl From<DomainError> for ApiError {
                 "student_progress_does_not_belong_to_assignment",
             ),
 
-            // The caller is not allowed to act on this resource.
             DomainError::StudentDoesNotBelongToAssignmentGroup => (
                 StatusCode::FORBIDDEN,
                 "student_does_not_belong_to_assignment_group",
             ),
             DomainError::PermissionDenied { .. } => (StatusCode::FORBIDDEN, "permission_denied"),
 
-            // Invariants only checkable when rebuilding an aggregate from storage. Reaching a
-            // handler with one of these means the stored row is corrupted, not that the caller
-            // did anything wrong.
             DomainError::InvalidAssignmentPublishedState
             | DomainError::InvalidSubmissionAttemptNumber { .. }
             | DomainError::InvalidSubmissionReviewState => return Self::internal(&error),
