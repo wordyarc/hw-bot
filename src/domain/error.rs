@@ -25,6 +25,7 @@ pub enum DomainError {
     AssignmentDeadlineMustBeAfterCreatedAt,
     AssignmentDoesNotBelongToTeachingCourse,
     AssignmentIsNotPublished,
+    InvalidAssignmentPublishedState,
     AssignmentDeadlineExceeded {
         deadline_at: chrono::DateTime<chrono::Utc>,
         submitted_at: chrono::DateTime<chrono::Utc>,
@@ -33,6 +34,10 @@ pub enum DomainError {
         allowed: u16,
         used: u16,
     },
+    InvalidSubmissionAttemptNumber {
+        value: u16,
+    },
+    InvalidSubmissionReviewState,
     SubmissionAlreadyAccepted,
     SubmissionAlreadyPendingReview,
     SubmissionDoesNotBelongToAssignment,
@@ -72,6 +77,12 @@ impl Display for DomainError {
                 write!(formatter, "assignment does not belong to teaching course")
             }
             Self::AssignmentIsNotPublished => write!(formatter, "assignment is not published"),
+            Self::InvalidAssignmentPublishedState => {
+                write!(
+                    formatter,
+                    "assignment published_at does not match assignment status"
+                )
+            }
             Self::AssignmentDeadlineExceeded {
                 deadline_at,
                 submitted_at,
@@ -83,6 +94,18 @@ impl Display for DomainError {
                 write!(
                     formatter,
                     "attempts exhausted: allowed {allowed}, used {used}"
+                )
+            }
+            Self::InvalidSubmissionAttemptNumber { value } => {
+                write!(
+                    formatter,
+                    "submission attempt number must be positive, got {value}"
+                )
+            }
+            Self::InvalidSubmissionReviewState => {
+                write!(
+                    formatter,
+                    "submission review fields do not match submission status"
                 )
             }
             Self::SubmissionAlreadyAccepted => {

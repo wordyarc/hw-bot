@@ -1,39 +1,15 @@
 use anyhow::Context;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use hw_bot::api::{self, AppState};
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
-use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
-use tower_http::trace::TraceLayer;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-
-#[derive(Clone)]
-struct AppState {
-    app_name: String,
-    db_pool: sqlx::PgPool,
-}
-
-#[derive(Debug, Deserialize)]
-struct EchoRequest {
-    text: String,
-}
-
-#[derive(Debug, Serialize)]
-struct EchoResponse {
-    app: String,
-    text: String,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -71,17 +47,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
         tracing::info!("database migrations disabled");
     }
 
-    let state = Arc::new(AppState {
-        app_name: config.app.name,
-        db_pool,
-    });
-
-    let app = Router::new()
-        .route("/", get(root))
-        .route("/health", get(health))
-        .route("/echo", post(echo))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = api::router(AppState::new(config.app.name, db_pool));
 
     let addr = SocketAddr::from_str(&format!("{}:{}", config.server.host, config.server.port))
         .context("failed to parse server bind address")?;
@@ -169,28 +135,4 @@ where
     }
 
     Ok(())
-}
-
-async fn root() -> &'static str {
-    "Hello, axum!"
-}
-
-async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match sqlx::query_scalar::<_, i32>("select 1")
-        .fetch_one(&state.db_pool)
-        .await
-    {
-        Ok(1) => StatusCode::OK,
-        Ok(_) | Err(_) => StatusCode::SERVICE_UNAVAILABLE,
-    }
-}
-
-async fn echo(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<EchoRequest>,
-) -> Json<EchoResponse> {
-    Json(EchoResponse {
-        app: state.app_name.clone(),
-        text: payload.text,
-    })
 }

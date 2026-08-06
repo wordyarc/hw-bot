@@ -2,6 +2,16 @@ use sqlx::PgPool;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::postgres::PgPoolOptions;
 
+pub mod assignments;
+mod convert;
+mod error;
+pub mod submissions;
+pub mod users;
+
+pub use error::{DbError, DbResult};
+
+pub(crate) use convert::{to_db_smallint, try_u16_from_i16, try_u16_from_i64};
+
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {

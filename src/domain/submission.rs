@@ -73,6 +73,55 @@ pub struct Submission {
 }
 
 impl Submission {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore(
+        id: SubmissionId,
+        assignment_id: AssignmentId,
+        student_id: UserId,
+        attempt_number: u16,
+        content: impl Into<String>,
+        status: SubmissionStatus,
+        submitted_at: DateTime<Utc>,
+        reviewed_by: Option<UserId>,
+        reviewed_at: Option<DateTime<Utc>>,
+        review_comment: Option<String>,
+    ) -> DomainResult<Self> {
+        if attempt_number == 0 {
+            return Err(DomainError::InvalidSubmissionAttemptNumber {
+                value: attempt_number,
+            });
+        }
+
+        match status {
+            SubmissionStatus::PendingReview
+                if reviewed_by.is_some() || reviewed_at.is_some() || review_comment.is_some() =>
+            {
+                return Err(DomainError::InvalidSubmissionReviewState);
+            }
+            SubmissionStatus::Accepted | SubmissionStatus::Rejected
+                if reviewed_by.is_none() || reviewed_at.is_none() || review_comment.is_none() =>
+            {
+                return Err(DomainError::InvalidSubmissionReviewState);
+            }
+            _ => {}
+        }
+
+        Ok(Self {
+            id,
+            assignment_id,
+            student_id,
+            attempt_number,
+            content: NonEmptyString::new("submission.content", content)?,
+            status,
+            submitted_at,
+            reviewed_by,
+            reviewed_at,
+            review_comment: review_comment
+                .map(|comment| NonEmptyString::new("submission.review_comment", comment))
+                .transpose()?,
+        })
+    }
+
     pub fn submit(
         id: SubmissionId,
         assignment: &Assignment,
@@ -245,5 +294,102 @@ impl Submission {
 
     pub fn is_pending_review(&self) -> bool {
         self.status == SubmissionStatus::PendingReview
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id() -> SubmissionId {
+        SubmissionId::new()
+    }
+
+    fn assignment_id() -> AssignmentId {
+        AssignmentId::new()
+    }
+
+    fn user_id() -> UserId {
+        UserId::new()
+    }
+
+    #[test]
+    fn restore_accepts_pending_submission_without_review_fields() {
+        let submission = Submission::restore(
+            id(),
+            assignment_id(),
+            user_id(),
+            1,
+            "https://github.com/course/hw/pull/1",
+            SubmissionStatus::PendingReview,
+            Utc::now(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(submission.status(), SubmissionStatus::PendingReview);
+        assert_eq!(submission.attempt_number(), 1);
+    }
+
+    #[test]
+    fn restore_rejects_zero_attempt_number() {
+        assert_eq!(
+            Submission::restore(
+                id(),
+                assignment_id(),
+                user_id(),
+                0,
+                "content",
+                SubmissionStatus::PendingReview,
+                Utc::now(),
+                None,
+                None,
+                None,
+            )
+            .unwrap_err(),
+            DomainError::InvalidSubmissionAttemptNumber { value: 0 }
+        );
+    }
+
+    #[test]
+    fn restore_requires_review_fields_for_completed_submission() {
+        assert_eq!(
+            Submission::restore(
+                id(),
+                assignment_id(),
+                user_id(),
+                1,
+                "content",
+                SubmissionStatus::Accepted,
+                Utc::now(),
+                None,
+                None,
+                None,
+            )
+            .unwrap_err(),
+            DomainError::InvalidSubmissionReviewState
+        );
+    }
+
+    #[test]
+    fn restore_rejects_review_fields_for_pending_submission() {
+        assert_eq!(
+            Submission::restore(
+                id(),
+                assignment_id(),
+                user_id(),
+                1,
+                "content",
+                SubmissionStatus::PendingReview,
+                Utc::now(),
+                Some(user_id()),
+                Some(Utc::now()),
+                Some("review".to_owned()),
+            )
+            .unwrap_err(),
+            DomainError::InvalidSubmissionReviewState
+        );
     }
 }
