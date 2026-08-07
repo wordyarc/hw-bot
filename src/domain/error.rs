@@ -30,6 +30,9 @@ pub enum DomainError {
     #[error("assignment does not belong to teaching course")]
     AssignmentDoesNotBelongToTeachingCourse,
 
+    #[error("teaching course has no teachers")]
+    TeachingCourseHasNoTeachers,
+
     #[error("assignment is not published")]
     AssignmentIsNotPublished,
 

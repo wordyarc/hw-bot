@@ -18,6 +18,6 @@ pub use error::{DomainError, DomainResult};
 pub use ids::{
     AssignmentId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
 };
-pub use submission::{Submission, SubmissionHistory, SubmissionStatus};
+pub use submission::{ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
 pub use text::NonEmptyString;
 pub use user::{Role, User};

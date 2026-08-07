@@ -140,7 +140,8 @@ impl From<DomainError> for ApiError {
 
             DomainError::InvalidAssignmentPublishedState
             | DomainError::InvalidSubmissionAttemptNumber { .. }
-            | DomainError::InvalidSubmissionReviewState => return Self::internal(&error),
+            | DomainError::InvalidSubmissionReviewState
+            | DomainError::TeachingCourseHasNoTeachers => return Self::internal(&error),
         };
 
         Self::new(status, code, error.to_string())

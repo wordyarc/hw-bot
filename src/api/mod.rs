@@ -5,6 +5,7 @@ use tower_http::trace::TraceLayer;
 mod error;
 mod health;
 mod json;
+mod review;
 mod state;
 mod submissions;
 
@@ -20,6 +21,11 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/assignments/{assignment_id}/submissions",
             post(submissions::submit_homework),
+        )
+        .route("/submissions/next", post(review::take_next_from_queue))
+        .route(
+            "/submissions/{submission_id}/review",
+            post(review::review_submission),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -128,6 +128,26 @@ pub struct TeachingCourse {
 }
 
 impl TeachingCourse {
+    pub(crate) fn restore(
+        id: TeachingCourseId,
+        subject_id: SubjectId,
+        student_group_id: StudentGroupId,
+        teacher_ids: HashSet<UserId>,
+        created_at: DateTime<Utc>,
+    ) -> DomainResult<Self> {
+        if teacher_ids.is_empty() {
+            return Err(DomainError::TeachingCourseHasNoTeachers);
+        }
+
+        Ok(Self {
+            id,
+            subject_id,
+            student_group_id,
+            teacher_ids,
+            created_at,
+        })
+    }
+
     pub fn new(
         id: TeachingCourseId,
         subject: &Subject,
@@ -141,16 +161,13 @@ impl TeachingCourse {
             });
         }
 
-        let mut teacher_ids = HashSet::new();
-        teacher_ids.insert(teacher.id());
-
-        Ok(Self {
+        Self::restore(
             id,
-            subject_id: subject.id(),
-            student_group_id: student_group.id(),
-            teacher_ids,
+            subject.id(),
+            student_group.id(),
+            HashSet::from([teacher.id()]),
             created_at,
-        })
+        )
     }
 
     pub fn add_teacher(&mut self, actor: &User, teacher: &User) -> DomainResult<()> {
@@ -210,6 +227,21 @@ mod tests {
                 value: 3,
                 max: 2,
             }
+        );
+    }
+
+    #[test]
+    fn restore_rejects_teaching_course_without_teachers() {
+        assert_eq!(
+            TeachingCourse::restore(
+                TeachingCourseId::new(),
+                SubjectId::new(),
+                StudentGroupId::new(),
+                HashSet::new(),
+                Utc::now(),
+            )
+            .unwrap_err(),
+            DomainError::TeachingCourseHasNoTeachers
         );
     }
 

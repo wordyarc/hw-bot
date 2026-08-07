@@ -61,6 +61,15 @@ str_enum! {
     }
 }
 
+str_enum! {
+    /// Решение ревьюера, а не результат проверки: результат - это статус самой сдачи.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ReviewDecision {
+        Accept => "accept",
+        Reject => "reject",
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Submission {
     id: SubmissionId,

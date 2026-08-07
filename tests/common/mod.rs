@@ -124,6 +124,39 @@ impl Fixture {
         Ok(student)
     }
 
+    /// Преподаватель без привязки к курсу фикстуры: нужен, чтобы проверять, что чужие сдачи ему
+    /// не видны и не подчиняются.
+    pub async fn insert_teacher(
+        &self,
+        pool: &PgPool,
+        telegram_id: i64,
+        display_name: &str,
+    ) -> anyhow::Result<User> {
+        let teacher = User::new(
+            UserId::new(),
+            TelegramUserId::new(telegram_id)?,
+            Role::Teacher,
+            display_name,
+            Utc::now(),
+        )?;
+        db::users::insert(pool, &teacher).await?;
+
+        Ok(teacher)
+    }
+
+    pub async fn insert_admin(&self, pool: &PgPool, telegram_id: i64) -> anyhow::Result<User> {
+        let admin = User::new(
+            UserId::new(),
+            TelegramUserId::new(telegram_id)?,
+            Role::Admin,
+            "Admin",
+            Utc::now(),
+        )?;
+        db::users::insert(pool, &admin).await?;
+
+        Ok(admin)
+    }
+
     pub async fn insert_outsider_student(
         &self,
         pool: &PgPool,

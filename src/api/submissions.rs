@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::api::{ApiError, AppState, JsonBody};
 use crate::app::SubmitHomework;
-use crate::domain::{AssignmentId, Submission, SubmissionStatus, TelegramUserId};
+use crate::domain::{AssignmentId, Submission, SubmissionStatus, TelegramUserId, UserId};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +26,9 @@ pub struct SubmissionResponse {
     content: String,
     status: SubmissionStatus,
     submitted_at: DateTime<Utc>,
+    reviewed_by: Option<Uuid>,
+    reviewed_at: Option<DateTime<Utc>>,
+    review_comment: Option<String>,
 }
 
 impl From<&Submission> for SubmissionResponse {
@@ -38,6 +41,11 @@ impl From<&Submission> for SubmissionResponse {
             content: submission.content().as_str().to_owned(),
             status: submission.status(),
             submitted_at: submission.submitted_at(),
+            reviewed_by: submission.reviewed_by().map(UserId::as_uuid),
+            reviewed_at: submission.reviewed_at(),
+            review_comment: submission
+                .review_comment()
+                .map(|comment| comment.as_str().to_owned()),
         }
     }
 }
