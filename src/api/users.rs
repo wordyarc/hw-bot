@@ -1,18 +1,17 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{ApiError, AppState, JsonBody};
+use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{RegisterStaff, RegisterStudent, RegisteredUser};
 use crate::domain::{EducationLevel, StaffRole, StudentGroup, TelegramUserId};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterStudentRequest {
-    telegram_user_id: i64,
     display_name: String,
     student_group_code: String,
 }
@@ -20,8 +19,6 @@ pub struct RegisterStudentRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterStaffRequest {
-    /// Identifies the admin doing the registration until authentication middleware takes over.
-    actor_telegram_user_id: i64,
     telegram_user_id: i64,
     display_name: String,
     role: StaffRole,
@@ -74,10 +71,11 @@ impl From<&StudentGroup> for StudentGroupResponse {
 
 pub async fn register_student(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     JsonBody(request): JsonBody<RegisterStudentRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     let command = RegisterStudent {
-        telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
+        telegram_user_id: actor,
         display_name: request.display_name,
         student_group_code: request.student_group_code,
         registered_at: Utc::now(),
@@ -90,10 +88,11 @@ pub async fn register_student(
 
 pub async fn register_staff(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     JsonBody(request): JsonBody<RegisterStaffRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     let command = RegisterStaff {
-        actor_telegram_user_id: TelegramUserId::new(request.actor_telegram_user_id)?,
+        actor_telegram_user_id: actor,
         telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
         display_name: request.display_name,
         role: request.role,
@@ -105,15 +104,13 @@ pub async fn register_staff(
     Ok((StatusCode::CREATED, Json(UserResponse::from(&registered))))
 }
 
-pub async fn find_user(
+/// Первый запрос бота на каждое сообщение: кто это и что ему показывать.
+/// 404 здесь - сигнал «предложи регистрацию».
+pub async fn me(
     State(state): State<AppState>,
-    Path(telegram_user_id): Path<i64>,
+    Actor(actor): Actor,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let telegram_user_id = TelegramUserId::new(telegram_user_id)?;
-    let registered = state
-        .users
-        .find_by_telegram_user_id(telegram_user_id)
-        .await?;
+    let registered = state.users.find_by_telegram_user_id(actor).await?;
 
     Ok(Json(UserResponse::from(&registered)))
 }

@@ -7,21 +7,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::submissions::SubmissionResponse;
-use crate::api::{ApiError, AppState, JsonBody};
+use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{ReviewQueueItem, ReviewSubmission};
-use crate::domain::{Assignment, ReviewDecision, SubmissionId, TelegramUserId, User};
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TakeNextRequest {
-    /// Identifies the reviewer until authentication middleware takes over.
-    telegram_user_id: i64,
-}
+use crate::domain::{Assignment, ReviewDecision, SubmissionId, User};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewSubmissionRequest {
-    telegram_user_id: i64,
     decision: ReviewDecision,
     comment: String,
 }
@@ -83,10 +75,8 @@ impl From<&User> for QueuedStudentResponse {
 
 pub async fn take_next_from_queue(
     State(state): State<AppState>,
-    JsonBody(request): JsonBody<TakeNextRequest>,
+    Actor(reviewer): Actor,
 ) -> Result<Response, ApiError> {
-    let reviewer = TelegramUserId::new(request.telegram_user_id)?;
-
     let Some(item) = state.reviews.take_next_from_queue(reviewer).await? else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -96,12 +86,13 @@ pub async fn take_next_from_queue(
 
 pub async fn review_submission(
     State(state): State<AppState>,
+    Actor(reviewer): Actor,
     Path(submission_id): Path<Uuid>,
     JsonBody(request): JsonBody<ReviewSubmissionRequest>,
 ) -> Result<Json<SubmissionResponse>, ApiError> {
     let command = ReviewSubmission {
         submission_id: SubmissionId::from_uuid(submission_id),
-        reviewer_telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
+        reviewer_telegram_user_id: reviewer,
         decision: request.decision,
         comment: request.comment,
         reviewed_at: Utc::now(),

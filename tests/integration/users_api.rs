@@ -66,22 +66,23 @@ async fn empty_display_name_is_rejected() {
 }
 
 #[tokio::test]
-async fn registered_user_can_be_found_by_telegram_id() {
+async fn a_registered_caller_reads_their_own_profile() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();
     app.register_student(2001, "Ivan", &code).await.created();
 
-    let body = app.get("/users/2001").await.ok();
+    let body = app.get_as("/me", 2001).await.ok();
 
     assert_eq!(body["display_name"], json!("Ivan"));
     assert_eq!(body["student_group"]["code"], json!(code));
 }
 
+/// Для бота это не ошибка, а развилка: 404 значит «предложи регистрацию».
 #[tokio::test]
-async fn unknown_user_is_not_found() {
+async fn an_unregistered_caller_is_not_found() {
     let app = TestApp::start().await;
 
-    app.get("/users/9999").await.not_found("user not found");
+    app.get_as("/me", 9999).await.not_found("user not found");
 }
 
 #[tokio::test]

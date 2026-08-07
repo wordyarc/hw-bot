@@ -200,8 +200,8 @@ async fn an_assignment_without_attempts_is_rejected() {
 
     app.create_assignment_raw(
         app.course(),
+        app.teacher(),
         json!({
-            "telegram_user_id": app.teacher(),
             "title": "Rust lifetimes",
             "body": "Send a pull request link.",
             "max_attempts": 0,
@@ -218,8 +218,8 @@ async fn an_empty_assignment_body_is_rejected() {
 
     app.create_assignment_raw(
         app.course(),
+        app.teacher(),
         json!({
-            "telegram_user_id": app.teacher(),
             "title": "Rust lifetimes",
             "body": "   ",
             "max_attempts": 2,

@@ -107,19 +107,10 @@ async fn empty_content_is_rejected() {
 }
 
 #[tokio::test]
-async fn non_positive_telegram_id_is_rejected() {
-    let app = TestApp::start().await;
-
-    app.submit(app.assignment(), 0, "pull/1")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_telegram_user_id");
-}
-
-#[tokio::test]
 async fn malformed_body_uses_the_same_error_envelope_as_handlers() {
     let app = TestApp::start().await;
 
-    app.submit_raw(app.assignment(), json!({ "content": "no student" }))
+    app.submit_raw(app.assignment(), app.student(), json!({}))
         .await
         .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
 }

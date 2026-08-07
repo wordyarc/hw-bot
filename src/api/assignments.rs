@@ -5,15 +5,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{ApiError, AppState, JsonBody};
+use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{ChangeDeadline, CreateAssignment};
-use crate::domain::{Assignment, AssignmentId, AssignmentStatus, TeachingCourseId, TelegramUserId};
+use crate::domain::{Assignment, AssignmentId, AssignmentStatus, TeachingCourseId};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateAssignmentRequest {
-    /// Identifies the teacher until authentication middleware takes over.
-    telegram_user_id: i64,
     title: String,
     body: String,
     max_attempts: u16,
@@ -22,14 +20,7 @@ pub struct CreateAssignmentRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ActorRequest {
-    telegram_user_id: i64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ChangeDeadlineRequest {
-    telegram_user_id: i64,
     deadline_at: DateTime<Utc>,
 }
 
@@ -70,12 +61,13 @@ impl From<&Assignment> for AssignmentResponse {
 
 pub async fn create_assignment(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     Path(teaching_course_id): Path<Uuid>,
     JsonBody(request): JsonBody<CreateAssignmentRequest>,
 ) -> Result<(StatusCode, Json<AssignmentResponse>), ApiError> {
     let command = CreateAssignment {
         teaching_course_id: TeachingCourseId::from_uuid(teaching_course_id),
-        actor_telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
+        actor_telegram_user_id: actor,
         title: request.title,
         body: request.body,
         max_attempts: request.max_attempts,
@@ -93,16 +85,12 @@ pub async fn create_assignment(
 
 pub async fn publish_assignment(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     Path(assignment_id): Path<Uuid>,
-    JsonBody(request): JsonBody<ActorRequest>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let assignment = state
         .assignments
-        .publish(
-            AssignmentId::from_uuid(assignment_id),
-            TelegramUserId::new(request.telegram_user_id)?,
-            Utc::now(),
-        )
+        .publish(AssignmentId::from_uuid(assignment_id), actor, Utc::now())
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
@@ -110,15 +98,12 @@ pub async fn publish_assignment(
 
 pub async fn archive_assignment(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     Path(assignment_id): Path<Uuid>,
-    JsonBody(request): JsonBody<ActorRequest>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let assignment = state
         .assignments
-        .archive(
-            AssignmentId::from_uuid(assignment_id),
-            TelegramUserId::new(request.telegram_user_id)?,
-        )
+        .archive(AssignmentId::from_uuid(assignment_id), actor)
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
@@ -126,12 +111,13 @@ pub async fn archive_assignment(
 
 pub async fn change_deadline(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     Path(assignment_id): Path<Uuid>,
     JsonBody(request): JsonBody<ChangeDeadlineRequest>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let command = ChangeDeadline {
         assignment_id: AssignmentId::from_uuid(assignment_id),
-        actor_telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
+        actor_telegram_user_id: actor,
         deadline_at: request.deadline_at,
     };
 

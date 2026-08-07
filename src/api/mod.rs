@@ -2,6 +2,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
+mod actor;
 mod assignments;
 mod error;
 mod health;
@@ -11,6 +12,7 @@ mod state;
 mod submissions;
 mod users;
 
+pub use actor::{ACTOR_HEADER, Actor};
 pub use error::ApiError;
 pub use json::JsonBody;
 pub use state::AppState;
@@ -43,7 +45,7 @@ pub fn router(state: AppState) -> Router {
         .route("/student-groups", get(users::list_student_groups))
         .route("/students", post(users::register_student))
         .route("/staff", post(users::register_staff))
-        .route("/users/{telegram_user_id}", get(users::find_user))
+        .route("/me", get(users::me))
         .route("/submissions/next", post(review::take_next_from_queue))
         .route(
             "/submissions/{submission_id}/review",

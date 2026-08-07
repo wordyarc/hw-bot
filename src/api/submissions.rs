@@ -5,15 +5,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{ApiError, AppState, JsonBody};
+use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::SubmitHomework;
-use crate::domain::{AssignmentId, Submission, SubmissionStatus, TelegramUserId, UserId};
+use crate::domain::{AssignmentId, Submission, SubmissionStatus, UserId};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitHomeworkRequest {
-    /// Identifies the student until authentication middleware takes over.
-    telegram_user_id: i64,
     content: String,
 }
 
@@ -52,12 +50,13 @@ impl From<&Submission> for SubmissionResponse {
 
 pub async fn submit_homework(
     State(state): State<AppState>,
+    Actor(actor): Actor,
     Path(assignment_id): Path<Uuid>,
     JsonBody(request): JsonBody<SubmitHomeworkRequest>,
 ) -> Result<(StatusCode, Json<SubmissionResponse>), ApiError> {
     let command = SubmitHomework {
         assignment_id: AssignmentId::from_uuid(assignment_id),
-        telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
+        telegram_user_id: actor,
         content: request.content,
         submitted_at: Utc::now(),
     };

@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
+use axum::http::request::Builder;
 use chrono::{DateTime, Duration, Utc};
-use hw_bot::api::{self, AppState};
+use hw_bot::api::{self, ACTOR_HEADER, AppState};
 use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, User};
 use hw_bot::test_support::{
@@ -231,22 +232,49 @@ impl TestApp {
         self.next_telegram_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Без актора: только health и справочники.
     pub async fn get(&self, path: &str) -> TestResponse {
-        self.send(
-            Request::get(path)
-                .body(Body::empty())
-                .expect("valid request"),
-        )
+        self.send(empty_request(Request::get(path))).await
+    }
+
+    pub async fn get_as(&self, path: &str, actor: i64) -> TestResponse {
+        self.send(empty_request(
+            Request::get(path).header(ACTOR_HEADER, actor),
+        ))
         .await
     }
 
     pub async fn post(&self, path: &str, body: Value) -> TestResponse {
-        self.send(
-            Request::post(path)
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&body).expect("valid json")))
-                .expect("valid request"),
-        )
+        self.send(json_request(Request::post(path), body)).await
+    }
+
+    pub async fn post_as(&self, path: &str, actor: i64, body: Value) -> TestResponse {
+        self.send(json_request(
+            Request::post(path).header(ACTOR_HEADER, actor),
+            body,
+        ))
+        .await
+    }
+
+    /// Команда, у которой весь вход - это актор и путь.
+    pub async fn post_empty_as(&self, path: &str, actor: i64) -> TestResponse {
+        self.send(empty_request(
+            Request::post(path).header(ACTOR_HEADER, actor),
+        ))
+        .await
+    }
+
+    /// Для тестов, которые проверяют разбор самого заголовка актора.
+    pub async fn post_with_actor_header(
+        &self,
+        path: &str,
+        actor: &str,
+        body: Value,
+    ) -> TestResponse {
+        self.send(json_request(
+            Request::post(path).header(ACTOR_HEADER, actor),
+            body,
+        ))
         .await
     }
 
@@ -272,17 +300,23 @@ impl TestApp {
     }
 
     pub async fn submit(&self, assignment: Uuid, telegram_id: i64, content: &str) -> TestResponse {
-        self.submit_raw(
-            assignment,
-            json!({ "telegram_user_id": telegram_id, "content": content }),
-        )
-        .await
+        self.submit_raw(assignment, telegram_id, json!({ "content": content }))
+            .await
     }
 
     /// Для тестов, которые проверяют разбор самого тела запроса.
-    pub async fn submit_raw(&self, assignment: Uuid, body: Value) -> TestResponse {
-        self.post(&format!("/assignments/{assignment}/submissions"), body)
-            .await
+    pub async fn submit_raw(
+        &self,
+        assignment: Uuid,
+        telegram_id: i64,
+        body: Value,
+    ) -> TestResponse {
+        self.post_as(
+            &format!("/assignments/{assignment}/submissions"),
+            telegram_id,
+            body,
+        )
+        .await
     }
 
     /// Сдача, уже лежащая в очереди: дальше почти всегда нужен её id.
@@ -295,8 +329,8 @@ impl TestApp {
     pub async fn create_assignment(&self, course: Uuid, telegram_id: i64) -> TestResponse {
         self.create_assignment_raw(
             course,
+            telegram_id,
             json!({
-                "telegram_user_id": telegram_id,
                 "title": "Rust lifetimes",
                 "body": "Send a pull request link.",
                 "max_attempts": 2,
@@ -307,9 +341,18 @@ impl TestApp {
     }
 
     /// Для тестов, которые проверяют разбор и валидацию самого тела запроса.
-    pub async fn create_assignment_raw(&self, course: Uuid, body: Value) -> TestResponse {
-        self.post(&format!("/teaching-courses/{course}/assignments"), body)
-            .await
+    pub async fn create_assignment_raw(
+        &self,
+        course: Uuid,
+        telegram_id: i64,
+        body: Value,
+    ) -> TestResponse {
+        self.post_as(
+            &format!("/teaching-courses/{course}/assignments"),
+            telegram_id,
+            body,
+        )
+        .await
     }
 
     pub async fn drafted_assignment(&self, telegram_id: i64) -> Uuid {
@@ -319,19 +362,13 @@ impl TestApp {
     }
 
     pub async fn publish_assignment(&self, assignment: Uuid, telegram_id: i64) -> TestResponse {
-        self.post(
-            &format!("/assignments/{assignment}/publish"),
-            json!({ "telegram_user_id": telegram_id }),
-        )
-        .await
+        self.post_empty_as(&format!("/assignments/{assignment}/publish"), telegram_id)
+            .await
     }
 
     pub async fn archive_assignment(&self, assignment: Uuid, telegram_id: i64) -> TestResponse {
-        self.post(
-            &format!("/assignments/{assignment}/archive"),
-            json!({ "telegram_user_id": telegram_id }),
-        )
-        .await
+        self.post_empty_as(&format!("/assignments/{assignment}/archive"), telegram_id)
+            .await
     }
 
     pub async fn change_deadline(
@@ -340,19 +377,16 @@ impl TestApp {
         telegram_id: i64,
         deadline_at: DateTime<Utc>,
     ) -> TestResponse {
-        self.post(
+        self.post_as(
             &format!("/assignments/{assignment}/deadline"),
-            json!({ "telegram_user_id": telegram_id, "deadline_at": deadline_at }),
+            telegram_id,
+            json!({ "deadline_at": deadline_at }),
         )
         .await
     }
 
     pub async fn take_next(&self, telegram_id: i64) -> TestResponse {
-        self.post(
-            "/submissions/next",
-            json!({ "telegram_user_id": telegram_id }),
-        )
-        .await
+        self.post_empty_as("/submissions/next", telegram_id).await
     }
 
     pub async fn review(
@@ -362,13 +396,10 @@ impl TestApp {
         decision: &str,
         comment: &str,
     ) -> TestResponse {
-        self.post(
+        self.post_as(
             &format!("/submissions/{submission}/review"),
-            json!({
-                "telegram_user_id": telegram_id,
-                "decision": decision,
-                "comment": comment,
-            }),
+            telegram_id,
+            json!({ "decision": decision, "comment": comment }),
         )
         .await
     }
@@ -379,10 +410,10 @@ impl TestApp {
         display_name: &str,
         group_code: &str,
     ) -> TestResponse {
-        self.post(
+        self.post_as(
             "/students",
+            telegram_id,
             json!({
-                "telegram_user_id": telegram_id,
                 "display_name": display_name,
                 "student_group_code": group_code,
             }),
@@ -397,10 +428,10 @@ impl TestApp {
         display_name: &str,
         role: &str,
     ) -> TestResponse {
-        self.post(
+        self.post_as(
             "/staff",
+            actor,
             json!({
-                "actor_telegram_user_id": actor,
                 "telegram_user_id": telegram_id,
                 "display_name": display_name,
                 "role": role,
@@ -499,6 +530,17 @@ impl TestApp {
 
         (teacher, student, foreign_assignment)
     }
+}
+
+fn empty_request(builder: Builder) -> Request<Body> {
+    builder.body(Body::empty()).expect("valid request")
+}
+
+fn json_request(builder: Builder, body: Value) -> Request<Body> {
+    builder
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).expect("valid json")))
+        .expect("valid request")
 }
 
 #[track_caller]
