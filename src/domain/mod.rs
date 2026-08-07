@@ -21,3 +21,6 @@ pub use ids::{
 pub use submission::{ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
 pub use text::NonEmptyString;
 pub use user::{Role, StaffRole, User};
+
+pub(crate) use assignment::AssignmentParts;
+pub(crate) use submission::SubmissionParts;

@@ -84,34 +84,41 @@ pub struct Submission {
     review_comment: Option<NonEmptyString>,
 }
 
+/// Поля сдачи россыпью: `restore` собирает сущность из них по именам, чтобы соседние
+/// `DateTime<Utc>` нельзя было переставить местами незаметно для компилятора.
+pub(crate) struct SubmissionParts {
+    pub id: SubmissionId,
+    pub assignment_id: AssignmentId,
+    pub student_id: UserId,
+    pub attempt_number: u16,
+    pub content: String,
+    pub status: SubmissionStatus,
+    pub submitted_at: DateTime<Utc>,
+    pub reviewed_by: Option<UserId>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub review_comment: Option<String>,
+}
+
 impl Submission {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn restore(
-        id: SubmissionId,
-        assignment_id: AssignmentId,
-        student_id: UserId,
-        attempt_number: u16,
-        content: impl Into<String>,
-        status: SubmissionStatus,
-        submitted_at: DateTime<Utc>,
-        reviewed_by: Option<UserId>,
-        reviewed_at: Option<DateTime<Utc>>,
-        review_comment: Option<String>,
-    ) -> DomainResult<Self> {
-        if attempt_number == 0 {
+    pub(crate) fn restore(parts: SubmissionParts) -> DomainResult<Self> {
+        if parts.attempt_number == 0 {
             return Err(DomainError::InvalidSubmissionAttemptNumber {
-                value: attempt_number,
+                value: parts.attempt_number,
             });
         }
 
-        match status {
+        match parts.status {
             SubmissionStatus::PendingReview
-                if reviewed_by.is_some() || reviewed_at.is_some() || review_comment.is_some() =>
+                if parts.reviewed_by.is_some()
+                    || parts.reviewed_at.is_some()
+                    || parts.review_comment.is_some() =>
             {
                 return Err(DomainError::InvalidSubmissionReviewState);
             }
             SubmissionStatus::Accepted | SubmissionStatus::Rejected
-                if reviewed_by.is_none() || reviewed_at.is_none() || review_comment.is_none() =>
+                if parts.reviewed_by.is_none()
+                    || parts.reviewed_at.is_none()
+                    || parts.review_comment.is_none() =>
             {
                 return Err(DomainError::InvalidSubmissionReviewState);
             }
@@ -119,16 +126,17 @@ impl Submission {
         }
 
         Ok(Self {
-            id,
-            assignment_id,
-            student_id,
-            attempt_number,
-            content: NonEmptyString::new("submission.content", content)?,
-            status,
-            submitted_at,
-            reviewed_by,
-            reviewed_at,
-            review_comment: review_comment
+            id: parts.id,
+            assignment_id: parts.assignment_id,
+            student_id: parts.student_id,
+            attempt_number: parts.attempt_number,
+            content: NonEmptyString::new("submission.content", parts.content)?,
+            status: parts.status,
+            submitted_at: parts.submitted_at,
+            reviewed_by: parts.reviewed_by,
+            reviewed_at: parts.reviewed_at,
+            review_comment: parts
+                .review_comment
                 .map(|comment| NonEmptyString::new("submission.review_comment", comment))
                 .transpose()?,
         })
@@ -179,18 +187,18 @@ impl Submission {
             });
         }
 
-        Self::restore(
+        Self::restore(SubmissionParts {
             id,
-            assignment.id(),
-            student.id(),
-            history.used_attempts + 1,
-            content,
-            SubmissionStatus::PendingReview,
+            assignment_id: assignment.id(),
+            student_id: student.id(),
+            attempt_number: history.used_attempts + 1,
+            content: content.into(),
+            status: SubmissionStatus::PendingReview,
             submitted_at,
-            None,
-            None,
-            None,
-        )
+            reviewed_by: None,
+            reviewed_at: None,
+            review_comment: None,
+        })
     }
 
     pub fn accept(
@@ -313,33 +321,24 @@ impl Submission {
 mod tests {
     use super::*;
 
-    fn id() -> SubmissionId {
-        SubmissionId::new()
-    }
-
-    fn assignment_id() -> AssignmentId {
-        AssignmentId::new()
-    }
-
-    fn user_id() -> UserId {
-        UserId::new()
+    fn pending_parts() -> SubmissionParts {
+        SubmissionParts {
+            id: SubmissionId::new(),
+            assignment_id: AssignmentId::new(),
+            student_id: UserId::new(),
+            attempt_number: 1,
+            content: "https://github.com/course/hw/pull/1".to_owned(),
+            status: SubmissionStatus::PendingReview,
+            submitted_at: Utc::now(),
+            reviewed_by: None,
+            reviewed_at: None,
+            review_comment: None,
+        }
     }
 
     #[test]
     fn restore_accepts_pending_submission_without_review_fields() {
-        let submission = Submission::restore(
-            id(),
-            assignment_id(),
-            user_id(),
-            1,
-            "https://github.com/course/hw/pull/1",
-            SubmissionStatus::PendingReview,
-            Utc::now(),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let submission = Submission::restore(pending_parts()).unwrap();
 
         assert_eq!(submission.status(), SubmissionStatus::PendingReview);
         assert_eq!(submission.attempt_number(), 1);
@@ -348,18 +347,10 @@ mod tests {
     #[test]
     fn restore_rejects_zero_attempt_number() {
         assert_eq!(
-            Submission::restore(
-                id(),
-                assignment_id(),
-                user_id(),
-                0,
-                "content",
-                SubmissionStatus::PendingReview,
-                Utc::now(),
-                None,
-                None,
-                None,
-            )
+            Submission::restore(SubmissionParts {
+                attempt_number: 0,
+                ..pending_parts()
+            })
             .unwrap_err(),
             DomainError::InvalidSubmissionAttemptNumber { value: 0 }
         );
@@ -368,18 +359,10 @@ mod tests {
     #[test]
     fn restore_requires_review_fields_for_completed_submission() {
         assert_eq!(
-            Submission::restore(
-                id(),
-                assignment_id(),
-                user_id(),
-                1,
-                "content",
-                SubmissionStatus::Accepted,
-                Utc::now(),
-                None,
-                None,
-                None,
-            )
+            Submission::restore(SubmissionParts {
+                status: SubmissionStatus::Accepted,
+                ..pending_parts()
+            })
             .unwrap_err(),
             DomainError::InvalidSubmissionReviewState
         );
@@ -388,18 +371,12 @@ mod tests {
     #[test]
     fn restore_rejects_review_fields_for_pending_submission() {
         assert_eq!(
-            Submission::restore(
-                id(),
-                assignment_id(),
-                user_id(),
-                1,
-                "content",
-                SubmissionStatus::PendingReview,
-                Utc::now(),
-                Some(user_id()),
-                Some(Utc::now()),
-                Some("review".to_owned()),
-            )
+            Submission::restore(SubmissionParts {
+                reviewed_by: Some(UserId::new()),
+                reviewed_at: Some(Utc::now()),
+                review_comment: Some("review".to_owned()),
+                ..pending_parts()
+            })
             .unwrap_err(),
             DomainError::InvalidSubmissionReviewState
         );

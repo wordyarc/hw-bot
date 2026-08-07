@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, num};
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, StudentGroupId, SubjectId, TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentParts, AssignmentStatus, StudentGroupId, SubjectId,
+    TeachingCourseId, UserId,
 };
 
 const MAX_ATTEMPTS: &str = "assignments.max_attempts";
@@ -86,19 +87,19 @@ impl TryFrom<AssignmentRow> for Assignment {
         let status = AssignmentStatus::parse_str(&row.status)
             .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
 
-        Ok(Assignment::restore(
-            AssignmentId::from_uuid(row.id),
-            TeachingCourseId::from_uuid(row.teaching_course_id),
-            SubjectId::from_uuid(row.subject_id),
-            StudentGroupId::from_uuid(row.student_group_id),
-            row.title,
-            row.body,
+        Ok(Assignment::restore(AssignmentParts {
+            id: AssignmentId::from_uuid(row.id),
+            teaching_course_id: TeachingCourseId::from_uuid(row.teaching_course_id),
+            subject_id: SubjectId::from_uuid(row.subject_id),
+            student_group_id: StudentGroupId::from_uuid(row.student_group_id),
+            title: row.title,
+            body: row.body,
             max_attempts,
             status,
-            UserId::from_uuid(row.created_by),
-            row.created_at,
-            row.deadline_at,
-            row.published_at,
-        )?)
+            created_by: UserId::from_uuid(row.created_by),
+            created_at: row.created_at,
+            deadline_at: row.deadline_at,
+            published_at: row.published_at,
+        })?)
     }
 }

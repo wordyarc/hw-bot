@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, num};
 use crate::domain::{
-    AssignmentId, DomainError, Role, Submission, SubmissionHistory, SubmissionId, SubmissionStatus,
-    User, UserId,
+    AssignmentId, DomainError, Role, Submission, SubmissionHistory, SubmissionId, SubmissionParts,
+    SubmissionStatus, User, UserId,
 };
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
@@ -205,17 +205,17 @@ impl TryFrom<SubmissionRow> for Submission {
             .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
         let attempt_number: u16 = num(ATTEMPT_NUMBER, row.attempt_number)?;
 
-        Ok(Submission::restore(
-            SubmissionId::from_uuid(row.id),
-            AssignmentId::from_uuid(row.assignment_id),
-            UserId::from_uuid(row.student_id),
+        Ok(Submission::restore(SubmissionParts {
+            id: SubmissionId::from_uuid(row.id),
+            assignment_id: AssignmentId::from_uuid(row.assignment_id),
+            student_id: UserId::from_uuid(row.student_id),
             attempt_number,
-            row.content,
+            content: row.content,
             status,
-            row.submitted_at,
-            row.reviewed_by.map(UserId::from_uuid),
-            row.reviewed_at,
-            row.review_comment,
-        )?)
+            submitted_at: row.submitted_at,
+            reviewed_by: row.reviewed_by.map(UserId::from_uuid),
+            reviewed_at: row.reviewed_at,
+            review_comment: row.review_comment,
+        })?)
     }
 }

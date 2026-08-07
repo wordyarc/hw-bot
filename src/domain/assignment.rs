@@ -31,57 +31,60 @@ pub struct Assignment {
     published_at: Option<DateTime<Utc>>,
 }
 
+/// Поля задания россыпью: `restore` собирает сущность из них по именам, чтобы соседние
+/// `DateTime<Utc>` нельзя было переставить местами незаметно для компилятора.
+pub(crate) struct AssignmentParts {
+    pub id: AssignmentId,
+    pub teaching_course_id: TeachingCourseId,
+    pub subject_id: SubjectId,
+    pub student_group_id: StudentGroupId,
+    pub title: String,
+    pub body: String,
+    pub max_attempts: u16,
+    pub status: AssignmentStatus,
+    pub created_by: UserId,
+    pub created_at: DateTime<Utc>,
+    pub deadline_at: DateTime<Utc>,
+    pub published_at: Option<DateTime<Utc>>,
+}
+
 impl Assignment {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn restore(
-        id: AssignmentId,
-        teaching_course_id: TeachingCourseId,
-        subject_id: SubjectId,
-        student_group_id: StudentGroupId,
-        title: impl Into<String>,
-        body: impl Into<String>,
-        max_attempts: u16,
-        status: AssignmentStatus,
-        created_by: UserId,
-        created_at: DateTime<Utc>,
-        deadline_at: DateTime<Utc>,
-        published_at: Option<DateTime<Utc>>,
-    ) -> DomainResult<Self> {
-        if max_attempts == 0 {
+    pub(crate) fn restore(parts: AssignmentParts) -> DomainResult<Self> {
+        if parts.max_attempts == 0 {
             return Err(DomainError::InvalidAttemptLimit {
-                value: max_attempts,
+                value: parts.max_attempts,
             });
         }
 
-        if deadline_at <= created_at {
+        if parts.deadline_at <= parts.created_at {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
 
         // An archived assignment may or may not have been published before, so it is the only
         // status that accepts both shapes.
-        match status {
-            AssignmentStatus::Draft if published_at.is_some() => {
+        match parts.status {
+            AssignmentStatus::Draft if parts.published_at.is_some() => {
                 return Err(DomainError::InvalidAssignmentPublishedState);
             }
-            AssignmentStatus::Published if published_at.is_none() => {
+            AssignmentStatus::Published if parts.published_at.is_none() => {
                 return Err(DomainError::InvalidAssignmentPublishedState);
             }
             _ => {}
         }
 
         Ok(Self {
-            id,
-            teaching_course_id,
-            subject_id,
-            student_group_id,
-            title: NonEmptyString::new("assignment.title", title)?,
-            body: NonEmptyString::new("assignment.body", body)?,
-            max_attempts,
-            status,
-            created_by,
-            created_at,
-            deadline_at,
-            published_at,
+            id: parts.id,
+            teaching_course_id: parts.teaching_course_id,
+            subject_id: parts.subject_id,
+            student_group_id: parts.student_group_id,
+            title: NonEmptyString::new("assignment.title", parts.title)?,
+            body: NonEmptyString::new("assignment.body", parts.body)?,
+            max_attempts: parts.max_attempts,
+            status: parts.status,
+            created_by: parts.created_by,
+            created_at: parts.created_at,
+            deadline_at: parts.deadline_at,
+            published_at: parts.published_at,
         })
     }
 
@@ -102,20 +105,20 @@ impl Assignment {
             });
         }
 
-        Self::restore(
+        Self::restore(AssignmentParts {
             id,
-            teaching_course.id(),
-            teaching_course.subject_id(),
-            teaching_course.student_group_id(),
-            title,
-            body,
+            teaching_course_id: teaching_course.id(),
+            subject_id: teaching_course.subject_id(),
+            student_group_id: teaching_course.student_group_id(),
+            title: title.into(),
+            body: body.into(),
             max_attempts,
-            AssignmentStatus::Draft,
-            created_by.id(),
+            status: AssignmentStatus::Draft,
+            created_by: created_by.id(),
             created_at,
             deadline_at,
-            None,
-        )
+            published_at: None,
+        })
     }
 
     pub fn publish(
@@ -249,20 +252,20 @@ mod tests {
     ) -> DomainResult<Assignment> {
         let created_at = Utc::now();
 
-        Assignment::restore(
-            AssignmentId::new(),
-            TeachingCourseId::new(),
-            SubjectId::new(),
-            StudentGroupId::new(),
-            "Rust ownership",
-            "Send a pull request link.",
+        Assignment::restore(AssignmentParts {
+            id: AssignmentId::new(),
+            teaching_course_id: TeachingCourseId::new(),
+            subject_id: SubjectId::new(),
+            student_group_id: StudentGroupId::new(),
+            title: "Rust ownership".to_owned(),
+            body: "Send a pull request link.".to_owned(),
             max_attempts,
             status,
-            UserId::new(),
+            created_by: UserId::new(),
             created_at,
-            created_at + Duration::days(7),
+            deadline_at: created_at + Duration::days(7),
             published_at,
-        )
+        })
     }
 
     #[test]
