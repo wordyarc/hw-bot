@@ -1,98 +1,30 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, EducationLevel, Role, StaffRole,
-    StudentAssignmentProgress, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId,
-    Submission, SubmissionHistory, SubmissionId, SubmissionStatus, TeachingCourse,
-    TeachingCourseId, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, DomainError, Role, StaffRole, StudentAssignmentProgress, Submission,
+    SubmissionHistory, SubmissionId, SubmissionStatus, TelegramUserId, User, UserId,
 };
-
-fn now() -> DateTime<Utc> {
-    Utc::now()
-}
-
-fn user(telegram_id: i64, role: Role) -> User {
-    User::new(
-        UserId::new(),
-        TelegramUserId::new(telegram_id).unwrap(),
-        role,
-        format!("{role:?}"),
-        now(),
-    )
-    .unwrap()
-}
-
-fn student(telegram_id: i64, student_group: &StudentGroup) -> User {
-    User::new_student(
-        UserId::new(),
-        TelegramUserId::new(telegram_id).unwrap(),
-        "Student",
-        student_group,
-        now(),
-    )
-    .unwrap()
-}
-
-fn student_group(code: &str) -> StudentGroup {
-    StudentGroup::new(
-        StudentGroupId::new(),
-        code,
-        StudyProgram::new(EducationLevel::Bachelor, 1).unwrap(),
-    )
-    .unwrap()
-}
-
-fn teaching_course(teacher: &User, student_group: &StudentGroup) -> TeachingCourse {
-    let subject = Subject::new(SubjectId::new(), "Backend development").unwrap();
-
-    TeachingCourse::new(
-        TeachingCourseId::new(),
-        &subject,
-        student_group,
-        teacher,
-        now(),
-    )
-    .unwrap()
-}
-
-fn published_assignment(
-    teacher: &User,
-    teaching_course: &TeachingCourse,
-    max_attempts: u16,
-) -> Assignment {
-    let created_at = now();
-    let mut assignment = Assignment::new(
-        AssignmentId::new(),
-        teaching_course,
-        teacher,
-        "Rust ownership",
-        "Send a pull request link.",
-        max_attempts,
-        created_at,
-        created_at + Duration::days(7),
-    )
-    .unwrap();
-
-    assignment.publish(teaching_course, teacher, now()).unwrap();
-    assignment
-}
+use crate::test_support::{
+    ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
+    assignment, course_for, history, student, student_group, submission, t0, teacher,
+};
 
 #[test]
 fn only_teacher_or_admin_can_create_assignment() {
-    let teacher = user(10, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
+    let teacher = teacher(10);
+    let group = student_group(GROUP_CODE);
     let student = student(1, &group);
-    let course = teaching_course(&teacher, &group);
+    let course = course_for(&group, &teacher);
 
     let result = Assignment::new(
         AssignmentId::new(),
         &course,
         &student,
-        "Rust ownership",
-        "Send a pull request link.",
+        ASSIGNMENT_TITLE,
+        ASSIGNMENT_BODY,
         2,
-        now(),
-        now() + Duration::days(7),
+        t0(),
+        t0() + Duration::days(7),
     );
 
     assert_eq!(
@@ -105,25 +37,14 @@ fn only_teacher_or_admin_can_create_assignment() {
 
 #[test]
 fn only_course_teacher_or_admin_can_publish_assignment() {
-    let course_teacher = user(1, Role::Teacher);
-    let other_teacher = user(2, Role::Teacher);
-    let admin = user(3, Role::Admin);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&course_teacher, &group);
-    let created_at = now();
-    let mut assignment = Assignment::new(
-        AssignmentId::new(),
-        &course,
-        &course_teacher,
-        "Rust ownership",
-        "Send a pull request link.",
-        2,
-        created_at,
-        created_at + Duration::days(7),
-    )
-    .unwrap();
+    let course_teacher = teacher(1);
+    let other_teacher = teacher(2);
+    let admin = admin(3);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &course_teacher);
+    let mut assignment = assignment(&course, &course_teacher).build();
 
-    let result = assignment.publish(&course, &other_teacher, now());
+    let result = assignment.publish(&course, &other_teacher, t0());
 
     assert_eq!(
         result.unwrap_err(),
@@ -132,30 +53,22 @@ fn only_course_teacher_or_admin_can_publish_assignment() {
         }
     );
 
-    assignment.publish(&course, &admin, now()).unwrap();
+    assignment.publish(&course, &admin, t0()).unwrap();
 }
 
 #[test]
 fn added_course_teacher_can_review_and_manage_assignment() {
-    let course_teacher = user(1, Role::Teacher);
-    let reviewer = user(2, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let mut course = teaching_course(&course_teacher, &group);
+    let course_teacher = teacher(1);
+    let reviewer = teacher(2);
+    let group = student_group(GROUP_CODE);
+    let mut course = course_for(&group, &course_teacher);
     course.add_teacher(&course_teacher, &reviewer).unwrap();
     let student = student(3, &group);
-    let assignment = published_assignment(&course_teacher, &course, 2);
-    let mut submission = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/1",
-        now(),
-    )
-    .unwrap();
+    let assignment = assignment(&course, &course_teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
 
     submission
-        .accept(&assignment, &course, &reviewer, "95/100", now())
+        .accept(&assignment, &course, &reviewer, "95/100", t0())
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -164,33 +77,23 @@ fn added_course_teacher_can_review_and_manage_assignment() {
 
 #[test]
 fn student_can_submit_published_assignment_until_attempts_are_exhausted() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 2);
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(2)
+        .published()
+        .build();
 
-    let first = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::new(0, 0, false, false),
-        "https://github.com/course/hw/pull/1",
-        now(),
-    )
-    .unwrap();
+    let first = submission(&assignment, &student).build();
 
     assert_eq!(first.attempt_number(), 1);
     assert_eq!(first.status(), SubmissionStatus::PendingReview);
 
-    let exhausted = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::new(2, 0, false, false),
-        "https://github.com/course/hw/pull/2",
-        now(),
-    );
+    let exhausted = submission(&assignment, &student)
+        .history(history().used(2).build())
+        .try_build();
 
     assert_eq!(
         exhausted.unwrap_err(),
@@ -203,34 +106,17 @@ fn student_can_submit_published_assignment_until_attempts_are_exhausted() {
 
 #[test]
 fn student_cannot_submit_assignment_after_deadline() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let created_at = now();
-    let deadline_at = created_at + Duration::days(7);
-    let mut assignment = Assignment::new(
-        AssignmentId::new(),
-        &course,
-        &teacher,
-        "Rust ownership",
-        "Send a pull request link.",
-        2,
-        created_at,
-        deadline_at,
-    )
-    .unwrap();
-    assignment.publish(&course, &teacher, created_at).unwrap();
+    let assignment = assignment(&course, &teacher).published().build();
+    let deadline_at = assignment.deadline_at();
     let submitted_at = deadline_at + Duration::seconds(1);
 
-    let result = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/2",
-        submitted_at,
-    );
+    let result = submission(&assignment, &student)
+        .submitted_at(submitted_at)
+        .try_build();
 
     assert_eq!(
         result.unwrap_err(),
@@ -243,28 +129,15 @@ fn student_cannot_submit_assignment_after_deadline() {
 
 #[test]
 fn course_teacher_or_admin_can_move_deadline_both_ways() {
-    let teacher = user(1, Role::Teacher);
-    let other_teacher = user(2, Role::Teacher);
-    let admin = user(3, Role::Admin);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
-    let created_at = now();
-    let initial_deadline = created_at + Duration::days(7);
-    let mut assignment = Assignment::new(
-        AssignmentId::new(),
-        &course,
-        &teacher,
-        "Rust ownership",
-        "Send a pull request link.",
-        2,
-        created_at,
-        initial_deadline,
-    )
-    .unwrap();
+    let (course_teacher, other_teacher, admin) = (teacher(1), teacher(2), admin(3));
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &course_teacher);
+    let mut assignment = assignment(&course, &course_teacher).build();
+    let created_at = assignment.created_at();
 
     let earlier_deadline = created_at + Duration::days(3);
     assignment
-        .change_deadline(&course, &teacher, earlier_deadline)
+        .change_deadline(&course, &course_teacher, earlier_deadline)
         .unwrap();
     assert_eq!(assignment.deadline_at(), earlier_deadline);
 
@@ -274,7 +147,7 @@ fn course_teacher_or_admin_can_move_deadline_both_ways() {
         .unwrap();
     assert_eq!(assignment.deadline_at(), later_deadline);
 
-    let result = assignment.change_deadline(&course, &other_teacher, initial_deadline);
+    let result = assignment.change_deadline(&course, &other_teacher, earlier_deadline);
     assert_eq!(
         result.unwrap_err(),
         DomainError::PermissionDenied {
@@ -284,22 +157,31 @@ fn course_teacher_or_admin_can_move_deadline_both_ways() {
 }
 
 #[test]
-fn student_from_another_group_cannot_submit_assignment() {
-    let teacher = user(1, Role::Teacher);
-    let assignment_group = student_group("B9122-02.03.21");
-    let other_group = student_group("M9241-09.04.03");
-    let course = teaching_course(&teacher, &assignment_group);
-    let student = student(2, &other_group);
-    let assignment = published_assignment(&teacher, &course, 2);
+fn deadline_cannot_be_moved_before_creation() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut assignment = assignment(&course, &teacher).build();
+    let created_at = assignment.created_at();
 
-    let result = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/2",
-        now(),
+    let result = assignment.change_deadline(&course, &teacher, created_at - Duration::seconds(1));
+
+    assert_eq!(
+        result.unwrap_err(),
+        DomainError::AssignmentDeadlineMustBeAfterCreatedAt
     );
+}
+
+#[test]
+fn student_from_another_group_cannot_submit_assignment() {
+    let teacher = teacher(1);
+    let assignment_group = student_group(GROUP_CODE);
+    let other_group = student_group(OTHER_GROUP_CODE);
+    let course = course_for(&assignment_group, &teacher);
+    let student = student(2, &other_group);
+    let assignment = assignment(&course, &teacher).published().build();
+
+    let result = submission(&assignment, &student).try_build();
 
     assert_eq!(
         result.unwrap_err(),
@@ -308,14 +190,30 @@ fn student_from_another_group_cannot_submit_assignment() {
 }
 
 #[test]
+fn draft_assignment_cannot_be_submitted() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let draft = assignment(&course, &teacher).build();
+
+    let result = submission(&draft, &student).try_build();
+
+    assert_eq!(result.unwrap_err(), DomainError::AssignmentIsNotPublished);
+}
+
+#[test]
 fn only_course_teacher_or_admin_can_grant_extra_attempts() {
-    let course_teacher = user(1, Role::Teacher);
-    let other_teacher = user(2, Role::Teacher);
-    let admin = user(3, Role::Admin);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&course_teacher, &group);
+    let course_teacher = teacher(1);
+    let other_teacher = teacher(2);
+    let admin = admin(3);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &course_teacher);
     let student = student(4, &group);
-    let assignment = published_assignment(&course_teacher, &course, 1);
+    let assignment = assignment(&course, &course_teacher)
+        .max_attempts(1)
+        .published()
+        .build();
 
     let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
     let result = progress.grant_extra_attempts(&assignment, &course, &other_teacher, 1);
@@ -335,66 +233,59 @@ fn only_course_teacher_or_admin_can_grant_extra_attempts() {
 
 #[test]
 fn extra_attempts_extend_submission_limit() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 1);
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(1)
+        .published()
+        .build();
 
     let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
     progress
         .grant_extra_attempts(&assignment, &course, &teacher, 1)
         .unwrap();
 
-    let second_attempt = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::new(1, progress.extra_attempts(), false, false),
-        "https://github.com/course/hw/pull/3",
-        now(),
-    )
-    .unwrap();
+    let second_attempt = submission(&assignment, &student)
+        .history(history().used(1).extra(progress.extra_attempts()).build())
+        .build();
 
     assert_eq!(second_attempt.attempt_number(), 2);
 }
 
 #[test]
 fn accepted_assignment_cannot_be_submitted_again() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 3);
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(3)
+        .published()
+        .build();
 
-    let result = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::new(1, 0, true, false),
-        "https://github.com/course/hw/pull/4",
-        now(),
-    );
+    let result = submission(&assignment, &student)
+        .history(history().used(1).accepted().build())
+        .try_build();
 
     assert_eq!(result.unwrap_err(), DomainError::SubmissionAlreadyAccepted);
 }
 
 #[test]
 fn pending_submission_blocks_next_attempt() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 3);
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(3)
+        .published()
+        .build();
 
-    let result = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::new(0, 0, false, true),
-        "https://github.com/course/hw/pull/4",
-        now(),
-    );
+    let result = submission(&assignment, &student)
+        .history(history().pending().build())
+        .try_build();
 
     assert_eq!(
         result.unwrap_err(),
@@ -404,22 +295,14 @@ fn pending_submission_blocks_next_attempt() {
 
 #[test]
 fn accepted_review_requires_comment_and_stores_it() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 2);
-    let mut submission = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/1",
-        now(),
-    )
-    .unwrap();
+    let assignment = assignment(&course, &teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
 
-    let empty_comment = submission.accept(&assignment, &course, &teacher, " ", now());
+    let empty_comment = submission.accept(&assignment, &course, &teacher, " ", t0());
 
     assert_eq!(
         empty_comment.unwrap_err(),
@@ -430,7 +313,7 @@ fn accepted_review_requires_comment_and_stores_it() {
     assert_eq!(submission.status(), SubmissionStatus::PendingReview);
 
     submission
-        .accept(&assignment, &course, &teacher, "95/100", now())
+        .accept(&assignment, &course, &teacher, "95/100", t0())
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -439,20 +322,12 @@ fn accepted_review_requires_comment_and_stores_it() {
 
 #[test]
 fn teacher_can_review_pending_submission_once() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 2);
-    let mut submission = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/1",
-        now(),
-    )
-    .unwrap();
+    let assignment = assignment(&course, &teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
 
     submission
         .reject(
@@ -460,7 +335,7 @@ fn teacher_can_review_pending_submission_once() {
             &course,
             &teacher,
             "Add tests for parser errors.",
-            now(),
+            t0(),
         )
         .unwrap();
 
@@ -471,7 +346,7 @@ fn teacher_can_review_pending_submission_once() {
         "Add tests for parser errors."
     );
 
-    let second_review = submission.accept(&assignment, &course, &teacher, "95/100", now());
+    let second_review = submission.accept(&assignment, &course, &teacher, "95/100", t0());
     assert_eq!(
         second_review.unwrap_err(),
         DomainError::SubmissionIsNotPendingReview
@@ -480,29 +355,21 @@ fn teacher_can_review_pending_submission_once() {
 
 #[test]
 fn only_course_teacher_or_admin_can_review_submission() {
-    let course_teacher = user(1, Role::Teacher);
-    let other_teacher = user(2, Role::Teacher);
-    let admin = user(3, Role::Admin);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&course_teacher, &group);
+    let course_teacher = teacher(1);
+    let other_teacher = teacher(2);
+    let admin = admin(3);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &course_teacher);
     let student = student(4, &group);
-    let assignment = published_assignment(&course_teacher, &course, 2);
-    let mut submission = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/1",
-        now(),
-    )
-    .unwrap();
+    let assignment = assignment(&course, &course_teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
 
     let result = submission.accept(
         &assignment,
         &course,
         &other_teacher,
         "Accepted, 95/100",
-        now(),
+        t0(),
     );
 
     assert_eq!(
@@ -513,28 +380,20 @@ fn only_course_teacher_or_admin_can_review_submission() {
     );
 
     submission
-        .reject(&assignment, &course, &admin, "Fix CI", now())
+        .reject(&assignment, &course, &admin, "Fix CI", t0())
         .unwrap();
 }
 
 #[test]
 fn student_cannot_review_submission() {
-    let teacher = user(1, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
-    let course = teaching_course(&teacher, &group);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
     let student = student(2, &group);
-    let assignment = published_assignment(&teacher, &course, 2);
-    let mut submission = Submission::submit(
-        SubmissionId::new(),
-        &assignment,
-        &student,
-        SubmissionHistory::default(),
-        "https://github.com/course/hw/pull/1",
-        now(),
-    )
-    .unwrap();
+    let assignment = assignment(&course, &teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
 
-    let result = submission.accept(&assignment, &course, &student, "95/100", now());
+    let result = submission.accept(&assignment, &course, &student, "95/100", t0());
 
     assert_eq!(
         result.unwrap_err(),
@@ -545,10 +404,30 @@ fn student_cannot_review_submission() {
 }
 
 #[test]
+fn submission_of_another_assignment_cannot_be_reviewed() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let (own, other) = (
+        assignment(&course, &teacher).published().build(),
+        assignment(&course, &teacher).published().build(),
+    );
+    let mut submission = submission(&own, &student).build();
+
+    let result = submission.accept(&other, &course, &teacher, "95/100", t0());
+
+    assert_eq!(
+        result.unwrap_err(),
+        DomainError::SubmissionDoesNotBelongToAssignment
+    );
+}
+
+#[test]
 fn only_admin_can_register_staff() {
-    let admin = user(1, Role::Admin);
-    let teacher = user(2, Role::Teacher);
-    let group = student_group("B9122-02.03.21");
+    let admin = admin(1);
+    let teacher = teacher(2);
+    let group = student_group(GROUP_CODE);
     let student = student(3, &group);
 
     for actor in [&teacher, &student] {
@@ -559,7 +438,7 @@ fn only_admin_can_register_staff() {
                 StaffRole::Teacher,
                 "New teacher",
                 actor,
-                now(),
+                t0(),
             )
             .unwrap_err(),
             DomainError::PermissionDenied {
@@ -574,7 +453,7 @@ fn only_admin_can_register_staff() {
         StaffRole::Teacher,
         "New teacher",
         &admin,
-        now(),
+        t0(),
     )
     .unwrap();
 
@@ -584,4 +463,25 @@ fn only_admin_can_register_staff() {
         None,
         "staff is never bound to a student group"
     );
+}
+
+#[test]
+fn submission_content_is_trimmed() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).published().build();
+
+    let submission = Submission::submit(
+        SubmissionId::new(),
+        &assignment,
+        &student,
+        SubmissionHistory::default(),
+        format!("  {PULL_REQUEST_URL}  "),
+        t0(),
+    )
+    .unwrap();
+
+    assert_eq!(submission.content().as_str(), PULL_REQUEST_URL);
 }

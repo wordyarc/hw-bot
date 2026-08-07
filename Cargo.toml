@@ -24,5 +24,5 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.19.0", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
-testcontainers = "0.28.0"
+testcontainers = { version = "0.28.0", features = ["reusable-containers"] }
 tower = { version = "0.5.2", features = ["util"] }
