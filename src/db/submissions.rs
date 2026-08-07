@@ -9,9 +9,6 @@ use crate::domain::{
     User, UserId,
 };
 
-/// Postgres class 23505: `unique_violation`.
-const UNIQUE_VIOLATION: &str = "23505";
-
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const STATUS: &str = "submissions.status";
 
@@ -60,8 +57,7 @@ where
         submission.review_comment().map(|comment| comment.as_str()),
     )
     .execute(executor)
-    .await
-    .map_err(insert_conflict_or)?;
+    .await?;
 
     Ok(())
 }
@@ -221,41 +217,5 @@ impl TryFrom<SubmissionRow> for Submission {
             row.reviewed_at,
             row.review_comment,
         )?)
-    }
-}
-
-fn insert_conflict_or(error: sqlx::Error) -> DbError {
-    let Some(database_error) = error.as_database_error() else {
-        return DbError::Database(error);
-    };
-
-    if database_error.code().as_deref() != Some(UNIQUE_VIOLATION) {
-        return DbError::Database(error);
-    }
-
-    match database_error.constraint() {
-        Some("submissions_one_pending_per_student_assignment_idx") => {
-            DbError::RuleViolation(DomainError::SubmissionAlreadyPendingReview)
-        }
-        Some("submissions_one_accepted_per_student_assignment_idx") => {
-            DbError::RuleViolation(DomainError::SubmissionAlreadyAccepted)
-        }
-        Some("submissions_assignment_id_student_id_attempt_number_key") => DbError::Conflict {
-            message: "attempt number was already taken by a concurrent submission",
-        },
-        _ => DbError::Database(error),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn keeps_non_unique_violations_as_database_errors() {
-        assert!(matches!(
-            insert_conflict_or(sqlx::Error::RowNotFound),
-            DbError::Database(_)
-        ));
     }
 }

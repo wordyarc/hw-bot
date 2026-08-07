@@ -32,7 +32,7 @@ impl From<DbError> for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
-        Self::Db(DbError::Database(error))
+        Self::from(DbError::from(error))
     }
 }
 
