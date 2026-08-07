@@ -3,7 +3,10 @@ use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult};
-use crate::domain::{Role, StudentGroupId, TelegramUserId, User, UserId};
+use crate::domain::{DomainError, Role, StudentGroupId, TelegramUserId, User, UserId};
+
+/// Postgres class 23505: `unique_violation`.
+const UNIQUE_VIOLATION: &str = "23505";
 
 pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
 where
@@ -16,13 +19,14 @@ where
         "#,
         user.id().as_uuid(),
         user.telegram_user_id().as_i64(),
-        user.role().as_db_str(),
+        user.role().as_str(),
         user.display_name().as_str(),
         user.student_group_id().map(StudentGroupId::as_uuid),
         user.registered_at(),
     )
     .execute(executor)
-    .await?;
+    .await
+    .map_err(insert_conflict_or)?;
 
     Ok(())
 }
@@ -66,6 +70,23 @@ where
     .await?;
 
     row.map(User::try_from).transpose()
+}
+
+fn insert_conflict_or(error: sqlx::Error) -> DbError {
+    let Some(database_error) = error.as_database_error() else {
+        return DbError::Database(error);
+    };
+
+    if database_error.code().as_deref() != Some(UNIQUE_VIOLATION) {
+        return DbError::Database(error);
+    }
+
+    match database_error.constraint() {
+        Some("users_telegram_user_id_key") => {
+            DbError::RuleViolation(DomainError::UserAlreadyRegistered)
+        }
+        _ => DbError::Database(error),
+    }
 }
 
 #[derive(Debug)]

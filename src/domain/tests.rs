@@ -1,9 +1,10 @@
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, EducationLevel, Role, StudentAssignmentProgress,
-    StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission, SubmissionHistory,
-    SubmissionId, SubmissionStatus, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, DomainError, EducationLevel, Role, StaffRole,
+    StudentAssignmentProgress, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId,
+    Submission, SubmissionHistory, SubmissionId, SubmissionStatus, TeachingCourse,
+    TeachingCourseId, TelegramUserId, User, UserId,
 };
 
 fn now() -> DateTime<Utc> {
@@ -540,5 +541,47 @@ fn student_cannot_review_submission() {
         DomainError::PermissionDenied {
             action: "review homework"
         }
+    );
+}
+
+#[test]
+fn only_admin_can_register_staff() {
+    let admin = user(1, Role::Admin);
+    let teacher = user(2, Role::Teacher);
+    let group = student_group("B9122-02.03.21");
+    let student = student(3, &group);
+
+    for actor in [&teacher, &student] {
+        assert_eq!(
+            User::new_staff(
+                UserId::new(),
+                TelegramUserId::new(100).unwrap(),
+                StaffRole::Teacher,
+                "New teacher",
+                actor,
+                now(),
+            )
+            .unwrap_err(),
+            DomainError::PermissionDenied {
+                action: "register staff"
+            }
+        );
+    }
+
+    let registered = User::new_staff(
+        UserId::new(),
+        TelegramUserId::new(100).unwrap(),
+        StaffRole::Teacher,
+        "New teacher",
+        &admin,
+        now(),
+    )
+    .unwrap();
+
+    assert_eq!(registered.role(), Role::Teacher);
+    assert_eq!(
+        registered.student_group_id(),
+        None,
+        "staff is never bound to a student group"
     );
 }

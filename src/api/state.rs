@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use crate::app::{ReviewService, SubmissionService};
+use crate::app::{ReviewService, SubmissionService, UserService};
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -8,6 +8,7 @@ pub struct AppState {
     pub db_pool: PgPool,
     pub submissions: SubmissionService,
     pub reviews: ReviewService,
+    pub users: UserService,
 }
 
 impl AppState {
@@ -16,6 +17,7 @@ impl AppState {
             app_name: app_name.into(),
             submissions: SubmissionService::new(db_pool.clone()),
             reviews: ReviewService::new(db_pool.clone()),
+            users: UserService::new(db_pool.clone()),
             db_pool,
         }
     }

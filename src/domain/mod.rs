@@ -20,4 +20,4 @@ pub use ids::{
 };
 pub use submission::{ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
 pub use text::NonEmptyString;
-pub use user::{Role, User};
+pub use user::{Role, StaffRole, User};

@@ -5,10 +5,14 @@ use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult};
+use crate::db::{DbError, DbResult, try_u8_from_i16};
 use crate::domain::{
-    StudentGroup, StudentGroupId, Subject, SubjectId, TeachingCourse, TeachingCourseId, UserId,
+    EducationLevel, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, TeachingCourse,
+    TeachingCourseId, UserId,
 };
+
+const EDUCATION_LEVEL: &str = "student_groups.education_level";
+const STUDY_YEAR: &str = "student_groups.study_year";
 
 pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> DbResult<()>
 where
@@ -28,6 +32,69 @@ where
     .await?;
 
     Ok(())
+}
+
+pub async fn find_student_group_by_id<'e, E>(
+    executor: E,
+    id: StudentGroupId,
+) -> DbResult<Option<StudentGroup>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        StudentGroupRow,
+        r#"
+        select id, code, education_level, study_year
+        from student_groups
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(StudentGroup::try_from).transpose()
+}
+
+pub async fn find_student_group_by_code<'e, E>(
+    executor: E,
+    code: &str,
+) -> DbResult<Option<StudentGroup>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        StudentGroupRow,
+        r#"
+        select id, code, education_level, study_year
+        from student_groups
+        where code = $1
+        "#,
+        code,
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(StudentGroup::try_from).transpose()
+}
+
+pub async fn list_student_groups<'e, E>(executor: E) -> DbResult<Vec<StudentGroup>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        StudentGroupRow,
+        r#"
+        select id, code, education_level, study_year
+        from student_groups
+        order by code
+        "#,
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(StudentGroup::try_from)
+    .collect()
 }
 
 pub async fn insert_subject<'e, E>(executor: E, subject: &Subject) -> DbResult<()>
@@ -115,6 +182,30 @@ where
     .await?;
 
     row.map(TeachingCourse::try_from).transpose()
+}
+
+#[derive(Debug)]
+struct StudentGroupRow {
+    id: Uuid,
+    code: String,
+    education_level: String,
+    study_year: i16,
+}
+
+impl TryFrom<StudentGroupRow> for StudentGroup {
+    type Error = DbError;
+
+    fn try_from(row: StudentGroupRow) -> Result<Self, Self::Error> {
+        let education_level = EducationLevel::parse_str(&row.education_level)
+            .ok_or_else(|| DbError::invalid_value(EDUCATION_LEVEL, &row.education_level))?;
+        let study_year = try_u8_from_i16(STUDY_YEAR, row.study_year)?;
+
+        Ok(StudentGroup::new(
+            StudentGroupId::from_uuid(row.id),
+            row.code,
+            StudyProgram::new(education_level, study_year)?,
+        )?)
+    }
 }
 
 #[derive(Debug)]

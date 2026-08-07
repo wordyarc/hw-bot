@@ -12,7 +12,7 @@ pub mod users;
 
 pub use error::{DbError, DbResult};
 
-pub(crate) use convert::{to_db_smallint, try_u16_from_i16, try_u16_from_i64};
+pub(crate) use convert::{to_db_smallint, try_u8_from_i16, try_u16_from_i16, try_u16_from_i64};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 

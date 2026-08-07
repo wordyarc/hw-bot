@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 
+use crate::domain::enums::str_enum;
 use crate::domain::{
-    DomainResult, NonEmptyString, StudentGroup, StudentGroupId, TelegramUserId, UserId,
+    DomainError, DomainResult, NonEmptyString, StudentGroup, StudentGroupId, TelegramUserId, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -11,7 +12,34 @@ pub enum Role {
     Admin,
 }
 
+str_enum! {
+    /// Роли, которые нельзя выдать себе самому: студент регистрируется сам, персонал заводит админ.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum StaffRole {
+        Teacher => "teacher",
+        Admin => "admin",
+    }
+}
+
+impl From<StaffRole> for Role {
+    fn from(role: StaffRole) -> Self {
+        match role {
+            StaffRole::Teacher => Self::Teacher,
+            StaffRole::Admin => Self::Admin,
+        }
+    }
+}
+
 impl Role {
+    /// Имя роли одно и то же в БД и в wire-формате API, как и у плоских `str_enum!`-ов.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Student { .. } => "student",
+            Self::Teacher => "teacher",
+            Self::Admin => "admin",
+        }
+    }
+
     pub fn can_submit_homework(self) -> bool {
         matches!(self, Self::Student { .. })
     }
@@ -30,6 +58,10 @@ impl Role {
 
     pub fn can_grant_attempts(self) -> bool {
         matches!(self, Self::Teacher | Self::Admin)
+    }
+
+    pub fn can_manage_users(self) -> bool {
+        matches!(self, Self::Admin)
     }
 
     pub fn student_group_id(self) -> Option<StudentGroupId> {
@@ -82,6 +114,29 @@ impl User {
             display_name: NonEmptyString::new("user.display_name", display_name)?,
             registered_at,
         })
+    }
+
+    pub fn new_staff(
+        id: UserId,
+        telegram_user_id: TelegramUserId,
+        role: StaffRole,
+        display_name: impl Into<String>,
+        actor: &User,
+        registered_at: DateTime<Utc>,
+    ) -> DomainResult<Self> {
+        if !actor.role().can_manage_users() {
+            return Err(DomainError::PermissionDenied {
+                action: "register staff",
+            });
+        }
+
+        Self::new(
+            id,
+            telegram_user_id,
+            role.into(),
+            display_name,
+            registered_at,
+        )
     }
 
     pub fn id(&self) -> UserId {

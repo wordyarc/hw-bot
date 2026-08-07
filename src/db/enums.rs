@@ -4,14 +4,6 @@ use crate::db::{DbError, DbResult};
 use crate::domain::{Role, StudentGroupId};
 
 impl Role {
-    pub fn as_db_str(self) -> &'static str {
-        match self {
-            Self::Student { .. } => "student",
-            Self::Teacher => "teacher",
-            Self::Admin => "admin",
-        }
-    }
-
     /// Роль размазана по двум колонкам, поэтому у нее собственный маппинг, а не `str_enum!`.
     pub(crate) fn from_db_str(value: &str, student_group_id: Option<Uuid>) -> DbResult<Self> {
         let invalid_group = || {
@@ -51,7 +43,7 @@ mod tests {
             let group_column = role.student_group_id().map(StudentGroupId::as_uuid);
 
             assert_eq!(
-                Role::from_db_str(role.as_db_str(), group_column).unwrap(),
+                Role::from_db_str(role.as_str(), group_column).unwrap(),
                 role
             );
         }

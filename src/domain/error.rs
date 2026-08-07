@@ -72,6 +72,9 @@ pub enum DomainError {
     #[error("student assignment progress does not belong to assignment")]
     StudentProgressDoesNotBelongToAssignment,
 
+    #[error("telegram user is already registered")]
+    UserAlreadyRegistered,
+
     #[error("permission denied for {action}")]
     PermissionDenied { action: &'static str },
 }

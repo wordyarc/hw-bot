@@ -127,6 +127,7 @@ impl From<DomainError> for ApiError {
             DomainError::SubmissionIsNotPendingReview => {
                 (StatusCode::CONFLICT, "submission_is_not_pending_review")
             }
+            DomainError::UserAlreadyRegistered => (StatusCode::CONFLICT, "user_already_registered"),
             DomainError::StudentProgressDoesNotBelongToAssignment => (
                 StatusCode::CONFLICT,
                 "student_progress_does_not_belong_to_assignment",

@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select id, code, education_level, study_year\n        from student_groups\n        where code = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "education_level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "education_level"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "study_year",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "study_year"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d4c117a1de6bd246655fe5d402a45c3ee4431b907d9051841d7962bdfcf0fc28"
+}
