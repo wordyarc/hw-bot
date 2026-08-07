@@ -167,18 +167,18 @@ impl Submission {
             });
         }
 
-        Ok(Self {
+        Self::restore(
             id,
-            assignment_id: assignment.id(),
-            student_id: student.id(),
-            attempt_number: history.used_attempts + 1,
-            content: NonEmptyString::new("submission.content", content)?,
-            status: SubmissionStatus::PendingReview,
+            assignment.id(),
+            student.id(),
+            history.used_attempts + 1,
+            content,
+            SubmissionStatus::PendingReview,
             submitted_at,
-            reviewed_by: None,
-            reviewed_at: None,
-            review_comment: None,
-        })
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn accept(

@@ -4,7 +4,13 @@ use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult};
-use crate::domain::{Role, TelegramUserId, User, UserId};
+use crate::domain::{Role, StudentGroupId, TelegramUserId, User, UserId};
+
+macro_rules! columns {
+    () => {
+        "id, telegram_user_id, role, display_name, student_group_id, registered_at"
+    };
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct UserRepository;
@@ -14,23 +20,36 @@ impl UserRepository {
         Self
     }
 
+    pub async fn insert<'e, E>(&self, executor: E, user: &User) -> DbResult<()>
+    where
+        E: PgExecutor<'e>,
+    {
+        sqlx::query(concat!(
+            "insert into users (",
+            columns!(),
+            ") values ($1, $2, $3, $4, $5, $6)"
+        ))
+        .bind(user.id().as_uuid())
+        .bind(user.telegram_user_id().as_i64())
+        .bind(user.role().as_db_str())
+        .bind(user.display_name().as_str())
+        .bind(user.student_group_id().map(StudentGroupId::as_uuid))
+        .bind(user.registered_at())
+        .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn find_by_id<'e, E>(&self, executor: E, id: UserId) -> DbResult<Option<User>>
     where
         E: PgExecutor<'e>,
     {
-        let row = sqlx::query_as::<_, UserRow>(
-            r#"
-            select
-                id,
-                telegram_user_id,
-                role,
-                display_name,
-                student_group_id,
-                registered_at
-            from users
-            where id = $1
-            "#,
-        )
+        let row = sqlx::query_as::<_, UserRow>(concat!(
+            "select ",
+            columns!(),
+            " from users where id = $1"
+        ))
         .bind(id.as_uuid())
         .fetch_optional(executor)
         .await?;
@@ -46,19 +65,11 @@ impl UserRepository {
     where
         E: PgExecutor<'e>,
     {
-        let row = sqlx::query_as::<_, UserRow>(
-            r#"
-            select
-                id,
-                telegram_user_id,
-                role,
-                display_name,
-                student_group_id,
-                registered_at
-            from users
-            where telegram_user_id = $1
-            "#,
-        )
+        let row = sqlx::query_as::<_, UserRow>(concat!(
+            "select ",
+            columns!(),
+            " from users where telegram_user_id = $1"
+        ))
         .bind(telegram_user_id.as_i64())
         .fetch_optional(executor)
         .await?;

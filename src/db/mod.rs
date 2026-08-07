@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::postgres::PgPoolOptions;
 
+pub mod academic;
 pub mod assignments;
 mod convert;
 mod enums;

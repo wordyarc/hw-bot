@@ -99,30 +99,20 @@ impl Assignment {
             });
         }
 
-        if max_attempts == 0 {
-            return Err(DomainError::InvalidAttemptLimit {
-                value: max_attempts,
-            });
-        }
-
-        if deadline_at <= created_at {
-            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
-        }
-
-        Ok(Self {
+        Self::restore(
             id,
-            teaching_course_id: teaching_course.id(),
-            subject_id: teaching_course.subject_id(),
-            student_group_id: teaching_course.student_group_id(),
-            title: NonEmptyString::new("assignment.title", title)?,
-            body: NonEmptyString::new("assignment.body", body)?,
+            teaching_course.id(),
+            teaching_course.subject_id(),
+            teaching_course.student_group_id(),
+            title,
+            body,
             max_attempts,
-            status: AssignmentStatus::Draft,
-            created_by: created_by.id(),
+            AssignmentStatus::Draft,
+            created_by.id(),
             created_at,
             deadline_at,
-            published_at: None,
-        })
+            None,
+        )
     }
 
     pub fn publish(

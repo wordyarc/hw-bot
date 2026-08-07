@@ -3,10 +3,17 @@ use sqlx::FromRow;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult, try_u16_from_i16};
+use crate::db::{DbError, DbResult, to_db_smallint, try_u16_from_i16};
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, StudentGroupId, SubjectId, TeachingCourseId, UserId,
 };
+
+macro_rules! columns {
+    () => {
+        "id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts, status, \
+         created_by, created_at, deadline_at, published_at"
+    };
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct AssignmentRepository;
@@ -14,6 +21,36 @@ pub struct AssignmentRepository;
 impl AssignmentRepository {
     pub fn new() -> Self {
         Self
+    }
+
+    pub async fn insert<'e, E>(&self, executor: E, assignment: &Assignment) -> DbResult<()>
+    where
+        E: PgExecutor<'e>,
+    {
+        sqlx::query(concat!(
+            "insert into assignments (",
+            columns!(),
+            ") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
+        ))
+        .bind(assignment.id().as_uuid())
+        .bind(assignment.teaching_course_id().as_uuid())
+        .bind(assignment.subject_id().as_uuid())
+        .bind(assignment.student_group_id().as_uuid())
+        .bind(assignment.title().as_str())
+        .bind(assignment.body().as_str())
+        .bind(to_db_smallint(
+            "assignment.max_attempts",
+            assignment.max_attempts(),
+        )?)
+        .bind(assignment.status().as_db_str())
+        .bind(assignment.created_by().as_uuid())
+        .bind(assignment.created_at())
+        .bind(assignment.deadline_at())
+        .bind(assignment.published_at())
+        .execute(executor)
+        .await?;
+
+        Ok(())
     }
 
     pub async fn find_by_id<'e, E>(
@@ -24,25 +61,11 @@ impl AssignmentRepository {
     where
         E: PgExecutor<'e>,
     {
-        let row = sqlx::query_as::<_, AssignmentRow>(
-            r#"
-            select
-                id,
-                teaching_course_id,
-                subject_id,
-                student_group_id,
-                title,
-                body,
-                max_attempts,
-                status,
-                created_by,
-                created_at,
-                deadline_at,
-                published_at
-            from assignments
-            where id = $1
-            "#,
-        )
+        let row = sqlx::query_as::<_, AssignmentRow>(concat!(
+            "select ",
+            columns!(),
+            " from assignments where id = $1"
+        ))
         .bind(id.as_uuid())
         .fetch_optional(executor)
         .await?;

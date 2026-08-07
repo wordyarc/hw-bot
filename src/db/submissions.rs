@@ -12,6 +12,13 @@ use crate::domain::{
 /// Postgres class 23505: `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
 
+macro_rules! columns {
+    () => {
+        "id, assignment_id, student_id, attempt_number, content, status, submitted_at, \
+         reviewed_by, reviewed_at, review_comment"
+    };
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SubmissionRepository;
 
@@ -28,23 +35,11 @@ impl SubmissionRepository {
     where
         E: PgExecutor<'e>,
     {
-        let row = sqlx::query_as::<_, SubmissionRow>(
-            r#"
-            select
-                id,
-                assignment_id,
-                student_id,
-                attempt_number,
-                content,
-                status,
-                submitted_at,
-                reviewed_by,
-                reviewed_at,
-                review_comment
-            from submissions
-            where id = $1
-            "#,
-        )
+        let row = sqlx::query_as::<_, SubmissionRow>(concat!(
+            "select ",
+            columns!(),
+            " from submissions where id = $1"
+        ))
         .bind(id.as_uuid())
         .fetch_optional(executor)
         .await?;
@@ -56,23 +51,11 @@ impl SubmissionRepository {
     where
         E: PgExecutor<'e>,
     {
-        sqlx::query(
-            r#"
-            insert into submissions (
-                id,
-                assignment_id,
-                student_id,
-                attempt_number,
-                content,
-                status,
-                submitted_at,
-                reviewed_by,
-                reviewed_at,
-                review_comment
-            )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            "#,
-        )
+        sqlx::query(concat!(
+            "insert into submissions (",
+            columns!(),
+            ") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+        ))
         .bind(submission.id().as_uuid())
         .bind(submission.assignment_id().as_uuid())
         .bind(submission.student_id().as_uuid())
@@ -192,19 +175,9 @@ impl SubmissionRepository {
         reviewer: &User,
     ) -> DbResult<Option<Submission>> {
         let can_review_all = matches!(reviewer.role(), Role::Admin);
-        let row = sqlx::query_as::<_, SubmissionRow>(
+        let locked_id = sqlx::query_scalar::<_, Uuid>(
             r#"
-            select
-                submissions.id,
-                submissions.assignment_id,
-                submissions.student_id,
-                submissions.attempt_number,
-                submissions.content,
-                submissions.status,
-                submissions.submitted_at,
-                submissions.reviewed_by,
-                submissions.reviewed_at,
-                submissions.review_comment
+            select submissions.id
             from submissions
             join assignments
               on assignments.id = submissions.assignment_id
@@ -223,7 +196,12 @@ impl SubmissionRepository {
         .fetch_optional(&mut **tx)
         .await?;
 
-        row.map(Submission::try_from).transpose()
+        let Some(locked_id) = locked_id else {
+            return Ok(None);
+        };
+
+        self.find_by_id(&mut **tx, SubmissionId::from_uuid(locked_id))
+            .await
     }
 }
 
