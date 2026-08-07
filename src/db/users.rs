@@ -1,84 +1,74 @@
 use chrono::{DateTime, Utc};
-use sqlx::FromRow;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult};
 use crate::domain::{Role, StudentGroupId, TelegramUserId, User, UserId};
 
-macro_rules! columns {
-    () => {
-        "id, telegram_user_id, role, display_name, student_group_id, registered_at"
-    };
+pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        insert into users (id, telegram_user_id, role, display_name, student_group_id, registered_at)
+        values ($1, $2, $3, $4, $5, $6)
+        "#,
+        user.id().as_uuid(),
+        user.telegram_user_id().as_i64(),
+        user.role().as_db_str(),
+        user.display_name().as_str(),
+        user.student_group_id().map(StudentGroupId::as_uuid),
+        user.registered_at(),
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(())
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct UserRepository;
+pub async fn find_by_id<'e, E>(executor: E, id: UserId) -> DbResult<Option<User>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        UserRow,
+        r#"
+        select id, telegram_user_id, role, display_name, student_group_id, registered_at
+        from users
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
 
-impl UserRepository {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub async fn insert<'e, E>(&self, executor: E, user: &User) -> DbResult<()>
-    where
-        E: PgExecutor<'e>,
-    {
-        sqlx::query(concat!(
-            "insert into users (",
-            columns!(),
-            ") values ($1, $2, $3, $4, $5, $6)"
-        ))
-        .bind(user.id().as_uuid())
-        .bind(user.telegram_user_id().as_i64())
-        .bind(user.role().as_db_str())
-        .bind(user.display_name().as_str())
-        .bind(user.student_group_id().map(StudentGroupId::as_uuid))
-        .bind(user.registered_at())
-        .execute(executor)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn find_by_id<'e, E>(&self, executor: E, id: UserId) -> DbResult<Option<User>>
-    where
-        E: PgExecutor<'e>,
-    {
-        let row = sqlx::query_as::<_, UserRow>(concat!(
-            "select ",
-            columns!(),
-            " from users where id = $1"
-        ))
-        .bind(id.as_uuid())
-        .fetch_optional(executor)
-        .await?;
-
-        row.map(User::try_from).transpose()
-    }
-
-    pub async fn find_by_telegram_user_id<'e, E>(
-        &self,
-        executor: E,
-        telegram_user_id: TelegramUserId,
-    ) -> DbResult<Option<User>>
-    where
-        E: PgExecutor<'e>,
-    {
-        let row = sqlx::query_as::<_, UserRow>(concat!(
-            "select ",
-            columns!(),
-            " from users where telegram_user_id = $1"
-        ))
-        .bind(telegram_user_id.as_i64())
-        .fetch_optional(executor)
-        .await?;
-
-        row.map(User::try_from).transpose()
-    }
+    row.map(User::try_from).transpose()
 }
 
-#[derive(Debug, FromRow)]
+pub async fn find_by_telegram_user_id<'e, E>(
+    executor: E,
+    telegram_user_id: TelegramUserId,
+) -> DbResult<Option<User>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        UserRow,
+        r#"
+        select id, telegram_user_id, role, display_name, student_group_id, registered_at
+        from users
+        where telegram_user_id = $1
+        "#,
+        telegram_user_id.as_i64(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(User::try_from).transpose()
+}
+
+#[derive(Debug)]
 struct UserRow {
     id: Uuid,
     telegram_user_id: i64,

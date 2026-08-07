@@ -29,3 +29,21 @@ impl From<DbError> for AppError {
         }
     }
 }
+
+impl From<sqlx::Error> for AppError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Db(DbError::Database(error))
+    }
+}
+
+/// Превращает "нашлось или нет" в доменную ошибку слоя приложения, чтобы каждый use case не
+/// повторял `.ok_or(AppError::NotFound { .. })`.
+pub trait Required<T> {
+    fn required(self, resource: &'static str) -> AppResult<T>;
+}
+
+impl<T> Required<T> for Option<T> {
+    fn required(self, resource: &'static str) -> AppResult<T> {
+        self.ok_or(AppError::NotFound { resource })
+    }
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select submissions.id\n        from submissions\n        join assignments\n          on assignments.id = submissions.assignment_id\n        left join teaching_course_teachers\n          on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id\n         and teaching_course_teachers.teacher_id = $2\n        where submissions.status = 'pending_review'\n          and ($1 or teaching_course_teachers.teacher_id is not null)\n        order by submissions.submitted_at, submissions.id\n        for update of submissions skip locked\n        limit 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d6a1f38581aa5627bbcae48fca34cd99d4b13a48a9270326a3e898cc7a5cd036"
+}

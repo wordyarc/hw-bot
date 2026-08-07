@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::Layer;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
@@ -104,35 +105,20 @@ fn init_logging_subscriber<W>(
 where
     W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
 {
-    match format {
-        LoggingFormat::Compact => tracing_subscriber::registry()
-            .with(env_filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .compact()
-                    .with_ansi(false)
-                    .with_writer(writer),
-            )
-            .try_init()?,
-        LoggingFormat::Pretty => tracing_subscriber::registry()
-            .with(env_filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .pretty()
-                    .with_ansi(false)
-                    .with_writer(writer),
-            )
-            .try_init()?,
-        LoggingFormat::Json => tracing_subscriber::registry()
-            .with(env_filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .json()
-                    .with_ansi(false)
-                    .with_writer(writer),
-            )
-            .try_init()?,
-    }
+    let layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(writer);
+
+    let layer = match format {
+        LoggingFormat::Compact => layer.compact().boxed(),
+        LoggingFormat::Pretty => layer.pretty().boxed(),
+        LoggingFormat::Json => layer.json().boxed(),
+    };
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(layer)
+        .try_init()?;
 
     Ok(())
 }

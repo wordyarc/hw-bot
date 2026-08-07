@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, to_db_smallint, try_u16_from_i16, try_u16_from_i64};
@@ -12,200 +12,181 @@ use crate::domain::{
 /// Postgres class 23505: `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
 
-macro_rules! columns {
-    () => {
-        "id, assignment_id, student_id, attempt_number, content, status, submitted_at, \
-         reviewed_by, reviewed_at, review_comment"
-    };
+const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
+
+pub async fn find_by_id<'e, E>(executor: E, id: SubmissionId) -> DbResult<Option<Submission>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        SubmissionRow,
+        r#"
+        select
+            id, assignment_id, student_id, attempt_number, content, status, submitted_at,
+            reviewed_by, reviewed_at, review_comment
+        from submissions
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(Submission::try_from).transpose()
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct SubmissionRepository;
-
-impl SubmissionRepository {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub async fn find_by_id<'e, E>(
-        &self,
-        executor: E,
-        id: SubmissionId,
-    ) -> DbResult<Option<Submission>>
-    where
-        E: PgExecutor<'e>,
-    {
-        let row = sqlx::query_as::<_, SubmissionRow>(concat!(
-            "select ",
-            columns!(),
-            " from submissions where id = $1"
-        ))
-        .bind(id.as_uuid())
-        .fetch_optional(executor)
-        .await?;
-
-        row.map(Submission::try_from).transpose()
-    }
-
-    pub async fn insert<'e, E>(&self, executor: E, submission: &Submission) -> DbResult<()>
-    where
-        E: PgExecutor<'e>,
-    {
-        sqlx::query(concat!(
-            "insert into submissions (",
-            columns!(),
-            ") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
-        ))
-        .bind(submission.id().as_uuid())
-        .bind(submission.assignment_id().as_uuid())
-        .bind(submission.student_id().as_uuid())
-        .bind(to_db_smallint(
-            "submission.attempt_number",
-            submission.attempt_number(),
-        )?)
-        .bind(submission.content().as_str())
-        .bind(submission.status().as_db_str())
-        .bind(submission.submitted_at())
-        .bind(submission.reviewed_by().map(UserId::as_uuid))
-        .bind(submission.reviewed_at())
-        .bind(submission.review_comment().map(|comment| comment.as_str()))
-        .execute(executor)
-        .await
-        .map_err(insert_conflict_or)?;
-
-        Ok(())
-    }
-
-    pub async fn save_review_result<'e, E>(
-        &self,
-        executor: E,
-        submission: &Submission,
-    ) -> DbResult<()>
-    where
-        E: PgExecutor<'e>,
-    {
-        if submission.status() == SubmissionStatus::PendingReview {
-            return Err(DbError::Conflict {
-                message: "pending submission cannot be saved as a review result",
-            });
-        }
-
-        let result = sqlx::query(
-            r#"
-            update submissions
-            set
-                status = $2,
-                reviewed_by = $3,
-                reviewed_at = $4,
-                review_comment = $5
-            where id = $1
-              and status = 'pending_review'
-            "#,
+pub async fn insert<'e, E>(executor: E, submission: &Submission) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        insert into submissions (
+            id, assignment_id, student_id, attempt_number, content, status, submitted_at,
+            reviewed_by, reviewed_at, review_comment
         )
-        .bind(submission.id().as_uuid())
-        .bind(submission.status().as_db_str())
-        .bind(submission.reviewed_by().map(UserId::as_uuid))
-        .bind(submission.reviewed_at())
-        .bind(submission.review_comment().map(|comment| comment.as_str()))
-        .execute(executor)
-        .await?;
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+        submission.id().as_uuid(),
+        submission.assignment_id().as_uuid(),
+        submission.student_id().as_uuid(),
+        to_db_smallint(ATTEMPT_NUMBER, submission.attempt_number())?,
+        submission.content().as_str(),
+        submission.status().as_db_str(),
+        submission.submitted_at(),
+        submission.reviewed_by().map(UserId::as_uuid),
+        submission.reviewed_at(),
+        submission.review_comment().map(|comment| comment.as_str()),
+    )
+    .execute(executor)
+    .await
+    .map_err(insert_conflict_or)?;
 
-        if result.rows_affected() == 0 {
-            return Err(DbError::RuleViolation(
-                DomainError::SubmissionIsNotPendingReview,
-            ));
-        }
+    Ok(())
+}
 
-        Ok(())
+pub async fn save_review_result<'e, E>(executor: E, submission: &Submission) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    if submission.status() == SubmissionStatus::PendingReview {
+        return Err(DbError::Conflict {
+            message: "pending submission cannot be saved as a review result",
+        });
     }
 
-    pub async fn load_history<'e, E>(
-        &self,
-        executor: E,
-        assignment_id: AssignmentId,
-        student_id: UserId,
-    ) -> DbResult<SubmissionHistory>
-    where
-        E: PgExecutor<'e>,
-    {
-        let row = sqlx::query_as::<_, SubmissionHistoryRow>(
-            r#"
-            with history as (
-                select
-                    count(*) filter (
-                        where status in ('accepted', 'rejected')
-                    )::bigint as used_attempts,
-                    coalesce(bool_or(status = 'accepted'), false) as has_accepted_submission,
-                    coalesce(bool_or(status = 'pending_review'), false) as has_pending_submission
-                from submissions
-                where assignment_id = $1
-                  and student_id = $2
-            ),
-            progress as (
-                select coalesce(max(extra_attempts), 0)::smallint as extra_attempts
-                from student_assignment_progress
-                where assignment_id = $1
-                  and student_id = $2
-            )
+    let result = sqlx::query!(
+        r#"
+        update submissions
+        set
+            status = $2,
+            reviewed_by = $3,
+            reviewed_at = $4,
+            review_comment = $5
+        where id = $1
+          and status = 'pending_review'
+        "#,
+        submission.id().as_uuid(),
+        submission.status().as_db_str(),
+        submission.reviewed_by().map(UserId::as_uuid),
+        submission.reviewed_at(),
+        submission.review_comment().map(|comment| comment.as_str()),
+    )
+    .execute(executor)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::RuleViolation(
+            DomainError::SubmissionIsNotPendingReview,
+        ));
+    }
+
+    Ok(())
+}
+
+pub async fn load_history<'e, E>(
+    executor: E,
+    assignment_id: AssignmentId,
+    student_id: UserId,
+) -> DbResult<SubmissionHistory>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query!(
+        r#"
+        with history as (
             select
-                history.used_attempts,
-                progress.extra_attempts,
-                history.has_accepted_submission,
-                history.has_pending_submission
-            from history
-            cross join progress
-            "#,
-        )
-        .bind(assignment_id.as_uuid())
-        .bind(student_id.as_uuid())
-        .fetch_one(executor)
-        .await?;
-
-        Ok(SubmissionHistory::new(
-            try_u16_from_i64("submission_history.used_attempts", row.used_attempts)?,
-            try_u16_from_i16("submission_history.extra_attempts", row.extra_attempts)?,
-            row.has_accepted_submission,
-            row.has_pending_submission,
-        ))
-    }
-
-    pub async fn lock_next_pending_for_reviewer(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        reviewer: &User,
-    ) -> DbResult<Option<Submission>> {
-        let can_review_all = matches!(reviewer.role(), Role::Admin);
-        let locked_id = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            select submissions.id
+                count(*) filter (
+                    where status in ('accepted', 'rejected')
+                )::bigint as used_attempts,
+                coalesce(bool_or(status = 'accepted'), false) as has_accepted_submission,
+                coalesce(bool_or(status = 'pending_review'), false) as has_pending_submission
             from submissions
-            join assignments
-              on assignments.id = submissions.assignment_id
-            left join teaching_course_teachers
-              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
-             and teaching_course_teachers.teacher_id = $2
-            where submissions.status = 'pending_review'
-              and ($1 or teaching_course_teachers.teacher_id is not null)
-            order by submissions.submitted_at, submissions.id
-            for update of submissions skip locked
-            limit 1
-            "#,
+            where assignment_id = $1
+              and student_id = $2
+        ),
+        progress as (
+            select coalesce(max(extra_attempts), 0)::smallint as extra_attempts
+            from student_assignment_progress
+            where assignment_id = $1
+              and student_id = $2
         )
-        .bind(can_review_all)
-        .bind(reviewer.id().as_uuid())
-        .fetch_optional(&mut **tx)
-        .await?;
+        select
+            history.used_attempts as "used_attempts!",
+            progress.extra_attempts as "extra_attempts!",
+            history.has_accepted_submission as "has_accepted_submission!",
+            history.has_pending_submission as "has_pending_submission!"
+        from history
+        cross join progress
+        "#,
+        assignment_id.as_uuid(),
+        student_id.as_uuid(),
+    )
+    .fetch_one(executor)
+    .await?;
 
-        let Some(locked_id) = locked_id else {
-            return Ok(None);
-        };
-
-        self.find_by_id(&mut **tx, SubmissionId::from_uuid(locked_id))
-            .await
-    }
+    Ok(SubmissionHistory::new(
+        try_u16_from_i64("submission_history.used_attempts", row.used_attempts)?,
+        try_u16_from_i16("submission_history.extra_attempts", row.extra_attempts)?,
+        row.has_accepted_submission,
+        row.has_pending_submission,
+    ))
 }
 
-#[derive(Debug, FromRow)]
+pub async fn lock_next_pending_for_reviewer(
+    tx: &mut Transaction<'_, Postgres>,
+    reviewer: &User,
+) -> DbResult<Option<Submission>> {
+    let can_review_all = matches!(reviewer.role(), Role::Admin);
+    let locked_id = sqlx::query_scalar!(
+        r#"
+        select submissions.id
+        from submissions
+        join assignments
+          on assignments.id = submissions.assignment_id
+        left join teaching_course_teachers
+          on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
+         and teaching_course_teachers.teacher_id = $2
+        where submissions.status = 'pending_review'
+          and ($1 or teaching_course_teachers.teacher_id is not null)
+        order by submissions.submitted_at, submissions.id
+        for update of submissions skip locked
+        limit 1
+        "#,
+        can_review_all,
+        reviewer.id().as_uuid(),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let Some(locked_id) = locked_id else {
+        return Ok(None);
+    };
+
+    find_by_id(&mut **tx, SubmissionId::from_uuid(locked_id)).await
+}
+
+#[derive(Debug)]
 struct SubmissionRow {
     id: Uuid,
     assignment_id: Uuid,
@@ -224,7 +205,7 @@ impl TryFrom<SubmissionRow> for Submission {
 
     fn try_from(row: SubmissionRow) -> Result<Self, Self::Error> {
         let status = SubmissionStatus::from_db_str(&row.status)?;
-        let attempt_number = try_u16_from_i16("submissions.attempt_number", row.attempt_number)?;
+        let attempt_number = try_u16_from_i16(ATTEMPT_NUMBER, row.attempt_number)?;
 
         Ok(Submission::restore(
             SubmissionId::from_uuid(row.id),
@@ -239,14 +220,6 @@ impl TryFrom<SubmissionRow> for Submission {
             row.review_comment,
         )?)
     }
-}
-
-#[derive(Debug, FromRow)]
-struct SubmissionHistoryRow {
-    used_attempts: i64,
-    extra_attempts: i16,
-    has_accepted_submission: bool,
-    has_pending_submission: bool,
 }
 
 fn insert_conflict_or(error: sqlx::Error) -> DbError {

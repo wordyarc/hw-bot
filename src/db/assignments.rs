@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use sqlx::FromRow;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
@@ -8,73 +7,61 @@ use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, StudentGroupId, SubjectId, TeachingCourseId, UserId,
 };
 
-macro_rules! columns {
-    () => {
-        "id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts, status, \
-         created_by, created_at, deadline_at, published_at"
-    };
+const MAX_ATTEMPTS: &str = "assignments.max_attempts";
+
+pub async fn insert<'e, E>(executor: E, assignment: &Assignment) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        insert into assignments (
+            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, created_at, deadline_at, published_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "#,
+        assignment.id().as_uuid(),
+        assignment.teaching_course_id().as_uuid(),
+        assignment.subject_id().as_uuid(),
+        assignment.student_group_id().as_uuid(),
+        assignment.title().as_str(),
+        assignment.body().as_str(),
+        to_db_smallint(MAX_ATTEMPTS, assignment.max_attempts())?,
+        assignment.status().as_db_str(),
+        assignment.created_by().as_uuid(),
+        assignment.created_at(),
+        assignment.deadline_at(),
+        assignment.published_at(),
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(())
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct AssignmentRepository;
+pub async fn find_by_id<'e, E>(executor: E, id: AssignmentId) -> DbResult<Option<Assignment>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        AssignmentRow,
+        r#"
+        select
+            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, created_at, deadline_at, published_at
+        from assignments
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
 
-impl AssignmentRepository {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub async fn insert<'e, E>(&self, executor: E, assignment: &Assignment) -> DbResult<()>
-    where
-        E: PgExecutor<'e>,
-    {
-        sqlx::query(concat!(
-            "insert into assignments (",
-            columns!(),
-            ") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
-        ))
-        .bind(assignment.id().as_uuid())
-        .bind(assignment.teaching_course_id().as_uuid())
-        .bind(assignment.subject_id().as_uuid())
-        .bind(assignment.student_group_id().as_uuid())
-        .bind(assignment.title().as_str())
-        .bind(assignment.body().as_str())
-        .bind(to_db_smallint(
-            "assignment.max_attempts",
-            assignment.max_attempts(),
-        )?)
-        .bind(assignment.status().as_db_str())
-        .bind(assignment.created_by().as_uuid())
-        .bind(assignment.created_at())
-        .bind(assignment.deadline_at())
-        .bind(assignment.published_at())
-        .execute(executor)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn find_by_id<'e, E>(
-        &self,
-        executor: E,
-        id: AssignmentId,
-    ) -> DbResult<Option<Assignment>>
-    where
-        E: PgExecutor<'e>,
-    {
-        let row = sqlx::query_as::<_, AssignmentRow>(concat!(
-            "select ",
-            columns!(),
-            " from assignments where id = $1"
-        ))
-        .bind(id.as_uuid())
-        .fetch_optional(executor)
-        .await?;
-
-        row.map(Assignment::try_from).transpose()
-    }
+    row.map(Assignment::try_from).transpose()
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug)]
 struct AssignmentRow {
     id: Uuid,
     teaching_course_id: Uuid,
@@ -94,7 +81,7 @@ impl TryFrom<AssignmentRow> for Assignment {
     type Error = DbError;
 
     fn try_from(row: AssignmentRow) -> Result<Self, Self::Error> {
-        let max_attempts = try_u16_from_i16("assignments.max_attempts", row.max_attempts)?;
+        let max_attempts = try_u16_from_i16(MAX_ATTEMPTS, row.max_attempts)?;
         let status = AssignmentStatus::from_db_str(&row.status)?;
 
         Ok(Assignment::restore(

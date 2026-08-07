@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into submissions (\n            id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n            reviewed_by, reviewed_at, review_comment\n        )\n        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int2",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e836de11f20e79efe9e15509a05f0ab9ab8b4095d75188e7e24e646936f7f52"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into subjects (id, name)\n        values ($1, $2)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "41b3dcdc4d5984053d435e65b4fa72726b177f05180b8fc8836eee93874dca30"
+}

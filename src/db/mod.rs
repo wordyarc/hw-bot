@@ -16,10 +16,6 @@ pub(crate) use convert::{to_db_smallint, try_u16_from_i16, try_u16_from_i64};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    connect_with_max_connections(database_url, 5).await
-}
-
 pub async fn connect_with_max_connections(
     database_url: &str,
     max_connections: u32,

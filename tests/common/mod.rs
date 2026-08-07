@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 
 use chrono::{Duration, Utc};
-use hw_bot::db::academic::{StudentGroupRepository, SubjectRepository, TeachingCourseRepository};
-use hw_bot::db::assignments::AssignmentRepository;
-use hw_bot::db::users::UserRepository;
+use hw_bot::db;
 use hw_bot::domain::{
     Assignment, AssignmentId, EducationLevel, Role, StudentGroup, StudentGroupId, StudyProgram,
     Subject, SubjectId, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
@@ -50,10 +48,10 @@ impl Fixture {
             "B9122-02.03.21",
             StudyProgram::new(EducationLevel::Bachelor, 1)?,
         )?;
-        StudentGroupRepository::new().insert(pool, &group).await?;
+        db::academic::insert_student_group(pool, &group).await?;
 
         let subject = Subject::new(SubjectId::new(), "Backend development")?;
-        SubjectRepository::new().insert(pool, &subject).await?;
+        db::academic::insert_subject(pool, &subject).await?;
 
         let teacher = User::new(
             UserId::new(),
@@ -62,7 +60,7 @@ impl Fixture {
             "Teacher",
             Utc::now(),
         )?;
-        UserRepository::new().insert(pool, &teacher).await?;
+        db::users::insert(pool, &teacher).await?;
 
         let student = User::new_student(
             UserId::new(),
@@ -71,7 +69,7 @@ impl Fixture {
             &group,
             Utc::now(),
         )?;
-        UserRepository::new().insert(pool, &student).await?;
+        db::users::insert(pool, &student).await?;
 
         let course = TeachingCourse::new(
             TeachingCourseId::new(),
@@ -81,9 +79,7 @@ impl Fixture {
             Utc::now(),
         )?;
         let mut tx = pool.begin().await?;
-        TeachingCourseRepository::new()
-            .insert(&mut tx, &course)
-            .await?;
+        db::academic::insert_teaching_course(&mut tx, &course).await?;
         tx.commit().await?;
 
         let created_at = Utc::now();
@@ -98,9 +94,7 @@ impl Fixture {
             created_at + Duration::days(7),
         )?;
         assignment.publish(&course, &teacher, created_at + Duration::seconds(1))?;
-        AssignmentRepository::new()
-            .insert(pool, &assignment)
-            .await?;
+        db::assignments::insert(pool, &assignment).await?;
 
         Ok(Self {
             group,
@@ -125,7 +119,7 @@ impl Fixture {
             &self.group,
             Utc::now(),
         )?;
-        UserRepository::new().insert(pool, &student).await?;
+        db::users::insert(pool, &student).await?;
 
         Ok(student)
     }
@@ -140,9 +134,7 @@ impl Fixture {
             "B9123-02.03.21",
             StudyProgram::new(EducationLevel::Bachelor, 2)?,
         )?;
-        StudentGroupRepository::new()
-            .insert(pool, &other_group)
-            .await?;
+        db::academic::insert_student_group(pool, &other_group).await?;
 
         let student = User::new_student(
             UserId::new(),
@@ -151,7 +143,7 @@ impl Fixture {
             &other_group,
             Utc::now(),
         )?;
-        UserRepository::new().insert(pool, &student).await?;
+        db::users::insert(pool, &student).await?;
 
         Ok(student)
     }
@@ -168,9 +160,7 @@ impl Fixture {
             created_at,
             created_at + Duration::days(7),
         )?;
-        AssignmentRepository::new()
-            .insert(pool, &assignment)
-            .await?;
+        db::assignments::insert(pool, &assignment).await?;
 
         Ok(assignment)
     }

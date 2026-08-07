@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into teaching_course_teachers (teaching_course_id, teacher_id)\n        select $1, teacher_id\n        from unnest($2::uuid[]) as teachers (teacher_id)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4911018a9b8d962b71b406c2a4ba72aebb53c390f5cb715005a03ff4f513fb1e"
+}
