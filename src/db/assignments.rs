@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult, to_db_smallint, try_u16_from_i16};
+use crate::db::{DbError, DbResult, num};
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, StudentGroupId, SubjectId, TeachingCourseId, UserId,
 };
@@ -28,7 +28,7 @@ where
         assignment.student_group_id().as_uuid(),
         assignment.title().as_str(),
         assignment.body().as_str(),
-        to_db_smallint(MAX_ATTEMPTS, assignment.max_attempts())?,
+        num::<_, i16>(MAX_ATTEMPTS, assignment.max_attempts())?,
         assignment.status().as_str(),
         assignment.created_by().as_uuid(),
         assignment.created_at(),
@@ -82,7 +82,7 @@ impl TryFrom<AssignmentRow> for Assignment {
     type Error = DbError;
 
     fn try_from(row: AssignmentRow) -> Result<Self, Self::Error> {
-        let max_attempts = try_u16_from_i16(MAX_ATTEMPTS, row.max_attempts)?;
+        let max_attempts: u16 = num(MAX_ATTEMPTS, row.max_attempts)?;
         let status = AssignmentStatus::parse_str(&row.status)
             .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
 

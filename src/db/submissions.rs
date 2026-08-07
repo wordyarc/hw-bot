@@ -3,7 +3,7 @@ use sqlx::postgres::PgExecutor;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult, to_db_smallint, try_u16_from_i16, try_u16_from_i64};
+use crate::db::{DbError, DbResult, num};
 use crate::domain::{
     AssignmentId, DomainError, Role, Submission, SubmissionHistory, SubmissionId, SubmissionStatus,
     User, UserId,
@@ -51,7 +51,7 @@ where
         submission.id().as_uuid(),
         submission.assignment_id().as_uuid(),
         submission.student_id().as_uuid(),
-        to_db_smallint(ATTEMPT_NUMBER, submission.attempt_number())?,
+        num::<_, i16>(ATTEMPT_NUMBER, submission.attempt_number())?,
         submission.content().as_str(),
         submission.status().as_str(),
         submission.submitted_at(),
@@ -147,8 +147,8 @@ where
     .await?;
 
     Ok(SubmissionHistory::new(
-        try_u16_from_i64("submission_history.used_attempts", row.used_attempts)?,
-        try_u16_from_i16("submission_history.extra_attempts", row.extra_attempts)?,
+        num("submission_history.used_attempts", row.used_attempts)?,
+        num("submission_history.extra_attempts", row.extra_attempts)?,
         row.has_accepted_submission,
         row.has_pending_submission,
     ))
@@ -207,7 +207,7 @@ impl TryFrom<SubmissionRow> for Submission {
     fn try_from(row: SubmissionRow) -> Result<Self, Self::Error> {
         let status = SubmissionStatus::parse_str(&row.status)
             .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
-        let attempt_number = try_u16_from_i16(ATTEMPT_NUMBER, row.attempt_number)?;
+        let attempt_number: u16 = num(ATTEMPT_NUMBER, row.attempt_number)?;
 
         Ok(Submission::restore(
             SubmissionId::from_uuid(row.id),
