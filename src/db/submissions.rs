@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, to_db_smallint, try_u16_from_i16, try_u16_from_i64};
 use crate::domain::{
-    AssignmentId, Role, Submission, SubmissionHistory, SubmissionId, SubmissionStatus, User, UserId,
+    AssignmentId, DomainError, Role, Submission, SubmissionHistory, SubmissionId, SubmissionStatus,
+    User, UserId,
 };
 
 /// Postgres class 23505: `unique_violation`.
@@ -80,7 +81,7 @@ impl SubmissionRepository {
             submission.attempt_number(),
         )?)
         .bind(submission.content().as_str())
-        .bind(submission_status_to_db(submission.status()))
+        .bind(submission.status().as_db_str())
         .bind(submission.submitted_at())
         .bind(submission.reviewed_by().map(UserId::as_uuid))
         .bind(submission.reviewed_at())
@@ -119,7 +120,7 @@ impl SubmissionRepository {
             "#,
         )
         .bind(submission.id().as_uuid())
-        .bind(submission_status_to_db(submission.status()))
+        .bind(submission.status().as_db_str())
         .bind(submission.reviewed_by().map(UserId::as_uuid))
         .bind(submission.reviewed_at())
         .bind(submission.review_comment().map(|comment| comment.as_str()))
@@ -127,9 +128,9 @@ impl SubmissionRepository {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(DbError::Conflict {
-                message: "submission was not found or is not pending review",
-            });
+            return Err(DbError::RuleViolation(
+                DomainError::SubmissionIsNotPendingReview,
+            ));
         }
 
         Ok(())
@@ -244,7 +245,7 @@ impl TryFrom<SubmissionRow> for Submission {
     type Error = DbError;
 
     fn try_from(row: SubmissionRow) -> Result<Self, Self::Error> {
-        let status = submission_status_from_db(&row.status)?;
+        let status = SubmissionStatus::from_db_str(&row.status)?;
         let attempt_number = try_u16_from_i16("submissions.attempt_number", row.attempt_number)?;
 
         Ok(Submission::restore(
@@ -270,26 +271,6 @@ struct SubmissionHistoryRow {
     has_pending_submission: bool,
 }
 
-fn submission_status_to_db(status: SubmissionStatus) -> &'static str {
-    match status {
-        SubmissionStatus::PendingReview => "pending_review",
-        SubmissionStatus::Accepted => "accepted",
-        SubmissionStatus::Rejected => "rejected",
-    }
-}
-
-fn submission_status_from_db(value: &str) -> DbResult<SubmissionStatus> {
-    match value {
-        "pending_review" => Ok(SubmissionStatus::PendingReview),
-        "accepted" => Ok(SubmissionStatus::Accepted),
-        "rejected" => Ok(SubmissionStatus::Rejected),
-        other => Err(DbError::InvalidDatabaseValue {
-            field: "submissions.status",
-            value: other.to_owned(),
-        }),
-    }
-}
-
 fn insert_conflict_or(error: sqlx::Error) -> DbError {
     let Some(database_error) = error.as_database_error() else {
         return DbError::Database(error);
@@ -299,64 +280,23 @@ fn insert_conflict_or(error: sqlx::Error) -> DbError {
         return DbError::Database(error);
     }
 
-    let message = match database_error.constraint() {
+    match database_error.constraint() {
         Some("submissions_one_pending_per_student_assignment_idx") => {
-            "assignment already has a pending submission"
+            DbError::RuleViolation(DomainError::SubmissionAlreadyPendingReview)
         }
         Some("submissions_one_accepted_per_student_assignment_idx") => {
-            "assignment already has an accepted submission"
+            DbError::RuleViolation(DomainError::SubmissionAlreadyAccepted)
         }
-        Some("submissions_assignment_id_student_id_attempt_number_key") => {
-            "attempt number was already taken by a concurrent submission"
-        }
-        _ => return DbError::Database(error),
-    };
-
-    DbError::Conflict { message }
+        Some("submissions_assignment_id_student_id_attempt_number_key") => DbError::Conflict {
+            message: "attempt number was already taken by a concurrent submission",
+        },
+        _ => DbError::Database(error),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn maps_submission_status_to_database_values() {
-        assert_eq!(
-            submission_status_to_db(SubmissionStatus::PendingReview),
-            "pending_review"
-        );
-        assert_eq!(
-            submission_status_to_db(SubmissionStatus::Accepted),
-            "accepted"
-        );
-        assert_eq!(
-            submission_status_to_db(SubmissionStatus::Rejected),
-            "rejected"
-        );
-    }
-
-    #[test]
-    fn maps_submission_status_from_database_values() {
-        assert_eq!(
-            submission_status_from_db("pending_review").unwrap(),
-            SubmissionStatus::PendingReview
-        );
-        assert_eq!(
-            submission_status_from_db("accepted").unwrap(),
-            SubmissionStatus::Accepted
-        );
-        assert_eq!(
-            submission_status_from_db("rejected").unwrap(),
-            SubmissionStatus::Rejected
-        );
-        assert!(matches!(
-            submission_status_from_db("unknown"),
-            Err(DbError::InvalidDatabaseValue {
-                field: "submissions.status",
-                ..
-            })
-        ));
-    }
 
     #[test]
     fn keeps_non_unique_violations_as_database_errors() {

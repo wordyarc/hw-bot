@@ -2,9 +2,8 @@
 
 use chrono::{Duration, Utc};
 use hw_bot::domain::{
-    Assignment, AssignmentId, AssignmentStatus, EducationLevel, Role, StudentGroup, StudentGroupId,
-    StudyProgram, Subject, SubjectId, TeachingCourse, TeachingCourseId, TelegramUserId, User,
-    UserId,
+    Assignment, AssignmentId, EducationLevel, Role, StudentGroup, StudentGroupId, StudyProgram,
+    Subject, SubjectId, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
 };
 use sqlx::PgPool;
 use testcontainers::core::{IntoContainerPort, WaitFor};
@@ -213,7 +212,7 @@ pub async fn insert_user(pool: &PgPool, user: &User) -> anyhow::Result<()> {
     )
     .bind(user.id().as_uuid())
     .bind(user.telegram_user_id().as_i64())
-    .bind(role_to_db(user.role()))
+    .bind(user.role().as_db_str())
     .bind(user.display_name().as_str())
     .bind(user.student_group_id().map(StudentGroupId::as_uuid))
     .bind(user.registered_at())
@@ -291,7 +290,7 @@ pub async fn insert_assignment(pool: &PgPool, assignment: &Assignment) -> anyhow
     .bind(assignment.title().as_str())
     .bind(assignment.body().as_str())
     .bind(i16::try_from(assignment.max_attempts())?)
-    .bind(assignment_status_to_db(assignment.status()))
+    .bind(assignment.status().as_db_str())
     .bind(assignment.created_by().as_uuid())
     .bind(assignment.created_at())
     .bind(assignment.deadline_at())
@@ -300,20 +299,4 @@ pub async fn insert_assignment(pool: &PgPool, assignment: &Assignment) -> anyhow
     .await?;
 
     Ok(())
-}
-
-pub fn role_to_db(role: Role) -> &'static str {
-    match role {
-        Role::Student { .. } => "student",
-        Role::Teacher => "teacher",
-        Role::Admin => "admin",
-    }
-}
-
-pub fn assignment_status_to_db(status: AssignmentStatus) -> &'static str {
-    match status {
-        AssignmentStatus::Draft => "draft",
-        AssignmentStatus::Published => "published",
-        AssignmentStatus::Archived => "archived",
-    }
 }

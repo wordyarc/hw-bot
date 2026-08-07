@@ -162,6 +162,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
+    use crate::db::DbError;
 
     fn api_error(error: DomainError) -> ApiError {
         ApiError::from(error)
@@ -236,12 +237,28 @@ mod tests {
     }
 
     #[test]
-    fn maps_write_races_to_conflict() {
+    fn maps_retryable_write_races_to_conflict() {
         let error = ApiError::from(AppError::Conflict {
-            message: "assignment already has a pending submission",
+            message: "attempt number was already taken by a concurrent submission",
         });
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
         assert_eq!(error.code(), "conflict");
+    }
+
+    #[test]
+    fn a_lost_race_reports_the_same_error_as_the_up_front_check() {
+        for rule in [
+            DomainError::SubmissionAlreadyPendingReview,
+            DomainError::SubmissionAlreadyAccepted,
+            DomainError::SubmissionIsNotPendingReview,
+        ] {
+            let from_check = ApiError::from(AppError::from(rule.clone()));
+            let from_race = ApiError::from(AppError::from(DbError::RuleViolation(rule)));
+
+            assert_eq!(from_check.status(), from_race.status());
+            assert_eq!(from_check.code(), from_race.code());
+            assert_eq!(from_check.message, from_race.message);
+        }
     }
 }

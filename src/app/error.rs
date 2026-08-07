@@ -23,6 +23,7 @@ pub enum AppError {
 impl From<DbError> for AppError {
     fn from(error: DbError) -> Self {
         match error {
+            DbError::RuleViolation(domain_error) => Self::Domain(domain_error),
             DbError::Conflict { message } => Self::Conflict { message },
             other => Self::Db(other),
         }

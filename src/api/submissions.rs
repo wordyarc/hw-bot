@@ -24,8 +24,26 @@ pub struct SubmissionResponse {
     student_id: Uuid,
     attempt_number: u16,
     content: String,
-    status: &'static str,
+    status: SubmissionStatusResponse,
     submitted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionStatusResponse {
+    PendingReview,
+    Accepted,
+    Rejected,
+}
+
+impl From<SubmissionStatus> for SubmissionStatusResponse {
+    fn from(status: SubmissionStatus) -> Self {
+        match status {
+            SubmissionStatus::PendingReview => Self::PendingReview,
+            SubmissionStatus::Accepted => Self::Accepted,
+            SubmissionStatus::Rejected => Self::Rejected,
+        }
+    }
 }
 
 impl From<&Submission> for SubmissionResponse {
@@ -36,7 +54,7 @@ impl From<&Submission> for SubmissionResponse {
             student_id: submission.student_id().as_uuid(),
             attempt_number: submission.attempt_number(),
             content: submission.content().as_str().to_owned(),
-            status: status_name(submission.status()),
+            status: submission.status().into(),
             submitted_at: submission.submitted_at(),
         }
     }
@@ -60,12 +78,4 @@ pub async fn submit_homework(
         StatusCode::CREATED,
         Json(SubmissionResponse::from(&submission)),
     ))
-}
-
-fn status_name(status: SubmissionStatus) -> &'static str {
-    match status {
-        SubmissionStatus::PendingReview => "pending_review",
-        SubmissionStatus::Accepted => "accepted",
-        SubmissionStatus::Rejected => "rejected",
-    }
 }

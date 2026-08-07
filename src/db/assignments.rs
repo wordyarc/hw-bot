@@ -72,7 +72,7 @@ impl TryFrom<AssignmentRow> for Assignment {
 
     fn try_from(row: AssignmentRow) -> Result<Self, Self::Error> {
         let max_attempts = try_u16_from_i16("assignments.max_attempts", row.max_attempts)?;
-        let status = assignment_status_from_db(&row.status)?;
+        let status = AssignmentStatus::from_db_str(&row.status)?;
 
         Ok(Assignment::restore(
             AssignmentId::from_uuid(row.id),
@@ -88,45 +88,5 @@ impl TryFrom<AssignmentRow> for Assignment {
             row.deadline_at,
             row.published_at,
         )?)
-    }
-}
-
-fn assignment_status_from_db(value: &str) -> DbResult<AssignmentStatus> {
-    match value {
-        "draft" => Ok(AssignmentStatus::Draft),
-        "published" => Ok(AssignmentStatus::Published),
-        "archived" => Ok(AssignmentStatus::Archived),
-        other => Err(DbError::InvalidDatabaseValue {
-            field: "assignments.status",
-            value: other.to_owned(),
-        }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn maps_assignment_status_from_database_values() {
-        assert_eq!(
-            assignment_status_from_db("draft").unwrap(),
-            AssignmentStatus::Draft
-        );
-        assert_eq!(
-            assignment_status_from_db("published").unwrap(),
-            AssignmentStatus::Published
-        );
-        assert_eq!(
-            assignment_status_from_db("archived").unwrap(),
-            AssignmentStatus::Archived
-        );
-        assert!(matches!(
-            assignment_status_from_db("unknown"),
-            Err(DbError::InvalidDatabaseValue {
-                field: "assignments.status",
-                ..
-            })
-        ));
     }
 }

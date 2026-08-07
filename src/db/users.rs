@@ -4,7 +4,7 @@ use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult};
-use crate::domain::{Role, StudentGroupId, TelegramUserId, User, UserId};
+use crate::domain::{Role, TelegramUserId, User, UserId};
 
 #[derive(Clone, Debug, Default)]
 pub struct UserRepository;
@@ -82,7 +82,7 @@ impl TryFrom<UserRow> for User {
 
     fn try_from(row: UserRow) -> Result<Self, Self::Error> {
         let telegram_user_id = TelegramUserId::new(row.telegram_user_id)?;
-        let role = role_from_db(&row.role, row.student_group_id)?;
+        let role = Role::from_db_str(&row.role, row.student_group_id)?;
 
         Ok(User::new(
             UserId::from_uuid(row.id),
@@ -91,75 +91,5 @@ impl TryFrom<UserRow> for User {
             row.display_name,
             row.registered_at,
         )?)
-    }
-}
-
-/// The `student` role carries its group, so the two database columns collapse into one enum. A
-/// mismatch between them is corrupted data rather than a domain rule violation.
-fn role_from_db(value: &str, student_group_id: Option<Uuid>) -> DbResult<Role> {
-    let invalid_group = || DbError::InvalidDatabaseValue {
-        field: "users.student_group_id",
-        value: format!("{student_group_id:?} for role {value}"),
-    };
-
-    match (value, student_group_id) {
-        ("student", Some(group_id)) => Ok(Role::Student {
-            student_group_id: StudentGroupId::from_uuid(group_id),
-        }),
-        ("teacher", None) => Ok(Role::Teacher),
-        ("admin", None) => Ok(Role::Admin),
-        ("student" | "teacher" | "admin", _) => Err(invalid_group()),
-        other => Err(DbError::InvalidDatabaseValue {
-            field: "users.role",
-            value: other.0.to_owned(),
-        }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn maps_roles_from_database_values() {
-        let group_id = StudentGroupId::new();
-
-        assert_eq!(
-            role_from_db("student", Some(group_id.as_uuid())).unwrap(),
-            Role::Student {
-                student_group_id: group_id
-            }
-        );
-        assert_eq!(role_from_db("teacher", None).unwrap(), Role::Teacher);
-        assert_eq!(role_from_db("admin", None).unwrap(), Role::Admin);
-    }
-
-    #[test]
-    fn rejects_role_inconsistent_with_student_group() {
-        assert!(matches!(
-            role_from_db("student", None),
-            Err(DbError::InvalidDatabaseValue {
-                field: "users.student_group_id",
-                ..
-            })
-        ));
-        assert!(matches!(
-            role_from_db("teacher", Some(Uuid::new_v4())),
-            Err(DbError::InvalidDatabaseValue {
-                field: "users.student_group_id",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn rejects_unknown_role() {
-        assert!(matches!(
-            role_from_db("unknown", None),
-            Err(DbError::InvalidDatabaseValue {
-                field: "users.role",
-                ..
-            })
-        ));
     }
 }

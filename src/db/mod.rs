@@ -4,6 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 
 pub mod assignments;
 mod convert;
+mod enums;
 mod error;
 pub mod submissions;
 pub mod users;

@@ -9,8 +9,11 @@ pub enum DbError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    #[error(transparent)]
+    RuleViolation(DomainError),
+
     #[error("invalid domain state from database: {0}")]
-    Domain(#[from] DomainError),
+    CorruptedState(#[from] DomainError),
 
     #[error("invalid database value for {field}: {value}")]
     InvalidDatabaseValue { field: &'static str, value: String },
