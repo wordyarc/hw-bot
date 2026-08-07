@@ -4,6 +4,7 @@ use tower_http::trace::TraceLayer;
 
 mod actor;
 mod assignments;
+mod courses;
 mod error;
 mod health;
 mod json;
@@ -24,7 +25,7 @@ pub fn router(state: AppState) -> Router {
         .route("/echo", post(health::echo))
         .route(
             "/teaching-courses/{teaching_course_id}/assignments",
-            post(assignments::create_assignment),
+            get(assignments::list_course_assignments).post(assignments::create_assignment),
         )
         .route(
             "/assignments/{assignment_id}/publish",
@@ -46,6 +47,16 @@ pub fn router(state: AppState) -> Router {
         .route("/students", post(users::register_student))
         .route("/staff", post(users::register_staff))
         .route("/me", get(users::me))
+        .route(
+            "/me/assignments",
+            get(assignments::list_student_assignments),
+        )
+        .route(
+            "/me/assignments/{assignment_id}",
+            get(assignments::find_student_assignment),
+        )
+        .route("/me/courses", get(courses::list_my_courses))
+        .route("/me/review-queue", get(review::queue_size))
         .route("/submissions/next", post(review::take_next_from_queue))
         .route(
             "/submissions/{submission_id}/review",

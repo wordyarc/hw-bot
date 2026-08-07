@@ -101,6 +101,60 @@ where
     row.map(Assignment::try_from).transpose()
 }
 
+pub async fn list_published_for_group<'e, E>(
+    executor: E,
+    student_group_id: StudentGroupId,
+) -> DbResult<Vec<Assignment>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        AssignmentRow,
+        r#"
+        select
+            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, created_at, deadline_at, published_at
+        from assignments
+        where student_group_id = $1
+          and status = 'published'
+        order by deadline_at, id
+        "#,
+        student_group_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(Assignment::try_from)
+    .collect()
+}
+
+/// Всё, что есть у курса, включая черновики и архив - экран преподавателя.
+pub async fn list_for_course<'e, E>(
+    executor: E,
+    teaching_course_id: TeachingCourseId,
+) -> DbResult<Vec<Assignment>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        AssignmentRow,
+        r#"
+        select
+            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, created_at, deadline_at, published_at
+        from assignments
+        where teaching_course_id = $1
+        order by created_at desc, id
+        "#,
+        teaching_course_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(Assignment::try_from)
+    .collect()
+}
+
 #[derive(Debug)]
 struct AssignmentRow {
     id: Uuid,

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::db::{DbError, DbResult, num};
 use crate::domain::{
     EducationLevel, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, TeachingCourse,
-    TeachingCourseId, UserId,
+    TeachingCourseId, User, UserId,
 };
 
 const EDUCATION_LEVEL: &str = "student_groups.education_level";
@@ -184,6 +184,63 @@ where
     row.map(TeachingCourse::try_from).transpose()
 }
 
+pub async fn list_teaching_courses_for_teacher<'e, E>(
+    executor: E,
+    teacher: &User,
+) -> DbResult<Vec<TeachingCourseCard>>
+where
+    E: PgExecutor<'e>,
+{
+    let sees_every_course = teacher.role().can_manage_all_teaching_courses();
+
+    sqlx::query_as!(
+        TeachingCourseCardRow,
+        r#"
+        select
+            teaching_courses.id,
+            teaching_courses.subject_id,
+            teaching_courses.student_group_id,
+            teaching_courses.created_at,
+            array_remove(array_agg(teaching_course_teachers.teacher_id), null)
+                as "teacher_ids!: Vec<Uuid>",
+            subjects.name as subject_name,
+            student_groups.code as group_code,
+            student_groups.education_level,
+            student_groups.study_year
+        from teaching_courses
+        join subjects
+          on subjects.id = teaching_courses.subject_id
+        join student_groups
+          on student_groups.id = teaching_courses.student_group_id
+        left join teaching_course_teachers
+          on teaching_course_teachers.teaching_course_id = teaching_courses.id
+        where $1 or exists (
+            select 1
+            from teaching_course_teachers mine
+            where mine.teaching_course_id = teaching_courses.id
+              and mine.teacher_id = $2
+        )
+        group by teaching_courses.id, subjects.name, student_groups.code,
+                 student_groups.education_level, student_groups.study_year
+        order by subjects.name, student_groups.code
+        "#,
+        sees_every_course,
+        teacher.id().as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(TeachingCourseCard::try_from)
+    .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct TeachingCourseCard {
+    pub course: TeachingCourse,
+    pub subject: Subject,
+    pub group: StudentGroup,
+}
+
 #[derive(Debug)]
 struct StudentGroupRow {
     id: Uuid,
@@ -231,5 +288,45 @@ impl TryFrom<TeachingCourseRow> for TeachingCourse {
             teacher_ids,
             row.created_at,
         )?)
+    }
+}
+
+#[derive(Debug)]
+struct TeachingCourseCardRow {
+    id: Uuid,
+    subject_id: Uuid,
+    student_group_id: Uuid,
+    created_at: DateTime<Utc>,
+    teacher_ids: Vec<Uuid>,
+    subject_name: String,
+    group_code: String,
+    education_level: String,
+    study_year: i16,
+}
+
+impl TryFrom<TeachingCourseCardRow> for TeachingCourseCard {
+    type Error = DbError;
+
+    fn try_from(row: TeachingCourseCardRow) -> Result<Self, Self::Error> {
+        let subject = Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?;
+        let group = StudentGroup::try_from(StudentGroupRow {
+            id: row.student_group_id,
+            code: row.group_code,
+            education_level: row.education_level,
+            study_year: row.study_year,
+        })?;
+        let course = TeachingCourse::try_from(TeachingCourseRow {
+            id: row.id,
+            subject_id: row.subject_id,
+            student_group_id: row.student_group_id,
+            created_at: row.created_at,
+            teacher_ids: row.teacher_ids,
+        })?;
+
+        Ok(Self {
+            course,
+            subject,
+            group,
+        })
     }
 }

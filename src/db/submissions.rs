@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use sqlx::{Postgres, Transaction};
@@ -148,6 +150,119 @@ where
         row.has_accepted_submission,
         row.has_pending_submission,
     ))
+}
+
+pub async fn load_histories<'e, E>(
+    executor: E,
+    assignment_ids: &[Uuid],
+    student_id: UserId,
+) -> DbResult<HashMap<AssignmentId, SubmissionHistory>>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query!(
+        r#"
+        with history as (
+            select
+                assignment_id,
+                count(*) filter (
+                    where status in ('accepted', 'rejected')
+                )::bigint as used_attempts,
+                bool_or(status = 'accepted') as has_accepted_submission,
+                bool_or(status = 'pending_review') as has_pending_submission
+            from submissions
+            where student_id = $2
+              and assignment_id = any($1)
+            group by assignment_id
+        )
+        select
+            requested.assignment_id as "assignment_id!",
+            coalesce(history.used_attempts, 0) as "used_attempts!",
+            coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
+            coalesce(history.has_accepted_submission, false) as "has_accepted_submission!",
+            coalesce(history.has_pending_submission, false) as "has_pending_submission!"
+        from unnest($1::uuid[]) as requested (assignment_id)
+        left join history
+          on history.assignment_id = requested.assignment_id
+        left join student_assignment_progress progress
+          on progress.assignment_id = requested.assignment_id
+         and progress.student_id = $2
+        "#,
+        assignment_ids,
+        student_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let history = SubmissionHistory::new(
+                num("submission_history.used_attempts", row.used_attempts)?,
+                num("submission_history.extra_attempts", row.extra_attempts)?,
+                row.has_accepted_submission,
+                row.has_pending_submission,
+            );
+
+            Ok((AssignmentId::from_uuid(row.assignment_id), history))
+        })
+        .collect()
+}
+
+pub async fn list_for_student<'e, E>(
+    executor: E,
+    assignment_id: AssignmentId,
+    student_id: UserId,
+) -> DbResult<Vec<Submission>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        SubmissionRow,
+        r#"
+        select
+            id, assignment_id, student_id, attempt_number, content, status, submitted_at,
+            reviewed_by, reviewed_at, review_comment
+        from submissions
+        where assignment_id = $1
+          and student_id = $2
+        order by attempt_number
+        "#,
+        assignment_id.as_uuid(),
+        student_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(Submission::try_from)
+    .collect()
+}
+
+/// Видимость обязана совпадать с `lock_next_pending_for_reviewer`!!
+/// иначе бот может показать например очередь из трёх сдач, а `POST /submissions/next` вернёт 204.
+pub async fn count_pending_for_reviewer<'e, E>(executor: E, reviewer: &User) -> DbResult<u32>
+where
+    E: PgExecutor<'e>,
+{
+    let can_review_all = matches!(reviewer.role(), Role::Admin);
+    let pending = sqlx::query_scalar!(
+        r#"
+        select count(*) as "pending!"
+        from submissions
+        join assignments
+          on assignments.id = submissions.assignment_id
+        left join teaching_course_teachers
+          on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
+         and teaching_course_teachers.teacher_id = $2
+        where submissions.status = 'pending_review'
+          and ($1 or teaching_course_teachers.teacher_id is not null)
+        "#,
+        can_review_all,
+        reviewer.id().as_uuid(),
+    )
+    .fetch_one(executor)
+    .await?;
+
+    num("review_queue.pending", pending)
 }
 
 pub async fn lock_next_pending_for_reviewer(

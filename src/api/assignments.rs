@@ -5,8 +5,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
-use crate::app::{ChangeDeadline, CreateAssignment};
+use crate::app::{ChangeDeadline, CreateAssignment, StudentAssignment, StudentAssignmentDetails};
 use crate::domain::{Assignment, AssignmentId, AssignmentStatus, TeachingCourseId};
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +58,100 @@ impl From<&Assignment> for AssignmentResponse {
             published_at: assignment.published_at(),
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct StudentAssignmentResponse {
+    assignment: AssignmentResponse,
+    progress: ProgressResponse,
+}
+
+/// Ответ даёт `Submission::submit`. Второго
+/// источника не заводить, разойдутся.
+#[derive(Debug, Serialize)]
+struct ProgressResponse {
+    used_attempts: u16,
+    allowed_attempts: u16,
+    remaining_attempts: u16,
+    has_pending_submission: bool,
+    has_accepted_submission: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StudentAssignmentDetailsResponse {
+    #[serde(flatten)]
+    assignment: StudentAssignmentResponse,
+    submissions: Vec<SubmissionResponse>,
+}
+
+impl From<&StudentAssignment> for StudentAssignmentResponse {
+    fn from(view: &StudentAssignment) -> Self {
+        Self {
+            assignment: AssignmentResponse::from(&view.assignment),
+            progress: ProgressResponse::from(view),
+        }
+    }
+}
+
+impl From<&StudentAssignment> for ProgressResponse {
+    fn from(view: &StudentAssignment) -> Self {
+        let StudentAssignment {
+            assignment,
+            history,
+        } = view;
+
+        Self {
+            used_attempts: history.used_attempts(),
+            allowed_attempts: history.allowed_attempts_for(assignment),
+            remaining_attempts: history.remaining_attempts_for(assignment),
+            has_pending_submission: history.has_pending_submission(),
+            has_accepted_submission: history.has_accepted_submission(),
+        }
+    }
+}
+
+impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
+    fn from(details: &StudentAssignmentDetails) -> Self {
+        Self {
+            assignment: StudentAssignmentResponse::from(&details.assignment),
+            submissions: details.submissions.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+pub async fn list_student_assignments(
+    State(state): State<AppState>,
+    Actor(actor): Actor,
+) -> Result<Json<Vec<StudentAssignmentResponse>>, ApiError> {
+    let assignments = state.assignments.list_for_student(actor).await?;
+
+    Ok(Json(assignments.iter().map(Into::into).collect()))
+}
+
+pub async fn find_student_assignment(
+    State(state): State<AppState>,
+    Actor(actor): Actor,
+    Path(assignment_id): Path<Uuid>,
+) -> Result<Json<StudentAssignmentDetailsResponse>, ApiError> {
+    let details = state
+        .assignments
+        .find_for_student(actor, AssignmentId::from_uuid(assignment_id))
+        .await?;
+
+    Ok(Json(StudentAssignmentDetailsResponse::from(&details)))
+}
+
+pub async fn list_course_assignments(
+    State(state): State<AppState>,
+    Actor(actor): Actor,
+    Path(teaching_course_id): Path<Uuid>,
+) -> Result<Json<Vec<AssignmentResponse>>, ApiError> {
+    let assignments = state
+        .assignments
+        .list_for_course(actor, TeachingCourseId::from_uuid(teaching_course_id))
+        .await?;
+
+    Ok(Json(assignments.iter().map(Into::into).collect()))
 }
 
 pub async fn create_assignment(

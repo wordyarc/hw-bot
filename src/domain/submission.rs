@@ -50,6 +50,13 @@ impl SubmissionHistory {
             .max_attempts()
             .saturating_add(self.extra_attempts)
     }
+
+    /// Сколько попыток бот показывает студенту. Принятая сдача и
+    /// сдача на проверке блокируют следующую попытку, даже когда остаток положительный.
+    pub fn remaining_attempts_for(self, assignment: &Assignment) -> u16 {
+        self.allowed_attempts_for(assignment)
+            .saturating_sub(self.used_attempts)
+    }
 }
 
 str_enum! {

@@ -9,6 +9,8 @@ mod assignments_api;
 mod db_schema;
 mod health_api;
 mod review_api;
+mod student_read_api;
 mod submission_repository;
 mod submit_homework_api;
+mod teacher_read_api;
 mod users_api;

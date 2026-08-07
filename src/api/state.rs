@@ -1,12 +1,13 @@
 use sqlx::PgPool;
 
-use crate::app::{AssignmentService, ReviewService, SubmissionService, UserService};
+use crate::app::{AssignmentService, CourseService, ReviewService, SubmissionService, UserService};
 
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub app_name: String,
     pub db_pool: PgPool,
     pub assignments: AssignmentService,
+    pub courses: CourseService,
     pub submissions: SubmissionService,
     pub reviews: ReviewService,
     pub users: UserService,
@@ -17,6 +18,7 @@ impl AppState {
         Self {
             app_name: app_name.into(),
             assignments: AssignmentService::new(db_pool.clone()),
+            courses: CourseService::new(db_pool.clone()),
             submissions: SubmissionService::new(db_pool.clone()),
             reviews: ReviewService::new(db_pool.clone()),
             users: UserService::new(db_pool.clone()),

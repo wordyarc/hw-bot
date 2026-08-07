@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::app::{AppResult, Required};
+use crate::app::{AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    Assignment, AssignmentId, DomainResult, TeachingCourse, TeachingCourseId, TelegramUserId, User,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Submission,
+    SubmissionHistory, TeachingCourse, TeachingCourseId, TelegramUserId, User,
 };
 
 #[derive(Clone, Debug)]
@@ -23,6 +24,19 @@ pub struct ChangeDeadline {
     pub assignment_id: AssignmentId,
     pub actor_telegram_user_id: TelegramUserId,
     pub deadline_at: DateTime<Utc>,
+}
+
+/// Задание глазами студента
+#[derive(Clone, Debug)]
+pub struct StudentAssignment {
+    pub assignment: Assignment,
+    pub history: SubmissionHistory,
+}
+
+#[derive(Clone, Debug)]
+pub struct StudentAssignmentDetails {
+    pub assignment: StudentAssignment,
+    pub submissions: Vec<Submission>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +111,106 @@ impl AssignmentService {
             },
         )
         .await
+    }
+
+    /// Главный экран студента.
+    pub async fn list_for_student(
+        &self,
+        actor_telegram_user_id: TelegramUserId,
+    ) -> AppResult<Vec<StudentAssignment>> {
+        let student = self.student(actor_telegram_user_id).await?;
+        let group_id = student.student_group_id().required("student group")?;
+
+        let assignments = db::assignments::list_published_for_group(&self.pool, group_id).await?;
+        let ids: Vec<_> = assignments
+            .iter()
+            .map(|assignment| assignment.id().as_uuid())
+            .collect();
+        let mut histories = db::submissions::load_histories(&self.pool, &ids, student.id()).await?;
+
+        Ok(assignments
+            .into_iter()
+            .map(|assignment| StudentAssignment {
+                history: histories.remove(&assignment.id()).unwrap_or_default(),
+                assignment,
+            })
+            .collect())
+    }
+
+    pub async fn find_for_student(
+        &self,
+        actor_telegram_user_id: TelegramUserId,
+        assignment_id: AssignmentId,
+    ) -> AppResult<StudentAssignmentDetails> {
+        let student = self.student(actor_telegram_user_id).await?;
+
+        let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
+            .await?
+            .required("assignment")?;
+
+        // Черновика для студента не существует, поэтому 404, а не 403: знать о нём он не должен.
+        if assignment.status() == AssignmentStatus::Draft {
+            return Err(AppError::NotFound {
+                resource: "assignment",
+            });
+        }
+
+        if student.student_group_id() != Some(assignment.student_group_id()) {
+            return Err(DomainError::StudentDoesNotBelongToAssignmentGroup.into());
+        }
+
+        let history =
+            db::submissions::load_history(&self.pool, assignment.id(), student.id()).await?;
+        let submissions =
+            db::submissions::list_for_student(&self.pool, assignment.id(), student.id()).await?;
+
+        Ok(StudentAssignmentDetails {
+            assignment: StudentAssignment {
+                assignment,
+                history,
+            },
+            submissions,
+        })
+    }
+
+    /// Экран курса у преподавателя: черновики и архив тоже его, в отличие от студенческого списка.
+    pub async fn list_for_course(
+        &self,
+        actor_telegram_user_id: TelegramUserId,
+        teaching_course_id: TeachingCourseId,
+    ) -> AppResult<Vec<Assignment>> {
+        let actor = db::users::find_by_telegram_user_id(&self.pool, actor_telegram_user_id)
+            .await?
+            .required("teacher")?;
+
+        let teaching_course =
+            db::academic::find_teaching_course_by_id(&self.pool, teaching_course_id)
+                .await?
+                .required("teaching course")?;
+
+        if !teaching_course.can_be_managed_by(&actor) {
+            return Err(DomainError::PermissionDenied {
+                action: "list course assignments",
+            }
+            .into());
+        }
+
+        Ok(db::assignments::list_for_course(&self.pool, teaching_course_id).await?)
+    }
+
+    async fn student(&self, telegram_user_id: TelegramUserId) -> AppResult<User> {
+        let student = db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
+            .await?
+            .required("student")?;
+
+        if !student.role().can_submit_homework() {
+            return Err(DomainError::PermissionDenied {
+                action: "list student assignments",
+            }
+            .into());
+        }
+
+        Ok(student)
     }
 
     /// Общая обвязка всех правок задания: у публикации, архивации и сдвига дедлайна отличается

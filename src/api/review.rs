@@ -73,6 +73,20 @@ impl From<&User> for QueuedStudentResponse {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct ReviewQueueSizeResponse {
+    pending: u32,
+}
+
+pub async fn queue_size(
+    State(state): State<AppState>,
+    Actor(reviewer): Actor,
+) -> Result<Json<ReviewQueueSizeResponse>, ApiError> {
+    let pending = state.reviews.queue_size(reviewer).await?;
+
+    Ok(Json(ReviewQueueSizeResponse { pending }))
+}
+
 pub async fn take_next_from_queue(
     State(state): State<AppState>,
     Actor(reviewer): Actor,

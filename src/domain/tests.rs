@@ -583,3 +583,28 @@ fn submission_content_is_trimmed() {
 
     assert_eq!(submission.content().as_str(), PULL_REQUEST_URL);
 }
+
+#[test]
+fn remaining_attempts_count_the_granted_ones() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let assignment = assignment(&course, &teacher).max_attempts(2).build();
+
+    let history = history().used(2).extra(1).build();
+
+    assert_eq!(history.allowed_attempts_for(&assignment), 3);
+    assert_eq!(history.remaining_attempts_for(&assignment), 1);
+}
+
+#[test]
+fn remaining_attempts_stop_at_zero() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let assignment = assignment(&course, &teacher).max_attempts(1).build();
+
+    let history = history().used(2).build();
+
+    assert_eq!(history.remaining_attempts_for(&assignment), 0);
+}
