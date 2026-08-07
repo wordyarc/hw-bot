@@ -8,6 +8,7 @@ use crate::domain::{
 };
 
 const MAX_ATTEMPTS: &str = "assignments.max_attempts";
+const STATUS: &str = "assignments.status";
 
 pub async fn insert<'e, E>(executor: E, assignment: &Assignment) -> DbResult<()>
 where
@@ -28,7 +29,7 @@ where
         assignment.title().as_str(),
         assignment.body().as_str(),
         to_db_smallint(MAX_ATTEMPTS, assignment.max_attempts())?,
-        assignment.status().as_db_str(),
+        assignment.status().as_str(),
         assignment.created_by().as_uuid(),
         assignment.created_at(),
         assignment.deadline_at(),
@@ -82,7 +83,8 @@ impl TryFrom<AssignmentRow> for Assignment {
 
     fn try_from(row: AssignmentRow) -> Result<Self, Self::Error> {
         let max_attempts = try_u16_from_i16(MAX_ATTEMPTS, row.max_attempts)?;
-        let status = AssignmentStatus::from_db_str(&row.status)?;
+        let status = AssignmentStatus::parse_str(&row.status)
+            .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
 
         Ok(Assignment::restore(
             AssignmentId::from_uuid(row.id),

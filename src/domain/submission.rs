@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 
+use crate::domain::enums::str_enum;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, DomainResult, NonEmptyString, SubmissionId,
     TeachingCourse, User, UserId,
@@ -51,11 +52,13 @@ impl SubmissionHistory {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SubmissionStatus {
-    PendingReview,
-    Accepted,
-    Rejected,
+str_enum! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum SubmissionStatus {
+        PendingReview => "pending_review",
+        Accepted => "accepted",
+        Rejected => "rejected",
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

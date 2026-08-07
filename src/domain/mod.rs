@@ -1,6 +1,7 @@
 mod academic;
 mod assignment;
 mod attempts;
+mod enums;
 mod error;
 mod ids;
 mod submission;

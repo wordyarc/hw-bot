@@ -13,6 +13,7 @@ use crate::domain::{
 const UNIQUE_VIOLATION: &str = "23505";
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
+const STATUS: &str = "submissions.status";
 
 pub async fn find_by_id<'e, E>(executor: E, id: SubmissionId) -> DbResult<Option<Submission>>
 where
@@ -52,7 +53,7 @@ where
         submission.student_id().as_uuid(),
         to_db_smallint(ATTEMPT_NUMBER, submission.attempt_number())?,
         submission.content().as_str(),
-        submission.status().as_db_str(),
+        submission.status().as_str(),
         submission.submitted_at(),
         submission.reviewed_by().map(UserId::as_uuid),
         submission.reviewed_at(),
@@ -87,7 +88,7 @@ where
           and status = 'pending_review'
         "#,
         submission.id().as_uuid(),
-        submission.status().as_db_str(),
+        submission.status().as_str(),
         submission.reviewed_by().map(UserId::as_uuid),
         submission.reviewed_at(),
         submission.review_comment().map(|comment| comment.as_str()),
@@ -204,7 +205,8 @@ impl TryFrom<SubmissionRow> for Submission {
     type Error = DbError;
 
     fn try_from(row: SubmissionRow) -> Result<Self, Self::Error> {
-        let status = SubmissionStatus::from_db_str(&row.status)?;
+        let status = SubmissionStatus::parse_str(&row.status)
+            .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
         let attempt_number = try_u16_from_i16(ATTEMPT_NUMBER, row.attempt_number)?;
 
         Ok(Submission::restore(

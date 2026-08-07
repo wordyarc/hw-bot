@@ -1,24 +1,15 @@
 use crate::db::{DbError, DbResult};
 
 pub(crate) fn to_db_smallint(field: &'static str, value: u16) -> DbResult<i16> {
-    i16::try_from(value).map_err(|_| DbError::InvalidDatabaseValue {
-        field,
-        value: value.to_string(),
-    })
+    i16::try_from(value).map_err(|_| DbError::invalid_value(field, value.to_string()))
 }
 
 pub(crate) fn try_u16_from_i16(field: &'static str, value: i16) -> DbResult<u16> {
-    u16::try_from(value).map_err(|_| DbError::InvalidDatabaseValue {
-        field,
-        value: value.to_string(),
-    })
+    u16::try_from(value).map_err(|_| DbError::invalid_value(field, value.to_string()))
 }
 
 pub(crate) fn try_u16_from_i64(field: &'static str, value: i64) -> DbResult<u16> {
-    u16::try_from(value).map_err(|_| DbError::InvalidDatabaseValue {
-        field,
-        value: value.to_string(),
-    })
+    u16::try_from(value).map_err(|_| DbError::invalid_value(field, value.to_string()))
 }
 
 #[cfg(test)]

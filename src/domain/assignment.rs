@@ -1,15 +1,18 @@
 use chrono::{DateTime, Utc};
 
+use crate::domain::enums::str_enum;
 use crate::domain::{
     AssignmentId, DomainError, DomainResult, NonEmptyString, StudentGroupId, SubjectId,
     TeachingCourse, TeachingCourseId, User, UserId,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AssignmentStatus {
-    Draft,
-    Published,
-    Archived,
+str_enum! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum AssignmentStatus {
+        Draft => "draft",
+        Published => "published",
+        Archived => "archived",
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

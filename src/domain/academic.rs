@@ -2,29 +2,23 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
+use crate::domain::enums::str_enum;
 use crate::domain::{
     DomainError, DomainResult, NonEmptyString, StudentGroupId, SubjectId, TeachingCourseId, User,
     UserId,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EducationLevel {
-    Bachelor,
-    Master,
-    Specialist,
-    Postgraduate,
+str_enum! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum EducationLevel {
+        Bachelor => "bachelor",
+        Master => "master",
+        Specialist => "specialist",
+        Postgraduate => "postgraduate",
+    }
 }
 
 impl EducationLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Bachelor => "bachelor",
-            Self::Master => "master",
-            Self::Specialist => "specialist",
-            Self::Postgraduate => "postgraduate",
-        }
-    }
-
     pub fn max_study_year(self) -> u8 {
         match self {
             Self::Bachelor => 4,

@@ -21,3 +21,12 @@ pub enum DbError {
     #[error("{message}")]
     Conflict { message: &'static str },
 }
+
+impl DbError {
+    pub(crate) fn invalid_value(field: &'static str, value: impl Into<String>) -> Self {
+        Self::InvalidDatabaseValue {
+            field,
+            value: value.into(),
+        }
+    }
+}

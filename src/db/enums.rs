@@ -1,41 +1,7 @@
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult};
-use crate::domain::{AssignmentStatus, Role, StudentGroupId, SubmissionStatus};
-
-macro_rules! db_enum {
-    ($type:ty, $column:literal { $($variant:ident => $value:literal),+ $(,)? }) => {
-        impl $type {
-            pub fn as_db_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $value),+
-                }
-            }
-
-            pub(crate) fn from_db_str(value: &str) -> DbResult<Self> {
-                match value {
-                    $($value => Ok(Self::$variant),)+
-                    other => Err(DbError::InvalidDatabaseValue {
-                        field: $column,
-                        value: other.to_owned(),
-                    }),
-                }
-            }
-        }
-    };
-}
-
-db_enum!(SubmissionStatus, "submissions.status" {
-    PendingReview => "pending_review",
-    Accepted => "accepted",
-    Rejected => "rejected",
-});
-
-db_enum!(AssignmentStatus, "assignments.status" {
-    Draft => "draft",
-    Published => "published",
-    Archived => "archived",
-});
+use crate::domain::{Role, StudentGroupId};
 
 impl Role {
     pub fn as_db_str(self) -> &'static str {
@@ -46,10 +12,13 @@ impl Role {
         }
     }
 
+    /// Роль размазана по двум колонкам, поэтому у нее собственный маппинг, а не `str_enum!`.
     pub(crate) fn from_db_str(value: &str, student_group_id: Option<Uuid>) -> DbResult<Self> {
-        let invalid_group = || DbError::InvalidDatabaseValue {
-            field: "users.student_group_id",
-            value: format!("{student_group_id:?} for role {value}"),
+        let invalid_group = || {
+            DbError::invalid_value(
+                "users.student_group_id",
+                format!("{student_group_id:?} for role {value}"),
+            )
         };
 
         match (value, student_group_id) {
@@ -59,10 +28,7 @@ impl Role {
             ("teacher", None) => Ok(Self::Teacher),
             ("admin", None) => Ok(Self::Admin),
             ("student" | "teacher" | "admin", _) => Err(invalid_group()),
-            other => Err(DbError::InvalidDatabaseValue {
-                field: "users.role",
-                value: other.0.to_owned(),
-            }),
+            other => Err(DbError::invalid_value("users.role", other.0)),
         }
     }
 }
@@ -70,34 +36,6 @@ impl Role {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn submission_statuses_survive_a_round_trip() {
-        for status in [
-            SubmissionStatus::PendingReview,
-            SubmissionStatus::Accepted,
-            SubmissionStatus::Rejected,
-        ] {
-            assert_eq!(
-                SubmissionStatus::from_db_str(status.as_db_str()).unwrap(),
-                status
-            );
-        }
-    }
-
-    #[test]
-    fn assignment_statuses_survive_a_round_trip() {
-        for status in [
-            AssignmentStatus::Draft,
-            AssignmentStatus::Published,
-            AssignmentStatus::Archived,
-        ] {
-            assert_eq!(
-                AssignmentStatus::from_db_str(status.as_db_str()).unwrap(),
-                status
-            );
-        }
-    }
 
     #[test]
     fn roles_survive_a_round_trip() {
@@ -120,21 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_statuses() {
-        assert!(matches!(
-            SubmissionStatus::from_db_str("unknown"),
-            Err(DbError::InvalidDatabaseValue {
-                field: "submissions.status",
-                ..
-            })
-        ));
-        assert!(matches!(
-            AssignmentStatus::from_db_str("unknown"),
-            Err(DbError::InvalidDatabaseValue {
-                field: "assignments.status",
-                ..
-            })
-        ));
+    fn rejects_unknown_roles() {
         assert!(matches!(
             Role::from_db_str("unknown", None),
             Err(DbError::InvalidDatabaseValue {
