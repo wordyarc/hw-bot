@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
+use chrono::{DateTime, Duration, Utc};
 use hw_bot::api::{self, AppState};
 use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, User};
@@ -145,7 +145,7 @@ async fn connect_with_retry(url: &str, max_connections: u32) -> PgPool {
             Ok(pool) => return pool,
             Err(error) => {
                 last_error = Some(error);
-                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
             }
         }
     }
@@ -211,6 +211,10 @@ impl TestApp {
 
     pub fn assignment(&self) -> Uuid {
         self.fixture.assignment.id().as_uuid()
+    }
+
+    pub fn course(&self) -> Uuid {
+        self.fixture.course.id().as_uuid()
     }
 
     /// Telegram id преподавателя курса из фикстуры.
@@ -286,6 +290,61 @@ impl TestApp {
         let body = self.submit(self.assignment(), telegram_id, content).await;
 
         submission_id(&body.created())
+    }
+
+    pub async fn create_assignment(&self, course: Uuid, telegram_id: i64) -> TestResponse {
+        self.create_assignment_raw(
+            course,
+            json!({
+                "telegram_user_id": telegram_id,
+                "title": "Rust lifetimes",
+                "body": "Send a pull request link.",
+                "max_attempts": 2,
+                "deadline_at": Utc::now() + Duration::days(7),
+            }),
+        )
+        .await
+    }
+
+    /// Для тестов, которые проверяют разбор и валидацию самого тела запроса.
+    pub async fn create_assignment_raw(&self, course: Uuid, body: Value) -> TestResponse {
+        self.post(&format!("/teaching-courses/{course}/assignments"), body)
+            .await
+    }
+
+    pub async fn drafted_assignment(&self, telegram_id: i64) -> Uuid {
+        let body = self.create_assignment(self.course(), telegram_id).await;
+
+        assignment_id(&body.created())
+    }
+
+    pub async fn publish_assignment(&self, assignment: Uuid, telegram_id: i64) -> TestResponse {
+        self.post(
+            &format!("/assignments/{assignment}/publish"),
+            json!({ "telegram_user_id": telegram_id }),
+        )
+        .await
+    }
+
+    pub async fn archive_assignment(&self, assignment: Uuid, telegram_id: i64) -> TestResponse {
+        self.post(
+            &format!("/assignments/{assignment}/archive"),
+            json!({ "telegram_user_id": telegram_id }),
+        )
+        .await
+    }
+
+    pub async fn change_deadline(
+        &self,
+        assignment: Uuid,
+        telegram_id: i64,
+        deadline_at: DateTime<Utc>,
+    ) -> TestResponse {
+        self.post(
+            &format!("/assignments/{assignment}/deadline"),
+            json!({ "telegram_user_id": telegram_id, "deadline_at": deadline_at }),
+        )
+        .await
     }
 
     pub async fn take_next(&self, telegram_id: i64) -> TestResponse {
@@ -444,9 +503,19 @@ impl TestApp {
 
 #[track_caller]
 pub fn submission_id(body: &Value) -> Uuid {
+    id(body, "submission")
+}
+
+#[track_caller]
+pub fn assignment_id(body: &Value) -> Uuid {
+    id(body, "assignment")
+}
+
+#[track_caller]
+fn id(body: &Value, resource: &str) -> Uuid {
     body["id"]
         .as_str()
-        .unwrap_or_else(|| panic!("submission id is missing in {body:#}"))
+        .unwrap_or_else(|| panic!("{resource} id is missing in {body:#}"))
         .parse()
-        .expect("submission id is a uuid")
+        .unwrap_or_else(|_| panic!("{resource} id is a uuid"))
 }

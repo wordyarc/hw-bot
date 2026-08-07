@@ -110,6 +110,11 @@ impl From<DomainError> for ApiError {
             DomainError::AssignmentIsNotPublished => {
                 (StatusCode::CONFLICT, "assignment_is_not_published")
             }
+            DomainError::AssignmentStatusTransitionNotAllowed { .. } => (
+                StatusCode::CONFLICT,
+                "assignment_status_transition_not_allowed",
+            ),
+            DomainError::AssignmentIsArchived => (StatusCode::CONFLICT, "assignment_is_archived"),
             DomainError::AssignmentDeadlineExceeded { .. } => {
                 (StatusCode::CONFLICT, "assignment_deadline_exceeded")
             }

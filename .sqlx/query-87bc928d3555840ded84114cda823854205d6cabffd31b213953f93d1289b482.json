@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update assignments\n        set\n            status = $2,\n            deadline_at = $3,\n            published_at = $4\n        where id = $1\n          and status = $5\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "87bc928d3555840ded84114cda823854205d6cabffd31b213953f93d1289b482"
+}

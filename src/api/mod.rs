@@ -2,6 +2,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
+mod assignments;
 mod error;
 mod health;
 mod json;
@@ -19,6 +20,22 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(health::root))
         .route("/health", get(health::health))
         .route("/echo", post(health::echo))
+        .route(
+            "/teaching-courses/{teaching_course_id}/assignments",
+            post(assignments::create_assignment),
+        )
+        .route(
+            "/assignments/{assignment_id}/publish",
+            post(assignments::publish_assignment),
+        )
+        .route(
+            "/assignments/{assignment_id}/archive",
+            post(assignments::archive_assignment),
+        )
+        .route(
+            "/assignments/{assignment_id}/deadline",
+            post(assignments::change_deadline),
+        )
         .route(
             "/assignments/{assignment_id}/submissions",
             post(submissions::submit_homework),

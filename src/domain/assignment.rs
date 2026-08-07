@@ -127,11 +127,12 @@ impl Assignment {
         actor: &User,
         published_at: DateTime<Utc>,
     ) -> DomainResult<()> {
-        self.ensure_belongs_to_course(teaching_course)?;
+        self.ensure_managed_by(teaching_course, actor, "publish assignment")?;
 
-        if !teaching_course.can_be_managed_by(actor) {
-            return Err(DomainError::PermissionDenied {
-                action: "publish assignment",
+        if self.status == AssignmentStatus::Published {
+            return Err(DomainError::AssignmentStatusTransitionNotAllowed {
+                from: self.status,
+                to: AssignmentStatus::Published,
             });
         }
 
@@ -142,11 +143,12 @@ impl Assignment {
     }
 
     pub fn archive(&mut self, teaching_course: &TeachingCourse, actor: &User) -> DomainResult<()> {
-        self.ensure_belongs_to_course(teaching_course)?;
+        self.ensure_managed_by(teaching_course, actor, "archive assignment")?;
 
-        if !teaching_course.can_be_managed_by(actor) {
-            return Err(DomainError::PermissionDenied {
-                action: "archive assignment",
+        if self.status == AssignmentStatus::Archived {
+            return Err(DomainError::AssignmentStatusTransitionNotAllowed {
+                from: self.status,
+                to: AssignmentStatus::Archived,
             });
         }
 
@@ -161,12 +163,10 @@ impl Assignment {
         actor: &User,
         new_deadline_at: DateTime<Utc>,
     ) -> DomainResult<()> {
-        self.ensure_belongs_to_course(teaching_course)?;
+        self.ensure_managed_by(teaching_course, actor, "change assignment deadline")?;
 
-        if !teaching_course.can_be_managed_by(actor) {
-            return Err(DomainError::PermissionDenied {
-                action: "change assignment deadline",
-            });
+        if self.status == AssignmentStatus::Archived {
+            return Err(DomainError::AssignmentIsArchived);
         }
 
         if new_deadline_at <= self.created_at {
@@ -197,6 +197,21 @@ impl Assignment {
     pub fn ensure_belongs_to_course(&self, teaching_course: &TeachingCourse) -> DomainResult<()> {
         if self.teaching_course_id != teaching_course.id() {
             return Err(DomainError::AssignmentDoesNotBelongToTeachingCourse);
+        }
+
+        Ok(())
+    }
+
+    fn ensure_managed_by(
+        &self,
+        teaching_course: &TeachingCourse,
+        actor: &User,
+        action: &'static str,
+    ) -> DomainResult<()> {
+        self.ensure_belongs_to_course(teaching_course)?;
+
+        if !teaching_course.can_be_managed_by(actor) {
+            return Err(DomainError::PermissionDenied { action });
         }
 
         Ok(())

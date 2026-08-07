@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use crate::domain::AssignmentStatus;
+
 pub type DomainResult<T> = Result<T, DomainError>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
@@ -35,6 +37,15 @@ pub enum DomainError {
 
     #[error("assignment is not published")]
     AssignmentIsNotPublished,
+
+    #[error("assignment cannot move from {} to {}", from.as_str(), to.as_str())]
+    AssignmentStatusTransitionNotAllowed {
+        from: AssignmentStatus,
+        to: AssignmentStatus,
+    },
+
+    #[error("archived assignment cannot be changed")]
+    AssignmentIsArchived,
 
     #[error("assignment published_at does not match assignment status")]
     InvalidAssignmentPublishedState,

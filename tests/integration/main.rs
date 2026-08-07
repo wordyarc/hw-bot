@@ -4,6 +4,7 @@
 
 mod harness;
 
+mod assignments_api;
 mod db_schema;
 mod health_api;
 mod review_api;

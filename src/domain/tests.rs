@@ -1,8 +1,9 @@
 use chrono::Duration;
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, Role, StaffRole, StudentAssignmentProgress, Submission,
-    SubmissionHistory, SubmissionId, SubmissionStatus, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, Role, StaffRole,
+    StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId, SubmissionStatus,
+    TelegramUserId, User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
@@ -54,6 +55,103 @@ fn only_course_teacher_or_admin_can_publish_assignment() {
     );
 
     assignment.publish(&course, &admin, t0()).unwrap();
+}
+
+#[test]
+fn assignment_can_be_published_only_once() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut assignment = assignment(&course, &teacher).build();
+
+    assignment.publish(&course, &teacher, t0()).unwrap();
+
+    assert_eq!(
+        assignment.publish(&course, &teacher, t0()).unwrap_err(),
+        DomainError::AssignmentStatusTransitionNotAllowed {
+            from: AssignmentStatus::Published,
+            to: AssignmentStatus::Published,
+        }
+    );
+}
+
+#[test]
+fn archived_assignment_can_be_published_again_for_a_retake() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut assignment = assignment(&course, &teacher).published().build();
+    assignment.archive(&course, &teacher).unwrap();
+
+    let reopened_at = t0() + Duration::days(180);
+    assignment.publish(&course, &teacher, reopened_at).unwrap();
+
+    assert_eq!(assignment.status(), AssignmentStatus::Published);
+    assert_eq!(assignment.published_at(), Some(reopened_at));
+}
+
+#[test]
+fn a_reopened_assignment_accepts_a_new_deadline() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut assignment = assignment(&course, &teacher).published().build();
+    assignment.archive(&course, &teacher).unwrap();
+    assignment.publish(&course, &teacher, t0()).unwrap();
+
+    let retake_deadline = t0() + Duration::days(200);
+    assignment
+        .change_deadline(&course, &teacher, retake_deadline)
+        .unwrap();
+
+    assert_eq!(assignment.deadline_at(), retake_deadline);
+}
+
+#[test]
+fn both_draft_and_published_assignments_can_be_archived() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut draft = assignment(&course, &teacher).build();
+    let mut published = assignment(&course, &teacher).published().build();
+
+    draft.archive(&course, &teacher).unwrap();
+    published.archive(&course, &teacher).unwrap();
+
+    assert_eq!(draft.status(), AssignmentStatus::Archived);
+    assert_eq!(published.status(), AssignmentStatus::Archived);
+}
+
+#[test]
+fn assignment_can_be_archived_only_once() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut assignment = assignment(&course, &teacher).build();
+    assignment.archive(&course, &teacher).unwrap();
+
+    assert_eq!(
+        assignment.archive(&course, &teacher).unwrap_err(),
+        DomainError::AssignmentStatusTransitionNotAllowed {
+            from: AssignmentStatus::Archived,
+            to: AssignmentStatus::Archived,
+        }
+    );
+}
+
+#[test]
+fn archived_assignment_keeps_its_deadline() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let mut assignment = assignment(&course, &teacher).build();
+    let deadline_at = assignment.deadline_at();
+    assignment.archive(&course, &teacher).unwrap();
+
+    let result = assignment.change_deadline(&course, &teacher, deadline_at + Duration::days(1));
+
+    assert_eq!(result.unwrap_err(), DomainError::AssignmentIsArchived);
+    assert_eq!(assignment.deadline_at(), deadline_at);
 }
 
 #[test]

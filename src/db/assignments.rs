@@ -42,6 +42,44 @@ where
     Ok(())
 }
 
+/// Update условный по прежнему статусу: одновременные publish и archive иначе молча затирают друг
+/// друга, и проигравший получает 200 на переход, которого в БД уже нет.
+pub async fn update<'e, E>(
+    executor: E,
+    assignment: &Assignment,
+    previous_status: AssignmentStatus,
+) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    let result = sqlx::query!(
+        r#"
+        update assignments
+        set
+            status = $2,
+            deadline_at = $3,
+            published_at = $4
+        where id = $1
+          and status = $5
+        "#,
+        assignment.id().as_uuid(),
+        assignment.status().as_str(),
+        assignment.deadline_at(),
+        assignment.published_at(),
+        previous_status.as_str(),
+    )
+    .execute(executor)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::Conflict {
+            message: "assignment was changed by a concurrent request",
+        });
+    }
+
+    Ok(())
+}
+
 pub async fn find_by_id<'e, E>(executor: E, id: AssignmentId) -> DbResult<Option<Assignment>>
 where
     E: PgExecutor<'e>,
