@@ -1,25 +1,17 @@
 mod common;
 
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use common::{Fixture, postgres_pool};
-use hw_bot::api::{self, AppState};
+use axum::http::StatusCode;
+use common::TestApp;
 use serde_json::{Value, json};
-use tower::ServiceExt;
 use uuid::Uuid;
 
 #[tokio::test]
 async fn review_endpoints_cover_the_queue_and_the_review_decision() -> anyhow::Result<()> {
-    let (_postgres, pool) = postgres_pool().await?;
-    hw_bot::db::run_migrations(&pool).await?;
+    let app = TestApp::start().await?;
 
-    let fixture = Fixture::insert(&pool).await?;
-    let app = api::router(AppState::new("hw-bot-test", pool.clone()));
-
-    let assignment_id = fixture.assignment.id().as_uuid();
-    let teacher_id = fixture.teacher.telegram_user_id().as_i64();
-    let first_student_id = fixture.student.telegram_user_id().as_i64();
+    let assignment_id = app.fixture.assignment.id().as_uuid();
+    let teacher_id = app.fixture.teacher.telegram_user_id().as_i64();
+    let first_student_id = app.fixture.student.telegram_user_id().as_i64();
 
     let (status, body) = take_next(&app, teacher_id).await?;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -29,8 +21,9 @@ async fn review_endpoints_cover_the_queue_and_the_review_decision() -> anyhow::R
         submit(&app, assignment_id, first_student_id, "pull/1").await?;
     assert_eq!(status, StatusCode::CREATED);
 
-    let second_student = fixture
-        .insert_student(&pool, 1002, "Second student")
+    let second_student = app
+        .fixture
+        .insert_student(&app.pool, 1002, "Second student")
         .await?;
     let second_student_id = second_student.telegram_user_id().as_i64();
     let (status, second_submission) =
@@ -54,8 +47,9 @@ async fn review_endpoints_cover_the_queue_and_the_review_decision() -> anyhow::R
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], "permission_denied");
 
-    let outsider = fixture
-        .insert_teacher(&pool, 1003, "Outsider teacher")
+    let outsider = app
+        .fixture
+        .insert_teacher(&app.pool, 1003, "Outsider teacher")
         .await?;
     let outsider_id = outsider.telegram_user_id().as_i64();
     let (status, _) = take_next(&app, outsider_id).await?;
@@ -65,7 +59,7 @@ async fn review_endpoints_cover_the_queue_and_the_review_decision() -> anyhow::R
         "a teacher only sees submissions of the courses they teach"
     );
 
-    let admin = fixture.insert_admin(&pool, 1004).await?;
+    let admin = app.fixture.insert_admin(&app.pool, 1004).await?;
     let (status, body) = take_next(&app, admin.telegram_user_id().as_i64()).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -103,7 +97,10 @@ async fn review_endpoints_cover_the_queue_and_the_review_decision() -> anyhow::R
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], json!("rejected"));
-    assert_eq!(body["reviewed_by"], json!(fixture.teacher.id().as_uuid()));
+    assert_eq!(
+        body["reviewed_by"],
+        json!(app.fixture.teacher.id().as_uuid())
+    );
     assert_eq!(body["review_comment"], json!("Add tests, then resubmit."));
     assert!(body["reviewed_at"].as_str().is_some());
 
@@ -147,57 +144,43 @@ async fn review_endpoints_cover_the_queue_and_the_review_decision() -> anyhow::R
 }
 
 async fn submit(
-    app: &Router,
+    app: &TestApp,
     assignment_id: Uuid,
     telegram_user_id: i64,
     path: &str,
 ) -> anyhow::Result<(StatusCode, Value)> {
-    let request = Request::post(format!("/assignments/{assignment_id}/submissions"))
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({
+    app.post(
+        &format!("/assignments/{assignment_id}/submissions"),
+        json!({
             "telegram_user_id": telegram_user_id,
             "content": format!("https://github.com/course/hw/{path}"),
-        }))?))?;
-
-    send(app, request).await
+        }),
+    )
+    .await
 }
 
-async fn take_next(app: &Router, telegram_user_id: i64) -> anyhow::Result<(StatusCode, Value)> {
-    let request = Request::post("/submissions/next")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({
-            "telegram_user_id": telegram_user_id,
-        }))?))?;
-
-    send(app, request).await
+async fn take_next(app: &TestApp, telegram_user_id: i64) -> anyhow::Result<(StatusCode, Value)> {
+    app.post(
+        "/submissions/next",
+        json!({ "telegram_user_id": telegram_user_id }),
+    )
+    .await
 }
 
 async fn review(
-    app: &Router,
+    app: &TestApp,
     submission_id: Uuid,
     telegram_user_id: i64,
     decision: &str,
     comment: &str,
 ) -> anyhow::Result<(StatusCode, Value)> {
-    let request = Request::post(format!("/submissions/{submission_id}/review"))
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({
+    app.post(
+        &format!("/submissions/{submission_id}/review"),
+        json!({
             "telegram_user_id": telegram_user_id,
             "decision": decision,
             "comment": comment,
-        }))?))?;
-
-    send(app, request).await
-}
-
-async fn send(app: &Router, request: Request<Body>) -> anyhow::Result<(StatusCode, Value)> {
-    let response = app.clone().oneshot(request).await?;
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
-
-    if bytes.is_empty() {
-        return Ok((status, Value::Null));
-    }
-
-    Ok((status, serde_json::from_slice(&bytes)?))
+        }),
+    )
+    .await
 }

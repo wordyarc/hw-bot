@@ -1,27 +1,19 @@
 mod common;
 
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use common::{Fixture, postgres_pool};
-use hw_bot::api::{self, AppState};
+use axum::http::StatusCode;
+use common::TestApp;
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
 #[tokio::test]
 async fn user_endpoints_cover_registration_and_reference_data() -> anyhow::Result<()> {
-    let (_postgres, pool) = postgres_pool().await?;
-    hw_bot::db::run_migrations(&pool).await?;
+    let app = TestApp::start().await?;
 
-    let fixture = Fixture::insert(&pool).await?;
-    let app = api::router(AppState::new("hw-bot-test", pool.clone()));
-
-    let group_code = fixture.group.code().as_str().to_owned();
-    let admin = fixture.insert_admin(&pool, 1004).await?;
+    let group_code = app.fixture.group.code().as_str().to_owned();
+    let admin = app.fixture.insert_admin(&app.pool, 1004).await?;
     let admin_id = admin.telegram_user_id().as_i64();
-    let teacher_id = fixture.teacher.telegram_user_id().as_i64();
+    let teacher_id = app.fixture.teacher.telegram_user_id().as_i64();
 
-    let (status, body) = get(&app, "/student-groups").await?;
+    let (status, body) = app.get("/student-groups").await?;
     assert_eq!(status, StatusCode::OK);
     let groups = body.as_array().unwrap();
     assert!(
@@ -53,12 +45,12 @@ async fn user_endpoints_cover_registration_and_reference_data() -> anyhow::Resul
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"]["code"], "empty_field");
 
-    let (status, body) = get(&app, "/users/2001").await?;
+    let (status, body) = app.get("/users/2001").await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["display_name"], json!("Ivan"));
     assert_eq!(body["student_group"]["code"], json!(group_code));
 
-    let (status, body) = get(&app, "/users/9999").await?;
+    let (status, body) = app.get("/users/9999").await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["message"], "user not found");
 
@@ -92,16 +84,18 @@ async fn user_endpoints_cover_registration_and_reference_data() -> anyhow::Resul
         "student is not a staff role, so it never reaches the domain"
     );
 
-    let request = Request::post(format!(
-        "/assignments/{}/submissions",
-        fixture.assignment.id().as_uuid()
-    ))
-    .header("content-type", "application/json")
-    .body(Body::from(serde_json::to_vec(&json!({
-        "telegram_user_id": 2001,
-        "content": "https://github.com/course/hw/pull/1",
-    }))?))?;
-    let (status, body) = send(&app, request).await?;
+    let (status, body) = app
+        .post(
+            &format!(
+                "/assignments/{}/submissions",
+                app.fixture.assignment.id().as_uuid()
+            ),
+            json!({
+                "telegram_user_id": 2001,
+                "content": "https://github.com/course/hw/pull/1",
+            }),
+        )
+        .await?;
     assert_eq!(
         status,
         StatusCode::CREATED,
@@ -113,53 +107,37 @@ async fn user_endpoints_cover_registration_and_reference_data() -> anyhow::Resul
 }
 
 async fn register_student(
-    app: &Router,
+    app: &TestApp,
     telegram_user_id: i64,
     display_name: &str,
     student_group_code: &str,
 ) -> anyhow::Result<(StatusCode, Value)> {
-    let request = Request::post("/students")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({
+    app.post(
+        "/students",
+        json!({
             "telegram_user_id": telegram_user_id,
             "display_name": display_name,
             "student_group_code": student_group_code,
-        }))?))?;
-
-    send(app, request).await
+        }),
+    )
+    .await
 }
 
 async fn register_staff(
-    app: &Router,
+    app: &TestApp,
     actor_telegram_user_id: i64,
     telegram_user_id: i64,
     display_name: &str,
     role: &str,
 ) -> anyhow::Result<(StatusCode, Value)> {
-    let request = Request::post("/staff")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({
+    app.post(
+        "/staff",
+        json!({
             "actor_telegram_user_id": actor_telegram_user_id,
             "telegram_user_id": telegram_user_id,
             "display_name": display_name,
             "role": role,
-        }))?))?;
-
-    send(app, request).await
-}
-
-async fn get(app: &Router, path: &str) -> anyhow::Result<(StatusCode, Value)> {
-    send(app, Request::get(path).body(Body::empty())?).await
-}
-
-async fn send(app: &Router, request: Request<Body>) -> anyhow::Result<(StatusCode, Value)> {
-    let response = app.clone().oneshot(request).await?;
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
-
-    if bytes.is_empty() {
-        return Ok((status, Value::Null));
-    }
-
-    Ok((status, serde_json::from_slice(&bytes)?))
+        }),
+    )
+    .await
 }

@@ -1,15 +1,21 @@
 #![allow(dead_code)]
 
+use axum::Router;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use chrono::{Duration, Utc};
+use hw_bot::api::{self, AppState};
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, AssignmentId, EducationLevel, Role, StudentGroup, StudentGroupId, StudyProgram,
     Subject, SubjectId, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
 };
+use serde_json::Value;
 use sqlx::PgPool;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use tower::ServiceExt;
 
 const POSTGRES_PORT: u16 = 5432;
 
@@ -30,6 +36,57 @@ pub async fn postgres_pool() -> anyhow::Result<(ContainerAsync<GenericImage>, Pg
     let database_url = format!("postgres://postgres:postgres@{host}:{port}/hw_bot_test");
 
     Ok((postgres, PgPool::connect(&database_url).await?))
+}
+
+/// Поднятый Postgres, накатанные миграции, вставленная фикстура и собранный роутер: всё, что нужно
+/// любому HTTP-тесту. Контейнер живёт, пока жив `TestApp`.
+pub struct TestApp {
+    _postgres: ContainerAsync<GenericImage>,
+    pub pool: PgPool,
+    pub app: Router,
+    pub fixture: Fixture,
+}
+
+impl TestApp {
+    pub async fn start() -> anyhow::Result<Self> {
+        let (postgres, pool) = postgres_pool().await?;
+        db::run_migrations(&pool).await?;
+
+        let fixture = Fixture::insert(&pool).await?;
+        let app = api::router(AppState::new("hw-bot-test", pool.clone()));
+
+        Ok(Self {
+            _postgres: postgres,
+            pool,
+            app,
+            fixture,
+        })
+    }
+
+    pub async fn get(&self, path: &str) -> anyhow::Result<(StatusCode, Value)> {
+        self.send(Request::get(path).body(Body::empty())?).await
+    }
+
+    pub async fn post(&self, path: &str, body: Value) -> anyhow::Result<(StatusCode, Value)> {
+        self.send(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body)?))?,
+        )
+        .await
+    }
+
+    pub async fn send(&self, request: Request<Body>) -> anyhow::Result<(StatusCode, Value)> {
+        let response = self.app.clone().oneshot(request).await?;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+
+        if bytes.is_empty() {
+            return Ok((status, Value::Null));
+        }
+
+        Ok((status, serde_json::from_slice(&bytes)?))
+    }
 }
 
 pub struct Fixture {

@@ -1,7 +1,7 @@
 mod common;
 
 use chrono::{DateTime, Duration, Utc};
-use common::{Fixture, postgres_pool};
+use common::TestApp;
 use hw_bot::db::submissions;
 use hw_bot::domain::{
     Assignment, Submission, SubmissionHistory, SubmissionId, SubmissionStatus, User,
@@ -10,12 +10,11 @@ use sqlx::PgPool;
 
 #[tokio::test]
 async fn submission_repository_persists_history_reviews_and_queue_order() -> anyhow::Result<()> {
-    let (_postgres, pool) = postgres_pool().await?;
-    hw_bot::db::run_migrations(&pool).await?;
+    let test_app = TestApp::start().await?;
+    let (pool, fixture) = (&test_app.pool, &test_app.fixture);
 
-    let fixture = Fixture::insert(&pool).await?;
     let history =
-        submissions::load_history(&pool, fixture.assignment.id(), fixture.student.id()).await?;
+        submissions::load_history(pool, fixture.assignment.id(), fixture.student.id()).await?;
     assert_eq!(history, SubmissionHistory::default());
 
     let submitted_at = Utc::now();
@@ -28,9 +27,9 @@ async fn submission_repository_persists_history_reviews_and_queue_order() -> any
         submitted_at,
     )?;
 
-    submissions::insert(&pool, &submission).await?;
+    submissions::insert(pool, &submission).await?;
 
-    let loaded = submissions::find_by_id(&pool, submission.id())
+    let loaded = submissions::find_by_id(pool, submission.id())
         .await?
         .unwrap();
     assert_eq!(loaded.id(), submission.id());
@@ -38,7 +37,7 @@ async fn submission_repository_persists_history_reviews_and_queue_order() -> any
     assert_eq!(loaded.content().as_str(), submission.content().as_str());
 
     let history =
-        submissions::load_history(&pool, fixture.assignment.id(), fixture.student.id()).await?;
+        submissions::load_history(pool, fixture.assignment.id(), fixture.student.id()).await?;
     assert_eq!(
         history,
         SubmissionHistory::new(0, 0, false, true),
@@ -53,32 +52,28 @@ async fn submission_repository_persists_history_reviews_and_queue_order() -> any
         "95/100",
         Utc::now(),
     )?;
-    submissions::save_review_result(&pool, &reviewed).await?;
+    submissions::save_review_result(pool, &reviewed).await?;
 
-    let loaded = submissions::find_by_id(&pool, reviewed.id())
-        .await?
-        .unwrap();
+    let loaded = submissions::find_by_id(pool, reviewed.id()).await?.unwrap();
     assert_eq!(loaded.status(), SubmissionStatus::Accepted);
     assert_eq!(loaded.reviewed_by(), Some(fixture.teacher.id()));
     assert_eq!(loaded.review_comment().unwrap().as_str(), "95/100");
 
     let history =
-        submissions::load_history(&pool, fixture.assignment.id(), fixture.student.id()).await?;
+        submissions::load_history(pool, fixture.assignment.id(), fixture.student.id()).await?;
     assert_eq!(history, SubmissionHistory::new(1, 0, true, false));
 
-    let second_student = fixture
-        .insert_student(&pool, 1002, "Second student")
-        .await?;
-    let third_student = fixture.insert_student(&pool, 1003, "Third student").await?;
+    let second_student = fixture.insert_student(pool, 1002, "Second student").await?;
+    let third_student = fixture.insert_student(pool, 1003, "Third student").await?;
     let later_submission = submit_for_student(
-        &pool,
+        pool,
         &fixture.assignment,
         &second_student,
         submitted_at + Duration::seconds(2),
     )
     .await?;
     let earlier_submission = submit_for_student(
-        &pool,
+        pool,
         &fixture.assignment,
         &third_student,
         submitted_at + Duration::seconds(1),
