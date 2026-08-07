@@ -63,9 +63,11 @@ fn unique_violation(error: &sqlx::Error) -> Option<DbError> {
         "submissions_one_accepted_per_student_assignment_idx" => {
             rule(DomainError::SubmissionAlreadyAccepted)
         }
-        "submissions_assignment_id_student_id_attempt_number_key" => Some(DbError::Conflict {
-            message: "attempt number was already taken by a concurrent submission",
-        }),
+        // Двойной тап: этот ключ проверяется раньше индекса по pending, поэтому конкурентную
+        // вставку ловит он. Соседняя сдача только что вставлена, значит заведомо ждёт проверки.
+        "submissions_assignment_id_student_id_attempt_number_key" => {
+            rule(DomainError::SubmissionAlreadyPendingReview)
+        }
         _ => None,
     }
 }

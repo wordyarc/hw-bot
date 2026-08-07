@@ -144,7 +144,7 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
 }
 
 /// Единственный арбитр гонки - условный `update ... where status = 'pending_review'`.
-/// Проигравший обязан получить `SubmissionIsNotPendingReview`, а не молча перезаписать решение.
+/// Проигравший обязан получить `SubmissionIsNotPendingReview`
 #[tokio::test]
 async fn the_loser_of_a_review_race_is_rejected_by_the_conditional_update() -> anyhow::Result<()> {
     let app = TestApp::start().await;
@@ -200,8 +200,28 @@ async fn the_loser_of_a_review_race_is_rejected_by_the_conditional_update() -> a
     Ok(())
 }
 
-/// Сдача в статусе `PendingReview` не может быть сохранена как результат ревью: без этой
-/// проверки условный update снял бы статус и оставил сдачу без решения.
+#[tokio::test]
+async fn a_double_tap_reports_the_same_error_as_the_up_front_check() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let first = submission(&app.fixture.assignment, &app.fixture.student).build();
+    let double_tap = submission(&app.fixture.assignment, &app.fixture.student).build();
+
+    submissions::insert(&app.pool, &first).await?;
+    let lost = submissions::insert(&app.pool, &double_tap).await;
+
+    assert!(
+        matches!(
+            lost,
+            Err(DbError::RuleViolation(
+                DomainError::SubmissionAlreadyPendingReview
+            ))
+        ),
+        "expected the same rule as the up-front check, got {lost:?}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_pending_submission_cannot_be_saved_as_a_review_result() -> anyhow::Result<()> {
     let app = TestApp::start().await;

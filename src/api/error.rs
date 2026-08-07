@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn maps_retryable_write_races_to_conflict() {
         let error = ApiError::from(AppError::Conflict {
-            message: "attempt number was already taken by a concurrent submission",
+            message: "assignment was changed by a concurrent request",
         });
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
