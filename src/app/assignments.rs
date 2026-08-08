@@ -4,8 +4,9 @@ use sqlx::PgPool;
 use crate::app::{AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Submission,
-    SubmissionHistory, TeachingCourse, TeachingCourseId, TelegramUserId, User,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult,
+    StudentAssignmentProgress, Submission, SubmissionHistory, TeachingCourse, TeachingCourseId,
+    TelegramUserId, User, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,14 @@ pub struct ChangeDeadline {
     pub assignment_id: AssignmentId,
     pub actor_telegram_user_id: TelegramUserId,
     pub deadline_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GrantExtraAttempts {
+    pub assignment_id: AssignmentId,
+    pub student_id: UserId,
+    pub actor_telegram_user_id: TelegramUserId,
+    pub amount: u16,
 }
 
 /// Задание глазами студента
@@ -111,6 +120,41 @@ impl AssignmentService {
             },
         )
         .await
+    }
+
+    pub async fn grant_extra_attempts(
+        &self,
+        command: GrantExtraAttempts,
+    ) -> AppResult<StudentAssignmentProgress> {
+        let mut tx = self.pool.begin().await?;
+
+        let actor = db::users::find_by_telegram_user_id(&mut *tx, command.actor_telegram_user_id)
+            .await?
+            .required("teacher")?;
+
+        let assignment = db::assignments::find_by_id(&mut *tx, command.assignment_id)
+            .await?
+            .required("assignment")?;
+
+        let student = db::users::find_by_id(&mut *tx, command.student_id)
+            .await?
+            .required("student")?;
+
+        let teaching_course =
+            db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
+                .await?
+                .required("teaching course")?;
+
+        let extra_attempts =
+            db::attempts::lock_or_create(&mut tx, assignment.id(), student.id()).await?;
+        let mut progress = StudentAssignmentProgress::new(&assignment, &student, extra_attempts)?;
+
+        progress.grant_extra_attempts(&assignment, &teaching_course, &actor, command.amount)?;
+
+        db::attempts::update(&mut tx, &progress).await?;
+        tx.commit().await?;
+
+        Ok(progress)
     }
 
     /// Главный экран студента.

@@ -7,8 +7,13 @@ use uuid::Uuid;
 
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
-use crate::app::{ChangeDeadline, CreateAssignment, StudentAssignment, StudentAssignmentDetails};
-use crate::domain::{Assignment, AssignmentId, AssignmentStatus, TeachingCourseId};
+use crate::app::{
+    ChangeDeadline, CreateAssignment, GrantExtraAttempts, StudentAssignment,
+    StudentAssignmentDetails,
+};
+use crate::domain::{
+    Assignment, AssignmentId, AssignmentStatus, StudentAssignmentProgress, TeachingCourseId, UserId,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +28,29 @@ pub struct CreateAssignmentRequest {
 #[serde(deny_unknown_fields)]
 pub struct ChangeDeadlineRequest {
     deadline_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantExtraAttemptsRequest {
+    amount: u16,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StudentAssignmentProgressResponse {
+    assignment_id: Uuid,
+    student_id: Uuid,
+    extra_attempts: u16,
+}
+
+impl From<&StudentAssignmentProgress> for StudentAssignmentProgressResponse {
+    fn from(progress: &StudentAssignmentProgress) -> Self {
+        Self {
+            assignment_id: progress.assignment_id().as_uuid(),
+            student_id: progress.student_id().as_uuid(),
+            extra_attempts: progress.extra_attempts(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -219,4 +247,22 @@ pub async fn change_deadline(
     let assignment = state.assignments.change_deadline(command).await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
+}
+
+pub async fn grant_extra_attempts(
+    State(state): State<AppState>,
+    Actor(actor): Actor,
+    Path((assignment_id, student_id)): Path<(Uuid, Uuid)>,
+    JsonBody(request): JsonBody<GrantExtraAttemptsRequest>,
+) -> Result<Json<StudentAssignmentProgressResponse>, ApiError> {
+    let command = GrantExtraAttempts {
+        assignment_id: AssignmentId::from_uuid(assignment_id),
+        student_id: UserId::from_uuid(student_id),
+        actor_telegram_user_id: actor,
+        amount: request.amount,
+    };
+
+    let progress = state.assignments.grant_extra_attempts(command).await?;
+
+    Ok(Json(StudentAssignmentProgressResponse::from(&progress)))
 }

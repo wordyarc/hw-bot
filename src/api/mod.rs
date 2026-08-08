@@ -40,6 +40,10 @@ pub fn router(state: AppState) -> Router {
             post(assignments::change_deadline),
         )
         .route(
+            "/assignments/{assignment_id}/students/{student_id}/extra-attempts",
+            post(assignments::grant_extra_attempts),
+        )
+        .route(
             "/assignments/{assignment_id}/submissions",
             post(submissions::submit_homework),
         )

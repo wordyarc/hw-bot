@@ -4,6 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 
 pub mod academic;
 pub mod assignments;
+pub mod attempts;
 mod convert;
 mod enums;
 mod error;
@@ -12,7 +13,7 @@ pub mod users;
 
 pub use error::{DbError, DbResult};
 
-pub(crate) use convert::num;
+pub(crate) use convert::checked_num_cast;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 

@@ -6,6 +6,7 @@ mod harness;
 
 mod actor_api;
 mod assignments_api;
+mod attempts_api;
 mod db_schema;
 mod health_api;
 mod review_api;

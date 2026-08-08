@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into student_assignment_progress (assignment_id, student_id, extra_attempts)\n        values ($1, $2, 0)\n        on conflict (assignment_id, student_id) do update\n        set extra_attempts = student_assignment_progress.extra_attempts\n        returning extra_attempts\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "extra_attempts",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "student_assignment_progress",
+            "name": "extra_attempts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1b41a622ee62b79c1c39969afca1634aea6698a52f1f02f3f8a7c3fd9b9bfcb5"
+}

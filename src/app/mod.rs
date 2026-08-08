@@ -6,7 +6,7 @@ mod submissions;
 mod users;
 
 pub use assignments::{
-    AssignmentService, ChangeDeadline, CreateAssignment, StudentAssignment,
+    AssignmentService, ChangeDeadline, CreateAssignment, GrantExtraAttempts, StudentAssignment,
     StudentAssignmentDetails,
 };
 pub use courses::CourseService;

@@ -385,6 +385,21 @@ impl TestApp {
         .await
     }
 
+    pub async fn grant_extra_attempts(
+        &self,
+        assignment: Uuid,
+        student: Uuid,
+        telegram_id: i64,
+        amount: u16,
+    ) -> TestResponse {
+        self.post_as(
+            &format!("/assignments/{assignment}/students/{student}/extra-attempts"),
+            telegram_id,
+            json!({ "amount": amount }),
+        )
+        .await
+    }
+
     pub async fn take_next(&self, telegram_id: i64) -> TestResponse {
         self.post_empty_as("/submissions/next", telegram_id).await
     }

@@ -5,7 +5,7 @@ use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult, num};
+use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     EducationLevel, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, TeachingCourse,
     TeachingCourseId, User, UserId,
@@ -255,7 +255,7 @@ impl TryFrom<StudentGroupRow> for StudentGroup {
     fn try_from(row: StudentGroupRow) -> Result<Self, Self::Error> {
         let education_level = EducationLevel::parse_str(&row.education_level)
             .ok_or_else(|| DbError::invalid_value(EDUCATION_LEVEL, &row.education_level))?;
-        let study_year: u8 = num(STUDY_YEAR, row.study_year)?;
+        let study_year: u8 = checked_num_cast(STUDY_YEAR, row.study_year)?;
 
         Ok(StudentGroup::new(
             StudentGroupId::from_uuid(row.id),

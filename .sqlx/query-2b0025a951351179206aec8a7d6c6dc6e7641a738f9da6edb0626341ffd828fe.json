@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update student_assignment_progress\n        set extra_attempts = $3\n        where assignment_id = $1\n          and student_id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b0025a951351179206aec8a7d6c6dc6e7641a738f9da6edb0626341ffd828fe"
+}

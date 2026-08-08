@@ -5,7 +5,7 @@ use sqlx::postgres::PgExecutor;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult, num};
+use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     AssignmentId, DomainError, Role, Submission, SubmissionHistory, SubmissionId, SubmissionParts,
     SubmissionStatus, User, UserId,
@@ -50,7 +50,7 @@ where
         submission.id().as_uuid(),
         submission.assignment_id().as_uuid(),
         submission.student_id().as_uuid(),
-        num::<_, i16>(ATTEMPT_NUMBER, submission.attempt_number())?,
+        checked_num_cast::<_, i16>(ATTEMPT_NUMBER, submission.attempt_number())?,
         submission.content().as_str(),
         submission.status().as_str(),
         submission.submitted_at(),
@@ -145,8 +145,8 @@ where
     .await?;
 
     Ok(SubmissionHistory::new(
-        num("submission_history.used_attempts", row.used_attempts)?,
-        num("submission_history.extra_attempts", row.extra_attempts)?,
+        checked_num_cast("submission_history.used_attempts", row.used_attempts)?,
+        checked_num_cast("submission_history.extra_attempts", row.extra_attempts)?,
         row.has_accepted_submission,
         row.has_pending_submission,
     ))
@@ -197,8 +197,8 @@ where
     rows.into_iter()
         .map(|row| {
             let history = SubmissionHistory::new(
-                num("submission_history.used_attempts", row.used_attempts)?,
-                num("submission_history.extra_attempts", row.extra_attempts)?,
+                checked_num_cast("submission_history.used_attempts", row.used_attempts)?,
+                checked_num_cast("submission_history.extra_attempts", row.extra_attempts)?,
                 row.has_accepted_submission,
                 row.has_pending_submission,
             );
@@ -262,7 +262,7 @@ where
     .fetch_one(executor)
     .await?;
 
-    num("review_queue.pending", pending)
+    checked_num_cast("review_queue.pending", pending)
 }
 
 pub async fn lock_next_pending_for_reviewer(
@@ -318,7 +318,7 @@ impl TryFrom<SubmissionRow> for Submission {
     fn try_from(row: SubmissionRow) -> Result<Self, Self::Error> {
         let status = SubmissionStatus::parse_str(&row.status)
             .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
-        let attempt_number: u16 = num(ATTEMPT_NUMBER, row.attempt_number)?;
+        let attempt_number: u16 = checked_num_cast(ATTEMPT_NUMBER, row.attempt_number)?;
 
         Ok(Submission::restore(SubmissionParts {
             id: SubmissionId::from_uuid(row.id),
