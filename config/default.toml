@@ -21,8 +21,10 @@ rotation = "daily"
 also_stdout = true
 
 [telegram]
+enabled = false
 api_base_url = "https://api.telegram.org"
 request_timeout_ms = 5000
+shutdown_grace_ms = 10000
 
 [notification_worker]
 enabled = false

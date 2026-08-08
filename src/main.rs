@@ -1,6 +1,7 @@
 use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{NotificationWorker, NotificationWorkerSettings};
+use hw_bot::bot::TelegramBot;
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
 use hw_bot::telegram::TelegramClient;
@@ -54,6 +55,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     }
 
     let cancellation = CancellationToken::new();
+    let telegram_bot = start_telegram_bot(&config, db_pool.clone(), cancellation.clone())?;
     let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
     let app = api::router(AppState::new(config.app.name, db_pool));
 
@@ -75,6 +77,11 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
         .context("failed to serve HTTP application");
 
     cancellation.cancel();
+    stop_telegram_bot(
+        telegram_bot,
+        Duration::from_millis(config.telegram.shutdown_grace_ms),
+    )
+    .await?;
     stop_notification_worker(
         worker,
         Duration::from_millis(config.notification_worker.shutdown_grace_ms),
@@ -82,6 +89,45 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     .await?;
 
     server_result
+}
+
+fn start_telegram_bot(
+    config: &AppConfig,
+    pool: sqlx::PgPool,
+    cancellation: CancellationToken,
+) -> anyhow::Result<Option<JoinHandle<()>>> {
+    if !config.telegram.enabled {
+        tracing::info!("Telegram bot disabled");
+        return Ok(None);
+    }
+
+    ensure!(
+        config.telegram.shutdown_grace_ms > 0,
+        "Telegram bot shutdown grace must be positive"
+    );
+    let bot = TelegramBot::new(
+        pool,
+        required_bot_token(config)?,
+        &config.telegram.api_base_url,
+    )?;
+
+    tracing::info!("Telegram bot enabled");
+    Ok(Some(tokio::spawn(bot.run(cancellation))))
+}
+
+async fn stop_telegram_bot(bot: Option<JoinHandle<()>>, grace: Duration) -> anyhow::Result<()> {
+    let Some(mut bot) = bot else {
+        return Ok(());
+    };
+
+    match tokio::time::timeout(grace, &mut bot).await {
+        Ok(result) => result.context("Telegram bot task failed"),
+        Err(_) => {
+            tracing::warn!("Telegram bot did not stop within shutdown grace");
+            bot.abort();
+            Ok(())
+        }
+    }
 }
 
 fn start_notification_worker(
@@ -128,12 +174,7 @@ fn start_notification_worker(
         "worker lease duration must exceed Telegram request timeout"
     );
 
-    let bot_token = config
-        .telegram
-        .bot_token
-        .as_deref()
-        .filter(|token| !token.trim().is_empty())
-        .context("Telegram bot token is required when notification worker is enabled")?;
+    let bot_token = required_bot_token(config)?;
     ensure!(
         !config.telegram.api_base_url.trim().is_empty(),
         "Telegram API base URL must not be empty"
@@ -159,6 +200,15 @@ fn start_notification_worker(
 
     tracing::info!("review notification worker enabled");
     Ok(Some(tokio::spawn(worker.run(cancellation))))
+}
+
+fn required_bot_token(config: &AppConfig) -> anyhow::Result<&str> {
+    config
+        .telegram
+        .bot_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .context("Telegram bot token is required when a Telegram component is enabled")
 }
 
 async fn stop_notification_worker(

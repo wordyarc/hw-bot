@@ -42,9 +42,11 @@ pub struct LoggingConfig {
 
 #[derive(Clone, Deserialize)]
 pub struct TelegramConfig {
+    pub enabled: bool,
     pub api_base_url: String,
     pub bot_token: Option<String>,
     pub request_timeout_ms: u64,
+    pub shutdown_grace_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -121,8 +123,10 @@ mod tests {
                 also_stdout = true
 
                 [telegram]
+                enabled = false
                 api_base_url = "https://api.telegram.org"
                 request_timeout_ms = 5000
+                shutdown_grace_ms = 10000
 
                 [notification_worker]
                 enabled = false
@@ -162,6 +166,8 @@ mod tests {
         assert!(config.logging.also_stdout);
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
+        assert!(!config.telegram.enabled);
+        assert_eq!(config.telegram.shutdown_grace_ms, 10000);
         assert!(!config.notification_worker.enabled);
         assert_eq!(config.notification_worker.max_attempts, 10);
     }
