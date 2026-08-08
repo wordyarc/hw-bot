@@ -169,7 +169,7 @@ async fn grant_is_visible_in_student_assignment_progress() {
     .await
     .ok();
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     assert_eq!(body[0]["progress"]["allowed_attempts"], json!(3));
     assert_eq!(body[0]["progress"]["remaining_attempts"], json!(3));

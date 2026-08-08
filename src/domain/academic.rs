@@ -217,6 +217,7 @@ impl TeachingCourse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::t0;
 
     #[test]
     fn study_program_validates_year_by_education_level() {
@@ -238,7 +239,7 @@ mod tests {
                 SubjectId::new(),
                 StudentGroupId::new(),
                 HashSet::new(),
-                Utc::now(),
+                t0(),
             )
             .unwrap_err(),
             DomainError::TeachingCourseHasNoTeachers

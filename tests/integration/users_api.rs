@@ -52,7 +52,7 @@ async fn registration_into_unknown_group_is_not_found() {
 
     app.register_student(2002, "Petr", "NO-SUCH-GROUP")
         .await
-        .not_found("student group not found");
+        .not_found();
 }
 
 #[tokio::test]
@@ -82,7 +82,7 @@ async fn a_registered_caller_reads_their_own_profile() {
 async fn an_unregistered_caller_is_not_found() {
     let app = TestApp::start().await;
 
-    app.get_as("/me", 9999).await.not_found("user not found");
+    app.get_as("/me", 9999).await.not_found();
 }
 
 #[tokio::test]

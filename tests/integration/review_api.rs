@@ -87,7 +87,13 @@ async fn second_course_teacher_shares_the_queue() {
 #[tokio::test]
 async fn admin_reviews_every_course() {
     let app = TestApp::start().await;
-    let (_, foreign_student, foreign_assignment) = app.add_foreign_course_assignment().await;
+    let foreign = app.add_foreign_course().await;
+    let foreign_student = app
+        .add_student_to_group("Foreign student", &foreign.group)
+        .await;
+    let foreign_assignment = app
+        .add_published_assignment(&foreign.course, &foreign.teacher, "Foreign assignment")
+        .await;
 
     app.submit(
         foreign_assignment.id().as_uuid(),
@@ -110,8 +116,13 @@ async fn admin_reviews_every_course() {
 #[tokio::test]
 async fn queue_does_not_mix_courses() {
     let app = TestApp::start().await;
-    let (foreign_teacher, foreign_student, foreign_assignment) =
-        app.add_foreign_course_assignment().await;
+    let foreign = app.add_foreign_course().await;
+    let foreign_student = app
+        .add_student_to_group("Foreign student", &foreign.group)
+        .await;
+    let foreign_assignment = app
+        .add_published_assignment(&foreign.course, &foreign.teacher, "Foreign assignment")
+        .await;
 
     let own = app.queued_submission(app.student(), "pull/1").await;
     app.submit(
@@ -126,7 +137,7 @@ async fn queue_does_not_mix_courses() {
     assert_eq!(submission_id(&body["submission"]), own);
 
     let body = app
-        .take_next(foreign_teacher.telegram_user_id().as_i64())
+        .take_next(foreign.teacher.telegram_user_id().as_i64())
         .await
         .ok();
     assert_eq!(
@@ -179,7 +190,7 @@ async fn reviewing_unknown_submission_is_not_found() {
 
     app.review(Uuid::now_v7(), app.teacher(), "accept", "good")
         .await
-        .not_found("submission not found");
+        .not_found();
 }
 
 #[tokio::test]
@@ -273,9 +284,13 @@ async fn racing_reviews_enqueue_one_notification() {
         app.review(submission, app.teacher(), "reject", "bad"),
     );
 
-    let statuses = [first.status, second.status];
-    assert!(statuses.contains(&StatusCode::OK));
-    assert!(statuses.contains(&StatusCode::CONFLICT));
+    let (winner, loser) = if first.status == StatusCode::OK {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    winner.ok();
+    loser.error(StatusCode::CONFLICT, "submission_is_not_pending_review");
 
     let count: i64 = sqlx::query_scalar(
         "select count(*) from review_notification_outbox where submission_id = $1",

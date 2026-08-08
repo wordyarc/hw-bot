@@ -13,8 +13,7 @@ pub const ASSIGNMENT_TITLE: &str = "Rust ownership";
 pub const ASSIGNMENT_BODY: &str = "Send a pull request link.";
 pub const PULL_REQUEST_URL: &str = "https://github.com/course/hw/pull/1";
 
-/// Фиксированная точка отсчёта вместо `Utc::now()` в каждом билдере: дедлайны и порядок очереди
-/// становятся точными значениями, а не «строка непустая».
+/// Фиксированная точка отсчёта вместо `Utc::now()` в каждом билдере
 pub fn t0() -> DateTime<Utc> {
     DateTime::from_timestamp(1_767_225_600, 0).expect("2026-01-01T00:00:00Z is a valid timestamp")
 }
@@ -157,7 +156,12 @@ impl<'a> AssignmentBuilder<'a> {
         self
     }
 
+    #[track_caller]
     pub fn build(self) -> Assignment {
+        self.try_build().expect("valid assignment")
+    }
+
+    pub fn try_build(self) -> DomainResult<Assignment> {
         let deadline_at = self
             .deadline_at
             .unwrap_or(self.created_at + self.deadline_offset);
@@ -171,16 +175,13 @@ impl<'a> AssignmentBuilder<'a> {
             self.max_attempts,
             self.created_at,
             deadline_at,
-        )
-        .expect("valid assignment");
+        )?;
 
         if self.publish {
-            assignment
-                .publish(self.course, self.author, self.created_at)
-                .expect("assignment can be published by its author");
+            assignment.publish(self.course, self.author, self.created_at)?;
         }
 
-        assignment
+        Ok(assignment)
     }
 }
 
@@ -218,6 +219,7 @@ impl<'a> SubmissionBuilder<'a> {
         self
     }
 
+    #[track_caller]
     pub fn build(self) -> Submission {
         self.try_build().expect("valid submission")
     }

@@ -76,6 +76,11 @@ impl From<AppError> for ApiError {
                 format!("{resource} not found"),
             ),
             AppError::Conflict { message } => Self::new(StatusCode::CONFLICT, "conflict", message),
+            AppError::AssignmentChangedConcurrently => Self::new(
+                StatusCode::CONFLICT,
+                "assignment_changed_concurrently",
+                "assignment was changed by a concurrent request",
+            ),
             AppError::Db(database_error) => Self::internal(&database_error),
         }
     }
@@ -244,13 +249,11 @@ mod tests {
     }
 
     #[test]
-    fn maps_retryable_write_races_to_conflict() {
-        let error = ApiError::from(AppError::Conflict {
-            message: "assignment was changed by a concurrent request",
-        });
+    fn maps_assignment_write_races_to_a_specific_conflict() {
+        let error = ApiError::from(AppError::AssignmentChangedConcurrently);
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
-        assert_eq!(error.code(), "conflict");
+        assert_eq!(error.code(), "assignment_changed_concurrently");
     }
 
     #[test]

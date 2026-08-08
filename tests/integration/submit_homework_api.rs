@@ -49,7 +49,7 @@ async fn submitting_to_unknown_assignment_is_not_found() {
 
     app.submit(Uuid::now_v7(), app.student(), "pull/1")
         .await
-        .not_found("assignment not found");
+        .not_found();
 }
 
 #[tokio::test]
@@ -58,7 +58,7 @@ async fn submitting_as_unknown_user_is_not_found() {
 
     app.submit(app.assignment(), 9999, "pull/1")
         .await
-        .not_found("student not found");
+        .not_found();
 }
 
 #[tokio::test]

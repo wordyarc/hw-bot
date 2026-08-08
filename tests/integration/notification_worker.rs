@@ -63,9 +63,10 @@ async fn transient_telegram_error_reschedules_notification() {
         .mount(&telegram)
         .await;
     let worker = worker(&app, &telegram, 3);
+    let now = Utc::now();
 
     assert_eq!(
-        worker.deliver_one(Utc::now()).await.unwrap(),
+        worker.deliver_one(now).await.unwrap(),
         DeliveryOutcome::Rescheduled
     );
 
@@ -89,7 +90,7 @@ async fn transient_telegram_error_reschedules_notification() {
             .is_some_and(|error| error.contains("internal error"))
     );
     assert_eq!(
-        worker.deliver_one(Utc::now()).await.unwrap(),
+        worker.deliver_one(now).await.unwrap(),
         DeliveryOutcome::Idle,
         "a retry must wait until available_at"
     );

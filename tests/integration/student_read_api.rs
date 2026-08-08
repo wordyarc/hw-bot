@@ -16,7 +16,7 @@ fn only(body: &Value) -> &Value {
 async fn a_student_sees_the_published_assignments_of_their_group() {
     let app = TestApp::start().await;
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     let item = only(&body);
     assert_eq!(item["assignment"]["id"], json!(app.assignment()));
@@ -28,7 +28,7 @@ async fn a_draft_assignment_stays_out_of_the_student_list() {
     let app = TestApp::start().await;
     app.add_draft_assignment().await;
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     only(&body);
 }
@@ -40,7 +40,7 @@ async fn an_archived_assignment_leaves_the_student_list() {
         .await
         .ok();
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     assert_eq!(body, json!([]));
 }
@@ -51,7 +51,7 @@ async fn assignments_of_another_group_are_invisible() {
     let outsider = app.add_outsider_student().await;
 
     let body = app
-        .get_as("/me/assignments", outsider.telegram_user_id().as_i64())
+        .student_assignments(outsider.telegram_user_id().as_i64())
         .await
         .ok();
 
@@ -62,7 +62,7 @@ async fn assignments_of_another_group_are_invisible() {
 async fn an_untouched_assignment_reports_a_full_quota() {
     let app = TestApp::start().await;
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     let progress = &only(&body)["progress"];
     assert_eq!(progress["used_attempts"], json!(0));
@@ -77,7 +77,7 @@ async fn a_pending_submission_shows_up_in_the_list_without_spending_an_attempt()
     let app = TestApp::start().await;
     app.queued_submission(app.student(), "pull/1").await;
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     let progress = &only(&body)["progress"];
     assert_eq!(progress["has_pending_submission"], json!(true));
@@ -93,7 +93,7 @@ async fn a_rejection_spends_an_attempt_in_the_list() {
         .await
         .ok();
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     let progress = &only(&body)["progress"];
     assert_eq!(progress["used_attempts"], json!(1));
@@ -109,7 +109,7 @@ async fn an_acceptance_is_visible_in_the_list() {
         .await
         .ok();
 
-    let body = app.get_as("/me/assignments", app.student()).await.ok();
+    let body = app.student_assignments(app.student()).await.ok();
 
     assert_eq!(
         only(&body)["progress"]["has_accepted_submission"],
@@ -128,10 +128,7 @@ async fn the_card_carries_every_attempt_with_its_review() {
     app.queued_submission(app.student(), "pull/2").await;
 
     let body = app
-        .get_as(
-            &format!("/me/assignments/{}", app.assignment()),
-            app.student(),
-        )
+        .student_assignment(app.assignment(), app.student())
         .await
         .ok();
 
@@ -148,10 +145,7 @@ async fn the_card_of_an_untouched_assignment_has_no_submissions() {
     let app = TestApp::start().await;
 
     let body = app
-        .get_as(
-            &format!("/me/assignments/{}", app.assignment()),
-            app.student(),
-        )
+        .student_assignment(app.assignment(), app.student())
         .await
         .ok();
 
@@ -171,10 +165,7 @@ async fn the_card_survives_archiving() {
         .ok();
 
     let body = app
-        .get_as(
-            &format!("/me/assignments/{}", app.assignment()),
-            app.student(),
-        )
+        .student_assignment(app.assignment(), app.student())
         .await
         .ok();
 
@@ -187,12 +178,9 @@ async fn a_draft_card_does_not_exist_for_a_student() {
     let app = TestApp::start().await;
     let draft = app.add_draft_assignment().await;
 
-    app.get_as(
-        &format!("/me/assignments/{}", draft.id().as_uuid()),
-        app.student(),
-    )
-    .await
-    .not_found("assignment not found");
+    app.student_assignment(draft.id().as_uuid(), app.student())
+        .await
+        .not_found();
 }
 
 #[tokio::test]
@@ -200,34 +188,28 @@ async fn a_card_of_another_group_is_forbidden() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_student().await;
 
-    app.get_as(
-        &format!("/me/assignments/{}", app.assignment()),
-        outsider.telegram_user_id().as_i64(),
-    )
-    .await
-    .error(
-        StatusCode::FORBIDDEN,
-        "student_does_not_belong_to_assignment_group",
-    );
+    app.student_assignment(app.assignment(), outsider.telegram_user_id().as_i64())
+        .await
+        .error(
+            StatusCode::FORBIDDEN,
+            "student_does_not_belong_to_assignment_group",
+        );
 }
 
 #[tokio::test]
 async fn an_unknown_card_is_not_found() {
     let app = TestApp::start().await;
 
-    app.get_as(
-        &format!("/me/assignments/{}", Uuid::now_v7()),
-        app.student(),
-    )
-    .await
-    .not_found("assignment not found");
+    app.student_assignment(Uuid::now_v7(), app.student())
+        .await
+        .not_found();
 }
 
 #[tokio::test]
 async fn a_teacher_has_no_student_assignments() {
     let app = TestApp::start().await;
 
-    app.get_as("/me/assignments", app.teacher())
+    app.student_assignments(app.teacher())
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
 }

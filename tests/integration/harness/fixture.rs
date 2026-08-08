@@ -29,6 +29,12 @@ pub struct Fixture {
     pub assignment: Assignment,
 }
 
+pub struct CourseFixture {
+    pub group: StudentGroup,
+    pub teacher: User,
+    pub course: TeachingCourse,
+}
+
 impl Fixture {
     pub async fn insert(pool: &PgPool) -> Self {
         let group = student_group(GROUP_CODE);

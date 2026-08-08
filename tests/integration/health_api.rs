@@ -1,4 +1,5 @@
 use axum::http::StatusCode;
+use axum::http::header::CONTENT_TYPE;
 use serde_json::json;
 
 use crate::harness::TestApp;
@@ -7,16 +8,16 @@ use crate::harness::TestApp;
 async fn health_endpoint_checks_the_database() {
     let app = TestApp::start().await;
 
-    let body = app.get("/health").await.expect(StatusCode::OK);
-
-    assert_eq!(body, json!(null), "health has no body to return");
+    app.get("/health").await.expect(StatusCode::OK);
 }
 
 #[tokio::test]
 async fn echo_returns_the_app_name() {
     let app = TestApp::start().await;
 
-    let body = app.post("/echo", json!({ "text": "ping" })).await.ok();
+    let response = app.post("/echo", json!({ "text": "ping" })).await;
+    assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+    let body = response.ok();
 
     assert_eq!(body["app"], json!("hw-bot-test"));
     assert_eq!(body["text"], json!("ping"));

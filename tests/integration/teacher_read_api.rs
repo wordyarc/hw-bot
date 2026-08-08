@@ -17,7 +17,7 @@ fn ids(body: &Value) -> Vec<String> {
 async fn a_teacher_sees_their_course_with_subject_and_group() {
     let app = TestApp::start().await;
 
-    let body = app.get_as("/me/courses", app.teacher()).await.ok();
+    let body = app.teacher_courses(app.teacher()).await.ok();
 
     let items = body.as_array().expect("a json array");
     assert_eq!(items.len(), 1);
@@ -36,10 +36,10 @@ async fn a_teacher_sees_their_course_with_subject_and_group() {
 #[tokio::test]
 async fn a_teacher_does_not_see_courses_they_do_not_teach() {
     let app = TestApp::start().await;
-    let (foreign_teacher, _, _) = app.add_foreign_course_assignment().await;
+    let foreign = app.add_foreign_course().await;
 
     let body = app
-        .get_as("/me/courses", foreign_teacher.telegram_user_id().as_i64())
+        .teacher_courses(foreign.teacher.telegram_user_id().as_i64())
         .await
         .ok();
 
@@ -54,11 +54,11 @@ async fn a_teacher_does_not_see_courses_they_do_not_teach() {
 #[tokio::test]
 async fn an_admin_sees_every_course() {
     let app = TestApp::start().await;
-    app.add_foreign_course_assignment().await;
+    app.add_foreign_course().await;
     let admin = app.add_admin().await;
 
     let body = app
-        .get_as("/me/courses", admin.telegram_user_id().as_i64())
+        .teacher_courses(admin.telegram_user_id().as_i64())
         .await
         .ok();
 
@@ -71,7 +71,7 @@ async fn a_second_course_teacher_sees_the_shared_course() {
     let reviewer = app.add_course_teacher("Second teacher").await;
 
     let body = app
-        .get_as("/me/courses", reviewer.telegram_user_id().as_i64())
+        .teacher_courses(reviewer.telegram_user_id().as_i64())
         .await
         .ok();
 
@@ -83,7 +83,7 @@ async fn a_second_course_teacher_sees_the_shared_course() {
 async fn a_student_has_no_courses_to_teach() {
     let app = TestApp::start().await;
 
-    app.get_as("/me/courses", app.student())
+    app.teacher_courses(app.student())
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
 }
@@ -92,12 +92,12 @@ async fn a_student_has_no_courses_to_teach() {
 async fn a_teacher_sees_drafts_and_archived_assignments_of_their_course() {
     let app = TestApp::start().await;
     let draft = app.add_draft_assignment().await;
+    app.archive_assignment(app.assignment(), app.teacher())
+        .await
+        .ok();
 
     let body = app
-        .get_as(
-            &format!("/teaching-courses/{}/assignments", app.course()),
-            app.teacher(),
-        )
+        .course_assignments(app.course(), app.teacher())
         .await
         .ok();
 
@@ -111,31 +111,25 @@ async fn a_teacher_of_another_course_cannot_list_its_assignments() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider").await;
 
-    app.get_as(
-        &format!("/teaching-courses/{}/assignments", app.course()),
-        outsider.telegram_user_id().as_i64(),
-    )
-    .await
-    .error(StatusCode::FORBIDDEN, "permission_denied");
+    app.course_assignments(app.course(), outsider.telegram_user_id().as_i64())
+        .await
+        .error(StatusCode::FORBIDDEN, "permission_denied");
 }
 
 #[tokio::test]
 async fn assignments_of_an_unknown_course_are_not_found() {
     let app = TestApp::start().await;
 
-    app.get_as(
-        &format!("/teaching-courses/{}/assignments", Uuid::now_v7()),
-        app.teacher(),
-    )
-    .await
-    .not_found("teaching course not found");
+    app.course_assignments(Uuid::now_v7(), app.teacher())
+        .await
+        .not_found();
 }
 
 #[tokio::test]
 async fn an_empty_queue_reports_zero() {
     let app = TestApp::start().await;
 
-    let body = app.get_as("/me/review-queue", app.teacher()).await.ok();
+    let body = app.review_queue_size(app.teacher()).await.ok();
 
     assert_eq!(body["pending"], json!(0));
 }
@@ -151,7 +145,7 @@ async fn the_queue_size_counts_only_pending_submissions() {
         .await
         .ok();
 
-    let body = app.get_as("/me/review-queue", app.teacher()).await.ok();
+    let body = app.review_queue_size(app.teacher()).await.ok();
 
     assert_eq!(body["pending"], json!(1));
 }
@@ -159,7 +153,13 @@ async fn the_queue_size_counts_only_pending_submissions() {
 #[tokio::test]
 async fn the_queue_size_does_not_count_other_courses() {
     let app = TestApp::start().await;
-    let (_, foreign_student, foreign_assignment) = app.add_foreign_course_assignment().await;
+    let foreign = app.add_foreign_course().await;
+    let foreign_student = app
+        .add_student_to_group("Foreign student", &foreign.group)
+        .await;
+    let foreign_assignment = app
+        .add_published_assignment(&foreign.course, &foreign.teacher, "Foreign assignment")
+        .await;
     app.submit(
         foreign_assignment.id().as_uuid(),
         foreign_student.telegram_user_id().as_i64(),
@@ -168,7 +168,7 @@ async fn the_queue_size_does_not_count_other_courses() {
     .await
     .created();
 
-    let body = app.get_as("/me/review-queue", app.teacher()).await.ok();
+    let body = app.review_queue_size(app.teacher()).await.ok();
 
     assert_eq!(body["pending"], json!(0));
 }
@@ -177,7 +177,7 @@ async fn the_queue_size_does_not_count_other_courses() {
 async fn a_student_has_no_review_queue() {
     let app = TestApp::start().await;
 
-    app.get_as("/me/review-queue", app.student())
+    app.review_queue_size(app.student())
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
 }

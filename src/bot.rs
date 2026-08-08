@@ -750,7 +750,9 @@ async fn send_app_error(bot: &Bot, chat_id: ChatId, error: AppError) -> HandlerR
 fn app_error_message(error: &AppError) -> &'static str {
     match error {
         AppError::NotFound { .. } => "Запрошенные данные не найдены.",
-        AppError::Conflict { .. } => "Данные уже изменились. Повторите действие.",
+        AppError::Conflict { .. } | AppError::AssignmentChangedConcurrently => {
+            "Данные уже изменились. Повторите действие."
+        }
         AppError::Db(_) => "Произошла внутренняя ошибка. Попробуйте позже.",
         AppError::Domain(error) => match error {
             DomainError::EmptyField { .. } => "Сообщение не должно быть пустым.",

@@ -259,13 +259,14 @@ mod tests {
     use chrono::Duration;
 
     use super::*;
+    use crate::test_support::t0;
 
     fn restore(
         status: AssignmentStatus,
         max_attempts: u16,
         published_at: Option<DateTime<Utc>>,
     ) -> DomainResult<Assignment> {
-        let created_at = Utc::now();
+        let created_at = t0();
 
         Assignment::restore(AssignmentParts {
             id: AssignmentId::new(),
@@ -285,7 +286,7 @@ mod tests {
 
     #[test]
     fn restores_published_assignment() {
-        let published_at = Utc::now();
+        let published_at = t0();
         let assignment = restore(AssignmentStatus::Published, 2, Some(published_at)).unwrap();
 
         assert!(assignment.is_published());
@@ -296,7 +297,7 @@ mod tests {
     #[test]
     fn restores_archived_assignment_regardless_of_published_at() {
         assert!(restore(AssignmentStatus::Archived, 1, None).is_ok());
-        assert!(restore(AssignmentStatus::Archived, 1, Some(Utc::now())).is_ok());
+        assert!(restore(AssignmentStatus::Archived, 1, Some(t0())).is_ok());
     }
 
     #[test]
@@ -318,7 +319,7 @@ mod tests {
     #[test]
     fn restore_rejects_draft_assignment_with_published_at() {
         assert_eq!(
-            restore(AssignmentStatus::Draft, 1, Some(Utc::now())).unwrap_err(),
+            restore(AssignmentStatus::Draft, 1, Some(t0())).unwrap_err(),
             DomainError::InvalidAssignmentPublishedState
         );
     }

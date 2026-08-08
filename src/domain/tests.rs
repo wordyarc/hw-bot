@@ -1,4 +1,4 @@
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, Role, StaffRole,
@@ -9,6 +9,10 @@ use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
     assignment, course_for, history, student, student_group, submission, t0, teacher,
 };
+
+fn reviewed_at() -> DateTime<Utc> {
+    t0() + Duration::hours(2)
+}
 
 #[test]
 fn only_teacher_or_admin_can_create_assignment() {
@@ -166,7 +170,7 @@ fn added_course_teacher_can_review_and_manage_assignment() {
     let mut submission = submission(&assignment, &student).build();
 
     submission
-        .accept(&assignment, &course, &reviewer, "95/100", t0())
+        .accept(&assignment, &course, &reviewer, "95/100", reviewed_at())
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -400,7 +404,7 @@ fn accepted_review_requires_comment_and_stores_it() {
     let assignment = assignment(&course, &teacher).published().build();
     let mut submission = submission(&assignment, &student).build();
 
-    let empty_comment = submission.accept(&assignment, &course, &teacher, " ", t0());
+    let empty_comment = submission.accept(&assignment, &course, &teacher, " ", reviewed_at());
 
     assert_eq!(
         empty_comment.unwrap_err(),
@@ -411,7 +415,7 @@ fn accepted_review_requires_comment_and_stores_it() {
     assert_eq!(submission.status(), SubmissionStatus::PendingReview);
 
     submission
-        .accept(&assignment, &course, &teacher, "95/100", t0())
+        .accept(&assignment, &course, &teacher, "95/100", reviewed_at())
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -433,7 +437,7 @@ fn teacher_can_review_pending_submission_once() {
             &course,
             &teacher,
             "Add tests for parser errors.",
-            t0(),
+            reviewed_at(),
         )
         .unwrap();
 
@@ -444,7 +448,7 @@ fn teacher_can_review_pending_submission_once() {
         "Add tests for parser errors."
     );
 
-    let second_review = submission.accept(&assignment, &course, &teacher, "95/100", t0());
+    let second_review = submission.accept(&assignment, &course, &teacher, "95/100", reviewed_at());
     assert_eq!(
         second_review.unwrap_err(),
         DomainError::SubmissionIsNotPendingReview
@@ -467,7 +471,7 @@ fn only_course_teacher_or_admin_can_review_submission() {
         &course,
         &other_teacher,
         "Accepted, 95/100",
-        t0(),
+        reviewed_at(),
     );
 
     assert_eq!(
@@ -478,7 +482,7 @@ fn only_course_teacher_or_admin_can_review_submission() {
     );
 
     submission
-        .reject(&assignment, &course, &admin, "Fix CI", t0())
+        .reject(&assignment, &course, &admin, "Fix CI", reviewed_at())
         .unwrap();
 }
 
@@ -491,7 +495,7 @@ fn student_cannot_review_submission() {
     let assignment = assignment(&course, &teacher).published().build();
     let mut submission = submission(&assignment, &student).build();
 
-    let result = submission.accept(&assignment, &course, &student, "95/100", t0());
+    let result = submission.accept(&assignment, &course, &student, "95/100", reviewed_at());
 
     assert_eq!(
         result.unwrap_err(),
@@ -513,7 +517,7 @@ fn submission_of_another_assignment_cannot_be_reviewed() {
     );
     let mut submission = submission(&own, &student).build();
 
-    let result = submission.accept(&other, &course, &teacher, "95/100", t0());
+    let result = submission.accept(&other, &course, &teacher, "95/100", reviewed_at());
 
     assert_eq!(
         result.unwrap_err(),

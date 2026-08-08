@@ -286,7 +286,12 @@ impl AssignmentService {
         let previous_status = assignment.status();
         apply(&mut assignment, &teaching_course, &actor)?;
 
-        db::assignments::update(&mut *tx, &assignment, previous_status).await?;
+        match db::assignments::update(&mut *tx, &assignment, previous_status).await {
+            Err(db::DbError::Conflict { .. }) => {
+                return Err(AppError::AssignmentChangedConcurrently);
+            }
+            result => result?,
+        }
 
         tx.commit().await?;
 

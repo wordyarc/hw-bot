@@ -16,6 +16,9 @@ pub enum AppError {
     #[error("{message}")]
     Conflict { message: &'static str },
 
+    #[error("assignment was changed by a concurrent request")]
+    AssignmentChangedConcurrently,
+
     #[error(transparent)]
     Db(DbError),
 }

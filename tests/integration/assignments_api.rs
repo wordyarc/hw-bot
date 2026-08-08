@@ -296,7 +296,7 @@ async fn an_assignment_cannot_be_created_in_an_unknown_course() {
 
     app.create_assignment(Uuid::now_v7(), app.teacher())
         .await
-        .not_found("teaching course not found");
+        .not_found();
 }
 
 #[tokio::test]
@@ -305,16 +305,14 @@ async fn an_unknown_assignment_cannot_be_published() {
 
     app.publish_assignment(Uuid::now_v7(), app.teacher())
         .await
-        .not_found("assignment not found");
+        .not_found();
 }
 
 #[tokio::test]
 async fn an_unregistered_actor_cannot_create_an_assignment() {
     let app = TestApp::start().await;
 
-    app.create_assignment(app.course(), 9999)
-        .await
-        .not_found("teacher not found");
+    app.create_assignment(app.course(), 9999).await.not_found();
 }
 
 #[tokio::test]

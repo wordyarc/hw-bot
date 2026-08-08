@@ -327,6 +327,7 @@ impl Submission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::t0;
 
     fn pending_parts() -> SubmissionParts {
         SubmissionParts {
@@ -336,7 +337,7 @@ mod tests {
             attempt_number: 1,
             content: "https://github.com/course/hw/pull/1".to_owned(),
             status: SubmissionStatus::PendingReview,
-            submitted_at: Utc::now(),
+            submitted_at: t0(),
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
@@ -380,7 +381,7 @@ mod tests {
         assert_eq!(
             Submission::restore(SubmissionParts {
                 reviewed_by: Some(UserId::new()),
-                reviewed_at: Some(Utc::now()),
+                reviewed_at: Some(t0()),
                 review_comment: Some("review".to_owned()),
                 ..pending_parts()
             })
