@@ -19,3 +19,16 @@ file_prefix = "hw-bot"
 file_suffix = "log"
 rotation = "daily"
 also_stdout = true
+
+[telegram]
+api_base_url = "https://api.telegram.org"
+request_timeout_ms = 5000
+
+[notification_worker]
+enabled = false
+poll_interval_ms = 500
+lease_duration_ms = 15000
+max_attempts = 10
+retry_initial_ms = 1000
+retry_max_ms = 300000
+shutdown_grace_ms = 10000

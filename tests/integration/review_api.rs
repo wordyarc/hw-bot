@@ -207,6 +207,87 @@ async fn rejection_is_stored_with_a_trimmed_comment() {
 }
 
 #[tokio::test]
+async fn completed_review_enqueues_notification_for_the_student() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+
+    app.review(submission, app.teacher(), "accept", "  95/100  ")
+        .await
+        .ok();
+
+    let notification = sqlx::query!(
+        r#"
+        select
+            recipient_telegram_user_id,
+            assignment_title,
+            outcome,
+            review_comment
+        from review_notification_outbox
+        where submission_id = $1
+        "#,
+        submission,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("notification is enqueued");
+
+    assert_eq!(notification.recipient_telegram_user_id, app.student());
+    assert_eq!(notification.assignment_title, "Rust ownership");
+    assert_eq!(notification.outcome, "accepted");
+    assert_eq!(notification.review_comment, "95/100");
+}
+
+#[tokio::test]
+async fn outbox_failure_rolls_back_the_review() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    sqlx::query(
+        r#"
+        alter table review_notification_outbox
+        add constraint reject_notifications check (false) not valid
+        "#,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("add rejecting constraint");
+
+    app.review(submission, app.teacher(), "accept", "good")
+        .await
+        .expect(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let status: String = sqlx::query_scalar("select status from submissions where id = $1")
+        .bind(submission)
+        .fetch_one(&app.pool)
+        .await
+        .expect("load submission status");
+    assert_eq!(status, "pending_review");
+}
+
+#[tokio::test]
+async fn racing_reviews_enqueue_one_notification() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+
+    let (first, second) = tokio::join!(
+        app.review(submission, app.teacher(), "accept", "good"),
+        app.review(submission, app.teacher(), "reject", "bad"),
+    );
+
+    let statuses = [first.status, second.status];
+    assert!(statuses.contains(&StatusCode::OK));
+    assert!(statuses.contains(&StatusCode::CONFLICT));
+
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from review_notification_outbox where submission_id = $1",
+    )
+    .bind(submission)
+    .fetch_one(&app.pool)
+    .await
+    .expect("count notifications");
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
 async fn a_finished_review_is_final() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;

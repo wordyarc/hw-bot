@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            recipient_telegram_user_id,\n            assignment_title,\n            outcome,\n            review_comment\n        from review_notification_outbox\n        where submission_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recipient_telegram_user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "recipient_telegram_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "assignment_title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "outcome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "review_comment",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "review_comment"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c1730e2d97577c0bfc55bbba21428b7938a24f9ca6b780ec1e6502e04c3ab788"
+}

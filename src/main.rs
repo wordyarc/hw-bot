@@ -1,9 +1,14 @@
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
+use hw_bot::app::{NotificationWorker, NotificationWorkerSettings};
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
+use hw_bot::telegram::TelegramClient;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::Layer;
@@ -48,6 +53,8 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
         tracing::info!("database migrations disabled");
     }
 
+    let cancellation = CancellationToken::new();
+    let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
     let app = api::router(AppState::new(config.app.name, db_pool));
 
     let addr = SocketAddr::from_str(&format!("{}:{}", config.server.host, config.server.port))
@@ -58,11 +65,142 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
 
     tracing::info!("listening on http://{addr}");
 
-    axum::serve(listener, app)
+    let shutdown = cancellation.clone();
+    let server_result = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            shutdown.cancel();
+        })
         .await
-        .context("failed to serve HTTP application")?;
+        .context("failed to serve HTTP application");
 
-    Ok(())
+    cancellation.cancel();
+    stop_notification_worker(
+        worker,
+        Duration::from_millis(config.notification_worker.shutdown_grace_ms),
+    )
+    .await?;
+
+    server_result
+}
+
+fn start_notification_worker(
+    config: &AppConfig,
+    pool: sqlx::PgPool,
+    cancellation: CancellationToken,
+) -> anyhow::Result<Option<JoinHandle<()>>> {
+    if !config.notification_worker.enabled {
+        tracing::info!("review notification worker disabled");
+        return Ok(None);
+    }
+
+    let worker = &config.notification_worker;
+    ensure!(
+        worker.poll_interval_ms > 0,
+        "worker poll interval must be positive"
+    );
+    ensure!(
+        worker.lease_duration_ms > 0,
+        "worker lease duration must be positive"
+    );
+    ensure!(
+        worker.max_attempts > 0,
+        "worker max attempts must be positive"
+    );
+    ensure!(
+        worker.retry_initial_ms > 0,
+        "worker initial retry must be positive"
+    );
+    ensure!(
+        worker.retry_max_ms >= worker.retry_initial_ms,
+        "worker max retry must not be less than initial retry"
+    );
+    ensure!(
+        worker.shutdown_grace_ms > 0,
+        "worker shutdown grace must be positive"
+    );
+    ensure!(
+        config.telegram.request_timeout_ms > 0,
+        "Telegram request timeout must be positive"
+    );
+    ensure!(
+        worker.lease_duration_ms > config.telegram.request_timeout_ms,
+        "worker lease duration must exceed Telegram request timeout"
+    );
+
+    let bot_token = config
+        .telegram
+        .bot_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .context("Telegram bot token is required when notification worker is enabled")?;
+    ensure!(
+        !config.telegram.api_base_url.trim().is_empty(),
+        "Telegram API base URL must not be empty"
+    );
+
+    let telegram = TelegramClient::new(
+        &config.telegram.api_base_url,
+        bot_token,
+        Duration::from_millis(config.telegram.request_timeout_ms),
+    )
+    .context("failed to initialize Telegram client")?;
+    let worker = NotificationWorker::new(
+        pool,
+        telegram,
+        NotificationWorkerSettings {
+            poll_interval: Duration::from_millis(worker.poll_interval_ms),
+            lease_duration: Duration::from_millis(worker.lease_duration_ms),
+            max_attempts: worker.max_attempts,
+            retry_initial: Duration::from_millis(worker.retry_initial_ms),
+            retry_max: Duration::from_millis(worker.retry_max_ms),
+        },
+    );
+
+    tracing::info!("review notification worker enabled");
+    Ok(Some(tokio::spawn(worker.run(cancellation))))
+}
+
+async fn stop_notification_worker(
+    worker: Option<JoinHandle<()>>,
+    grace: Duration,
+) -> anyhow::Result<()> {
+    let Some(mut worker) = worker else {
+        return Ok(());
+    };
+
+    match tokio::time::timeout(grace, &mut worker).await {
+        Ok(result) => result.context("notification worker task failed"),
+        Err(_) => {
+            tracing::warn!("notification worker did not stop within shutdown grace");
+            worker.abort();
+            Ok(())
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }
 
 fn init_logging(config: &LoggingConfig) -> anyhow::Result<Option<WorkerGuard>> {

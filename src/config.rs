@@ -1,11 +1,13 @@
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct AppConfig {
     pub app: AppInfoConfig,
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
+    pub telegram: TelegramConfig,
+    pub notification_worker: NotificationWorkerConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -36,6 +38,24 @@ pub struct LoggingConfig {
     pub file_suffix: String,
     pub rotation: LogRotation,
     pub also_stdout: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TelegramConfig {
+    pub api_base_url: String,
+    pub bot_token: Option<String>,
+    pub request_timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct NotificationWorkerConfig {
+    pub enabled: bool,
+    pub poll_interval_ms: u64,
+    pub lease_duration_ms: u64,
+    pub max_attempts: u32,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+    pub shutdown_grace_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -99,6 +119,19 @@ mod tests {
                 file_suffix = "log"
                 rotation = "daily"
                 also_stdout = true
+
+                [telegram]
+                api_base_url = "https://api.telegram.org"
+                request_timeout_ms = 5000
+
+                [notification_worker]
+                enabled = false
+                poll_interval_ms = 500
+                lease_duration_ms = 15000
+                max_attempts = 10
+                retry_initial_ms = 1000
+                retry_max_ms = 300000
+                shutdown_grace_ms = 10000
                 "#,
                 ::config::FileFormat::Toml,
             ))
@@ -127,5 +160,9 @@ mod tests {
         assert_eq!(config.logging.file_suffix, "log");
         assert!(matches!(config.logging.rotation, LogRotation::Daily));
         assert!(config.logging.also_stdout);
+        assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
+        assert!(config.telegram.bot_token.is_none());
+        assert!(!config.notification_worker.enabled);
+        assert_eq!(config.notification_worker.max_attempts, 10);
     }
 }

@@ -136,6 +136,12 @@ impl ReviewService {
 
         db::submissions::save_review_result(&mut *tx, &submission).await?;
 
+        let student = db::users::find_by_id(&mut *tx, submission.student_id())
+            .await?
+            .required("student")?;
+        db::notifications::enqueue_review_result(&mut *tx, &submission, &assignment, &student)
+            .await?;
+
         tx.commit().await?;
 
         Ok(submission)

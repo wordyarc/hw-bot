@@ -14,9 +14,11 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 config = { version = "0.15.23", features = ["toml"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros"] }
 thiserror = "2.0.19"
 tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = "0.7.18"
 tower-http = { version = "0.7.0", features = ["trace"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
@@ -26,3 +28,4 @@ uuid = { version = "1.19.0", features = ["v4", "v7", "serde"] }
 [dev-dependencies]
 testcontainers = { version = "0.28.0", features = ["reusable-containers"] }
 tower = { version = "0.5.2", features = ["util"] }
+wiremock = "0.6.5"

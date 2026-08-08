@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update review_notification_outbox\n        set\n            delivered_at = $3,\n            lease_token = null,\n            lease_expires_at = null,\n            last_error = null\n        where id = $1\n          and lease_token = $2\n          and delivered_at is null\n          and failed_at is null\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e9b72fc0fc8d6f15cb1792b41a95c8aced51a812b250c380139838710ae91eb1"
+}

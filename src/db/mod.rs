@@ -8,6 +8,7 @@ pub mod attempts;
 mod convert;
 mod enums;
 mod error;
+pub mod notifications;
 pub mod submissions;
 pub mod users;
 

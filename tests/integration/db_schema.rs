@@ -25,6 +25,7 @@ async fn migrations_apply_to_empty_postgres() -> anyhow::Result<()> {
         "assignments",
         "submissions",
         "student_assignment_progress",
+        "review_notification_outbox",
     ] {
         assert!(
             table_exists(&pool, table_name).await?,
@@ -36,6 +37,7 @@ async fn migrations_apply_to_empty_postgres() -> anyhow::Result<()> {
         "submissions_one_pending_per_student_assignment_idx",
         "submissions_one_accepted_per_student_assignment_idx",
         "submissions_pending_review_queue_idx",
+        "review_notification_outbox_pending_idx",
     ] {
         assert!(
             index_exists(&pool, index_name).await?,
