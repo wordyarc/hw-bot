@@ -1,23 +1,29 @@
 use anyhow::{Context, anyhow};
-use chrono::Utc;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use teloxide::payloads::{AnswerCallbackQuerySetters, SendMessageSetters};
 use teloxide::prelude::{Bot, Requester};
 use teloxide::types::{
-    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, User,
+    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId, User,
 };
 use teloxide::utils::command::BotCommands;
 use uuid::Uuid;
 
-use crate::app::{Actor, ErrorCode, RegisterStudent, ReviewSubmission, SubmitHomework};
+use crate::app::{
+    Actor, ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, RegisterStudent,
+    ReviewSubmission, SubmitHomework,
+};
 use crate::domain::{
-    AssignmentId, AssignmentStatus, ReviewDecision, Role, SubmissionId, TelegramUserId,
+    AssignmentId, AssignmentStatus, MAX_ATTEMPTS, ReviewDecision, Role, SubmissionId,
+    TeachingCourseId, TelegramUserId, UserId,
 };
 
 use super::errors::send_app_error;
 use super::state::{BotDialogue, BotState};
 use super::views::{
-    button_label, format_deadline, group_keyboard, review_keyboard, send_message_chunks,
-    send_stale_button, student_menu, submission_status, teacher_menu,
+    assignment_actions_keyboard, assignment_status, assignment_students_keyboard, button_label,
+    course_assignments_keyboard, courses_keyboard, format_deadline, group_keyboard,
+    review_keyboard, send_message_chunks, send_stale_button, student_menu, submission_status,
+    teacher_menu,
 };
 use super::{BotServices, HandlerResult};
 
@@ -207,6 +213,209 @@ pub(super) async fn handle_message(
                 Err(error) => send_app_error(&bot, message.chat.id, error).await?,
             }
         }
+        BotState::ChoosingCourse { .. } => {
+            bot.send_message(message.chat.id, "Выберите курс кнопкой выше.")
+                .await?;
+        }
+        BotState::ChoosingAssignment { .. } => {
+            bot.send_message(
+                message.chat.id,
+                "Выберите задание или действие кнопкой выше.",
+            )
+            .await?;
+        }
+        BotState::ManagingAssignment { .. } => {
+            bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
+                .await?;
+        }
+        BotState::AwaitingAssignmentTitle { course_id } => {
+            if text.trim().is_empty() {
+                bot.send_message(message.chat.id, "Название не должно быть пустым.")
+                    .await?;
+                return Ok(());
+            }
+            dialogue
+                .update(BotState::AwaitingAssignmentBody {
+                    course_id,
+                    title: text.to_owned(),
+                })
+                .await?;
+            bot.send_message(message.chat.id, "Пришлите текст задания одним сообщением:")
+                .await?;
+        }
+        BotState::AwaitingAssignmentBody { course_id, title } => {
+            if text.trim().is_empty() {
+                bot.send_message(message.chat.id, "Текст задания не должен быть пустым.")
+                    .await?;
+                return Ok(());
+            }
+            dialogue
+                .update(BotState::AwaitingAssignmentMaxAttempts {
+                    course_id,
+                    title,
+                    body: text.to_owned(),
+                })
+                .await?;
+            bot.send_message(
+                message.chat.id,
+                format!("Введите количество попыток от 1 до {MAX_ATTEMPTS}:"),
+            )
+            .await?;
+        }
+        BotState::AwaitingAssignmentMaxAttempts {
+            course_id,
+            title,
+            body,
+        } => {
+            let Some(max_attempts) = parse_positive_attempts(text) else {
+                bot.send_message(
+                    message.chat.id,
+                    format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
+                )
+                .await?;
+                return Ok(());
+            };
+            dialogue
+                .update(BotState::AwaitingAssignmentDeadline {
+                    course_id,
+                    title,
+                    body,
+                    max_attempts,
+                })
+                .await?;
+            bot.send_message(
+                message.chat.id,
+                "Введите дедлайн в UTC в формате ДД.ММ.ГГГГ ЧЧ:ММ:",
+            )
+            .await?;
+        }
+        BotState::AwaitingAssignmentDeadline {
+            course_id,
+            title,
+            body,
+            max_attempts,
+        } => {
+            let Some(deadline_at) = parse_deadline(text) else {
+                send_deadline_format_error(&bot, message.chat.id).await?;
+                return Ok(());
+            };
+            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
+                return Ok(());
+            };
+            let result = services
+                .assignments
+                .create(CreateAssignment {
+                    teaching_course_id: course_id,
+                    actor,
+                    title,
+                    body,
+                    max_attempts,
+                    created_at: Utc::now(),
+                    deadline_at,
+                })
+                .await;
+
+            match result {
+                Ok(assignment) => {
+                    bot.send_message(message.chat.id, "Черновик создан.")
+                        .await?;
+                    show_teacher_assignment(
+                        &bot,
+                        message.chat.id,
+                        actor,
+                        assignment.id(),
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
+            }
+        }
+        BotState::AwaitingDeadlineChange { assignment_id } => {
+            let Some(deadline_at) = parse_deadline(text) else {
+                send_deadline_format_error(&bot, message.chat.id).await?;
+                return Ok(());
+            };
+            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
+                return Ok(());
+            };
+            match services
+                .assignments
+                .change_deadline(ChangeDeadline {
+                    assignment_id,
+                    actor,
+                    deadline_at,
+                })
+                .await
+            {
+                Ok(_) => {
+                    bot.send_message(message.chat.id, "Дедлайн изменён.")
+                        .await?;
+                    show_teacher_assignment(
+                        &bot,
+                        message.chat.id,
+                        actor,
+                        assignment_id,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
+            }
+        }
+        BotState::ChoosingAttemptStudent { .. } => {
+            bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
+                .await?;
+        }
+        BotState::AwaitingAttemptAmount {
+            assignment_id,
+            student_id,
+        } => {
+            let Some(amount) = parse_positive_attempts(text) else {
+                bot.send_message(
+                    message.chat.id,
+                    format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
+                )
+                .await?;
+                return Ok(());
+            };
+            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
+                return Ok(());
+            };
+            match services
+                .assignments
+                .grant_extra_attempts(GrantExtraAttempts {
+                    assignment_id,
+                    student_id,
+                    actor,
+                    amount,
+                })
+                .await
+            {
+                Ok(progress) => {
+                    bot.send_message(
+                        message.chat.id,
+                        format!(
+                            "Добавлено попыток: {amount}. Всего дополнительных: {}.",
+                            progress.extra_attempts()
+                        ),
+                    )
+                    .await?;
+                    show_assignment_students(
+                        &bot,
+                        message.chat.id,
+                        actor,
+                        assignment_id,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
+            }
+        }
     }
 
     Ok(())
@@ -280,7 +489,7 @@ pub(super) async fn handle_callback(
 
     match data {
         "menu:assignments" => show_student_assignments(&bot, chat_id, actor, &services).await?,
-        "menu:courses" => show_courses(&bot, chat_id, actor, &services).await?,
+        "menu:courses" => show_courses(&bot, chat_id, actor, &services, &dialogue).await?,
         "review:next" => show_next_review(&bot, chat_id, actor, &services, &dialogue).await?,
         _ if data.starts_with("review:accept:") || data.starts_with("review:reject:") => {
             let Some((decision, callback_submission_id)) = parse_review_callback(data) else {
@@ -302,6 +511,185 @@ pub(super) async fn handle_callback(
                 })
                 .await?;
             bot.send_message(chat_id, "Напишите обязательный комментарий к решению:")
+                .await?;
+        }
+        _ if data.starts_with("course:") => {
+            let Some(id) = parse_uuid_callback(data, "course:") else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            let course_id = TeachingCourseId::from_uuid(id);
+            let valid = match &state {
+                BotState::ChoosingCourse {
+                    message_id,
+                    course_ids,
+                } => *message_id == message.id && course_ids.contains(&course_id),
+                BotState::ManagingAssignment {
+                    message_id,
+                    course_id: current_course_id,
+                    ..
+                } => *message_id == message.id && *current_course_id == course_id,
+                _ => false,
+            };
+            if !valid {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            show_course_assignments(&bot, chat_id, actor, course_id, &services, &dialogue).await?;
+        }
+        _ if data.starts_with("manage:") => {
+            let Some(id) = parse_uuid_callback(data, "manage:") else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            let assignment_id = AssignmentId::from_uuid(id);
+            let valid = match &state {
+                BotState::ChoosingAssignment {
+                    message_id,
+                    assignment_ids,
+                    ..
+                } => *message_id == message.id && assignment_ids.contains(&assignment_id),
+                BotState::ChoosingAttemptStudent {
+                    message_id,
+                    assignment_id: current_assignment_id,
+                    ..
+                } => *message_id == message.id && *current_assignment_id == assignment_id,
+                _ => false,
+            };
+            if !valid {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            show_teacher_assignment(&bot, chat_id, actor, assignment_id, &services, &dialogue)
+                .await?;
+        }
+        _ if data.starts_with("create:") => {
+            let Some(id) = parse_uuid_callback(data, "create:") else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            let course_id = TeachingCourseId::from_uuid(id);
+            let BotState::ChoosingAssignment {
+                message_id,
+                course_id: current_course_id,
+                ..
+            } = state
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            if message_id != message.id || current_course_id != course_id {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            dialogue
+                .update(BotState::AwaitingAssignmentTitle { course_id })
+                .await?;
+            bot.send_message(chat_id, "Введите название задания:")
+                .await?;
+        }
+        _ if data.starts_with("publish:") => {
+            let Some(assignment_id) =
+                managed_assignment_callback(data, "publish:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            match services
+                .assignments
+                .publish(assignment_id, actor, Utc::now())
+                .await
+            {
+                Ok(_) => {
+                    bot.send_message(chat_id, "Задание опубликовано.").await?;
+                    show_teacher_assignment(
+                        &bot,
+                        chat_id,
+                        actor,
+                        assignment_id,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => send_app_error(&bot, chat_id, error).await?,
+            }
+        }
+        _ if data.starts_with("archive:") => {
+            let Some(assignment_id) =
+                managed_assignment_callback(data, "archive:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            match services.assignments.archive(assignment_id, actor).await {
+                Ok(_) => {
+                    bot.send_message(chat_id, "Задание архивировано.").await?;
+                    show_teacher_assignment(
+                        &bot,
+                        chat_id,
+                        actor,
+                        assignment_id,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => send_app_error(&bot, chat_id, error).await?,
+            }
+        }
+        _ if data.starts_with("deadline:") => {
+            let Some(assignment_id) =
+                managed_assignment_callback(data, "deadline:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            dialogue
+                .update(BotState::AwaitingDeadlineChange { assignment_id })
+                .await?;
+            bot.send_message(
+                chat_id,
+                "Введите новый дедлайн в UTC в формате ДД.ММ.ГГГГ ЧЧ:ММ:",
+            )
+            .await?;
+        }
+        _ if data.starts_with("attempts:") => {
+            let Some(assignment_id) =
+                managed_assignment_callback(data, "attempts:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            show_assignment_students(&bot, chat_id, actor, assignment_id, &services, &dialogue)
+                .await?;
+        }
+        _ if data.starts_with("student:") => {
+            let Some(id) = parse_uuid_callback(data, "student:") else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            let student_id = UserId::from_uuid(id);
+            let BotState::ChoosingAttemptStudent {
+                message_id,
+                assignment_id,
+                student_ids,
+            } = state
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            if message_id != message.id || !student_ids.contains(&student_id) {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            dialogue
+                .update(BotState::AwaitingAttemptAmount {
+                    assignment_id,
+                    student_id,
+                })
+                .await?;
+            bot.send_message(chat_id, "Сколько дополнительных попыток выдать?")
                 .await?;
         }
         _ if data.starts_with("assignment:") => {
@@ -491,6 +879,7 @@ async fn show_courses(
     chat_id: ChatId,
     actor: Actor,
     services: &BotServices,
+    dialogue: &BotDialogue,
 ) -> HandlerResult {
     let courses = match services.courses.list_for_teacher(actor).await {
         Ok(courses) => courses,
@@ -500,13 +889,15 @@ async fn show_courses(
         }
     };
     if courses.is_empty() {
+        dialogue.exit().await?;
         bot.send_message(chat_id, "У вас пока нет учебных курсов.")
+            .reply_markup(teacher_menu(None))
             .await?;
         return Ok(());
     }
 
     let mut text = String::from("Ваши курсы:\n");
-    for course in courses {
+    for course in &courses {
         text.push_str(&format!(
             "\n{} · {}\n",
             course.subject.name().as_str(),
@@ -514,6 +905,174 @@ async fn show_courses(
         ));
     }
     send_message_chunks(bot, chat_id, text, None).await?;
+    let message = bot
+        .send_message(chat_id, "Выберите курс:")
+        .reply_markup(courses_keyboard(&courses))
+        .await?;
+    dialogue
+        .update(BotState::ChoosingCourse {
+            message_id: message.id,
+            course_ids: courses.iter().map(|course| course.course.id()).collect(),
+        })
+        .await?;
+    Ok(())
+}
+
+async fn show_course_assignments(
+    bot: &Bot,
+    chat_id: ChatId,
+    actor: Actor,
+    course_id: TeachingCourseId,
+    services: &BotServices,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    let assignments = match services.assignments.list_for_course(actor, course_id).await {
+        Ok(assignments) => assignments,
+        Err(error) => {
+            send_app_error(bot, chat_id, error).await?;
+            return Ok(());
+        }
+    };
+
+    if assignments.is_empty() {
+        bot.send_message(chat_id, "В этом курсе пока нет заданий.")
+            .await?;
+    } else {
+        let mut text = String::from("Задания курса:\n");
+        for assignment in &assignments {
+            text.push_str(&format!(
+                "\n{} · {}\nдедлайн: {}\n",
+                assignment.title().as_str(),
+                assignment_status(assignment.status()),
+                format_deadline(assignment.deadline_at()),
+            ));
+        }
+        send_message_chunks(bot, chat_id, text, None).await?;
+    }
+
+    let message = bot
+        .send_message(chat_id, "Выберите задание или создайте черновик:")
+        .reply_markup(course_assignments_keyboard(course_id, &assignments))
+        .await?;
+    dialogue
+        .update(BotState::ChoosingAssignment {
+            message_id: message.id,
+            course_id,
+            assignment_ids: assignments
+                .iter()
+                .map(|assignment| assignment.id())
+                .collect(),
+        })
+        .await?;
+    Ok(())
+}
+
+async fn show_teacher_assignment(
+    bot: &Bot,
+    chat_id: ChatId,
+    actor: Actor,
+    assignment_id: AssignmentId,
+    services: &BotServices,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    let assignment = match services
+        .assignments
+        .find_for_teacher(actor, assignment_id)
+        .await
+    {
+        Ok(assignment) => assignment,
+        Err(error) => {
+            send_app_error(bot, chat_id, error).await?;
+            return Ok(());
+        }
+    };
+    let published = assignment
+        .published_at()
+        .map(|published_at| format!("\nОпубликовано: {}", format_deadline(published_at)))
+        .unwrap_or_default();
+    let text = format!(
+        "{}\n\nСтатус: {}\nДедлайн: {}\nПопыток: {}{}\n\nТекст задания:\n{}",
+        assignment.title().as_str(),
+        assignment_status(assignment.status()),
+        format_deadline(assignment.deadline_at()),
+        assignment.max_attempts(),
+        published,
+        assignment.body().as_str(),
+    );
+    send_message_chunks(bot, chat_id, text, None).await?;
+    let message = bot
+        .send_message(chat_id, "Выберите действие:")
+        .reply_markup(assignment_actions_keyboard(&assignment))
+        .await?;
+    dialogue
+        .update(BotState::ManagingAssignment {
+            message_id: message.id,
+            course_id: assignment.teaching_course_id(),
+            assignment_id,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn show_assignment_students(
+    bot: &Bot,
+    chat_id: ChatId,
+    actor: Actor,
+    assignment_id: AssignmentId,
+    services: &BotServices,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    let students = match services
+        .assignments
+        .list_students_for_assignment(actor, assignment_id)
+        .await
+    {
+        Ok(students) => students,
+        Err(error) => {
+            send_app_error(bot, chat_id, error).await?;
+            return Ok(());
+        }
+    };
+
+    if students.is_empty() {
+        bot.send_message(chat_id, "В группе пока нет студентов.")
+            .await?;
+    } else {
+        let mut text = String::from("Студенты группы:\n");
+        for student in &students {
+            let pending = if student.history.has_pending_submission() {
+                " · сдача на проверке"
+            } else {
+                ""
+            };
+            let accepted = if student.history.has_accepted_submission() {
+                " · работа принята"
+            } else {
+                ""
+            };
+            text.push_str(&format!(
+                "\n{} · использовано {} · дополнительных {}{}{}\n",
+                student.student.display_name().as_str(),
+                student.history.used_attempts(),
+                student.history.extra_attempts(),
+                pending,
+                accepted,
+            ));
+        }
+        send_message_chunks(bot, chat_id, text, None).await?;
+    }
+
+    let message = bot
+        .send_message(chat_id, "Выберите студента:")
+        .reply_markup(assignment_students_keyboard(assignment_id, &students))
+        .await?;
+    dialogue
+        .update(BotState::ChoosingAttemptStudent {
+            message_id: message.id,
+            assignment_id,
+            student_ids: students.iter().map(|item| item.student.id()).collect(),
+        })
+        .await?;
     Ok(())
 }
 
@@ -602,6 +1161,51 @@ fn parse_review_callback(data: &str) -> Option<(ReviewDecision, SubmissionId)> {
     Some((decision, SubmissionId::from_uuid(id.parse().ok()?)))
 }
 
+fn managed_assignment_callback(
+    data: &str,
+    prefix: &str,
+    message_id: MessageId,
+    state: &BotState,
+) -> Option<AssignmentId> {
+    let assignment_id = AssignmentId::from_uuid(parse_uuid_callback(data, prefix)?);
+    let BotState::ManagingAssignment {
+        message_id: current_message_id,
+        assignment_id: current_assignment_id,
+        ..
+    } = state
+    else {
+        return None;
+    };
+
+    (*current_message_id == message_id && *current_assignment_id == assignment_id)
+        .then_some(assignment_id)
+}
+
+fn parse_deadline(text: &str) -> Option<DateTime<Utc>> {
+    let text = text.trim();
+    let value = NaiveDateTime::parse_from_str(text, "%d.%m.%Y %H:%M").ok()?;
+    (value.format("%d.%m.%Y %H:%M").to_string() == text).then(|| value.and_utc())
+}
+
+fn parse_positive_attempts(text: &str) -> Option<u16> {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let value: u16 = text.parse().ok()?;
+
+    (value > 0 && value <= MAX_ATTEMPTS).then_some(value)
+}
+
+async fn send_deadline_format_error(bot: &Bot, chat_id: ChatId) -> HandlerResult {
+    bot.send_message(
+        chat_id,
+        "Не удалось разобрать дату. Используйте формат ДД.ММ.ГГГГ ЧЧ:ММ в UTC.",
+    )
+    .await?;
+    Ok(())
+}
+
 async fn resolve_actor(
     bot: &Bot,
     chat_id: ChatId,
@@ -688,6 +1292,65 @@ mod tests {
             parse_review_callback(&format!("review:accept:{}", old.as_uuid())).unwrap();
 
         assert_ne!(callback_submission, current);
+    }
+
+    #[test]
+    fn teacher_inputs_use_strict_formats() {
+        assert_eq!(
+            parse_deadline("31.12.2030 23:59").unwrap(),
+            "2030-12-31T23:59:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        assert!(parse_deadline("31.12.2030 23:59 UTC").is_none());
+        assert!(parse_deadline("1.12.2030 23:59").is_none());
+        assert!(parse_deadline("31.02.2030 23:59").is_none());
+
+        assert_eq!(parse_positive_attempts("1"), Some(1));
+        assert_eq!(
+            parse_positive_attempts(&MAX_ATTEMPTS.to_string()),
+            Some(MAX_ATTEMPTS)
+        );
+        assert!(parse_positive_attempts("0").is_none());
+        assert!(parse_positive_attempts("+1").is_none());
+        assert!(parse_positive_attempts("32768").is_none());
+    }
+
+    #[test]
+    fn assignment_action_requires_current_keyboard_and_assignment() {
+        let current = AssignmentId::new();
+        let other = AssignmentId::new();
+        let state = BotState::ManagingAssignment {
+            message_id: MessageId(10),
+            course_id: TeachingCourseId::new(),
+            assignment_id: current,
+        };
+
+        assert_eq!(
+            managed_assignment_callback(
+                &format!("archive:{}", current.as_uuid()),
+                "archive:",
+                MessageId(10),
+                &state,
+            ),
+            Some(current)
+        );
+        assert!(
+            managed_assignment_callback(
+                &format!("archive:{}", current.as_uuid()),
+                "archive:",
+                MessageId(11),
+                &state,
+            )
+            .is_none()
+        );
+        assert!(
+            managed_assignment_callback(
+                &format!("archive:{}", other.as_uuid()),
+                "archive:",
+                MessageId(10),
+                &state,
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]

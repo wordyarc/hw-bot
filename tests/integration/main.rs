@@ -5,6 +5,7 @@
 mod harness;
 
 mod actor_api;
+mod assignment_teacher_queries;
 mod assignments_api;
 mod attempts_api;
 mod db_schema;
@@ -16,4 +17,5 @@ mod student_read_api;
 mod submission_repository;
 mod submit_homework_api;
 mod teacher_read_api;
+mod telegram_bot;
 mod users_api;

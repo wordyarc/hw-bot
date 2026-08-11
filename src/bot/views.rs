@@ -3,7 +3,10 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::{Bot, ChatId, Requester};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-use crate::domain::{SubmissionId, SubmissionStatus};
+use crate::app::{AssignmentStudentSummary, TeachingCourseSummary};
+use crate::domain::{
+    Assignment, AssignmentStatus, SubmissionId, SubmissionStatus, TeachingCourseId,
+};
 
 use super::HandlerResult;
 
@@ -55,6 +58,117 @@ pub(super) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMark
     ]])
 }
 
+pub(super) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(
+        courses
+            .iter()
+            .map(|course| {
+                vec![InlineKeyboardButton::callback(
+                    button_label(&format!(
+                        "{} · {}",
+                        course.subject.name().as_str(),
+                        course.group.code().as_str()
+                    )),
+                    format!("course:{}", course.course.id().as_uuid()),
+                )]
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub(super) fn course_assignments_keyboard(
+    course_id: TeachingCourseId,
+    assignments: &[Assignment],
+) -> InlineKeyboardMarkup {
+    let mut rows: Vec<_> = assignments
+        .iter()
+        .map(|assignment| {
+            vec![InlineKeyboardButton::callback(
+                button_label(&format!(
+                    "{} · {}",
+                    assignment.title().as_str(),
+                    assignment_status(assignment.status())
+                )),
+                format!("manage:{}", assignment.id().as_uuid()),
+            )]
+        })
+        .collect();
+    rows.push(vec![InlineKeyboardButton::callback(
+        "Создать черновик",
+        format!("create:{}", course_id.as_uuid()),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "К списку курсов",
+        "menu:courses",
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
+    let assignment_id = assignment.id().as_uuid();
+    let mut rows = Vec::new();
+
+    match assignment.status() {
+        AssignmentStatus::Draft => {
+            rows.push(vec![InlineKeyboardButton::callback(
+                "Опубликовать",
+                format!("publish:{assignment_id}"),
+            )]);
+            rows.push(vec![InlineKeyboardButton::callback(
+                "Архивировать",
+                format!("archive:{assignment_id}"),
+            )]);
+        }
+        AssignmentStatus::Published => rows.push(vec![InlineKeyboardButton::callback(
+            "Архивировать",
+            format!("archive:{assignment_id}"),
+        )]),
+        AssignmentStatus::Archived => rows.push(vec![InlineKeyboardButton::callback(
+            "Опубликовать снова",
+            format!("publish:{assignment_id}"),
+        )]),
+    }
+
+    if assignment.status() != AssignmentStatus::Archived {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "Изменить дедлайн",
+            format!("deadline:{assignment_id}"),
+        )]);
+    }
+    rows.push(vec![InlineKeyboardButton::callback(
+        "Выдать дополнительные попытки",
+        format!("attempts:{assignment_id}"),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "К заданиям курса",
+        format!("course:{}", assignment.teaching_course_id().as_uuid()),
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn assignment_students_keyboard(
+    assignment_id: crate::domain::AssignmentId,
+    students: &[AssignmentStudentSummary],
+) -> InlineKeyboardMarkup {
+    let mut rows = students
+        .iter()
+        .map(|student| {
+            vec![InlineKeyboardButton::callback(
+                button_label(student.student.display_name().as_str()),
+                format!("student:{}", student.student.id().as_uuid()),
+            )]
+        })
+        .collect::<Vec<_>>();
+    rows.push(vec![InlineKeyboardButton::callback(
+        "К заданию",
+        format!("manage:{}", assignment_id.as_uuid()),
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
 pub(super) fn format_deadline(deadline: chrono::DateTime<Utc>) -> String {
     deadline.format("%d.%m.%Y %H:%M UTC").to_string()
 }
@@ -64,6 +178,14 @@ pub(super) fn submission_status(status: SubmissionStatus) -> &'static str {
         SubmissionStatus::PendingReview => "на проверке",
         SubmissionStatus::Accepted => "принята",
         SubmissionStatus::Rejected => "отклонена",
+    }
+}
+
+pub(super) fn assignment_status(status: AssignmentStatus) -> &'static str {
+    match status {
+        AssignmentStatus::Draft => "черновик",
+        AssignmentStatus::Published => "опубликовано",
+        AssignmentStatus::Archived => "архив",
     }
 }
 
@@ -165,5 +287,27 @@ mod tests {
         assert_eq!(button_label("Мои задания"), "Мои задания");
         assert_eq!(button_label(&"я".repeat(61)).chars().count(), 63);
         assert!(button_label(&"я".repeat(61)).ends_with("..."));
+    }
+
+    #[test]
+    fn assignment_action_callbacks_fit_telegram_limit() {
+        use crate::test_support::{assignment, course_for, student_group, teacher};
+
+        let teacher = teacher(1);
+        let group = student_group("test-group");
+        let course = course_for(&group, &teacher);
+        let draft = assignment(&course, &teacher).build();
+        let published = assignment(&course, &teacher).published().build();
+        let mut archived = published.clone();
+        archived.archive(&course, &teacher).unwrap();
+
+        for assignment in [draft, published, archived] {
+            let json = serde_json::to_value(assignment_actions_keyboard(&assignment)).unwrap();
+            for row in json["inline_keyboard"].as_array().unwrap() {
+                for button in row.as_array().unwrap() {
+                    assert!(button["callback_data"].as_str().unwrap().len() <= 64);
+                }
+            }
+        }
     }
 }

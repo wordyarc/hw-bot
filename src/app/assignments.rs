@@ -49,6 +49,21 @@ pub struct StudentAssignmentDetails {
 }
 
 #[derive(Clone, Debug)]
+pub struct AssignmentStudentSummary {
+    pub student: User,
+    pub history: SubmissionHistory,
+}
+
+impl From<db::users::AssignmentStudentCard> for AssignmentStudentSummary {
+    fn from(card: db::users::AssignmentStudentCard) -> Self {
+        Self {
+            student: card.student,
+            history: card.history,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct AssignmentService {
     pool: PgPool,
 }
@@ -211,6 +226,35 @@ impl AssignmentService {
         })
     }
 
+    pub async fn find_for_teacher(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+    ) -> AppResult<Assignment> {
+        self.load_managed_assignment(actor, assignment_id, "view assignment")
+            .await
+    }
+
+    pub async fn list_students_for_assignment(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+    ) -> AppResult<Vec<AssignmentStudentSummary>> {
+        let assignment = self
+            .load_managed_assignment(actor, assignment_id, "list assignment students")
+            .await?;
+
+        Ok(db::users::list_students_with_assignment_history(
+            &self.pool,
+            assignment.id(),
+            assignment.student_group_id(),
+        )
+        .await?
+        .into_iter()
+        .map(AssignmentStudentSummary::from)
+        .collect())
+    }
+
     /// Экран курса у преподавателя: черновики и архив тоже его, в отличие от студенческого списка.
     pub async fn list_for_course(
         &self,
@@ -249,6 +293,30 @@ impl AssignmentService {
         }
 
         Ok(student)
+    }
+
+    async fn load_managed_assignment(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+        action: &'static str,
+    ) -> AppResult<Assignment> {
+        let actor = db::users::find_by_id(&self.pool, actor.user_id())
+            .await?
+            .required("teacher")?;
+        let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
+            .await?
+            .required("assignment")?;
+        let teaching_course =
+            db::academic::find_teaching_course_by_id(&self.pool, assignment.teaching_course_id())
+                .await?
+                .required("teaching course")?;
+
+        if !teaching_course.can_be_managed_by(&actor) {
+            return Err(DomainError::PermissionDenied { action }.into());
+        }
+
+        Ok(assignment)
     }
 
     /// Общая обвязка всех правок задания: у публикации, архивации и сдвига дедлайна отличается

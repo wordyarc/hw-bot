@@ -2,8 +2,10 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult};
-use crate::domain::{Role, StudentGroupId, TelegramUserId, User, UserId};
+use crate::db::{DbError, DbResult, checked_num_cast};
+use crate::domain::{
+    AssignmentId, Role, StudentGroupId, SubmissionHistory, TelegramUserId, User, UserId,
+};
 
 pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
 where
@@ -68,6 +70,66 @@ where
     row.map(User::try_from).transpose()
 }
 
+pub(crate) async fn list_students_with_assignment_history<'e, E>(
+    executor: E,
+    assignment_id: AssignmentId,
+    student_group_id: StudentGroupId,
+) -> DbResult<Vec<AssignmentStudentCard>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        AssignmentStudentCardRow,
+        r#"
+        with history as (
+            select
+                student_id,
+                count(*) filter (
+                    where status in ('accepted', 'rejected')
+                )::bigint as used_attempts,
+                bool_or(status = 'accepted') as has_accepted_submission,
+                bool_or(status = 'pending_review') as has_pending_submission
+            from submissions
+            where assignment_id = $1
+            group by student_id
+        )
+        select
+            users.id,
+            users.telegram_user_id,
+            users.role,
+            users.display_name,
+            users.student_group_id,
+            users.registered_at,
+            coalesce(history.used_attempts, 0)::bigint as "used_attempts!",
+            coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
+            coalesce(history.has_accepted_submission, false) as "has_accepted_submission!",
+            coalesce(history.has_pending_submission, false) as "has_pending_submission!"
+        from users
+        left join history
+          on history.student_id = users.id
+        left join student_assignment_progress progress
+          on progress.assignment_id = $1
+         and progress.student_id = users.id
+        where users.role = 'student'
+          and users.student_group_id = $2
+        order by users.display_name, users.id
+        "#,
+        assignment_id.as_uuid(),
+        student_group_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(AssignmentStudentCard::try_from)
+    .collect()
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AssignmentStudentCard {
+    pub(crate) student: User,
+    pub(crate) history: SubmissionHistory,
+}
+
 #[derive(Debug)]
 struct UserRow {
     id: Uuid,
@@ -76,6 +138,20 @@ struct UserRow {
     display_name: String,
     student_group_id: Option<Uuid>,
     registered_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+struct AssignmentStudentCardRow {
+    id: Uuid,
+    telegram_user_id: i64,
+    role: String,
+    display_name: String,
+    student_group_id: Option<Uuid>,
+    registered_at: DateTime<Utc>,
+    used_attempts: i64,
+    extra_attempts: i16,
+    has_accepted_submission: bool,
+    has_pending_submission: bool,
 }
 
 impl TryFrom<UserRow> for User {
@@ -92,5 +168,31 @@ impl TryFrom<UserRow> for User {
             row.display_name,
             row.registered_at,
         )?)
+    }
+}
+
+impl TryFrom<AssignmentStudentCardRow> for AssignmentStudentCard {
+    type Error = DbError;
+
+    fn try_from(row: AssignmentStudentCardRow) -> Result<Self, Self::Error> {
+        let student = User::try_from(UserRow {
+            id: row.id,
+            telegram_user_id: row.telegram_user_id,
+            role: row.role,
+            display_name: row.display_name,
+            student_group_id: row.student_group_id,
+            registered_at: row.registered_at,
+        })?;
+        let history = SubmissionHistory::new(
+            checked_num_cast("submission_history.used_attempts", row.used_attempts)?,
+            checked_num_cast(
+                "student_assignment_progress.extra_attempts",
+                row.extra_attempts,
+            )?,
+            row.has_accepted_submission,
+            row.has_pending_submission,
+        );
+
+        Ok(Self { student, history })
     }
 }

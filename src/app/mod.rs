@@ -9,8 +9,8 @@ mod users;
 
 pub use actor::Actor;
 pub use assignments::{
-    AssignmentService, ChangeDeadline, CreateAssignment, GrantExtraAttempts, StudentAssignment,
-    StudentAssignmentDetails,
+    AssignmentService, AssignmentStudentSummary, ChangeDeadline, CreateAssignment,
+    GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
 pub use courses::{CourseService, TeachingCourseSummary};
