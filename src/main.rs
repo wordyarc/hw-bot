@@ -6,7 +6,6 @@ use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -60,8 +59,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
     let app = api::router(AppState::new(config.app.name, db_pool, application));
 
-    let addr = SocketAddr::from_str(&format!("{}:{}", config.server.host, config.server.port))
-        .context("failed to parse server bind address")?;
+    let addr = SocketAddr::new(config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind server listener to {addr}"))?;

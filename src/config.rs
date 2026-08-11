@@ -1,4 +1,6 @@
-use serde::Deserialize;
+use std::net::IpAddr;
+
+use serde::{Deserialize, Deserializer};
 
 #[derive(Clone, Deserialize)]
 pub struct AppConfig {
@@ -17,8 +19,23 @@ pub struct AppInfoConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ServerConfig {
-    pub host: String,
+    #[serde(deserialize_with = "deserialize_loopback_ip")]
+    pub host: IpAddr,
     pub port: u16,
+}
+
+fn deserialize_loopback_ip<'de, D>(deserializer: D) -> Result<IpAddr, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let host = IpAddr::deserialize(deserializer)?;
+    if host.is_loopback() {
+        Ok(host)
+    } else {
+        Err(serde::de::Error::custom(
+            "server.host must be a loopback IP address",
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -145,7 +162,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(config.app.name, "hw-bot");
-        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.host, "127.0.0.1".parse::<IpAddr>().unwrap());
         assert_eq!(config.server.port, 3000);
         assert_eq!(
             config.database.url,
@@ -170,5 +187,49 @@ mod tests {
         assert_eq!(config.telegram.shutdown_grace_ms, 10000);
         assert!(!config.notification_worker.enabled);
         assert_eq!(config.notification_worker.max_attempts, 10);
+    }
+
+    #[test]
+    fn server_host_accepts_loopback_ip_addresses() {
+        for host in ["127.0.0.1", "127.0.0.2", "::1"] {
+            let config = server_config(host).unwrap();
+            assert!(config.host.is_loopback(), "host: {host}");
+        }
+    }
+
+    #[test]
+    fn server_host_rejects_non_loopback_ip_addresses() {
+        for host in [
+            "0.0.0.0",
+            "::",
+            "10.0.0.1",
+            "192.168.1.10",
+            "8.8.8.8",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ] {
+            let error = server_config(host).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("server.host must be a loopback IP address"),
+                "host: {host}, error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn server_host_rejects_hostnames_and_socket_syntax() {
+        for host in ["localhost", "[::1]", "http://127.0.0.1"] {
+            assert!(server_config(host).is_err(), "host: {host}");
+        }
+    }
+
+    fn server_config(host: &str) -> Result<ServerConfig, ::config::ConfigError> {
+        ::config::Config::builder()
+            .set_override("host", host.to_owned())?
+            .set_override("port", 3000)?
+            .build()?
+            .try_deserialize()
     }
 }
