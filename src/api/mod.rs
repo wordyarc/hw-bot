@@ -13,7 +13,7 @@ mod state;
 mod submissions;
 mod users;
 
-pub use actor::{ACTOR_HEADER, Actor};
+pub use actor::{ACTOR_HEADER, Actor, TelegramIdentity};
 pub use error::ApiError;
 pub use json::JsonBody;
 pub use state::AppState;

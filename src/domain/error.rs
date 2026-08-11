@@ -10,6 +10,13 @@ pub enum DomainError {
     #[error("{field} must not be empty")]
     EmptyField { field: &'static str },
 
+    #[error("{field} must be at most {max} characters, got {actual}")]
+    FieldTooLong {
+        field: &'static str,
+        max: usize,
+        actual: usize,
+    },
+
     #[error("telegram user id must be positive, got {value}")]
     InvalidTelegramUserId { value: i64 },
 
@@ -25,6 +32,9 @@ pub enum DomainError {
 
     #[error("attempt grant must be positive, got {value}")]
     InvalidAttemptGrant { value: u16 },
+
+    #[error("total attempt limit must not exceed {max}, got {value}")]
+    AttemptLimitExceeded { value: u32, max: u16 },
 
     #[error("assignment deadline must be after created_at")]
     AssignmentDeadlineMustBeAfterCreatedAt,

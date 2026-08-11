@@ -107,6 +107,15 @@ async fn empty_content_is_rejected() {
 }
 
 #[tokio::test]
+async fn oversized_submission_content_is_rejected() {
+    let app = TestApp::start().await;
+
+    app.submit(app.assignment(), app.student(), &"я".repeat(4097))
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+}
+
+#[tokio::test]
 async fn malformed_body_uses_the_same_error_envelope_as_handlers() {
     let app = TestApp::start().await;
 

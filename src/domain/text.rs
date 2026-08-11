@@ -1,5 +1,11 @@
 use crate::domain::{DomainError, DomainResult};
 
+pub const DISPLAY_NAME_MAX_LEN: usize = 100;
+pub const STUDENT_GROUP_CODE_MAX_LEN: usize = 64;
+pub const SUBJECT_NAME_MAX_LEN: usize = 200;
+pub const ASSIGNMENT_TITLE_MAX_LEN: usize = 200;
+pub const USER_TEXT_MAX_LEN: usize = 4096;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NonEmptyString(String);
 
@@ -12,6 +18,25 @@ impl NonEmptyString {
         }
 
         Ok(Self(value))
+    }
+
+    pub fn new_bounded(
+        field: &'static str,
+        value: impl Into<String>,
+        max_len: usize,
+    ) -> DomainResult<Self> {
+        let value = Self::new(field, value)?;
+        let actual = value.0.chars().count();
+
+        if actual > max_len {
+            return Err(DomainError::FieldTooLong {
+                field,
+                max: max_len,
+                actual,
+            });
+        }
+
+        Ok(value)
     }
 
     pub fn as_str(&self) -> &str {
@@ -47,5 +72,18 @@ mod tests {
         let value = NonEmptyString::new("field", "text").unwrap();
 
         assert_eq!(value.into_string(), "text");
+    }
+
+    #[test]
+    fn bounded_value_counts_unicode_scalars() {
+        assert!(NonEmptyString::new_bounded("field", "ёж", 2).is_ok());
+        assert_eq!(
+            NonEmptyString::new_bounded("field", "ёжик", 3).unwrap_err(),
+            DomainError::FieldTooLong {
+                field: "field",
+                max: 3,
+                actual: 4,
+            }
+        );
     }
 }

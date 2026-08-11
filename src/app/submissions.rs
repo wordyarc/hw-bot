@@ -1,14 +1,14 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::app::{AppResult, Required};
+use crate::app::{Actor, AppResult, Required};
 use crate::db;
-use crate::domain::{AssignmentId, Submission, SubmissionId, TelegramUserId};
+use crate::domain::{AssignmentId, Submission, SubmissionId};
 
 #[derive(Clone, Debug)]
 pub struct SubmitHomework {
     pub assignment_id: AssignmentId,
-    pub telegram_user_id: TelegramUserId,
+    pub actor: Actor,
     pub content: String,
     pub submitted_at: DateTime<Utc>,
 }
@@ -26,7 +26,7 @@ impl SubmissionService {
     pub async fn submit_homework(&self, command: SubmitHomework) -> AppResult<Submission> {
         let mut tx = self.pool.begin().await?;
 
-        let student = db::users::find_by_telegram_user_id(&mut *tx, command.telegram_user_id)
+        let student = db::users::find_by_id(&mut *tx, command.actor.user_id())
             .await?
             .required("student")?;
 

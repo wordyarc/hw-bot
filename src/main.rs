@@ -1,6 +1,6 @@
 use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
-use hw_bot::app::{NotificationWorker, NotificationWorkerSettings};
+use hw_bot::app::{ApplicationContainer, NotificationWorker, NotificationWorkerSettings};
 use hw_bot::bot::TelegramBot;
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
@@ -55,9 +55,10 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     }
 
     let cancellation = CancellationToken::new();
-    let telegram_bot = start_telegram_bot(&config, db_pool.clone(), cancellation.clone())?;
+    let application = ApplicationContainer::new(db_pool.clone());
+    let telegram_bot = start_telegram_bot(&config, application.clone(), cancellation.clone())?;
     let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
-    let app = api::router(AppState::new(config.app.name, db_pool));
+    let app = api::router(AppState::new(config.app.name, db_pool, application));
 
     let addr = SocketAddr::from_str(&format!("{}:{}", config.server.host, config.server.port))
         .context("failed to parse server bind address")?;
@@ -93,7 +94,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
 
 fn start_telegram_bot(
     config: &AppConfig,
-    pool: sqlx::PgPool,
+    application: ApplicationContainer,
     cancellation: CancellationToken,
 ) -> anyhow::Result<Option<JoinHandle<()>>> {
     if !config.telegram.enabled {
@@ -106,7 +107,7 @@ fn start_telegram_bot(
         "Telegram bot shutdown grace must be positive"
     );
     let bot = TelegramBot::new(
-        pool,
+        application,
         required_bot_token(config)?,
         &config.telegram.api_base_url,
     )?;

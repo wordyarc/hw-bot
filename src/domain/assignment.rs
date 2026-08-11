@@ -2,9 +2,11 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::enums::str_enum;
 use crate::domain::{
-    AssignmentId, DomainError, DomainResult, NonEmptyString, StudentGroupId, SubjectId,
-    TeachingCourse, TeachingCourseId, User, UserId,
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, NonEmptyString,
+    StudentGroupId, SubjectId, TeachingCourse, TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
 };
+
+pub const MAX_ATTEMPTS: u16 = i16::MAX as u16;
 
 str_enum! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,7 +52,7 @@ pub(crate) struct AssignmentParts {
 
 impl Assignment {
     pub(crate) fn restore(parts: AssignmentParts) -> DomainResult<Self> {
-        if parts.max_attempts == 0 {
+        if parts.max_attempts == 0 || parts.max_attempts > MAX_ATTEMPTS {
             return Err(DomainError::InvalidAttemptLimit {
                 value: parts.max_attempts,
             });
@@ -77,8 +79,12 @@ impl Assignment {
             teaching_course_id: parts.teaching_course_id,
             subject_id: parts.subject_id,
             student_group_id: parts.student_group_id,
-            title: NonEmptyString::new("assignment.title", parts.title)?,
-            body: NonEmptyString::new("assignment.body", parts.body)?,
+            title: NonEmptyString::new_bounded(
+                "assignment.title",
+                parts.title,
+                ASSIGNMENT_TITLE_MAX_LEN,
+            )?,
+            body: NonEmptyString::new_bounded("assignment.body", parts.body, USER_TEXT_MAX_LEN)?,
             max_attempts: parts.max_attempts,
             status: parts.status,
             created_by: parts.created_by,
@@ -305,6 +311,16 @@ mod tests {
         assert_eq!(
             restore(AssignmentStatus::Draft, 0, None).unwrap_err(),
             DomainError::InvalidAttemptLimit { value: 0 }
+        );
+    }
+
+    #[test]
+    fn restore_rejects_max_attempts_that_do_not_fit_storage() {
+        assert_eq!(
+            restore(AssignmentStatus::Draft, MAX_ATTEMPTS + 1, None).unwrap_err(),
+            DomainError::InvalidAttemptLimit {
+                value: MAX_ATTEMPTS + 1,
+            }
         );
     }
 

@@ -149,19 +149,24 @@ impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
 
 pub async fn list_student_assignments(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
 ) -> Result<Json<Vec<StudentAssignmentResponse>>, ApiError> {
-    let assignments = state.assignments.list_for_student(actor).await?;
+    let assignments = state
+        .application
+        .assignments
+        .list_for_student(actor)
+        .await?;
 
     Ok(Json(assignments.iter().map(Into::into).collect()))
 }
 
 pub async fn find_student_assignment(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(assignment_id): Path<Uuid>,
 ) -> Result<Json<StudentAssignmentDetailsResponse>, ApiError> {
     let details = state
+        .application
         .assignments
         .find_for_student(actor, AssignmentId::from_uuid(assignment_id))
         .await?;
@@ -171,10 +176,11 @@ pub async fn find_student_assignment(
 
 pub async fn list_course_assignments(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(teaching_course_id): Path<Uuid>,
 ) -> Result<Json<Vec<AssignmentResponse>>, ApiError> {
     let assignments = state
+        .application
         .assignments
         .list_for_course(actor, TeachingCourseId::from_uuid(teaching_course_id))
         .await?;
@@ -184,13 +190,13 @@ pub async fn list_course_assignments(
 
 pub async fn create_assignment(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(teaching_course_id): Path<Uuid>,
     JsonBody(request): JsonBody<CreateAssignmentRequest>,
 ) -> Result<(StatusCode, Json<AssignmentResponse>), ApiError> {
     let command = CreateAssignment {
         teaching_course_id: TeachingCourseId::from_uuid(teaching_course_id),
-        actor_telegram_user_id: actor,
+        actor,
         title: request.title,
         body: request.body,
         max_attempts: request.max_attempts,
@@ -198,7 +204,7 @@ pub async fn create_assignment(
         deadline_at: request.deadline_at,
     };
 
-    let assignment = state.assignments.create(command).await?;
+    let assignment = state.application.assignments.create(command).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -208,10 +214,11 @@ pub async fn create_assignment(
 
 pub async fn publish_assignment(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(assignment_id): Path<Uuid>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let assignment = state
+        .application
         .assignments
         .publish(AssignmentId::from_uuid(assignment_id), actor, Utc::now())
         .await?;
@@ -221,10 +228,11 @@ pub async fn publish_assignment(
 
 pub async fn archive_assignment(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(assignment_id): Path<Uuid>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let assignment = state
+        .application
         .assignments
         .archive(AssignmentId::from_uuid(assignment_id), actor)
         .await?;
@@ -234,35 +242,43 @@ pub async fn archive_assignment(
 
 pub async fn change_deadline(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(assignment_id): Path<Uuid>,
     JsonBody(request): JsonBody<ChangeDeadlineRequest>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let command = ChangeDeadline {
         assignment_id: AssignmentId::from_uuid(assignment_id),
-        actor_telegram_user_id: actor,
+        actor,
         deadline_at: request.deadline_at,
     };
 
-    let assignment = state.assignments.change_deadline(command).await?;
+    let assignment = state
+        .application
+        .assignments
+        .change_deadline(command)
+        .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
 }
 
 pub async fn grant_extra_attempts(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path((assignment_id, student_id)): Path<(Uuid, Uuid)>,
     JsonBody(request): JsonBody<GrantExtraAttemptsRequest>,
 ) -> Result<Json<StudentAssignmentProgressResponse>, ApiError> {
     let command = GrantExtraAttempts {
         assignment_id: AssignmentId::from_uuid(assignment_id),
         student_id: UserId::from_uuid(student_id),
-        actor_telegram_user_id: actor,
+        actor,
         amount: request.amount,
     };
 
-    let progress = state.assignments.grant_extra_attempts(command).await?;
+    let progress = state
+        .application
+        .assignments
+        .grant_extra_attempts(command)
+        .await?;
 
     Ok(Json(StudentAssignmentProgressResponse::from(&progress)))
 }

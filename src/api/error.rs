@@ -91,6 +91,9 @@ impl From<DomainError> for ApiError {
         let (status, code) = match error {
             // Malformed input.
             DomainError::EmptyField { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "empty_field"),
+            DomainError::FieldTooLong { .. } => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "field_too_long")
+            }
             DomainError::InvalidTelegramUserId { .. } => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "invalid_telegram_user_id")
             }
@@ -102,6 +105,9 @@ impl From<DomainError> for ApiError {
             }
             DomainError::InvalidAttemptGrant { .. } => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_grant")
+            }
+            DomainError::AttemptLimitExceeded { .. } => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "attempt_limit_exceeded")
             }
             DomainError::AssignmentDeadlineMustBeAfterCreatedAt => (
                 StatusCode::UNPROCESSABLE_ENTITY,

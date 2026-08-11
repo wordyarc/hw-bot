@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{Actor, ApiError, AppState, JsonBody};
+use crate::api::{Actor, ApiError, AppState, JsonBody, TelegramIdentity};
 use crate::app::{RegisterStaff, RegisterStudent, RegisteredUser};
 use crate::domain::{EducationLevel, StaffRole, StudentGroup, TelegramUserId};
 
@@ -71,35 +71,35 @@ impl From<&StudentGroup> for StudentGroupResponse {
 
 pub async fn register_student(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    TelegramIdentity(telegram_user_id): TelegramIdentity,
     JsonBody(request): JsonBody<RegisterStudentRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     let command = RegisterStudent {
-        telegram_user_id: actor,
+        telegram_user_id,
         display_name: request.display_name,
         student_group_code: request.student_group_code,
         registered_at: Utc::now(),
     };
 
-    let registered = state.users.register_student(command).await?;
+    let registered = state.application.users.register_student(command).await?;
 
     Ok((StatusCode::CREATED, Json(UserResponse::from(&registered))))
 }
 
 pub async fn register_staff(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     JsonBody(request): JsonBody<RegisterStaffRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     let command = RegisterStaff {
-        actor_telegram_user_id: actor,
+        actor,
         telegram_user_id: TelegramUserId::new(request.telegram_user_id)?,
         display_name: request.display_name,
         role: request.role,
         registered_at: Utc::now(),
     };
 
-    let registered = state.users.register_staff(command).await?;
+    let registered = state.application.users.register_staff(command).await?;
 
     Ok((StatusCode::CREATED, Json(UserResponse::from(&registered))))
 }
@@ -108,9 +108,9 @@ pub async fn register_staff(
 /// 404 здесь - сигнал «предложи регистрацию».
 pub async fn me(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let registered = state.users.find_by_telegram_user_id(actor).await?;
+    let registered = state.application.users.find_by_actor(actor).await?;
 
     Ok(Json(UserResponse::from(&registered)))
 }
@@ -118,7 +118,7 @@ pub async fn me(
 pub async fn list_student_groups(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<StudentGroupResponse>>, ApiError> {
-    let groups = state.users.list_student_groups().await?;
+    let groups = state.application.users.list_student_groups().await?;
 
     Ok(Json(
         groups.iter().map(StudentGroupResponse::from).collect(),

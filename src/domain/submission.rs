@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use crate::domain::enums::str_enum;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, DomainResult, NonEmptyString, SubmissionId,
-    TeachingCourse, User, UserId,
+    TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -46,9 +46,7 @@ impl SubmissionHistory {
     }
 
     pub fn allowed_attempts_for(self, assignment: &Assignment) -> u16 {
-        assignment
-            .max_attempts()
-            .saturating_add(self.extra_attempts)
+        assignment.max_attempts() + self.extra_attempts
     }
 
     /// Сколько попыток бот показывает студенту. Принятая сдача и
@@ -137,14 +135,24 @@ impl Submission {
             assignment_id: parts.assignment_id,
             student_id: parts.student_id,
             attempt_number: parts.attempt_number,
-            content: NonEmptyString::new("submission.content", parts.content)?,
+            content: NonEmptyString::new_bounded(
+                "submission.content",
+                parts.content,
+                USER_TEXT_MAX_LEN,
+            )?,
             status: parts.status,
             submitted_at: parts.submitted_at,
             reviewed_by: parts.reviewed_by,
             reviewed_at: parts.reviewed_at,
             review_comment: parts
                 .review_comment
-                .map(|comment| NonEmptyString::new("submission.review_comment", comment))
+                .map(|comment| {
+                    NonEmptyString::new_bounded(
+                        "submission.review_comment",
+                        comment,
+                        USER_TEXT_MAX_LEN,
+                    )
+                })
                 .transpose()?,
         })
     }
@@ -269,7 +277,8 @@ impl Submission {
             return Err(DomainError::SubmissionIsNotPendingReview);
         }
 
-        let review_comment = NonEmptyString::new("submission.review_comment", comment)?;
+        let review_comment =
+            NonEmptyString::new_bounded("submission.review_comment", comment, USER_TEXT_MAX_LEN)?;
 
         self.status = status;
         self.reviewed_by = Some(reviewer.id());

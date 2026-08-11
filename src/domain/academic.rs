@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::enums::str_enum;
 use crate::domain::{
-    DomainError, DomainResult, NonEmptyString, StudentGroupId, SubjectId, TeachingCourseId, User,
-    UserId,
+    DomainError, DomainResult, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN, SUBJECT_NAME_MAX_LEN,
+    StudentGroupId, SubjectId, TeachingCourseId, User, UserId,
 };
 
 str_enum! {
@@ -77,7 +77,11 @@ impl StudentGroup {
     ) -> DomainResult<Self> {
         Ok(Self {
             id,
-            code: NonEmptyString::new("student_group.code", code)?,
+            code: NonEmptyString::new_bounded(
+                "student_group.code",
+                code,
+                STUDENT_GROUP_CODE_MAX_LEN,
+            )?,
             program,
         })
     }
@@ -105,7 +109,7 @@ impl Subject {
     pub fn new(id: SubjectId, name: impl Into<String>) -> DomainResult<Self> {
         Ok(Self {
             id,
-            name: NonEmptyString::new("subject.name", name)?,
+            name: NonEmptyString::new_bounded("subject.name", name, SUBJECT_NAME_MAX_LEN)?,
         })
     }
 

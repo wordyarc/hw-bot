@@ -1,4 +1,6 @@
+mod actor;
 mod assignments;
+mod container;
 mod courses;
 mod error;
 mod notifications;
@@ -6,10 +8,12 @@ mod review;
 mod submissions;
 mod users;
 
+pub use actor::Actor;
 pub use assignments::{
     AssignmentService, ChangeDeadline, CreateAssignment, GrantExtraAttempts, StudentAssignment,
     StudentAssignmentDetails,
 };
+pub use container::ApplicationContainer;
 pub use courses::CourseService;
 pub use error::{AppError, AppResult, Required};
 pub use notifications::{DeliveryOutcome, NotificationWorker, NotificationWorkerSettings};

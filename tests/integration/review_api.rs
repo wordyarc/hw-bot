@@ -175,6 +175,16 @@ async fn review_comment_is_mandatory_for_both_decisions() {
 }
 
 #[tokio::test]
+async fn oversized_review_comment_is_rejected() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+
+    app.review(submission, app.teacher(), "reject", &"я".repeat(4097))
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+}
+
+#[tokio::test]
 async fn unknown_decision_is_rejected() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;

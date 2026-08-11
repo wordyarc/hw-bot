@@ -42,12 +42,10 @@ where
     Ok(())
 }
 
-/// Update условный по прежнему статусу: одновременные publish и archive иначе молча затирают друг
-/// друга, и проигравший получает 200 на переход, которого в БД уже нет.
 pub async fn update<'e, E>(
     executor: E,
     assignment: &Assignment,
-    previous_status: AssignmentStatus,
+    expected_revision: i64,
 ) -> DbResult<()>
 where
     E: PgExecutor<'e>,
@@ -58,15 +56,16 @@ where
         set
             status = $2,
             deadline_at = $3,
-            published_at = $4
+            published_at = $4,
+            revision = revision + 1
         where id = $1
-          and status = $5
+          and revision = $5
         "#,
         assignment.id().as_uuid(),
         assignment.status().as_str(),
         assignment.deadline_at(),
         assignment.published_at(),
-        previous_status.as_str(),
+        expected_revision,
     )
     .execute(executor)
     .await?;
@@ -78,6 +77,46 @@ where
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+pub struct VersionedAssignment {
+    assignment: Assignment,
+    revision: i64,
+}
+
+impl VersionedAssignment {
+    pub fn into_assignment(self) -> Assignment {
+        self.assignment
+    }
+
+    pub fn revision(&self) -> i64 {
+        self.revision
+    }
+}
+
+pub async fn find_versioned_by_id<'e, E>(
+    executor: E,
+    id: AssignmentId,
+) -> DbResult<Option<VersionedAssignment>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query_as!(
+        VersionedAssignmentRow,
+        r#"
+        select
+            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, created_at, deadline_at, published_at, revision
+        from assignments
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(VersionedAssignment::try_from).transpose()
 }
 
 pub async fn find_by_id<'e, E>(executor: E, id: AssignmentId) -> DbResult<Option<Assignment>>
@@ -169,6 +208,50 @@ struct AssignmentRow {
     created_at: DateTime<Utc>,
     deadline_at: DateTime<Utc>,
     published_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug)]
+struct VersionedAssignmentRow {
+    id: Uuid,
+    teaching_course_id: Uuid,
+    subject_id: Uuid,
+    student_group_id: Uuid,
+    title: String,
+    body: String,
+    max_attempts: i16,
+    status: String,
+    created_by: Uuid,
+    created_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    published_at: Option<DateTime<Utc>>,
+    revision: i64,
+}
+
+impl TryFrom<VersionedAssignmentRow> for VersionedAssignment {
+    type Error = DbError;
+
+    fn try_from(row: VersionedAssignmentRow) -> Result<Self, Self::Error> {
+        let revision = row.revision;
+        let assignment = Assignment::try_from(AssignmentRow {
+            id: row.id,
+            teaching_course_id: row.teaching_course_id,
+            subject_id: row.subject_id,
+            student_group_id: row.student_group_id,
+            title: row.title,
+            body: row.body,
+            max_attempts: row.max_attempts,
+            status: row.status,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            deadline_at: row.deadline_at,
+            published_at: row.published_at,
+        })?;
+
+        Ok(Self {
+            assignment,
+            revision,
+        })
+    }
 }
 
 impl TryFrom<AssignmentRow> for Assignment {

@@ -50,18 +50,22 @@ impl From<&Submission> for SubmissionResponse {
 
 pub async fn submit_homework(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
     Path(assignment_id): Path<Uuid>,
     JsonBody(request): JsonBody<SubmitHomeworkRequest>,
 ) -> Result<(StatusCode, Json<SubmissionResponse>), ApiError> {
     let command = SubmitHomework {
         assignment_id: AssignmentId::from_uuid(assignment_id),
-        telegram_user_id: actor,
+        actor,
         content: request.content,
         submitted_at: Utc::now(),
     };
 
-    let submission = state.submissions.submit_homework(command).await?;
+    let submission = state
+        .application
+        .submissions
+        .submit_homework(command)
+        .await?;
 
     Ok((
         StatusCode::CREATED,

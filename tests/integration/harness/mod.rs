@@ -6,6 +6,7 @@ use axum::http::Request;
 use axum::http::request::Builder;
 use chrono::{DateTime, Duration, Utc};
 use hw_bot::api::{self, ACTOR_HEADER, AppState};
+use hw_bot::app::ApplicationContainer;
 use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, StudentGroup, TeachingCourse, User};
 use hw_bot::test_support::{
@@ -37,7 +38,8 @@ impl TestApp {
     pub async fn start() -> Self {
         let pool = migrated_database().await;
         let fixture = Fixture::insert(&pool).await;
-        let router = api::router(AppState::new("hw-bot-test", pool.clone()));
+        let application = ApplicationContainer::new(pool.clone());
+        let router = api::router(AppState::new("hw-bot-test", pool.clone(), application));
 
         Self {
             pool,

@@ -2,17 +2,15 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::postgres::PgExecutor;
 
-use crate::app::{AppResult, Required};
+use crate::app::{Actor, AppResult, Required};
 use crate::db;
-use crate::domain::{
-    Assignment, DomainError, ReviewDecision, Submission, SubmissionId, TelegramUserId, User,
-};
+use crate::domain::{Assignment, DomainError, ReviewDecision, Submission, SubmissionId, User};
 
-async fn load_reviewer<'e, E>(executor: E, telegram_user_id: TelegramUserId) -> AppResult<User>
+async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
 where
     E: PgExecutor<'e>,
 {
-    let reviewer = db::users::find_by_telegram_user_id(executor, telegram_user_id)
+    let reviewer = db::users::find_by_id(executor, actor.user_id())
         .await?
         .required("reviewer")?;
 
@@ -29,7 +27,7 @@ where
 #[derive(Clone, Debug)]
 pub struct ReviewSubmission {
     pub submission_id: SubmissionId,
-    pub reviewer_telegram_user_id: TelegramUserId,
+    pub actor: Actor,
     pub decision: ReviewDecision,
     pub comment: String,
     pub reviewed_at: DateTime<Utc>,
@@ -57,13 +55,10 @@ impl ReviewService {
     /// Выдача из очереди не эксклюзивна: блокировка живет до конца транзакции, а HTTP-запрос
     /// заканчивается раньше решения. Единственный арбитр - условный update в `save_review_result`,
     /// поэтому проигравший гонку ревьюер получит `SubmissionIsNotPendingReview`.
-    pub async fn take_next_from_queue(
-        &self,
-        reviewer_telegram_user_id: TelegramUserId,
-    ) -> AppResult<Option<ReviewQueueItem>> {
+    pub async fn take_next_from_queue(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
         let mut tx = self.pool.begin().await?;
 
-        let reviewer = load_reviewer(&mut *tx, reviewer_telegram_user_id).await?;
+        let reviewer = load_reviewer(&mut *tx, actor).await?;
 
         let Some(submission) =
             db::submissions::lock_next_pending_for_reviewer(&mut tx, &reviewer).await?
@@ -90,8 +85,8 @@ impl ReviewService {
 
     /// Сколько сдач ждёт этого ревьюера. Бот не решает, звать ли
     /// `take_next`: очередь может опустеть между двумя запросами
-    pub async fn queue_size(&self, reviewer_telegram_user_id: TelegramUserId) -> AppResult<u32> {
-        let reviewer = load_reviewer(&self.pool, reviewer_telegram_user_id).await?;
+    pub async fn queue_size(&self, actor: Actor) -> AppResult<u32> {
+        let reviewer = load_reviewer(&self.pool, actor).await?;
 
         Ok(db::submissions::count_pending_for_reviewer(&self.pool, &reviewer).await?)
     }
@@ -99,10 +94,9 @@ impl ReviewService {
     pub async fn review_submission(&self, command: ReviewSubmission) -> AppResult<Submission> {
         let mut tx = self.pool.begin().await?;
 
-        let reviewer =
-            db::users::find_by_telegram_user_id(&mut *tx, command.reviewer_telegram_user_id)
-                .await?
-                .required("reviewer")?;
+        let reviewer = db::users::find_by_id(&mut *tx, command.actor.user_id())
+            .await?
+            .required("reviewer")?;
 
         let mut submission = db::submissions::find_by_id(&mut *tx, command.submission_id)
             .await?

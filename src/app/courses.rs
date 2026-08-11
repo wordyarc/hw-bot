@@ -1,9 +1,9 @@
 use sqlx::PgPool;
 
-use crate::app::{AppResult, Required};
+use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::db::academic::TeachingCourseCard;
-use crate::domain::{DomainError, TelegramUserId};
+use crate::domain::DomainError;
 
 #[derive(Clone, Debug)]
 pub struct CourseService {
@@ -15,11 +15,8 @@ impl CourseService {
         Self { pool }
     }
 
-    pub async fn list_for_teacher(
-        &self,
-        actor_telegram_user_id: TelegramUserId,
-    ) -> AppResult<Vec<TeachingCourseCard>> {
-        let actor = db::users::find_by_telegram_user_id(&self.pool, actor_telegram_user_id)
+    pub async fn list_for_teacher(&self, actor: Actor) -> AppResult<Vec<TeachingCourseCard>> {
+        let actor = db::users::find_by_id(&self.pool, actor.user_id())
             .await?
             .required("teacher")?;
 

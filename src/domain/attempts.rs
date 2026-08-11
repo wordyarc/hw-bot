@@ -1,3 +1,4 @@
+use crate::domain::assignment::MAX_ATTEMPTS;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, DomainResult, TeachingCourse, User, UserId,
 };
@@ -20,6 +21,8 @@ impl StudentAssignmentProgress {
         if student.student_group_id() != Some(assignment.student_group_id()) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
         }
+
+        ensure_total_attempts(assignment.max_attempts(), extra_attempts)?;
 
         Ok(Self {
             assignment_id: assignment.id(),
@@ -51,7 +54,15 @@ impl StudentAssignmentProgress {
             return Err(DomainError::InvalidAttemptGrant { value: amount });
         }
 
-        self.extra_attempts = self.extra_attempts.saturating_add(amount);
+        let extra_attempts =
+            self.extra_attempts
+                .checked_add(amount)
+                .ok_or(DomainError::AttemptLimitExceeded {
+                    value: u32::from(self.extra_attempts) + u32::from(amount),
+                    max: MAX_ATTEMPTS,
+                })?;
+        ensure_total_attempts(assignment.max_attempts(), extra_attempts)?;
+        self.extra_attempts = extra_attempts;
 
         Ok(())
     }
@@ -67,4 +78,16 @@ impl StudentAssignmentProgress {
     pub fn extra_attempts(&self) -> u16 {
         self.extra_attempts
     }
+}
+
+fn ensure_total_attempts(max_attempts: u16, extra_attempts: u16) -> DomainResult<()> {
+    let total = u32::from(max_attempts) + u32::from(extra_attempts);
+    if total > u32::from(MAX_ATTEMPTS) {
+        return Err(DomainError::AttemptLimitExceeded {
+            value: total,
+            max: MAX_ATTEMPTS,
+        });
+    }
+
+    Ok(())
 }

@@ -40,9 +40,9 @@ impl From<&TeachingCourseCard> for TeachingCourseResponse {
 
 pub async fn list_my_courses(
     State(state): State<AppState>,
-    Actor(actor): Actor,
+    actor: Actor,
 ) -> Result<Json<Vec<TeachingCourseResponse>>, ApiError> {
-    let courses = state.courses.list_for_teacher(actor).await?;
+    let courses = state.application.courses.list_for_teacher(actor).await?;
 
     Ok(Json(courses.iter().map(Into::into).collect()))
 }

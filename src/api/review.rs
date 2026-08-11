@@ -80,18 +80,23 @@ pub struct ReviewQueueSizeResponse {
 
 pub async fn queue_size(
     State(state): State<AppState>,
-    Actor(reviewer): Actor,
+    reviewer: Actor,
 ) -> Result<Json<ReviewQueueSizeResponse>, ApiError> {
-    let pending = state.reviews.queue_size(reviewer).await?;
+    let pending = state.application.reviews.queue_size(reviewer).await?;
 
     Ok(Json(ReviewQueueSizeResponse { pending }))
 }
 
 pub async fn take_next_from_queue(
     State(state): State<AppState>,
-    Actor(reviewer): Actor,
+    reviewer: Actor,
 ) -> Result<Response, ApiError> {
-    let Some(item) = state.reviews.take_next_from_queue(reviewer).await? else {
+    let Some(item) = state
+        .application
+        .reviews
+        .take_next_from_queue(reviewer)
+        .await?
+    else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
@@ -100,19 +105,19 @@ pub async fn take_next_from_queue(
 
 pub async fn review_submission(
     State(state): State<AppState>,
-    Actor(reviewer): Actor,
+    reviewer: Actor,
     Path(submission_id): Path<Uuid>,
     JsonBody(request): JsonBody<ReviewSubmissionRequest>,
 ) -> Result<Json<SubmissionResponse>, ApiError> {
     let command = ReviewSubmission {
         submission_id: SubmissionId::from_uuid(submission_id),
-        reviewer_telegram_user_id: reviewer,
+        actor: reviewer,
         decision: request.decision,
         comment: request.comment,
         reviewed_at: Utc::now(),
     };
 
-    let submission = state.reviews.review_submission(command).await?;
+    let submission = state.application.reviews.review_submission(command).await?;
 
     Ok(Json(SubmissionResponse::from(&submission)))
 }

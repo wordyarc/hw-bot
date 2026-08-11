@@ -2,7 +2,7 @@
 
 create table student_groups (
     id uuid primary key default gen_random_uuid(),
-    code text not null unique,
+    code text not null unique check (btrim(code) <> '' and char_length(code) <= 64),
     education_level text not null check (
         education_level in ('bachelor', 'master', 'specialist', 'postgraduate')
     ),
@@ -18,7 +18,7 @@ create table student_groups (
 
 create table subjects (
     id uuid primary key default gen_random_uuid(),
-    name text not null unique,
+    name text not null unique check (btrim(name) <> '' and char_length(name) <= 200),
     created_at timestamptz not null default now()
 );
 
@@ -28,7 +28,9 @@ create table users (
     id uuid primary key default uuidv7(),
     telegram_user_id bigint not null unique check (telegram_user_id > 0),
     role text not null check (role in ('student', 'teacher', 'admin')),
-    display_name text not null check (btrim(display_name) <> ''),
+    display_name text not null check (
+        btrim(display_name) <> '' and char_length(display_name) <= 100
+    ),
     student_group_id uuid references student_groups (id) on delete restrict,
     registered_at timestamptz not null default now(),
     check ((role = 'student') = (student_group_id is not null))
@@ -68,15 +70,21 @@ create table assignments (
     teaching_course_id uuid not null,
     subject_id uuid not null,
     student_group_id uuid not null,
-    title text not null check (btrim(title) <> ''),
-    body text not null check (btrim(body) <> ''),
-    max_attempts smallint not null check (max_attempts > 0),
+    title text not null check (btrim(title) <> '' and char_length(title) <= 200),
+    body text not null check (btrim(body) <> '' and char_length(body) <= 4096),
+    max_attempts smallint not null check (max_attempts between 1 and 32767),
     status text not null check (status in ('draft', 'published', 'archived')),
     created_by uuid not null references users (id) on delete restrict,
     created_at timestamptz not null default now(),
     deadline_at timestamptz not null,
     published_at timestamptz,
+    revision bigint not null default 0 check (revision >= 0),
     check (deadline_at > created_at),
+    check (
+        (status = 'draft' and published_at is null)
+        or (status = 'published' and published_at is not null)
+        or status = 'archived'
+    ),
     foreign key (teaching_course_id, subject_id, student_group_id)
         references teaching_courses (id, subject_id, student_group_id)
         on delete restrict
@@ -94,8 +102,8 @@ create table submissions (
     id uuid primary key default uuidv7(),
     assignment_id uuid not null references assignments (id) on delete restrict,
     student_id uuid not null references users (id) on delete restrict,
-    attempt_number smallint not null check (attempt_number > 0),
-    content text not null check (btrim(content) <> ''),
+    attempt_number smallint not null check (attempt_number between 1 and 32767),
+    content text not null check (btrim(content) <> '' and char_length(content) <= 4096),
     status text not null check (status in ('pending_review', 'accepted', 'rejected')),
     submitted_at timestamptz not null default now(),
     reviewed_by uuid references users (id) on delete restrict,
@@ -115,7 +123,8 @@ create table submissions (
             and reviewed_at is not null
             and btrim(review_comment) <> ''
         )
-    )
+    ),
+    check (review_comment is null or char_length(review_comment) <= 4096)
 );
 
 create unique index submissions_one_pending_per_student_assignment_idx
@@ -138,6 +147,6 @@ create index submissions_student_assignment_idx
 create table student_assignment_progress (
     assignment_id uuid not null references assignments (id) on delete restrict,
     student_id uuid not null references users (id) on delete restrict,
-    extra_attempts smallint not null default 0 check (extra_attempts >= 0),
+    extra_attempts smallint not null default 0 check (extra_attempts between 0 and 32767),
     primary key (assignment_id, student_id)
 );

@@ -1,18 +1,18 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::app::{AppError, AppResult, Required};
+use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult,
     StudentAssignmentProgress, Submission, SubmissionHistory, TeachingCourse, TeachingCourseId,
-    TelegramUserId, User, UserId,
+    User, UserId,
 };
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
     pub teaching_course_id: TeachingCourseId,
-    pub actor_telegram_user_id: TelegramUserId,
+    pub actor: Actor,
     pub title: String,
     pub body: String,
     pub max_attempts: u16,
@@ -23,7 +23,7 @@ pub struct CreateAssignment {
 #[derive(Clone, Debug)]
 pub struct ChangeDeadline {
     pub assignment_id: AssignmentId,
-    pub actor_telegram_user_id: TelegramUserId,
+    pub actor: Actor,
     pub deadline_at: DateTime<Utc>,
 }
 
@@ -31,7 +31,7 @@ pub struct ChangeDeadline {
 pub struct GrantExtraAttempts {
     pub assignment_id: AssignmentId,
     pub student_id: UserId,
-    pub actor_telegram_user_id: TelegramUserId,
+    pub actor: Actor,
     pub amount: u16,
 }
 
@@ -61,7 +61,7 @@ impl AssignmentService {
     pub async fn create(&self, command: CreateAssignment) -> AppResult<Assignment> {
         let mut tx = self.pool.begin().await?;
 
-        let author = db::users::find_by_telegram_user_id(&mut *tx, command.actor_telegram_user_id)
+        let author = db::users::find_by_id(&mut *tx, command.actor.user_id())
             .await?
             .required("teacher")?;
 
@@ -91,30 +91,27 @@ impl AssignmentService {
     pub async fn publish(
         &self,
         assignment_id: AssignmentId,
-        actor_telegram_user_id: TelegramUserId,
+        actor: Actor,
         published_at: DateTime<Utc>,
     ) -> AppResult<Assignment> {
-        self.change(
-            assignment_id,
-            actor_telegram_user_id,
-            |assignment, course, actor| assignment.publish(course, actor, published_at),
-        )
+        self.change(assignment_id, actor, |assignment, course, actor| {
+            assignment.publish(course, actor, published_at)
+        })
         .await
     }
 
     pub async fn archive(
         &self,
         assignment_id: AssignmentId,
-        actor_telegram_user_id: TelegramUserId,
+        actor: Actor,
     ) -> AppResult<Assignment> {
-        self.change(assignment_id, actor_telegram_user_id, Assignment::archive)
-            .await
+        self.change(assignment_id, actor, Assignment::archive).await
     }
 
     pub async fn change_deadline(&self, command: ChangeDeadline) -> AppResult<Assignment> {
         self.change(
             command.assignment_id,
-            command.actor_telegram_user_id,
+            command.actor,
             |assignment, course, actor| {
                 assignment.change_deadline(course, actor, command.deadline_at)
             },
@@ -128,7 +125,7 @@ impl AssignmentService {
     ) -> AppResult<StudentAssignmentProgress> {
         let mut tx = self.pool.begin().await?;
 
-        let actor = db::users::find_by_telegram_user_id(&mut *tx, command.actor_telegram_user_id)
+        let actor = db::users::find_by_id(&mut *tx, command.actor.user_id())
             .await?
             .required("teacher")?;
 
@@ -158,11 +155,8 @@ impl AssignmentService {
     }
 
     /// Главный экран студента.
-    pub async fn list_for_student(
-        &self,
-        actor_telegram_user_id: TelegramUserId,
-    ) -> AppResult<Vec<StudentAssignment>> {
-        let student = self.student(actor_telegram_user_id).await?;
+    pub async fn list_for_student(&self, actor: Actor) -> AppResult<Vec<StudentAssignment>> {
+        let student = self.student(actor).await?;
         let group_id = student.student_group_id().required("student group")?;
 
         let assignments = db::assignments::list_published_for_group(&self.pool, group_id).await?;
@@ -183,10 +177,10 @@ impl AssignmentService {
 
     pub async fn find_for_student(
         &self,
-        actor_telegram_user_id: TelegramUserId,
+        actor: Actor,
         assignment_id: AssignmentId,
     ) -> AppResult<StudentAssignmentDetails> {
-        let student = self.student(actor_telegram_user_id).await?;
+        let student = self.student(actor).await?;
 
         let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
             .await?
@@ -220,10 +214,10 @@ impl AssignmentService {
     /// Экран курса у преподавателя: черновики и архив тоже его, в отличие от студенческого списка.
     pub async fn list_for_course(
         &self,
-        actor_telegram_user_id: TelegramUserId,
+        actor: Actor,
         teaching_course_id: TeachingCourseId,
     ) -> AppResult<Vec<Assignment>> {
-        let actor = db::users::find_by_telegram_user_id(&self.pool, actor_telegram_user_id)
+        let actor = db::users::find_by_id(&self.pool, actor.user_id())
             .await?
             .required("teacher")?;
 
@@ -242,8 +236,8 @@ impl AssignmentService {
         Ok(db::assignments::list_for_course(&self.pool, teaching_course_id).await?)
     }
 
-    async fn student(&self, telegram_user_id: TelegramUserId) -> AppResult<User> {
-        let student = db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
+    async fn student(&self, actor: Actor) -> AppResult<User> {
+        let student = db::users::find_by_id(&self.pool, actor.user_id())
             .await?
             .required("student")?;
 
@@ -262,7 +256,7 @@ impl AssignmentService {
     async fn change<F>(
         &self,
         assignment_id: AssignmentId,
-        actor_telegram_user_id: TelegramUserId,
+        actor: Actor,
         apply: F,
     ) -> AppResult<Assignment>
     where
@@ -270,23 +264,24 @@ impl AssignmentService {
     {
         let mut tx = self.pool.begin().await?;
 
-        let actor = db::users::find_by_telegram_user_id(&mut *tx, actor_telegram_user_id)
+        let actor = db::users::find_by_id(&mut *tx, actor.user_id())
             .await?
             .required("teacher")?;
 
-        let mut assignment = db::assignments::find_by_id(&mut *tx, assignment_id)
+        let stored = db::assignments::find_versioned_by_id(&mut *tx, assignment_id)
             .await?
             .required("assignment")?;
+        let revision = stored.revision();
+        let mut assignment = stored.into_assignment();
 
         let teaching_course =
             db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
                 .await?
                 .required("teaching course")?;
 
-        let previous_status = assignment.status();
         apply(&mut assignment, &teaching_course, &actor)?;
 
-        match db::assignments::update(&mut *tx, &assignment, previous_status).await {
+        match db::assignments::update(&mut *tx, &assignment, revision).await {
             Err(db::DbError::Conflict { .. }) => {
                 return Err(AppError::AssignmentChangedConcurrently);
             }

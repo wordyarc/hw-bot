@@ -612,3 +612,25 @@ fn remaining_attempts_stop_at_zero() {
 
     assert_eq!(history.remaining_attempts_for(&assignment), 0);
 }
+
+#[test]
+fn extra_attempts_cannot_exceed_the_storage_limit() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(crate::domain::MAX_ATTEMPTS - 1)
+        .build();
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+
+    assert_eq!(
+        progress
+            .grant_extra_attempts(&assignment, &course, &teacher, 2)
+            .unwrap_err(),
+        DomainError::AttemptLimitExceeded {
+            value: u32::from(crate::domain::MAX_ATTEMPTS) + 1,
+            max: crate::domain::MAX_ATTEMPTS,
+        }
+    );
+}

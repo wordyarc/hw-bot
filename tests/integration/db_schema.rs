@@ -69,9 +69,9 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
             r#"
             insert into assignments (
                 teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-                status, created_by, deadline_at
+                status, created_by, deadline_at, published_at
             )
-            values ($1, $2, $3, $4, 'body', 1, $5, $6, $7)
+            values ($1, $2, $3, $4, 'body', 1, $5, $6, $7, $8)
             "#,
         )
         .bind(fixture.course.id().as_uuid())
@@ -81,6 +81,7 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         .bind(status.as_str())
         .bind(fixture.teacher.id().as_uuid())
         .bind(Utc::now() + Duration::days(7))
+        .bind((*status == AssignmentStatus::Published).then(Utc::now))
         .execute(&app.pool)
         .await
         .unwrap_or_else(|error| panic!("assignment status {} rejected: {error}", status.as_str()));
@@ -110,6 +111,68 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         .unwrap_or_else(|error| panic!("submission status {} rejected: {error}", status.as_str()));
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_status_requires_the_matching_published_at_shape() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let fixture = &app.fixture;
+
+    for (status, published_at) in [("draft", Some(Utc::now())), ("published", None)] {
+        let result = sqlx::query(
+            r#"
+            insert into assignments (
+                teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+                status, created_by, deadline_at, published_at
+            )
+            values ($1, $2, $3, $4, 'body', 1, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(fixture.course.id().as_uuid())
+        .bind(fixture.subject.id().as_uuid())
+        .bind(fixture.group.id().as_uuid())
+        .bind(format!("invalid-{status}"))
+        .bind(status)
+        .bind(fixture.teacher.id().as_uuid())
+        .bind(Utc::now() + Duration::days(7))
+        .bind(published_at)
+        .execute(&app.pool)
+        .await;
+
+        assert!(result.is_err(), "schema accepted invalid {status} shape");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn schema_rejects_user_text_over_the_product_limit() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let fixture = &app.fixture;
+
+    let result = sqlx::query(
+        r#"
+        insert into assignments (
+            teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, deadline_at
+        )
+        values ($1, $2, $3, 'title', $4, 1, 'draft', $5, $6)
+        "#,
+    )
+    .bind(fixture.course.id().as_uuid())
+    .bind(fixture.subject.id().as_uuid())
+    .bind(fixture.group.id().as_uuid())
+    .bind("я".repeat(4097))
+    .bind(fixture.teacher.id().as_uuid())
+    .bind(Utc::now() + Duration::days(7))
+    .execute(&app.pool)
+    .await;
+
+    assert!(
+        result.is_err(),
+        "schema accepted an oversized assignment body"
+    );
     Ok(())
 }
 

@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::enums::str_enum;
 use crate::domain::{
-    DomainError, DomainResult, NonEmptyString, StudentGroup, StudentGroupId, TelegramUserId, UserId,
+    DISPLAY_NAME_MAX_LEN, DomainError, DomainResult, NonEmptyString, StudentGroup, StudentGroupId,
+    TelegramUserId, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,7 +94,11 @@ impl User {
             id,
             telegram_user_id,
             role,
-            display_name: NonEmptyString::new("user.display_name", display_name)?,
+            display_name: NonEmptyString::new_bounded(
+                "user.display_name",
+                display_name,
+                DISPLAY_NAME_MAX_LEN,
+            )?,
             registered_at,
         })
     }
@@ -111,7 +116,11 @@ impl User {
             role: Role::Student {
                 student_group_id: student_group.id(),
             },
-            display_name: NonEmptyString::new("user.display_name", display_name)?,
+            display_name: NonEmptyString::new_bounded(
+                "user.display_name",
+                display_name,
+                DISPLAY_NAME_MAX_LEN,
+            )?,
             registered_at,
         })
     }

@@ -66,6 +66,19 @@ async fn empty_display_name_is_rejected() {
 }
 
 #[tokio::test]
+async fn oversized_display_name_is_rejected() {
+    let app = TestApp::start().await;
+
+    app.register_student(
+        app.next_telegram_id(),
+        &"я".repeat(101),
+        app.fixture.group.code().as_str(),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+}
+
+#[tokio::test]
 async fn a_registered_caller_reads_their_own_profile() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();

@@ -3,6 +3,8 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
+use hw_bot::db;
+
 use crate::harness::TestApp;
 
 #[tokio::test]
@@ -213,6 +215,42 @@ async fn an_assignment_without_attempts_is_rejected() {
 }
 
 #[tokio::test]
+async fn an_attempt_limit_above_smallint_is_rejected_before_insert() {
+    let app = TestApp::start().await;
+
+    app.create_assignment_raw(
+        app.course(),
+        app.teacher(),
+        json!({
+            "title": "Rust lifetimes",
+            "body": "Send a pull request link.",
+            "max_attempts": i16::MAX as u16 + 1,
+            "deadline_at": Utc::now() + Duration::days(7),
+        }),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_limit");
+}
+
+#[tokio::test]
+async fn an_assignment_title_over_the_limit_is_rejected() {
+    let app = TestApp::start().await;
+
+    app.create_assignment_raw(
+        app.course(),
+        app.teacher(),
+        json!({
+            "title": "я".repeat(201),
+            "body": "Send a pull request link.",
+            "max_attempts": 2,
+            "deadline_at": Utc::now() + Duration::days(7),
+        }),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+}
+
+#[tokio::test]
 async fn an_empty_assignment_body_is_rejected() {
     let app = TestApp::start().await;
 
@@ -337,4 +375,38 @@ async fn a_published_assignment_reaches_the_review_queue() {
         json!(assignment.to_string()),
         "the queue must carry the assignment the teacher just published"
     );
+}
+
+#[tokio::test]
+async fn assignment_revision_rejects_a_stale_deadline_update() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let first = db::assignments::find_versioned_by_id(&app.pool, app.fixture.assignment.id())
+        .await?
+        .expect("assignment");
+    let second = db::assignments::find_versioned_by_id(&app.pool, app.fixture.assignment.id())
+        .await?
+        .expect("assignment");
+    let first_revision = first.revision();
+    let second_revision = second.revision();
+    let first_deadline = Utc::now() + Duration::days(10);
+    let second_deadline = Utc::now() + Duration::days(20);
+    let mut first_assignment = first.into_assignment();
+    let mut second_assignment = second.into_assignment();
+    first_assignment.change_deadline(&app.fixture.course, &app.fixture.teacher, first_deadline)?;
+    second_assignment.change_deadline(
+        &app.fixture.course,
+        &app.fixture.teacher,
+        second_deadline,
+    )?;
+
+    db::assignments::update(&app.pool, &first_assignment, first_revision).await?;
+    let stale = db::assignments::update(&app.pool, &second_assignment, second_revision).await;
+
+    assert!(matches!(stale, Err(db::DbError::Conflict { .. })));
+    let stored = db::assignments::find_by_id(&app.pool, app.fixture.assignment.id())
+        .await?
+        .expect("assignment");
+    assert_eq!(stored.deadline_at(), first_deadline);
+
+    Ok(())
 }

@@ -10,8 +10,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::app::{
-    AppError, AssignmentService, CourseService, RegisterStudent, ReviewService, ReviewSubmission,
-    SubmissionService, SubmitHomework, UserService,
+    Actor, AppError, ApplicationContainer, RegisterStudent, ReviewSubmission, SubmitHomework,
 };
 use crate::domain::{
     AssignmentId, AssignmentStatus, DomainError, ReviewDecision, Role, SubmissionId,
@@ -26,17 +25,10 @@ type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
 #[derive(Clone)]
 pub struct TelegramBot {
     bot: Bot,
-    services: BotServices,
+    application: ApplicationContainer,
 }
 
-#[derive(Clone)]
-struct BotServices {
-    users: UserService,
-    assignments: AssignmentService,
-    submissions: SubmissionService,
-    courses: CourseService,
-    reviews: ReviewService,
-}
+type BotServices = ApplicationContainer;
 
 #[derive(Clone, Default)]
 enum BotState {
@@ -74,7 +66,7 @@ enum Command {
 
 impl TelegramBot {
     pub fn new(
-        pool: sqlx::PgPool,
+        application: ApplicationContainer,
         token: impl Into<String>,
         api_base_url: &str,
     ) -> anyhow::Result<Self> {
@@ -83,16 +75,13 @@ impl TelegramBot {
             .with_context(|| format!("invalid Telegram API base URL: {api_base_url}"))?;
         let bot = Bot::new(token).set_api_url(api_url);
 
-        Ok(Self {
-            bot,
-            services: BotServices::new(pool),
-        })
+        Ok(Self { bot, application })
     }
 
     pub async fn run(self, cancellation: CancellationToken) {
         let storage = InMemStorage::<BotState>::new();
         let mut dispatcher = Dispatcher::builder(self.bot, schema())
-            .dependencies(dptree::deps![storage, self.services])
+            .dependencies(dptree::deps![storage, self.application])
             .build();
         let shutdown = dispatcher.shutdown_token();
         let dispatch = dispatcher.dispatch();
@@ -104,18 +93,6 @@ impl TelegramBot {
                 let _ = shutdown.shutdown();
                 dispatch.await;
             }
-        }
-    }
-}
-
-impl BotServices {
-    fn new(pool: sqlx::PgPool) -> Self {
-        Self {
-            users: UserService::new(pool.clone()),
-            assignments: AssignmentService::new(pool.clone()),
-            submissions: SubmissionService::new(pool.clone()),
-            courses: CourseService::new(pool.clone()),
-            reviews: ReviewService::new(pool),
         }
     }
 }
@@ -246,11 +223,14 @@ async fn handle_message(
                 .await?;
         }
         BotState::AwaitingSubmission { assignment_id } => {
+            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
+                return Ok(());
+            };
             let result = services
                 .submissions
                 .submit_homework(SubmitHomework {
                     assignment_id,
-                    telegram_user_id: actor,
+                    actor,
                     content: text.to_owned(),
                     submitted_at: Utc::now(),
                 })
@@ -274,11 +254,14 @@ async fn handle_message(
             submission_id,
             decision,
         } => {
+            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
+                return Ok(());
+            };
             let result = services
                 .reviews
                 .review_submission(ReviewSubmission {
                     submission_id,
-                    reviewer_telegram_user_id: actor,
+                    actor,
                     decision,
                     comment: text.to_owned(),
                     reviewed_at: Utc::now(),
@@ -324,7 +307,7 @@ async fn handle_callback(
         return Ok(());
     }
     let chat_id = message.chat.id;
-    let actor = actor_from_user(&query.from)?;
+    let telegram_user_id = actor_from_user(&query.from)?;
     let Some(data) = query.data.as_deref() else {
         return Ok(());
     };
@@ -351,7 +334,7 @@ async fn handle_callback(
         match services
             .users
             .register_student(RegisterStudent {
-                telegram_user_id: actor,
+                telegram_user_id,
                 display_name,
                 student_group_code: group_code.clone(),
                 registered_at: Utc::now(),
@@ -369,20 +352,27 @@ async fn handle_callback(
         return Ok(());
     }
 
+    let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services).await? else {
+        return Ok(());
+    };
+
     match data {
         "menu:assignments" => show_student_assignments(&bot, chat_id, actor, &services).await?,
         "menu:courses" => show_courses(&bot, chat_id, actor, &services).await?,
         "review:next" => show_next_review(&bot, chat_id, actor, &services, &dialogue).await?,
-        "review:accept" | "review:reject" => {
+        _ if data.starts_with("review:accept:") || data.starts_with("review:reject:") => {
+            let Some((decision, callback_submission_id)) = parse_review_callback(data) else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
             let BotState::AwaitingReviewDecision { submission_id } = state else {
                 send_stale_button(&bot, chat_id).await?;
                 return Ok(());
             };
-            let decision = if data == "review:accept" {
-                ReviewDecision::Accept
-            } else {
-                ReviewDecision::Reject
-            };
+            if submission_id != callback_submission_id {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
             dialogue
                 .update(BotState::AwaitingReviewComment {
                     submission_id,
@@ -436,6 +426,7 @@ async fn show_home(
                 .await?;
             }
             Role::Teacher | Role::Admin => {
+                let actor = Actor::new(registered.user.id());
                 let pending = match services.reviews.queue_size(actor).await {
                     Ok(pending) => pending,
                     Err(error) => {
@@ -465,7 +456,7 @@ async fn show_home(
 async fn show_student_assignments(
     bot: &Bot,
     chat_id: ChatId,
-    actor: TelegramUserId,
+    actor: Actor,
     services: &BotServices,
 ) -> HandlerResult {
     let assignments = match services.assignments.list_for_student(actor).await {
@@ -500,16 +491,14 @@ async fn show_student_assignments(
         )]);
     }
 
-    bot.send_message(chat_id, bounded_message(text))
-        .reply_markup(InlineKeyboardMarkup::new(rows))
-        .await?;
+    send_message_chunks(bot, chat_id, text, Some(InlineKeyboardMarkup::new(rows))).await?;
     Ok(())
 }
 
 async fn show_assignment(
     bot: &Bot,
     chat_id: ChatId,
-    actor: TelegramUserId,
+    actor: Actor,
     assignment_id: AssignmentId,
     services: &BotServices,
 ) -> HandlerResult {
@@ -526,27 +515,14 @@ async fn show_assignment(
     };
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
-    let mut text = format!(
-        "{}\n\n{}\n\nДедлайн: {}\nПопытки: использовано {}, доступно {}, осталось {}",
+    let summary = format!(
+        "{}\n\nДедлайн: {}\nПопытки: использовано {}, доступно {}, осталось {}",
         assignment.title().as_str(),
-        assignment.body().as_str(),
         format_deadline(assignment.deadline_at()),
         history.used_attempts(),
         history.allowed_attempts_for(assignment),
         history.remaining_attempts_for(assignment),
     );
-
-    for submission in &details.submissions {
-        text.push_str(&format!(
-            "\n\nПопытка {}: {}\n{}",
-            submission.attempt_number(),
-            submission_status(submission.status()),
-            submission.content().as_str(),
-        ));
-        if let Some(comment) = submission.review_comment() {
-            text.push_str(&format!("\nКомментарий: {}", comment.as_str()));
-        }
-    }
 
     let mut rows = Vec::new();
     if assignment.status() == AssignmentStatus::Published {
@@ -560,7 +536,29 @@ async fn show_assignment(
         "menu:assignments",
     )]);
 
-    bot.send_message(chat_id, bounded_message(text))
+    bot.send_message(chat_id, summary).await?;
+    bot.send_message(chat_id, "Текст задания:").await?;
+    bot.send_message(chat_id, assignment.body().as_str())
+        .await?;
+    for submission in &details.submissions {
+        bot.send_message(
+            chat_id,
+            format!(
+                "Попытка {}: {}",
+                submission.attempt_number(),
+                submission_status(submission.status()),
+            ),
+        )
+        .await?;
+        bot.send_message(chat_id, submission.content().as_str())
+            .await?;
+        if let Some(comment) = submission.review_comment() {
+            bot.send_message(chat_id, "Комментарий преподавателя:")
+                .await?;
+            bot.send_message(chat_id, comment.as_str()).await?;
+        }
+    }
+    bot.send_message(chat_id, "Выберите действие:")
         .reply_markup(InlineKeyboardMarkup::new(rows))
         .await?;
     Ok(())
@@ -569,7 +567,7 @@ async fn show_assignment(
 async fn show_courses(
     bot: &Bot,
     chat_id: ChatId,
-    actor: TelegramUserId,
+    actor: Actor,
     services: &BotServices,
 ) -> HandlerResult {
     let courses = match services.courses.list_for_teacher(actor).await {
@@ -593,14 +591,14 @@ async fn show_courses(
             course.group.code().as_str(),
         ));
     }
-    bot.send_message(chat_id, bounded_message(text)).await?;
+    send_message_chunks(bot, chat_id, text, None).await?;
     Ok(())
 }
 
 async fn show_next_review(
     bot: &Bot,
     chat_id: ChatId,
-    actor: TelegramUserId,
+    actor: Actor,
     services: &BotServices,
     dialogue: &BotDialogue,
 ) -> HandlerResult {
@@ -624,18 +622,19 @@ async fn show_next_review(
             submission_id: item.submission.id(),
         })
         .await?;
-    let text = format!(
-        "{}\nСтудент: {}\n\nЗадание:\n{}\n\nСдача:\n{}",
+    let summary = format!(
+        "{}\nСтудент: {}",
         item.assignment.title().as_str(),
         item.student.display_name().as_str(),
-        item.assignment.body().as_str(),
-        item.submission.content().as_str(),
     );
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("Принять", "review:accept"),
-        InlineKeyboardButton::callback("Отклонить", "review:reject"),
-    ]]);
-    bot.send_message(chat_id, bounded_message(text))
+    let submission_id = item.submission.id();
+    let keyboard = review_keyboard(submission_id);
+    bot.send_message(chat_id, summary).await?;
+    bot.send_message(chat_id, "Текст задания:").await?;
+    bot.send_message(chat_id, item.assignment.body().as_str())
+        .await?;
+    bot.send_message(chat_id, "Сдача студента:").await?;
+    bot.send_message(chat_id, item.submission.content().as_str())
         .reply_markup(keyboard)
         .await?;
     Ok(())
@@ -698,8 +697,48 @@ fn group_keyboard(group_codes: &[String]) -> InlineKeyboardMarkup {
     )
 }
 
+fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback(
+            "Принять",
+            format!("review:accept:{}", submission_id.as_uuid()),
+        ),
+        InlineKeyboardButton::callback(
+            "Отклонить",
+            format!("review:reject:{}", submission_id.as_uuid()),
+        ),
+    ]])
+}
+
 fn parse_uuid_callback(data: &str, prefix: &str) -> Option<Uuid> {
     data.strip_prefix(prefix)?.parse().ok()
+}
+
+fn parse_review_callback(data: &str) -> Option<(ReviewDecision, SubmissionId)> {
+    let (decision, id) = data
+        .strip_prefix("review:accept:")
+        .map(|id| (ReviewDecision::Accept, id))
+        .or_else(|| {
+            data.strip_prefix("review:reject:")
+                .map(|id| (ReviewDecision::Reject, id))
+        })?;
+
+    Some((decision, SubmissionId::from_uuid(id.parse().ok()?)))
+}
+
+async fn resolve_actor(
+    bot: &Bot,
+    chat_id: ChatId,
+    telegram_user_id: TelegramUserId,
+    services: &BotServices,
+) -> HandlerResult<Option<Actor>> {
+    match services.users.resolve_actor(telegram_user_id).await {
+        Ok(actor) => Ok(Some(actor)),
+        Err(error) => {
+            send_app_error(bot, chat_id, error).await?;
+            Ok(None)
+        }
+    }
 }
 
 fn format_deadline(deadline: chrono::DateTime<Utc>) -> String {
@@ -723,14 +762,49 @@ fn button_label(label: &str) -> String {
     label
 }
 
-fn bounded_message(text: String) -> String {
-    if text.chars().count() <= MESSAGE_LIMIT {
-        return text;
+fn message_chunks(text: String) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0;
+
+    for character in text.chars() {
+        if current_len == MESSAGE_LIMIT {
+            chunks.push(std::mem::take(&mut current));
+            current_len = 0;
+        }
+        current.push(character);
+        current_len += 1;
     }
 
-    let mut text: String = text.chars().take(MESSAGE_LIMIT - 3).collect();
-    text.push_str("...");
-    text
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+async fn send_message_chunks(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: String,
+    keyboard: Option<InlineKeyboardMarkup>,
+) -> HandlerResult {
+    let chunks = message_chunks(text);
+    let last = chunks.len().saturating_sub(1);
+
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        if index == last
+            && let Some(keyboard) = keyboard.clone()
+        {
+            bot.send_message(chat_id, chunk)
+                .reply_markup(keyboard)
+                .await?;
+        } else {
+            bot.send_message(chat_id, chunk).await?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
@@ -793,14 +867,66 @@ mod tests {
             None
         );
         assert_eq!(parse_uuid_callback("assignment:nope", "assignment:"), None);
+        assert_eq!(
+            parse_uuid_callback(&format!("submit:{id}"), "submit:"),
+            Some(id)
+        );
     }
 
     #[test]
-    fn long_messages_are_bounded_for_telegram() {
-        let message = bounded_message("я".repeat(MESSAGE_LIMIT * 2));
+    fn cancel_command_remains_part_of_the_telegram_contract() {
+        assert!(matches!(
+            Command::parse("/cancel", "test_bot").unwrap(),
+            Command::Cancel
+        ));
+    }
 
-        assert_eq!(message.chars().count(), MESSAGE_LIMIT);
-        assert!(message.ends_with("..."));
+    #[test]
+    fn review_callbacks_carry_the_submission_the_buttons_belong_to() {
+        let submission_id = SubmissionId::new();
+        let keyboard = review_keyboard(submission_id);
+        let json = serde_json::to_value(keyboard).unwrap();
+        let accept = json["inline_keyboard"][0][0]["callback_data"]
+            .as_str()
+            .unwrap();
+        let reject = json["inline_keyboard"][0][1]["callback_data"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            parse_review_callback(accept),
+            Some((ReviewDecision::Accept, submission_id))
+        );
+        assert_eq!(
+            parse_review_callback(reject),
+            Some((ReviewDecision::Reject, submission_id))
+        );
+        assert!(accept.len() <= 64);
+        assert!(reject.len() <= 64);
+    }
+
+    #[test]
+    fn old_review_callback_identifies_a_different_submission() {
+        let current = SubmissionId::new();
+        let old = SubmissionId::new();
+        let (_, callback_submission) =
+            parse_review_callback(&format!("review:accept:{}", old.as_uuid())).unwrap();
+
+        assert_ne!(callback_submission, current);
+    }
+
+    #[test]
+    fn long_messages_are_split_without_losing_content() {
+        let source = "я".repeat(MESSAGE_LIMIT * 2 + 1);
+        let chunks = message_chunks(source.clone());
+
+        assert_eq!(chunks.len(), 3);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.chars().count() <= MESSAGE_LIMIT)
+        );
+        assert_eq!(chunks.concat(), source);
     }
 
     #[test]
@@ -878,7 +1004,7 @@ mod tests {
             message,
             Command::Help,
             dialogue,
-            BotServices::new(pool),
+            ApplicationContainer::new(pool),
         )
         .await
         .unwrap();

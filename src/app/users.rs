@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::app::{AppResult, Required};
+use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{StaffRole, StudentGroup, TelegramUserId, User, UserId};
 
@@ -15,7 +15,7 @@ pub struct RegisterStudent {
 
 #[derive(Clone, Debug)]
 pub struct RegisterStaff {
-    pub actor_telegram_user_id: TelegramUserId,
+    pub actor: Actor,
     pub telegram_user_id: TelegramUserId,
     pub display_name: String,
     pub role: StaffRole,
@@ -67,7 +67,7 @@ impl UserService {
     pub async fn register_staff(&self, command: RegisterStaff) -> AppResult<RegisteredUser> {
         let mut tx = self.pool.begin().await?;
 
-        let actor = db::users::find_by_telegram_user_id(&mut *tx, command.actor_telegram_user_id)
+        let actor = db::users::find_by_id(&mut *tx, command.actor.user_id())
             .await?
             .required("actor")?;
 
@@ -98,6 +98,32 @@ impl UserService {
             .await?
             .required("user")?;
 
+        let student_group = match user.student_group_id() {
+            Some(id) => db::academic::find_student_group_by_id(&self.pool, id)
+                .await?
+                .required("student group")
+                .map(Some)?,
+            None => None,
+        };
+
+        Ok(RegisteredUser {
+            user,
+            student_group,
+        })
+    }
+
+    pub async fn resolve_actor(&self, telegram_user_id: TelegramUserId) -> AppResult<Actor> {
+        let user = db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
+            .await?
+            .required("user")?;
+
+        Ok(Actor::new(user.id()))
+    }
+
+    pub async fn find_by_actor(&self, actor: Actor) -> AppResult<RegisteredUser> {
+        let user = db::users::find_by_id(&self.pool, actor.user_id())
+            .await?
+            .required("user")?;
         let student_group = match user.student_group_id() {
             Some(id) => db::academic::find_student_group_by_id(&self.pool, id)
                 .await?
