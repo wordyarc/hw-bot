@@ -1,60 +1,29 @@
 use anyhow::{Context, anyhow};
 use chrono::Utc;
-use teloxide::dispatching::UpdateHandler;
-use teloxide::dispatching::dialogue::{self, Dialogue, InMemStorage};
 use teloxide::payloads::{AnswerCallbackQuerySetters, SendMessageSetters};
-use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, User};
+use teloxide::prelude::{Bot, Requester};
+use teloxide::types::{
+    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, User,
+};
 use teloxide::utils::command::BotCommands;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::app::{
-    Actor, AppError, ApplicationContainer, ErrorCode, RegisterStudent, ReviewSubmission,
-    SubmitHomework,
-};
+use crate::app::{Actor, ErrorCode, RegisterStudent, ReviewSubmission, SubmitHomework};
 use crate::domain::{
-    AssignmentId, AssignmentStatus, ReviewDecision, Role, SubmissionId, SubmissionStatus,
-    TelegramUserId,
+    AssignmentId, AssignmentStatus, ReviewDecision, Role, SubmissionId, TelegramUserId,
 };
 
-const MESSAGE_LIMIT: usize = 4096;
-
-type HandlerResult<T = ()> = anyhow::Result<T>;
-type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
-
-#[derive(Clone)]
-pub struct TelegramBot {
-    bot: Bot,
-    application: ApplicationContainer,
-}
-
-type BotServices = ApplicationContainer;
-
-#[derive(Clone, Default)]
-enum BotState {
-    #[default]
-    Idle,
-    AwaitingRegistrationName,
-    AwaitingRegistrationGroup {
-        display_name: String,
-        group_codes: Vec<String>,
-    },
-    AwaitingSubmission {
-        assignment_id: AssignmentId,
-    },
-    AwaitingReviewDecision {
-        submission_id: SubmissionId,
-    },
-    AwaitingReviewComment {
-        submission_id: SubmissionId,
-        decision: ReviewDecision,
-    },
-}
+use super::errors::send_app_error;
+use super::state::{BotDialogue, BotState};
+use super::views::{
+    button_label, format_deadline, group_keyboard, review_keyboard, send_message_chunks,
+    send_stale_button, student_menu, submission_status, teacher_menu,
+};
+use super::{BotServices, HandlerResult};
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
-enum Command {
+pub(super) enum Command {
     #[command(description = "открыть главное меню")]
     Start,
     #[command(description = "открыть главное меню")]
@@ -65,55 +34,7 @@ enum Command {
     Help,
 }
 
-impl TelegramBot {
-    pub fn new(
-        application: ApplicationContainer,
-        token: impl Into<String>,
-        api_base_url: &str,
-    ) -> anyhow::Result<Self> {
-        let api_url = api_base_url
-            .parse()
-            .with_context(|| format!("invalid Telegram API base URL: {api_base_url}"))?;
-        let bot = Bot::new(token).set_api_url(api_url);
-
-        Ok(Self { bot, application })
-    }
-
-    pub async fn run(self, cancellation: CancellationToken) {
-        let storage = InMemStorage::<BotState>::new();
-        let mut dispatcher = Dispatcher::builder(self.bot, schema())
-            .dependencies(dptree::deps![storage, self.application])
-            .build();
-        let shutdown = dispatcher.shutdown_token();
-        let dispatch = dispatcher.dispatch();
-        tokio::pin!(dispatch);
-
-        tokio::select! {
-            () = &mut dispatch => {},
-            () = cancellation.cancelled() => {
-                let _ = shutdown.shutdown();
-                dispatch.await;
-            }
-        }
-    }
-}
-
-fn schema() -> UpdateHandler<anyhow::Error> {
-    let messages = Update::filter_message()
-        .branch(
-            dptree::entry()
-                .filter_command::<Command>()
-                .endpoint(handle_command),
-        )
-        .branch(dptree::endpoint(handle_message));
-    let callbacks = Update::filter_callback_query().endpoint(handle_callback);
-
-    dialogue::enter::<Update, InMemStorage<BotState>, BotState, _>()
-        .branch(messages)
-        .branch(callbacks)
-}
-
-async fn handle_command(
+pub(super) async fn handle_command(
     bot: Bot,
     message: Message,
     command: Command,
@@ -158,7 +79,7 @@ async fn handle_command(
     Ok(())
 }
 
-async fn handle_message(
+pub(super) async fn handle_message(
     bot: Bot,
     message: Message,
     dialogue: BotDialogue,
@@ -291,7 +212,7 @@ async fn handle_message(
     Ok(())
 }
 
-async fn handle_callback(
+pub(super) async fn handle_callback(
     bot: Bot,
     query: CallbackQuery,
     dialogue: BotDialogue,
@@ -665,52 +586,6 @@ fn actor_from_user(user: &User) -> HandlerResult<TelegramUserId> {
     TelegramUserId::new(value).map_err(|error| anyhow!(error))
 }
 
-fn student_menu() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "Мои задания",
-        "menu:assignments",
-    )]])
-}
-
-fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
-    let review_label = pending.map_or_else(
-        || "Проверить следующую".to_owned(),
-        |pending| format!("Проверить следующую ({pending})"),
-    );
-    InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback(review_label, "review:next")],
-        vec![InlineKeyboardButton::callback("Мои курсы", "menu:courses")],
-    ])
-}
-
-fn group_keyboard(group_codes: &[String]) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(
-        group_codes
-            .iter()
-            .enumerate()
-            .map(|(index, code)| {
-                vec![InlineKeyboardButton::callback(
-                    code.clone(),
-                    format!("register_group:{index}"),
-                )]
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback(
-            "Принять",
-            format!("review:accept:{}", submission_id.as_uuid()),
-        ),
-        InlineKeyboardButton::callback(
-            "Отклонить",
-            format!("review:reject:{}", submission_id.as_uuid()),
-        ),
-    ]])
-}
-
 fn parse_uuid_callback(data: &str, prefix: &str) -> Option<Uuid> {
     data.strip_prefix(prefix)?.parse().ok()
 }
@@ -742,113 +617,17 @@ async fn resolve_actor(
     }
 }
 
-fn format_deadline(deadline: chrono::DateTime<Utc>) -> String {
-    deadline.format("%d.%m.%Y %H:%M UTC").to_string()
-}
-
-fn submission_status(status: SubmissionStatus) -> &'static str {
-    match status {
-        SubmissionStatus::PendingReview => "на проверке",
-        SubmissionStatus::Accepted => "принята",
-        SubmissionStatus::Rejected => "отклонена",
-    }
-}
-
-fn button_label(label: &str) -> String {
-    let truncated = label.chars().count() > 60;
-    let mut label: String = label.chars().take(60).collect();
-    if truncated {
-        label.push_str("...");
-    }
-    label
-}
-
-fn message_chunks(text: String) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_len = 0;
-
-    for character in text.chars() {
-        if current_len == MESSAGE_LIMIT {
-            chunks.push(std::mem::take(&mut current));
-            current_len = 0;
-        }
-        current.push(character);
-        current_len += 1;
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-
-    chunks
-}
-
-async fn send_message_chunks(
-    bot: &Bot,
-    chat_id: ChatId,
-    text: String,
-    keyboard: Option<InlineKeyboardMarkup>,
-) -> HandlerResult {
-    let chunks = message_chunks(text);
-    let last = chunks.len().saturating_sub(1);
-
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        if index == last
-            && let Some(keyboard) = keyboard.clone()
-        {
-            bot.send_message(chat_id, chunk)
-                .reply_markup(keyboard)
-                .await?;
-        } else {
-            bot.send_message(chat_id, chunk).await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
-    bot.send_message(chat_id, "Эта кнопка устарела. Откройте /menu ещё раз.")
-        .await?;
-    Ok(())
-}
-
-async fn send_app_error(bot: &Bot, chat_id: ChatId, error: AppError) -> HandlerResult {
-    let code = error.code();
-    if code == ErrorCode::InternalError {
-        tracing::error!(error = ?error, "Telegram command failed");
-    }
-    bot.send_message(chat_id, app_error_message(code)).await?;
-    Ok(())
-}
-
-fn app_error_message(code: ErrorCode) -> &'static str {
-    match code {
-        ErrorCode::InternalError => "Произошла внутренняя ошибка. Попробуйте позже.",
-        ErrorCode::NotFound => "Запрошенные данные не найдены.",
-        ErrorCode::InvalidInput => {
-            "Не удалось выполнить действие. Проверьте данные и попробуйте ещё раз."
-        }
-        ErrorCode::PermissionDenied => "Это действие вам недоступно.",
-        ErrorCode::AssignmentUnavailable => "Это действие сейчас недоступно.",
-        ErrorCode::DeadlineExceeded => "Дедлайн задания уже прошёл.",
-        ErrorCode::AttemptsExhausted => "Доступные попытки закончились.",
-        ErrorCode::SubmissionAlreadyAccepted => "Работа уже принята.",
-        ErrorCode::SubmissionPendingReview => "Предыдущая работа ещё на проверке.",
-        ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",
-        ErrorCode::AlreadyRegistered => "Вы уже зарегистрированы.",
-        ErrorCode::ConcurrentModification => "Данные уже изменились. Повторите действие.",
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
     use sqlx::postgres::PgPoolOptions;
+    use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::app::ApplicationContainer;
+
+    use super::*;
 
     #[test]
     fn callback_uuid_parser_rejects_wrong_prefix_and_invalid_uuid() {
@@ -909,54 +688,6 @@ mod tests {
             parse_review_callback(&format!("review:accept:{}", old.as_uuid())).unwrap();
 
         assert_ne!(callback_submission, current);
-    }
-
-    #[test]
-    fn long_messages_are_split_without_losing_content() {
-        let source = "я".repeat(MESSAGE_LIMIT * 2 + 1);
-        let chunks = message_chunks(source.clone());
-
-        assert_eq!(chunks.len(), 3);
-        assert!(
-            chunks
-                .iter()
-                .all(|chunk| chunk.chars().count() <= MESSAGE_LIMIT)
-        );
-        assert_eq!(chunks.concat(), source);
-    }
-
-    #[test]
-    fn common_submission_errors_have_student_facing_text() {
-        assert_eq!(
-            app_error_message(ErrorCode::SubmissionPendingReview),
-            "Предыдущая работа ещё на проверке."
-        );
-        assert_eq!(
-            app_error_message(ErrorCode::SubmissionAlreadyReviewed),
-            "Эту сдачу уже проверил другой преподаватель."
-        );
-    }
-
-    #[test]
-    fn group_keyboard_keeps_callback_data_short() {
-        let keyboard = group_keyboard(&["б9122-02.03.21".to_owned(), "магистратура-2".to_owned()]);
-        let json = serde_json::to_value(keyboard).unwrap();
-
-        assert_eq!(
-            json["inline_keyboard"][0][0]["callback_data"],
-            "register_group:0"
-        );
-        assert_eq!(
-            json["inline_keyboard"][1][0]["callback_data"],
-            "register_group:1"
-        );
-    }
-
-    #[test]
-    fn button_labels_are_truncated_only_when_needed() {
-        assert_eq!(button_label("Мои задания"), "Мои задания");
-        assert_eq!(button_label(&"я".repeat(61)).chars().count(), 63);
-        assert!(button_label(&"я".repeat(61)).ends_with("..."));
     }
 
     #[tokio::test]
