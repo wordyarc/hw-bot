@@ -103,10 +103,7 @@ async fn student_from_another_group_cannot_receive_attempts() {
 
     app.grant_extra_attempts(app.assignment(), outsider.id().as_uuid(), app.teacher(), 1)
         .await
-        .error(
-            StatusCode::FORBIDDEN,
-            "student_does_not_belong_to_assignment_group",
-        );
+        .error(StatusCode::FORBIDDEN, "permission_denied");
 }
 
 #[tokio::test]
@@ -120,7 +117,7 @@ async fn zero_attempt_grant_is_rejected() {
         0,
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_grant");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -214,5 +211,5 @@ async fn total_attempts_cannot_exceed_smallint() {
         1,
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "attempt_limit_exceeded");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }

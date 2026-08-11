@@ -48,7 +48,7 @@ async fn a_draft_assignment_cannot_be_submitted_yet() {
         "https://github.com/course/hw/pull/1",
     )
     .await
-    .error(StatusCode::CONFLICT, "assignment_is_not_published");
+    .error(StatusCode::CONFLICT, "assignment_unavailable");
 }
 
 #[tokio::test]
@@ -78,10 +78,7 @@ async fn an_assignment_cannot_be_published_twice() {
 
     app.publish_assignment(assignment, app.teacher())
         .await
-        .error(
-            StatusCode::CONFLICT,
-            "assignment_status_transition_not_allowed",
-        );
+        .error(StatusCode::CONFLICT, "assignment_unavailable");
 }
 
 #[tokio::test]
@@ -140,7 +137,7 @@ async fn archiving_closes_the_assignment_for_submissions() {
         "https://github.com/course/hw/pull/1",
     )
     .await
-    .error(StatusCode::CONFLICT, "assignment_is_not_published");
+    .error(StatusCode::CONFLICT, "assignment_unavailable");
 }
 
 #[tokio::test]
@@ -161,7 +158,7 @@ async fn a_moved_deadline_applies_to_the_next_submission() {
         "https://github.com/course/hw/pull/1",
     )
     .await
-    .error(StatusCode::CONFLICT, "assignment_deadline_exceeded");
+    .error(StatusCode::CONFLICT, "deadline_exceeded");
 }
 
 #[tokio::test]
@@ -177,7 +174,7 @@ async fn an_archived_assignment_keeps_its_deadline() {
         Utc::now() + Duration::days(1),
     )
     .await
-    .error(StatusCode::CONFLICT, "assignment_is_archived");
+    .error(StatusCode::CONFLICT, "assignment_unavailable");
 }
 
 #[tokio::test]
@@ -190,10 +187,7 @@ async fn a_deadline_before_creation_is_rejected() {
         app.fixture.assignment.created_at() - Duration::seconds(1),
     )
     .await
-    .error(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "invalid_assignment_deadline",
-    );
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -211,7 +205,7 @@ async fn an_assignment_without_attempts_is_rejected() {
         }),
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_limit");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -229,7 +223,7 @@ async fn an_attempt_limit_above_smallint_is_rejected_before_insert() {
         }),
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_limit");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -247,7 +241,7 @@ async fn an_assignment_title_over_the_limit_is_rejected() {
         }),
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -265,7 +259,7 @@ async fn an_empty_assignment_body_is_rejected() {
         }),
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "empty_field");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]

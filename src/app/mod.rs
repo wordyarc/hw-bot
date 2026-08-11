@@ -14,8 +14,8 @@ pub use assignments::{
     StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
-pub use courses::CourseService;
-pub use error::{AppError, AppResult, Required};
+pub use courses::{CourseService, TeachingCourseSummary};
+pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use notifications::{DeliveryOutcome, NotificationWorker, NotificationWorkerSettings};
 pub use review::{ReviewQueueItem, ReviewService, ReviewSubmission};
 pub use submissions::{SubmissionService, SubmitHomework};

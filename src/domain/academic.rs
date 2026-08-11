@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
-use crate::domain::enums::str_enum;
 use crate::domain::{
     DomainError, DomainResult, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN, SUBJECT_NAME_MAX_LEN,
     StudentGroupId, SubjectId, TeachingCourseId, User, UserId,
 };
+use crate::string_enum::str_enum;
 
 str_enum! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -43,7 +43,7 @@ async fn repeated_registration_is_a_conflict() {
 
     app.register_student(2001, "Ivan again", &code)
         .await
-        .error(StatusCode::CONFLICT, "user_already_registered");
+        .error(StatusCode::CONFLICT, "already_registered");
 }
 
 #[tokio::test]
@@ -62,7 +62,7 @@ async fn empty_display_name_is_rejected() {
 
     app.register_student(2002, "   ", &code)
         .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "empty_field");
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -75,7 +75,7 @@ async fn oversized_display_name_is_rejected() {
         app.fixture.group.code().as_str(),
     )
     .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]

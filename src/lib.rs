@@ -6,5 +6,7 @@ pub mod db;
 pub mod domain;
 pub mod telegram;
 
+mod string_enum;
+
 #[doc(hidden)]
 pub mod test_support;

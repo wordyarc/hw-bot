@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 
-use crate::domain::enums::str_enum;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, DomainResult, NonEmptyString, SubmissionId,
     TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
+use crate::string_enum::str_enum;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SubmissionHistory {

@@ -170,7 +170,7 @@ async fn review_comment_is_mandatory_for_both_decisions() {
     for decision in ["accept", "reject"] {
         app.review(submission, app.teacher(), decision, "   ")
             .await
-            .error(StatusCode::UNPROCESSABLE_ENTITY, "empty_field");
+            .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
     }
 }
 
@@ -181,7 +181,7 @@ async fn oversized_review_comment_is_rejected() {
 
     app.review(submission, app.teacher(), "reject", &"я".repeat(4097))
         .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -300,7 +300,7 @@ async fn racing_reviews_enqueue_one_notification() {
         (second, first)
     };
     winner.ok();
-    loser.error(StatusCode::CONFLICT, "submission_is_not_pending_review");
+    loser.error(StatusCode::CONFLICT, "submission_already_reviewed");
 
     let count: i64 = sqlx::query_scalar(
         "select count(*) from review_notification_outbox where submission_id = $1",
@@ -322,7 +322,7 @@ async fn a_finished_review_is_final() {
 
     app.review(submission, app.teacher(), "accept", "changed my mind")
         .await
-        .error(StatusCode::CONFLICT, "submission_is_not_pending_review");
+        .error(StatusCode::CONFLICT, "submission_already_reviewed");
 }
 
 #[tokio::test]

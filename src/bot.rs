@@ -10,11 +10,12 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::app::{
-    Actor, AppError, ApplicationContainer, RegisterStudent, ReviewSubmission, SubmitHomework,
+    Actor, AppError, ApplicationContainer, ErrorCode, RegisterStudent, ReviewSubmission,
+    SubmitHomework,
 };
 use crate::domain::{
-    AssignmentId, AssignmentStatus, DomainError, ReviewDecision, Role, SubmissionId,
-    SubmissionStatus, TelegramUserId,
+    AssignmentId, AssignmentStatus, ReviewDecision, Role, SubmissionId, SubmissionStatus,
+    TelegramUserId,
 };
 
 const MESSAGE_LIMIT: usize = 4096;
@@ -278,7 +279,7 @@ async fn handle_message(
                     .reply_markup(teacher_menu(None))
                     .await?;
                 }
-                Err(error @ AppError::Domain(DomainError::SubmissionIsNotPendingReview)) => {
+                Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
                     dialogue.exit().await?;
                     send_app_error(&bot, message.chat.id, error).await?;
                 }
@@ -442,7 +443,7 @@ async fn show_home(
                 .await?;
             }
         },
-        Err(AppError::NotFound { .. }) => {
+        Err(error) if error.code() == ErrorCode::NotFound => {
             dialogue.update(BotState::AwaitingRegistrationName).await?;
             bot.send_message(chat_id, "Вы ещё не зарегистрированы. Как вас называть?")
                 .await?;
@@ -814,35 +815,30 @@ async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
 }
 
 async fn send_app_error(bot: &Bot, chat_id: ChatId, error: AppError) -> HandlerResult {
-    if matches!(error, AppError::Db(_)) {
+    let code = error.code();
+    if code == ErrorCode::InternalError {
         tracing::error!(error = ?error, "Telegram command failed");
     }
-    bot.send_message(chat_id, app_error_message(&error)).await?;
+    bot.send_message(chat_id, app_error_message(code)).await?;
     Ok(())
 }
 
-fn app_error_message(error: &AppError) -> &'static str {
-    match error {
-        AppError::NotFound { .. } => "Запрошенные данные не найдены.",
-        AppError::Conflict { .. } | AppError::AssignmentChangedConcurrently => {
-            "Данные уже изменились. Повторите действие."
+fn app_error_message(code: ErrorCode) -> &'static str {
+    match code {
+        ErrorCode::InternalError => "Произошла внутренняя ошибка. Попробуйте позже.",
+        ErrorCode::NotFound => "Запрошенные данные не найдены.",
+        ErrorCode::InvalidInput => {
+            "Не удалось выполнить действие. Проверьте данные и попробуйте ещё раз."
         }
-        AppError::Db(_) => "Произошла внутренняя ошибка. Попробуйте позже.",
-        AppError::Domain(error) => match error {
-            DomainError::EmptyField { .. } => "Сообщение не должно быть пустым.",
-            DomainError::AssignmentIsNotPublished => "Это задание сейчас не принимает работы.",
-            DomainError::AssignmentDeadlineExceeded { .. } => "Дедлайн задания уже прошёл.",
-            DomainError::AttemptsExhausted { .. } => "Доступные попытки закончились.",
-            DomainError::SubmissionAlreadyAccepted => "Работа уже принята.",
-            DomainError::SubmissionAlreadyPendingReview => "Предыдущая работа ещё на проверке.",
-            DomainError::SubmissionIsNotPendingReview => {
-                "Эту сдачу уже проверил другой преподаватель."
-            }
-            DomainError::UserAlreadyRegistered => "Вы уже зарегистрированы.",
-            DomainError::PermissionDenied { .. }
-            | DomainError::StudentDoesNotBelongToAssignmentGroup => "Это действие вам недоступно.",
-            _ => "Не удалось выполнить действие. Проверьте данные и попробуйте ещё раз.",
-        },
+        ErrorCode::PermissionDenied => "Это действие вам недоступно.",
+        ErrorCode::AssignmentUnavailable => "Это действие сейчас недоступно.",
+        ErrorCode::DeadlineExceeded => "Дедлайн задания уже прошёл.",
+        ErrorCode::AttemptsExhausted => "Доступные попытки закончились.",
+        ErrorCode::SubmissionAlreadyAccepted => "Работа уже принята.",
+        ErrorCode::SubmissionPendingReview => "Предыдущая работа ещё на проверке.",
+        ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",
+        ErrorCode::AlreadyRegistered => "Вы уже зарегистрированы.",
+        ErrorCode::ConcurrentModification => "Данные уже изменились. Повторите действие.",
     }
 }
 
@@ -932,11 +928,11 @@ mod tests {
     #[test]
     fn common_submission_errors_have_student_facing_text() {
         assert_eq!(
-            app_error_message(&DomainError::SubmissionAlreadyPendingReview.into()),
+            app_error_message(ErrorCode::SubmissionPendingReview),
             "Предыдущая работа ещё на проверке."
         );
         assert_eq!(
-            app_error_message(&DomainError::SubmissionIsNotPendingReview.into()),
+            app_error_message(ErrorCode::SubmissionAlreadyReviewed),
             "Эту сдачу уже проверил другой преподаватель."
         );
     }

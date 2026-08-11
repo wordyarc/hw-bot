@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
-use crate::app::AppError;
+use crate::app::{AppError, ErrorCode};
 use crate::domain::DomainError;
 
 #[derive(Debug)]
@@ -36,7 +36,7 @@ impl ApiError {
 
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
+            ErrorCode::InternalError.as_str(),
             "internal server error",
         )
     }
@@ -68,100 +68,35 @@ struct ApiErrorDetails {
 
 impl From<AppError> for ApiError {
     fn from(error: AppError) -> Self {
-        match error {
-            AppError::Domain(domain_error) => Self::from(domain_error),
-            AppError::NotFound { resource } => Self::new(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                format!("{resource} not found"),
-            ),
-            AppError::Conflict { message } => Self::new(StatusCode::CONFLICT, "conflict", message),
-            AppError::AssignmentChangedConcurrently => Self::new(
-                StatusCode::CONFLICT,
-                "assignment_changed_concurrently",
-                "assignment was changed by a concurrent request",
-            ),
-            AppError::Db(database_error) => Self::internal(&database_error),
+        let code = error.code();
+        if code == ErrorCode::InternalError {
+            return Self::internal(&error);
         }
+
+        Self::new(app_error_status(code), code.as_str(), error.to_string())
     }
 }
 
 impl From<DomainError> for ApiError {
     fn from(error: DomainError) -> Self {
-        let (status, code) = match error {
-            // Malformed input.
-            DomainError::EmptyField { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "empty_field"),
-            DomainError::FieldTooLong { .. } => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "field_too_long")
-            }
-            DomainError::InvalidTelegramUserId { .. } => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_telegram_user_id")
-            }
-            DomainError::InvalidStudyYear { .. } => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_study_year")
-            }
-            DomainError::InvalidAttemptLimit { .. } => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_limit")
-            }
-            DomainError::InvalidAttemptGrant { .. } => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_attempt_grant")
-            }
-            DomainError::AttemptLimitExceeded { .. } => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "attempt_limit_exceeded")
-            }
-            DomainError::AssignmentDeadlineMustBeAfterCreatedAt => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid_assignment_deadline",
-            ),
+        Self::from(AppError::from(error))
+    }
+}
 
-            DomainError::AssignmentDoesNotBelongToTeachingCourse => (
-                StatusCode::CONFLICT,
-                "assignment_does_not_belong_to_teaching_course",
-            ),
-            DomainError::AssignmentIsNotPublished => {
-                (StatusCode::CONFLICT, "assignment_is_not_published")
-            }
-            DomainError::AssignmentStatusTransitionNotAllowed { .. } => (
-                StatusCode::CONFLICT,
-                "assignment_status_transition_not_allowed",
-            ),
-            DomainError::AssignmentIsArchived => (StatusCode::CONFLICT, "assignment_is_archived"),
-            DomainError::AssignmentDeadlineExceeded { .. } => {
-                (StatusCode::CONFLICT, "assignment_deadline_exceeded")
-            }
-            DomainError::AttemptsExhausted { .. } => (StatusCode::CONFLICT, "attempts_exhausted"),
-            DomainError::SubmissionAlreadyAccepted => {
-                (StatusCode::CONFLICT, "submission_already_accepted")
-            }
-            DomainError::SubmissionAlreadyPendingReview => {
-                (StatusCode::CONFLICT, "submission_already_pending_review")
-            }
-            DomainError::SubmissionDoesNotBelongToAssignment => (
-                StatusCode::CONFLICT,
-                "submission_does_not_belong_to_assignment",
-            ),
-            DomainError::SubmissionIsNotPendingReview => {
-                (StatusCode::CONFLICT, "submission_is_not_pending_review")
-            }
-            DomainError::UserAlreadyRegistered => (StatusCode::CONFLICT, "user_already_registered"),
-            DomainError::StudentProgressDoesNotBelongToAssignment => (
-                StatusCode::CONFLICT,
-                "student_progress_does_not_belong_to_assignment",
-            ),
-
-            DomainError::StudentDoesNotBelongToAssignmentGroup => (
-                StatusCode::FORBIDDEN,
-                "student_does_not_belong_to_assignment_group",
-            ),
-            DomainError::PermissionDenied { .. } => (StatusCode::FORBIDDEN, "permission_denied"),
-
-            DomainError::InvalidAssignmentPublishedState
-            | DomainError::InvalidSubmissionAttemptNumber { .. }
-            | DomainError::InvalidSubmissionReviewState
-            | DomainError::TeachingCourseHasNoTeachers => return Self::internal(&error),
-        };
-
-        Self::new(status, code, error.to_string())
+fn app_error_status(code: ErrorCode) -> StatusCode {
+    match code {
+        ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::InvalidInput => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::AssignmentUnavailable
+        | ErrorCode::DeadlineExceeded
+        | ErrorCode::AttemptsExhausted
+        | ErrorCode::SubmissionAlreadyAccepted
+        | ErrorCode::SubmissionPendingReview
+        | ErrorCode::SubmissionAlreadyReviewed
+        | ErrorCode::AlreadyRegistered
+        | ErrorCode::ConcurrentModification => StatusCode::CONFLICT,
+        ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
     }
 }
 
@@ -206,7 +141,7 @@ mod tests {
         });
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
-        assert_eq!(error.code(), "assignment_deadline_exceeded");
+        assert_eq!(error.code(), "deadline_exceeded");
     }
 
     #[test]
@@ -231,7 +166,7 @@ mod tests {
         });
 
         assert_eq!(error.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(error.code(), "empty_field");
+        assert_eq!(error.code(), "invalid_input");
     }
 
     #[test]
@@ -259,7 +194,18 @@ mod tests {
         let error = ApiError::from(AppError::AssignmentChangedConcurrently);
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
-        assert_eq!(error.code(), "assignment_changed_concurrently");
+        assert_eq!(error.code(), "concurrent_modification");
+    }
+
+    #[test]
+    fn hides_unclassified_database_conflicts() {
+        let error = ApiError::from(AppError::from(DbError::Conflict {
+            message: "row changed",
+        }));
+
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code(), "internal_error");
+        assert_eq!(error.message, "internal server error");
     }
 
     #[test]

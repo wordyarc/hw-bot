@@ -2,8 +2,27 @@ use thiserror::Error;
 
 use crate::db::DbError;
 use crate::domain::DomainError;
+use crate::string_enum::str_enum;
 
 pub type AppResult<T> = Result<T, AppError>;
+
+str_enum! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ErrorCode {
+        InternalError => "internal_error",
+        NotFound => "not_found",
+        InvalidInput => "invalid_input",
+        PermissionDenied => "permission_denied",
+        AssignmentUnavailable => "assignment_unavailable",
+        DeadlineExceeded => "deadline_exceeded",
+        AttemptsExhausted => "attempts_exhausted",
+        SubmissionAlreadyAccepted => "submission_already_accepted",
+        SubmissionPendingReview => "submission_pending_review",
+        SubmissionAlreadyReviewed => "submission_already_reviewed",
+        AlreadyRegistered => "already_registered",
+        ConcurrentModification => "concurrent_modification"
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -13,9 +32,6 @@ pub enum AppError {
     #[error("{resource} not found")]
     NotFound { resource: &'static str },
 
-    #[error("{message}")]
-    Conflict { message: &'static str },
-
     #[error("assignment was changed by a concurrent request")]
     AssignmentChangedConcurrently,
 
@@ -23,11 +39,48 @@ pub enum AppError {
     Db(DbError),
 }
 
+impl AppError {
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Domain(error) => match error {
+                DomainError::EmptyField { .. }
+                | DomainError::FieldTooLong { .. }
+                | DomainError::InvalidTelegramUserId { .. }
+                | DomainError::InvalidStudyYear { .. }
+                | DomainError::InvalidAttemptLimit { .. }
+                | DomainError::InvalidAttemptGrant { .. }
+                | DomainError::AttemptLimitExceeded { .. }
+                | DomainError::AssignmentDeadlineMustBeAfterCreatedAt => ErrorCode::InvalidInput,
+                DomainError::AssignmentIsNotPublished
+                | DomainError::AssignmentStatusTransitionNotAllowed { .. }
+                | DomainError::AssignmentIsArchived => ErrorCode::AssignmentUnavailable,
+                DomainError::AssignmentDeadlineExceeded { .. } => ErrorCode::DeadlineExceeded,
+                DomainError::AttemptsExhausted { .. } => ErrorCode::AttemptsExhausted,
+                DomainError::SubmissionAlreadyAccepted => ErrorCode::SubmissionAlreadyAccepted,
+                DomainError::SubmissionAlreadyPendingReview => ErrorCode::SubmissionPendingReview,
+                DomainError::SubmissionIsNotPendingReview => ErrorCode::SubmissionAlreadyReviewed,
+                DomainError::StudentDoesNotBelongToAssignmentGroup
+                | DomainError::PermissionDenied { .. } => ErrorCode::PermissionDenied,
+                DomainError::UserAlreadyRegistered => ErrorCode::AlreadyRegistered,
+                DomainError::AssignmentDoesNotBelongToTeachingCourse
+                | DomainError::TeachingCourseHasNoTeachers
+                | DomainError::InvalidAssignmentPublishedState
+                | DomainError::InvalidSubmissionAttemptNumber { .. }
+                | DomainError::InvalidSubmissionReviewState
+                | DomainError::SubmissionDoesNotBelongToAssignment
+                | DomainError::StudentProgressDoesNotBelongToAssignment => ErrorCode::InternalError,
+            },
+            Self::NotFound { .. } => ErrorCode::NotFound,
+            Self::AssignmentChangedConcurrently => ErrorCode::ConcurrentModification,
+            Self::Db(_) => ErrorCode::InternalError,
+        }
+    }
+}
+
 impl From<DbError> for AppError {
     fn from(error: DbError) -> Self {
         match error {
             DbError::RuleViolation(domain_error) => Self::Domain(domain_error),
-            DbError::Conflict { message } => Self::Conflict { message },
             other => Self::Db(other),
         }
     }
@@ -48,5 +101,50 @@ pub trait Required<T> {
 impl<T> Required<T> for Option<T> {
     fn required(self, resource: &'static str) -> AppResult<T> {
         self.ok_or(AppError::NotFound { resource })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_rule_violations_keep_the_domain_code() {
+        let direct = AppError::from(DomainError::SubmissionAlreadyPendingReview);
+        let from_database = AppError::from(DbError::RuleViolation(
+            DomainError::SubmissionAlreadyPendingReview,
+        ));
+
+        assert_eq!(direct.code(), ErrorCode::SubmissionPendingReview);
+        assert_eq!(from_database.code(), direct.code());
+    }
+
+    #[test]
+    fn validation_details_share_one_actionable_code() {
+        let empty = AppError::from(DomainError::EmptyField { field: "title" });
+        let too_long = AppError::from(DomainError::FieldTooLong {
+            field: "title",
+            max: 10,
+            actual: 11,
+        });
+
+        assert_eq!(empty.code(), ErrorCode::InvalidInput);
+        assert_eq!(too_long.code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn unclassified_database_conflicts_are_internal() {
+        let error = AppError::from(DbError::Conflict {
+            message: "row changed",
+        });
+
+        assert_eq!(error.code(), ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn corrupted_domain_state_is_internal() {
+        let error = AppError::from(DomainError::InvalidSubmissionReviewState);
+
+        assert_eq!(error.code(), ErrorCode::InternalError);
     }
 }

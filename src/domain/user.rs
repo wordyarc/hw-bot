@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 
-use crate::domain::enums::str_enum;
 use crate::domain::{
     DISPLAY_NAME_MAX_LEN, DomainError, DomainResult, NonEmptyString, StudentGroup, StudentGroupId,
     TelegramUserId, UserId,
 };
+use crate::string_enum::str_enum;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::api::users::StudentGroupResponse;
 use crate::api::{Actor, ApiError, AppState};
-use crate::db::academic::TeachingCourseCard;
+use crate::app::TeachingCourseSummary;
 
 #[derive(Debug, Serialize)]
 pub struct TeachingCourseResponse {
@@ -23,8 +23,8 @@ struct SubjectResponse {
     name: String,
 }
 
-impl From<&TeachingCourseCard> for TeachingCourseResponse {
-    fn from(card: &TeachingCourseCard) -> Self {
+impl From<&TeachingCourseSummary> for TeachingCourseResponse {
+    fn from(card: &TeachingCourseSummary) -> Self {
         Self {
             id: card.course.id().as_uuid(),
             subject: SubjectResponse {

@@ -184,7 +184,7 @@ where
     row.map(TeachingCourse::try_from).transpose()
 }
 
-pub async fn list_teaching_courses_for_teacher<'e, E>(
+pub(crate) async fn list_teaching_courses_for_teacher<'e, E>(
     executor: E,
     teacher: &User,
 ) -> DbResult<Vec<TeachingCourseCard>>
@@ -235,10 +235,10 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub struct TeachingCourseCard {
-    pub course: TeachingCourse,
-    pub subject: Subject,
-    pub group: StudentGroup,
+pub(crate) struct TeachingCourseCard {
+    pub(crate) course: TeachingCourse,
+    pub(crate) subject: Subject,
+    pub(crate) group: StudentGroup,
 }
 
 #[derive(Debug)]

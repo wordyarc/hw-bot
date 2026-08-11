@@ -190,10 +190,7 @@ async fn a_card_of_another_group_is_forbidden() {
 
     app.student_assignment(app.assignment(), outsider.telegram_user_id().as_i64())
         .await
-        .error(
-            StatusCode::FORBIDDEN,
-            "student_does_not_belong_to_assignment_group",
-        );
+        .error(StatusCode::FORBIDDEN, "permission_denied");
 }
 
 #[tokio::test]

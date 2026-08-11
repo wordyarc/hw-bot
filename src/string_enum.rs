@@ -55,6 +55,7 @@ pub(crate) use str_enum;
 
 #[cfg(test)]
 mod tests {
+    use crate::app::ErrorCode;
     use crate::domain::{AssignmentStatus, EducationLevel, SubmissionStatus};
 
     macro_rules! assert_round_trips {
@@ -69,7 +70,12 @@ mod tests {
 
     #[test]
     fn every_variant_round_trips_through_its_string_name() {
-        assert_round_trips!(SubmissionStatus, AssignmentStatus, EducationLevel);
+        assert_round_trips!(
+            SubmissionStatus,
+            AssignmentStatus,
+            EducationLevel,
+            ErrorCode
+        );
     }
 
     #[test]

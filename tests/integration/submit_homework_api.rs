@@ -40,7 +40,7 @@ async fn pending_submission_blocks_the_next_attempt() {
 
     app.submit(app.assignment(), app.student(), "pull/2")
         .await
-        .error(StatusCode::CONFLICT, "submission_already_pending_review");
+        .error(StatusCode::CONFLICT, "submission_pending_review");
 }
 
 #[tokio::test]
@@ -72,10 +72,7 @@ async fn student_from_another_group_cannot_submit() {
         "pull/1",
     )
     .await
-    .error(
-        StatusCode::FORBIDDEN,
-        "student_does_not_belong_to_assignment_group",
-    );
+    .error(StatusCode::FORBIDDEN, "permission_denied");
 }
 
 #[tokio::test]
@@ -94,7 +91,7 @@ async fn draft_assignment_cannot_be_submitted() {
 
     app.submit(draft.id().as_uuid(), app.student(), "pull/1")
         .await
-        .error(StatusCode::CONFLICT, "assignment_is_not_published");
+        .error(StatusCode::CONFLICT, "assignment_unavailable");
 }
 
 #[tokio::test]
@@ -103,7 +100,7 @@ async fn empty_content_is_rejected() {
 
     app.submit(app.assignment(), app.student(), "   ")
         .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "empty_field");
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -112,7 +109,7 @@ async fn oversized_submission_content_is_rejected() {
 
     app.submit(app.assignment(), app.student(), &"я".repeat(4097))
         .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "field_too_long");
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]

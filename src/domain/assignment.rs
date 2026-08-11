@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 
-use crate::domain::enums::str_enum;
 use crate::domain::{
     ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, NonEmptyString,
     StudentGroupId, SubjectId, TeachingCourse, TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
 };
+use crate::string_enum::str_enum;
 
 pub const MAX_ATTEMPTS: u16 = i16::MAX as u16;
 
