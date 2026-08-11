@@ -3,7 +3,6 @@ mod assignments;
 mod container;
 mod courses;
 mod error;
-mod notifications;
 mod review;
 mod submissions;
 mod users;
@@ -16,7 +15,6 @@ pub use assignments::{
 pub use container::ApplicationContainer;
 pub use courses::{CourseService, TeachingCourseSummary};
 pub use error::{AppError, AppResult, ErrorCode, Required};
-pub use notifications::{DeliveryOutcome, NotificationWorker, NotificationWorkerSettings};
 pub use review::{ReviewQueueItem, ReviewService, ReviewSubmission};
 pub use submissions::{SubmissionService, SubmitHomework};
 pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService};

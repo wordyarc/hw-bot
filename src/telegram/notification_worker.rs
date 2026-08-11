@@ -5,9 +5,9 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::TelegramClient;
 use crate::db::{self, DbError, DbResult};
 use crate::domain::SubmissionStatus;
-use crate::telegram::TelegramClient;
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
 const LAST_ERROR_LIMIT: usize = 1000;

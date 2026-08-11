@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use hw_bot::app::{DeliveryOutcome, NotificationWorker, NotificationWorkerSettings};
-use hw_bot::telegram::TelegramClient;
+use hw_bot::telegram::{
+    DeliveryOutcome, NotificationWorker, NotificationWorkerSettings, TelegramClient,
+};
 use serde_json::json;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

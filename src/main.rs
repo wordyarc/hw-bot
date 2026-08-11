@@ -1,10 +1,10 @@
 use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
-use hw_bot::app::{ApplicationContainer, NotificationWorker, NotificationWorkerSettings};
+use hw_bot::app::ApplicationContainer;
 use hw_bot::bot::TelegramBot;
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
-use hw_bot::telegram::TelegramClient;
+use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;

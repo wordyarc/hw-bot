@@ -5,6 +5,10 @@ use thiserror::Error;
 
 use crate::domain::TelegramUserId;
 
+mod notification_worker;
+
+pub use notification_worker::{DeliveryOutcome, NotificationWorker, NotificationWorkerSettings};
+
 #[derive(Clone)]
 pub struct TelegramClient {
     http: reqwest::Client,
