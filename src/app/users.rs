@@ -1,9 +1,23 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use sqlx::postgres::PgExecutor;
 
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{StaffRole, StudentGroup, TelegramUserId, User, UserId};
+
+pub(crate) async fn load_actor<'e, E>(
+    executor: E,
+    actor: Actor,
+    resource: &'static str,
+) -> AppResult<User>
+where
+    E: PgExecutor<'e>,
+{
+    db::users::find_by_id(executor, actor.user_id())
+        .await?
+        .required(resource)
+}
 
 #[derive(Clone, Debug)]
 pub struct RegisterStudent {
@@ -67,9 +81,7 @@ impl UserService {
     pub async fn register_staff(&self, command: RegisterStaff) -> AppResult<RegisteredUser> {
         let mut tx = self.pool.begin().await?;
 
-        let actor = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("actor")?;
+        let actor = load_actor(&mut *tx, command.actor, "actor").await?;
 
         let staff = User::new_staff(
             UserId::new(),
@@ -97,19 +109,7 @@ impl UserService {
         let user = db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
             .await?
             .required("user")?;
-
-        let student_group = match user.student_group_id() {
-            Some(id) => db::academic::find_student_group_by_id(&self.pool, id)
-                .await?
-                .required("student group")
-                .map(Some)?,
-            None => None,
-        };
-
-        Ok(RegisteredUser {
-            user,
-            student_group,
-        })
+        self.registered_user(user).await
     }
 
     pub async fn resolve_actor(&self, telegram_user_id: TelegramUserId) -> AppResult<Actor> {
@@ -121,9 +121,11 @@ impl UserService {
     }
 
     pub async fn find_by_actor(&self, actor: Actor) -> AppResult<RegisteredUser> {
-        let user = db::users::find_by_id(&self.pool, actor.user_id())
-            .await?
-            .required("user")?;
+        let user = load_actor(&self.pool, actor, "user").await?;
+        self.registered_user(user).await
+    }
+
+    async fn registered_user(&self, user: User) -> AppResult<RegisteredUser> {
         let student_group = match user.student_group_id() {
             Some(id) => db::academic::find_student_group_by_id(&self.pool, id)
                 .await?

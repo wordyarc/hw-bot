@@ -22,8 +22,7 @@ str_enum! {
         AlreadyRegistered => "already_registered",
         ConcurrentModification => "concurrent_modification",
         FileTooLarge => "file_too_large",
-        FileLimitReached => "file_limit_reached",
-        ConfirmationRequired => "confirmation_required"
+        FileLimitReached => "file_limit_reached"
     }
 }
 
@@ -46,9 +45,6 @@ pub enum AppError {
 
     #[error("assignment must have at most {max_files} files")]
     AssignmentFileLimitReached { max_files: usize },
-
-    #[error("deleting an attachment from a published or archived assignment requires confirmation")]
-    AttachmentDeletionRequiresConfirmation,
 
     #[error(transparent)]
     Db(DbError),
@@ -89,7 +85,6 @@ impl AppError {
             Self::AssignmentChangedConcurrently => ErrorCode::ConcurrentModification,
             Self::FileTooLarge { .. } => ErrorCode::FileTooLarge,
             Self::AssignmentFileLimitReached { .. } => ErrorCode::FileLimitReached,
-            Self::AttachmentDeletionRequiresConfirmation => ErrorCode::ConfirmationRequired,
             Self::Db(_) => ErrorCode::InternalError,
         }
     }

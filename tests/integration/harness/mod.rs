@@ -7,7 +7,7 @@ use axum::http::Request;
 use axum::http::request::Builder;
 use chrono::{DateTime, Duration, Utc};
 use hw_bot::api::{self, ACTOR_HEADER, AppState};
-use hw_bot::app::{ApplicationContainer, FilePolicy};
+use hw_bot::app::{Actor, ApplicationContainer, FilePolicy};
 use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, StudentGroup, TeachingCourse, User};
 use hw_bot::test_support::{
@@ -31,6 +31,7 @@ use fixture::{insert_course, insert_group, insert_user, wall_clock_assignment};
 pub struct TestApp {
     pub pool: PgPool,
     pub fixture: Fixture,
+    pub application: ApplicationContainer,
     router: Router,
     next_telegram_id: AtomicI64,
 }
@@ -45,13 +46,14 @@ impl TestApp {
         let fixture = Fixture::insert(&pool).await;
         let application = ApplicationContainer::new(pool.clone(), test_file_policy());
         let router = api::router(
-            AppState::new("hw-bot-test", pool.clone(), application),
+            AppState::new("hw-bot-test", pool.clone(), application.clone()),
             request_timeout,
         );
 
         Self {
             pool,
             fixture,
+            application,
             router,
             // Выше диапазона, который тесты занимают литералами.
             next_telegram_id: AtomicI64::new(5000),
@@ -69,6 +71,10 @@ impl TestApp {
     /// Telegram id преподавателя курса из фикстуры.
     pub fn teacher(&self) -> i64 {
         self.fixture.teacher.telegram_user_id().as_i64()
+    }
+
+    pub fn teacher_actor(&self) -> Actor {
+        Actor::new(self.fixture.teacher.id())
     }
 
     /// Telegram id студента из фикстуры.

@@ -1,16 +1,16 @@
-use hw_bot::app::{Actor, ApplicationContainer, ErrorCode};
+use hw_bot::app::{Actor, ErrorCode};
 
-use crate::harness::{TestApp, test_file_policy};
+use crate::harness::TestApp;
 
 #[tokio::test]
 async fn course_teacher_can_open_a_draft_assignment_card() {
     let app = TestApp::start().await;
     let draft = app.add_draft_assignment().await;
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
 
     let assignment = application
         .assignments
-        .find_for_teacher(Actor::new(app.fixture.teacher.id()), draft.id())
+        .find_for_teacher(app.teacher_actor(), draft.id())
         .await
         .unwrap();
 
@@ -21,7 +21,7 @@ async fn course_teacher_can_open_a_draft_assignment_card() {
 async fn unrelated_teacher_cannot_open_an_assignment_card() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider").await;
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
 
     let error = application
         .assignments
@@ -36,7 +36,7 @@ async fn unrelated_teacher_cannot_open_an_assignment_card() {
 async fn unrelated_teacher_cannot_list_assignment_students() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider").await;
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
 
     let error = application
         .assignments
@@ -55,14 +55,11 @@ async fn assignment_student_list_includes_only_its_group_with_default_progress()
     let foreign_student = app
         .add_student_to_group("Foreign student", &foreign.group)
         .await;
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
 
     let students = application
         .assignments
-        .list_students_for_assignment(
-            Actor::new(app.fixture.teacher.id()),
-            app.fixture.assignment.id(),
-        )
+        .list_students_for_assignment(app.teacher_actor(), app.fixture.assignment.id())
         .await
         .unwrap();
 
@@ -94,14 +91,11 @@ async fn assignment_student_list_contains_submission_and_extra_attempt_facts() {
     )
     .await
     .ok();
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
 
     let students = application
         .assignments
-        .list_students_for_assignment(
-            Actor::new(app.fixture.teacher.id()),
-            app.fixture.assignment.id(),
-        )
+        .list_students_for_assignment(app.teacher_actor(), app.fixture.assignment.id())
         .await
         .unwrap();
     let student = students
@@ -122,14 +116,11 @@ async fn assignment_student_list_contains_accepted_submission_facts() {
     app.review(submission, app.teacher(), "accept", "good")
         .await
         .ok();
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
 
     let students = application
         .assignments
-        .list_students_for_assignment(
-            Actor::new(app.fixture.teacher.id()),
-            app.fixture.assignment.id(),
-        )
+        .list_students_for_assignment(app.teacher_actor(), app.fixture.assignment.id())
         .await
         .unwrap();
     let student = students

@@ -2,7 +2,7 @@ use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{ApplicationContainer, FilePolicy};
 use hw_bot::bot::{TelegramBot, TelegramBotSettings};
-use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
+use hw_bot::config::{AppConfig, FilesConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
 use std::net::SocketAddr;
@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run(config: AppConfig) -> anyhow::Result<()> {
+    let file_policy = validate_files_config(&config.files)?;
     tracing::info!(app = %config.app.name, "starting application");
     tracing::info!(
         max_connections = config.database.max_connections,
@@ -95,25 +96,6 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     .context("failed to initialize runtime database pool")?;
 
     let cancellation = CancellationToken::new();
-    ensure!(
-        config.files.max_file_size_bytes > 0,
-        "file size limit must be positive"
-    );
-    ensure!(
-        config.files.max_files_per_assignment > 0,
-        "assignment file limit must be positive"
-    );
-    ensure!(
-        config.files.max_files_per_submission > 0,
-        "submission file limit must be positive"
-    );
-    let max_file_size_bytes = usize::try_from(config.files.max_file_size_bytes)
-        .context("file size limit does not fit this platform")?;
-    let file_policy = FilePolicy {
-        max_file_size_bytes,
-        max_files_per_assignment: config.files.max_files_per_assignment,
-        max_files_per_submission: config.files.max_files_per_submission,
-    };
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
     let telegram_bot = start_telegram_bot(&config, application.clone(), cancellation.clone())?;
     let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
@@ -155,6 +137,47 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     .await?;
 
     server_result
+}
+
+fn validate_files_config(config: &FilesConfig) -> anyhow::Result<FilePolicy> {
+    const MAX_ASSIGNMENT_FILES: usize = 10;
+
+    ensure!(
+        config.max_file_size_bytes > 0,
+        "file size limit must be positive"
+    );
+    ensure!(
+        config.max_files_per_assignment > 0,
+        "assignment file limit must be positive"
+    );
+    ensure!(
+        config.max_files_per_assignment <= MAX_ASSIGNMENT_FILES,
+        "assignment file limit must not exceed {MAX_ASSIGNMENT_FILES}"
+    );
+    ensure!(
+        config.max_files_per_submission > 0,
+        "submission file limit must be positive"
+    );
+    ensure!(
+        config.transfer_timeout_ms > 0,
+        "file transfer timeout must be positive"
+    );
+    ensure!(
+        config.max_concurrent_transfers > 0,
+        "max concurrent file transfers must be positive"
+    );
+
+    let max_file_size_bytes = usize::try_from(config.max_file_size_bytes)
+        .context("file size limit does not fit this platform")?;
+    max_file_size_bytes
+        .checked_mul(config.max_concurrent_transfers)
+        .context("total concurrent file transfer size is too large")?;
+
+    Ok(FilePolicy {
+        max_file_size_bytes,
+        max_files_per_assignment: config.max_files_per_assignment,
+        max_files_per_submission: config.max_files_per_submission,
+    })
 }
 
 fn start_telegram_bot(
@@ -384,4 +407,46 @@ where
         .try_init()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files_config() -> FilesConfig {
+        FilesConfig {
+            max_file_size_bytes: 5 * 1024 * 1024,
+            max_files_per_assignment: 5,
+            max_files_per_submission: 1,
+            transfer_timeout_ms: 60_000,
+            max_concurrent_transfers: 4,
+        }
+    }
+
+    #[test]
+    fn file_config_rejects_more_than_ten_assignment_files() {
+        let error = validate_files_config(&FilesConfig {
+            max_files_per_assignment: 11,
+            ..files_config()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("must not exceed 10"));
+    }
+
+    #[test]
+    fn file_config_rejects_total_transfer_size_overflow() {
+        let error = validate_files_config(&FilesConfig {
+            max_file_size_bytes: usize::MAX as u64,
+            max_concurrent_transfers: 2,
+            ..files_config()
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("total concurrent file transfer size")
+        );
+    }
 }

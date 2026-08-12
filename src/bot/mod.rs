@@ -22,11 +22,14 @@ use crate::domain::TelegramUserId;
 
 const MAX_CONCURRENT_UPDATES: usize = 1024;
 
+mod assignment_files;
 mod errors;
+mod files;
 mod handlers;
 mod state;
 mod views;
 
+use files::FileTransfers;
 use handlers::{Command, handle_callback, handle_command, handle_message};
 use state::BotState;
 
@@ -52,12 +55,6 @@ pub struct TelegramBotSettings {
     pub max_concurrent_updates: usize,
     pub file_transfer_timeout: Duration,
     pub max_concurrent_file_transfers: usize,
-}
-
-#[derive(Clone)]
-struct FileTransfers {
-    bot: Bot,
-    semaphore: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -161,10 +158,10 @@ impl TelegramBot {
             application,
             settings,
             admission,
-            file_transfers: FileTransfers {
-                bot: transfer_bot,
-                semaphore: Arc::new(Semaphore::new(settings.max_concurrent_file_transfers)),
-            },
+            file_transfers: FileTransfers::new(
+                transfer_bot,
+                settings.max_concurrent_file_transfers,
+            ),
         })
     }
 

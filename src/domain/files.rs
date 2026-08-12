@@ -104,4 +104,9 @@ impl StoredFileMetadata {
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
+
+    pub(crate) fn with_position(mut self, position: u64) -> Self {
+        self.position = position;
+        self
+    }
 }

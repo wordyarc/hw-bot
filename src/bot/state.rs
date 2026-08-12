@@ -45,6 +45,7 @@ pub(super) enum BotState {
         assignment_id: AssignmentId,
         revision: i64,
         file_ids: Vec<StoredFileId>,
+        deletion_requires_confirmation: bool,
         creation_flow: bool,
     },
     AwaitingAssignmentFile {

@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 
-use crate::app::{Actor, AppResult, Required};
+use crate::app::users::load_actor;
+use crate::app::{Actor, AppResult};
 use crate::db;
 use crate::db::academic::TeachingCourseCard;
 use crate::domain::{DomainError, StudentGroup, Subject, TeachingCourse};
@@ -33,9 +34,7 @@ impl CourseService {
     }
 
     pub async fn list_for_teacher(&self, actor: Actor) -> AppResult<Vec<TeachingCourseSummary>> {
-        let actor = db::users::find_by_id(&self.pool, actor.user_id())
-            .await?
-            .required("teacher")?;
+        let actor = load_actor(&self.pool, actor, "teacher").await?;
 
         if !actor.role().can_manage_assignments() {
             return Err(DomainError::PermissionDenied {

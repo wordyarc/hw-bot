@@ -31,7 +31,6 @@ fn app_error_message(code: ErrorCode) -> &'static str {
         ErrorCode::ConcurrentModification => "Данные уже изменились. Повторите действие.",
         ErrorCode::FileTooLarge => "Файл превышает допустимый размер.",
         ErrorCode::FileLimitReached => "Достигнут лимит вложений для задания.",
-        ErrorCode::ConfirmationRequired => "Подтвердите удаление вложения.",
     }
 }
 

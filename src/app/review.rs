@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::postgres::PgExecutor;
 
+use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{Assignment, DomainError, ReviewDecision, Submission, SubmissionId, User};
@@ -10,9 +11,7 @@ async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
 where
     E: PgExecutor<'e>,
 {
-    let reviewer = db::users::find_by_id(executor, actor.user_id())
-        .await?
-        .required("reviewer")?;
+    let reviewer = load_actor(executor, actor, "reviewer").await?;
 
     if !reviewer.role().can_review_homework() {
         return Err(DomainError::PermissionDenied {
@@ -94,9 +93,7 @@ impl ReviewService {
     pub async fn review_submission(&self, command: ReviewSubmission) -> AppResult<Submission> {
         let mut tx = self.pool.begin().await?;
 
-        let reviewer = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("reviewer")?;
+        let reviewer = load_actor(&mut *tx, command.actor, "reviewer").await?;
 
         let mut submission = db::submissions::find_by_id(&mut *tx, command.submission_id)
             .await?

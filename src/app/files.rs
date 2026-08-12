@@ -1,12 +1,13 @@
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
+use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, FilePresentation, StoredFileId, StoredFileMetadata,
-    StoredFileOwner, StoredFileParts,
+    Assignment, AssignmentId, FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner,
+    StoredFileParts,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -40,7 +41,6 @@ pub struct DeleteAssignmentFile {
     pub file_id: StoredFileId,
     pub actor: Actor,
     pub expected_revision: i64,
-    pub confirmed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -92,36 +92,6 @@ impl FileService {
                 actual_bytes,
             });
         }
-
-        let mut tx = self.pool.begin().await?;
-        let actor = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("teacher")?;
-        let stored = db::assignments::find_versioned_by_id(&mut *tx, command.assignment_id)
-            .await?
-            .required("assignment")?;
-        let stored_revision = stored.revision();
-        let assignment = stored.into_assignment();
-        let course =
-            db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
-        assignment.ensure_managed_by(&course, &actor, "add assignment file")?;
-
-        let revision = advance_revision(
-            &mut tx,
-            assignment.id(),
-            stored_revision,
-            command.expected_revision,
-        )
-        .await?;
-        let files = db::files::list_for_assignment(&mut *tx, assignment.id()).await?;
-        if files.len() >= self.policy.max_files_per_assignment {
-            return Err(AppError::AssignmentFileLimitReached {
-                max_files: self.policy.max_files_per_assignment,
-            });
-        }
-        let position = first_free_position(&files)?;
         let size_bytes = u64::try_from(actual_bytes).map_err(|_| AppError::FileTooLarge {
             max_bytes: self.policy.max_file_size_bytes,
             actual_bytes,
@@ -129,8 +99,8 @@ impl FileService {
         let sha256: [u8; 32] = Sha256::digest(&command.content).into();
         let metadata = StoredFileMetadata::restore(StoredFileParts {
             id: StoredFileId::new(),
-            owner: StoredFileOwner::Assignment(assignment.id()),
-            position,
+            owner: StoredFileOwner::Assignment(command.assignment_id),
+            position: 1,
             presentation: command.presentation,
             filename: command.filename,
             mime_type: command.mime_type,
@@ -138,6 +108,25 @@ impl FileService {
             sha256,
             created_at: Utc::now(),
         })?;
+
+        let mut tx = self.pool.begin().await?;
+        let (assignment, _) = load_versioned_managed_assignment(
+            &mut tx,
+            command.actor,
+            command.assignment_id,
+            "add assignment file",
+        )
+        .await?;
+        let revision =
+            advance_revision(&mut tx, assignment.id(), command.expected_revision).await?;
+        let files = db::files::list_for_assignment(&mut *tx, assignment.id()).await?;
+        if files.len() >= self.policy.max_files_per_assignment {
+            return Err(AppError::AssignmentFileLimitReached {
+                max_files: self.policy.max_files_per_assignment,
+            });
+        }
+        let position = first_free_position(&files)?;
+        let metadata = metadata.with_position(position);
         db::files::insert_assignment_file(&mut *tx, &metadata, &command.content).await?;
         tx.commit().await?;
 
@@ -156,30 +145,15 @@ impl FileService {
         command: DeleteAssignmentFile,
     ) -> AppResult<AssignmentFiles> {
         let mut tx = self.pool.begin().await?;
-        let actor = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("teacher")?;
-        let stored = db::assignments::find_versioned_by_id(&mut *tx, command.assignment_id)
-            .await?
-            .required("assignment")?;
-        let stored_revision = stored.revision();
-        let assignment = stored.into_assignment();
-        let course =
-            db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
-        assignment.ensure_managed_by(&course, &actor, "delete assignment file")?;
-
-        let revision = advance_revision(
+        let (assignment, _) = load_versioned_managed_assignment(
             &mut tx,
-            assignment.id(),
-            stored_revision,
-            command.expected_revision,
+            command.actor,
+            command.assignment_id,
+            "delete assignment file",
         )
         .await?;
-        if assignment.status() != AssignmentStatus::Draft && !command.confirmed {
-            return Err(AppError::AttachmentDeletionRequiresConfirmation);
-        }
+        let revision =
+            advance_revision(&mut tx, assignment.id(), command.expected_revision).await?;
         if !db::files::delete_assignment_file(&mut *tx, assignment.id(), command.file_id).await? {
             return Err(AppError::NotFound { resource: "file" });
         }
@@ -217,20 +191,10 @@ impl FileService {
         assignment_id: AssignmentId,
         action: &'static str,
     ) -> AppResult<(Assignment, i64)> {
-        let actor = db::users::find_by_id(&self.pool, actor.user_id())
-            .await?
-            .required("teacher")?;
-        let stored = db::assignments::find_versioned_by_id(&self.pool, assignment_id)
-            .await?
-            .required("assignment")?;
-        let revision = stored.revision();
-        let assignment = stored.into_assignment();
-        let course =
-            db::academic::find_teaching_course_by_id(&self.pool, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
-        assignment.ensure_managed_by(&course, &actor, action)?;
-
+        let mut connection = self.pool.acquire().await?;
+        let (assignment, revision) =
+            load_versioned_managed_assignment(&mut connection, actor, assignment_id, action)
+                .await?;
         Ok((assignment, revision))
     }
 }
@@ -238,16 +202,33 @@ impl FileService {
 async fn advance_revision(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     assignment_id: AssignmentId,
-    stored_revision: i64,
     expected_revision: i64,
 ) -> AppResult<i64> {
-    if stored_revision != expected_revision {
-        return Err(AppError::AssignmentChangedConcurrently);
-    }
     match db::assignments::advance_revision(&mut **tx, assignment_id, expected_revision).await {
         Err(db::DbError::Conflict { .. }) => Err(AppError::AssignmentChangedConcurrently),
         result => Ok(result?),
     }
+}
+
+async fn load_versioned_managed_assignment(
+    connection: &mut PgConnection,
+    actor: Actor,
+    assignment_id: AssignmentId,
+    action: &'static str,
+) -> AppResult<(Assignment, i64)> {
+    let actor = load_actor(&mut *connection, actor, "teacher").await?;
+    let stored = db::assignments::find_versioned_by_id(&mut *connection, assignment_id)
+        .await?
+        .required("assignment")?;
+    let revision = stored.revision();
+    let assignment = stored.into_assignment();
+    let course =
+        db::academic::find_teaching_course_by_id(&mut *connection, assignment.teaching_course_id())
+            .await?
+            .required("teaching course")?;
+    assignment.ensure_managed_by(&course, &actor, action)?;
+
+    Ok((assignment, revision))
 }
 
 fn first_free_position(files: &[StoredFileMetadata]) -> AppResult<u64> {

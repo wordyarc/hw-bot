@@ -96,8 +96,7 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         | ErrorCode::SubmissionAlreadyReviewed
         | ErrorCode::AlreadyRegistered
         | ErrorCode::ConcurrentModification
-        | ErrorCode::FileLimitReached
-        | ErrorCode::ConfirmationRequired => StatusCode::CONFLICT,
+        | ErrorCode::FileLimitReached => StatusCode::CONFLICT,
         ErrorCode::FileTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
     }

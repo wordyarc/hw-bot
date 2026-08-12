@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{AssignmentId, Submission, SubmissionId};
@@ -26,9 +27,7 @@ impl SubmissionService {
     pub async fn submit_homework(&self, command: SubmitHomework) -> AppResult<Submission> {
         let mut tx = self.pool.begin().await?;
 
-        let student = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("student")?;
+        let student = load_actor(&mut *tx, command.actor, "student").await?;
 
         let assignment = db::assignments::find_by_id(&mut *tx, command.assignment_id)
             .await?

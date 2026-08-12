@@ -1,7 +1,8 @@
 use hw_bot::app::{
-    Actor, AddAssignmentFile, ApplicationContainer, DeleteAssignmentFile, ErrorCode, FilePolicy,
+    AddAssignmentFile, ApplicationContainer, ChangeDeadline, DeleteAssignmentFile, ErrorCode,
+    FilePolicy,
 };
-use hw_bot::domain::{FilePresentation, StoredFileOwner};
+use hw_bot::domain::{AssignmentStatus, FilePresentation, StoredFileOwner};
 
 use crate::harness::{TestApp, test_file_policy};
 
@@ -9,16 +10,13 @@ const DOCUMENT: &[u8] = include_bytes!("fixtures/assignment-note.txt");
 const IMAGE: &[u8] = include_bytes!("fixtures/pixel.ppm");
 
 fn application(app: &TestApp) -> ApplicationContainer {
-    ApplicationContainer::new(app.pool.clone(), test_file_policy())
+    app.application.clone()
 }
 
 async fn card(app: &TestApp, application: &ApplicationContainer) -> hw_bot::app::AssignmentFiles {
     application
         .files
-        .list_assignment_files_for_teacher(
-            Actor::new(app.fixture.teacher.id()),
-            app.fixture.assignment.id(),
-        )
+        .list_assignment_files_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
         .await
         .unwrap()
 }
@@ -33,7 +31,7 @@ async fn add(
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id: app.fixture.assignment.id(),
-            actor: Actor::new(app.fixture.teacher.id()),
+            actor: app.teacher_actor(),
             expected_revision: revision,
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
@@ -65,7 +63,7 @@ async fn stored_file_keeps_exact_fixture_bytes_and_computed_metadata() {
     let opened = application
         .files
         .open_assignment_file_for_teacher(
-            Actor::new(app.fixture.teacher.id()),
+            app.teacher_actor(),
             app.fixture.assignment.id(),
             metadata.id(),
         )
@@ -104,7 +102,7 @@ async fn file_size_limit_is_application_configuration() {
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id: app.fixture.assignment.id(),
-            actor: Actor::new(app.fixture.teacher.id()),
+            actor: app.teacher_actor(),
             expected_revision: initial.revision,
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
@@ -135,7 +133,7 @@ async fn assignment_file_count_limit_is_application_configuration() {
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id: app.fixture.assignment.id(),
-            actor: Actor::new(app.fixture.teacher.id()),
+            actor: app.teacher_actor(),
             expected_revision: added.revision,
             presentation: FilePresentation::Image,
             filename: "pixel.ppm".to_owned(),
@@ -156,7 +154,7 @@ async fn concurrent_additions_with_one_revision_have_one_winner() {
     let initial = card(&app, &application).await;
     let command = |filename: &str| AddAssignmentFile {
         assignment_id: app.fixture.assignment.id(),
-        actor: Actor::new(app.fixture.teacher.id()),
+        actor: app.teacher_actor(),
         expected_revision: initial.revision,
         presentation: FilePresentation::Document,
         filename: filename.to_owned(),
@@ -183,7 +181,7 @@ async fn concurrent_additions_with_one_revision_have_one_winner() {
 }
 
 #[tokio::test]
-async fn published_file_deletion_requires_confirmation() {
+async fn app_deletes_a_published_file_without_transport_confirmation_state() {
     let app = TestApp::start().await;
     let application = application(&app);
     let added = add(
@@ -195,26 +193,24 @@ async fn published_file_deletion_requires_confirmation() {
     .await;
     let file_id = added.files[0].id();
 
-    let error = application
+    let deleted = application
         .files
         .delete_assignment_file(DeleteAssignmentFile {
             assignment_id: app.fixture.assignment.id(),
             file_id,
-            actor: Actor::new(app.fixture.teacher.id()),
+            actor: app.teacher_actor(),
             expected_revision: added.revision,
-            confirmed: false,
         })
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(error.code(), ErrorCode::ConfirmationRequired);
-    let current = card(&app, &application).await;
-    assert_eq!(current.revision, added.revision);
-    assert_eq!(current.files.len(), 1);
+    assert_eq!(added.assignment.status(), AssignmentStatus::Published);
+    assert_eq!(deleted.revision, added.revision + 1);
+    assert!(deleted.files.is_empty());
 }
 
 #[tokio::test]
-async fn confirmed_deletion_removes_file_and_advances_revision() {
+async fn deletion_removes_file_and_advances_revision() {
     let app = TestApp::start().await;
     let application = application(&app);
     let added = add(
@@ -230,9 +226,8 @@ async fn confirmed_deletion_removes_file_and_advances_revision() {
         .delete_assignment_file(DeleteAssignmentFile {
             assignment_id: app.fixture.assignment.id(),
             file_id: added.files[0].id(),
-            actor: Actor::new(app.fixture.teacher.id()),
+            actor: app.teacher_actor(),
             expected_revision: added.revision,
-            confirmed: true,
         })
         .await
         .unwrap();
@@ -252,7 +247,7 @@ async fn unrelated_teacher_cannot_manage_assignment_files() {
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id: app.fixture.assignment.id(),
-            actor: Actor::new(outsider.id()),
+            actor: hw_bot::app::Actor::new(outsider.id()),
             expected_revision: initial.revision,
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
@@ -263,5 +258,83 @@ async fn unrelated_teacher_cannot_manage_assignment_files() {
         .unwrap_err();
 
     assert_eq!(error.code(), ErrorCode::PermissionDenied);
+    assert!(card(&app, &application).await.files.is_empty());
+}
+
+#[tokio::test]
+async fn unrelated_teacher_cannot_list_open_or_delete_assignment_files() {
+    let app = TestApp::start().await;
+    let application = application(&app);
+    let outsider = app.add_outsider_teacher("Outsider").await;
+    let added = add(
+        &app,
+        &application,
+        card(&app, &application).await.revision,
+        DOCUMENT,
+    )
+    .await;
+    let outsider = hw_bot::app::Actor::new(outsider.id());
+
+    let list = application
+        .files
+        .list_assignment_files_for_teacher(outsider, app.fixture.assignment.id())
+        .await
+        .unwrap_err();
+    let open = application
+        .files
+        .open_assignment_file_for_teacher(
+            outsider,
+            app.fixture.assignment.id(),
+            added.files[0].id(),
+        )
+        .await
+        .unwrap_err();
+    let delete = application
+        .files
+        .delete_assignment_file(DeleteAssignmentFile {
+            assignment_id: app.fixture.assignment.id(),
+            file_id: added.files[0].id(),
+            actor: outsider,
+            expected_revision: added.revision,
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(list.code(), ErrorCode::PermissionDenied);
+    assert_eq!(open.code(), ErrorCode::PermissionDenied);
+    assert_eq!(delete.code(), ErrorCode::PermissionDenied);
+    assert_eq!(card(&app, &application).await.files.len(), 1);
+}
+
+#[tokio::test]
+async fn assignment_change_invalidates_an_old_file_card() {
+    let app = TestApp::start().await;
+    let application = application(&app);
+    let initial = card(&app, &application).await;
+
+    application
+        .assignments
+        .change_deadline(ChangeDeadline {
+            assignment_id: app.fixture.assignment.id(),
+            actor: app.teacher_actor(),
+            deadline_at: app.fixture.assignment.deadline_at() + chrono::Duration::hours(1),
+        })
+        .await
+        .unwrap();
+    let error = application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: app.fixture.assignment.id(),
+            actor: app.teacher_actor(),
+            expected_revision: initial.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            content: DOCUMENT.to_vec(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::ConcurrentModification);
     assert!(card(&app, &application).await.files.is_empty());
 }

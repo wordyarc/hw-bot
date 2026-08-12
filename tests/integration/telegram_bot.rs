@@ -261,23 +261,127 @@ async fn declared_oversized_document_is_rejected_without_get_file() {
 }
 
 #[tokio::test]
+async fn oversized_download_stream_is_rejected_without_a_database_row() {
+    use hw_bot::app::FilePolicy;
+
+    let app = TestApp::start().await;
+    let assignment = app.assignment();
+    let max_size = DOCUMENT_FIXTURE.len() - 1;
+    let updates = file_upload_updates(
+        &app,
+        assignment,
+        document_update(
+            7,
+            app.teacher(),
+            2,
+            "stream-too-large",
+            "too-large.txt",
+            max_size,
+        ),
+    );
+    let telegram = telegram_server(updates).await;
+    mock_file_download(
+        &telegram,
+        "stream-too-large",
+        "files/too-large.txt",
+        DOCUMENT_FIXTURE,
+    )
+    .await;
+    let failed = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "Не удалось скачать файл. Попробуйте ещё раз."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let application = ApplicationContainer::new(
+        app.pool.clone(),
+        FilePolicy {
+            max_file_size_bytes: max_size,
+            ..test_file_policy()
+        },
+    );
+    let (cancellation, mut task) =
+        start_bot_with_application(&telegram, application, bot_settings_with(|_| {}));
+
+    tokio::time::timeout(Duration::from_secs(5), failed.wait_until_satisfied())
+        .await
+        .expect("oversized stream is rejected");
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(stored_file_count(&app.pool, assignment).await, 0);
+}
+
+#[tokio::test]
+async fn failed_download_does_not_create_a_database_row() {
+    let app = TestApp::start().await;
+    let assignment = app.assignment();
+    let updates = file_upload_updates(
+        &app,
+        assignment,
+        document_update(
+            7,
+            app.teacher(),
+            2,
+            "download-fails",
+            "failed.txt",
+            DOCUMENT_FIXTURE.len(),
+        ),
+    );
+    let telegram = telegram_server(updates).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetFile"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": false,
+            "error_code": 400,
+            "description": "Bad Request: file is unavailable"
+        })))
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let failed = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "Не удалось скачать файл. Попробуйте ещё раз."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    tokio::time::timeout(Duration::from_secs(5), failed.wait_until_satisfied())
+        .await
+        .expect("download failure is reported");
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(stored_file_count(&app.pool, assignment).await, 0);
+}
+
+#[tokio::test]
 async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
-    use hw_bot::app::{Actor, AddAssignmentFile};
+    use hw_bot::app::AddAssignmentFile;
     use hw_bot::domain::FilePresentation;
 
     let app = TestApp::start().await;
-    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let application = app.application.clone();
     let assignment = app.fixture.assignment.id();
     let card = application
         .files
-        .list_assignment_files_for_teacher(Actor::new(app.fixture.teacher.id()), assignment)
+        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
         .await
         .unwrap();
     application
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id: assignment,
-            actor: Actor::new(app.fixture.teacher.id()),
+            actor: app.teacher_actor(),
             expected_revision: card.revision,
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
@@ -318,6 +422,77 @@ async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
     let requests = recorded_requests(&telegram).await;
 
     assert!(requests.contains("Удалить вложение из уже выданного задания?"));
+}
+
+#[tokio::test]
+async fn stale_file_callback_does_not_delete_the_attachment() {
+    use hw_bot::app::AddAssignmentFile;
+    use hw_bot::domain::FilePresentation;
+
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    let card = app
+        .application
+        .files
+        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
+        .await
+        .unwrap();
+    app.application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: app.teacher_actor(),
+            expected_revision: card.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            content: DOCUMENT_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("manage:{}", assignment.as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            5,
+            app.teacher(),
+            &format!("files:{}", assignment.as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(6, app.teacher(), "file:delete:0", BOT_MESSAGE_ID - 1),
+    ];
+    let telegram = telegram_server(updates).await;
+    let stale = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "Эта кнопка устарела. Откройте /menu ещё раз."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    tokio::time::timeout(Duration::from_secs(5), stale.wait_until_satisfied())
+        .await
+        .expect("stale file callback is rejected");
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 1);
 }
 
 #[tokio::test]
@@ -622,17 +797,46 @@ fn start_bot_with_settings(
     telegram: &MockServer,
     settings: TelegramBotSettings,
 ) -> (CancellationToken, JoinHandle<()>) {
-    let bot = TelegramBot::new(
-        ApplicationContainer::new(app.pool.clone(), test_file_policy()),
-        "test-token",
-        &telegram.uri(),
-        settings,
-    )
-    .unwrap();
+    start_bot_with_application(telegram, app.application.clone(), settings)
+}
+
+fn start_bot_with_application(
+    telegram: &MockServer,
+    application: ApplicationContainer,
+    settings: TelegramBotSettings,
+) -> (CancellationToken, JoinHandle<()>) {
+    let bot = TelegramBot::new(application, "test-token", &telegram.uri(), settings).unwrap();
     let cancellation = CancellationToken::new();
     let task = tokio::spawn(bot.run(cancellation.clone()));
 
     (cancellation, task)
+}
+
+fn file_upload_updates(app: &TestApp, assignment: Uuid, file: Value) -> Vec<Value> {
+    vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("manage:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            5,
+            app.teacher(),
+            &format!("files:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(6, app.teacher(), "file:add", BOT_MESSAGE_ID),
+        file,
+    ]
 }
 
 fn bot_settings_with(update: impl FnOnce(&mut TelegramBotSettings)) -> TelegramBotSettings {
@@ -1014,6 +1218,14 @@ async fn wait_for_file_count(pool: &PgPool, assignment_id: Uuid, expected: i64) 
     })
     .await
     .expect("stored file count reaches expected value");
+}
+
+async fn stored_file_count(pool: &PgPool, assignment_id: Uuid) -> i64 {
+    sqlx::query_scalar("select count(*) from stored_files where assignment_id = $1")
+        .bind(assignment_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 fn callback_update(update_id: u32, user_id: i64, data: &str, message_id: i32) -> Value {

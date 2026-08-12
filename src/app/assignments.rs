@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
@@ -76,9 +77,7 @@ impl AssignmentService {
     pub async fn create(&self, command: CreateAssignment) -> AppResult<Assignment> {
         let mut tx = self.pool.begin().await?;
 
-        let author = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("teacher")?;
+        let author = load_actor(&mut *tx, command.actor, "teacher").await?;
 
         let teaching_course =
             db::academic::find_teaching_course_by_id(&mut *tx, command.teaching_course_id)
@@ -140,9 +139,7 @@ impl AssignmentService {
     ) -> AppResult<StudentAssignmentProgress> {
         let mut tx = self.pool.begin().await?;
 
-        let actor = db::users::find_by_id(&mut *tx, command.actor.user_id())
-            .await?
-            .required("teacher")?;
+        let actor = load_actor(&mut *tx, command.actor, "teacher").await?;
 
         let assignment = db::assignments::find_by_id(&mut *tx, command.assignment_id)
             .await?
@@ -261,9 +258,7 @@ impl AssignmentService {
         actor: Actor,
         teaching_course_id: TeachingCourseId,
     ) -> AppResult<Vec<Assignment>> {
-        let actor = db::users::find_by_id(&self.pool, actor.user_id())
-            .await?
-            .required("teacher")?;
+        let actor = load_actor(&self.pool, actor, "teacher").await?;
 
         let teaching_course =
             db::academic::find_teaching_course_by_id(&self.pool, teaching_course_id)
@@ -281,9 +276,7 @@ impl AssignmentService {
     }
 
     async fn student(&self, actor: Actor) -> AppResult<User> {
-        let student = db::users::find_by_id(&self.pool, actor.user_id())
-            .await?
-            .required("student")?;
+        let student = load_actor(&self.pool, actor, "student").await?;
 
         if !student.role().can_submit_homework() {
             return Err(DomainError::PermissionDenied {
@@ -301,9 +294,7 @@ impl AssignmentService {
         assignment_id: AssignmentId,
         action: &'static str,
     ) -> AppResult<Assignment> {
-        let actor = db::users::find_by_id(&self.pool, actor.user_id())
-            .await?
-            .required("teacher")?;
+        let actor = load_actor(&self.pool, actor, "teacher").await?;
         let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
             .await?
             .required("assignment")?;
@@ -332,9 +323,7 @@ impl AssignmentService {
     {
         let mut tx = self.pool.begin().await?;
 
-        let actor = db::users::find_by_id(&mut *tx, actor.user_id())
-            .await?
-            .required("teacher")?;
+        let actor = load_actor(&mut *tx, actor, "teacher").await?;
 
         let stored = db::assignments::find_versioned_by_id(&mut *tx, assignment_id)
             .await?
