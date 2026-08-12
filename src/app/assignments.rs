@@ -5,7 +5,7 @@ use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, StoredFileMetadata,
     StudentAssignmentProgress, Submission, SubmissionHistory, TeachingCourse, TeachingCourseId,
     User, UserId,
 };
@@ -46,6 +46,7 @@ pub struct StudentAssignment {
 #[derive(Clone, Debug)]
 pub struct StudentAssignmentDetails {
     pub assignment: StudentAssignment,
+    pub files: Vec<StoredFileMetadata>,
     pub submissions: Vec<Submission>,
 }
 
@@ -192,33 +193,21 @@ impl AssignmentService {
         actor: Actor,
         assignment_id: AssignmentId,
     ) -> AppResult<StudentAssignmentDetails> {
-        let student = self.student(actor).await?;
-
-        let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
-            .await?
-            .required("assignment")?;
-
-        // Черновика для студента не существует, поэтому 404, а не 403: знать о нём он не должен.
-        if assignment.status() == AssignmentStatus::Draft {
-            return Err(AppError::NotFound {
-                resource: "assignment",
-            });
-        }
-
-        if student.student_group_id() != Some(assignment.student_group_id()) {
-            return Err(DomainError::StudentDoesNotBelongToAssignmentGroup.into());
-        }
+        let (student, assignment) =
+            load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
 
         let history =
             db::submissions::load_history(&self.pool, assignment.id(), student.id()).await?;
         let submissions =
             db::submissions::list_for_student(&self.pool, assignment.id(), student.id()).await?;
+        let files = db::files::list_for_assignment(&self.pool, assignment.id()).await?;
 
         Ok(StudentAssignmentDetails {
             assignment: StudentAssignment {
                 assignment,
                 history,
             },
+            files,
             submissions,
         })
     }
@@ -349,4 +338,34 @@ impl AssignmentService {
 
         Ok(assignment)
     }
+}
+
+pub(crate) async fn load_visible_assignment_for_student(
+    pool: &PgPool,
+    actor: Actor,
+    assignment_id: AssignmentId,
+) -> AppResult<(User, Assignment)> {
+    let student = load_actor(pool, actor, "student").await?;
+    if !student.role().can_submit_homework() {
+        return Err(DomainError::PermissionDenied {
+            action: "view student assignment",
+        }
+        .into());
+    }
+
+    let assignment = db::assignments::find_by_id(pool, assignment_id)
+        .await?
+        .required("assignment")?;
+
+    // Черновика для студента не существует, поэтому 404, а не 403
+    if assignment.status() == AssignmentStatus::Draft {
+        return Err(AppError::NotFound {
+            resource: "assignment",
+        });
+    }
+    if student.student_group_id() != Some(assignment.student_group_id()) {
+        return Err(DomainError::StudentDoesNotBelongToAssignmentGroup.into());
+    }
+
+    Ok((student, assignment))
 }

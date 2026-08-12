@@ -2,6 +2,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool};
 
+use crate::app::assignments::load_visible_assignment_for_student;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -175,6 +176,23 @@ impl FileService {
     ) -> AppResult<OpenedFile> {
         self.load_managed_assignment(actor, assignment_id, "open assignment file")
             .await?;
+        let file = db::files::find_assignment_file(&self.pool, assignment_id, file_id)
+            .await?
+            .required("file")?;
+
+        Ok(OpenedFile {
+            metadata: file.metadata,
+            content: file.content,
+        })
+    }
+
+    pub async fn open_assignment_file_for_student(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+        file_id: StoredFileId,
+    ) -> AppResult<OpenedFile> {
+        load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
         let file = db::files::find_assignment_file(&self.pool, assignment_id, file_id)
             .await?
             .required("file")?;

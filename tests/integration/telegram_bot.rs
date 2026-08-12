@@ -496,6 +496,111 @@ async fn stale_file_callback_does_not_delete_the_attachment() {
 }
 
 #[tokio::test]
+async fn student_receives_assignment_attachments_after_the_text() {
+    use hw_bot::app::AddAssignmentFile;
+    use hw_bot::domain::FilePresentation;
+
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    let initial = app
+        .application
+        .files
+        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
+        .await
+        .unwrap();
+    let document = app
+        .application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: app.teacher_actor(),
+            expected_revision: initial.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            content: DOCUMENT_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+    app.application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: app.teacher_actor(),
+            expected_revision: document.revision,
+            presentation: FilePresentation::Image,
+            filename: "pixel.ppm".to_owned(),
+            mime_type: Some("image/x-portable-pixmap".to_owned()),
+            content: IMAGE_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+    let updates = vec![
+        message_update(1, app.student(), 1, "/menu"),
+        callback_update(2, app.student(), "menu:assignments", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.student(),
+            &format!("assignment:{}", assignment.as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(telegram_document_response())
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendPhoto"))
+        .respond_with(telegram_photo_response())
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_request_path(&telegram, "/bottest-token/SendPhoto").await;
+    stop_bot(cancellation, &mut task).await;
+    telegram.verify().await;
+    let requests = telegram.received_requests().await.unwrap();
+    let body_message = requests
+        .iter()
+        .position(|request| {
+            request.url.path() == "/bottest-token/SendMessage"
+                && request
+                    .body_json::<Value>()
+                    .ok()
+                    .and_then(|body| body["text"].as_str().map(str::to_owned))
+                    == Some("Send a pull request link.".to_owned())
+        })
+        .expect("assignment body message");
+    let document = requests
+        .iter()
+        .position(|request| request.url.path() == "/bottest-token/SendDocument")
+        .expect("assignment document");
+    let photo = requests
+        .iter()
+        .position(|request| request.url.path() == "/bottest-token/SendPhoto")
+        .expect("assignment photo");
+
+    assert!(body_message < document);
+    assert!(document < photo);
+    assert!(
+        requests[document]
+            .body
+            .windows(DOCUMENT_FIXTURE.len())
+            .any(|window| window == DOCUMENT_FIXTURE)
+    );
+    assert!(
+        requests[photo]
+            .body
+            .windows(IMAGE_FIXTURE.len())
+            .any(|window| window == IMAGE_FIXTURE)
+    );
+}
+
+#[tokio::test]
 async fn teacher_changes_an_assignment_and_grants_attempts_through_telegram() {
     let app = TestApp::start().await;
     let deadline = Utc::now() + chrono::Duration::days(14);

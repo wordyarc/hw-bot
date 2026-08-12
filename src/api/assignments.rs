@@ -12,7 +12,8 @@ use crate::app::{
     StudentAssignmentDetails,
 };
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, StudentAssignmentProgress, TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentStatus, FilePresentation, StoredFileMetadata,
+    StudentAssignmentProgress, TeachingCourseId, UserId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -109,7 +110,31 @@ struct ProgressResponse {
 pub struct StudentAssignmentDetailsResponse {
     #[serde(flatten)]
     assignment: StudentAssignmentResponse,
+    files: Vec<StoredFileResponse>,
     submissions: Vec<SubmissionResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct StoredFileResponse {
+    id: Uuid,
+    position: u64,
+    presentation: FilePresentation,
+    filename: String,
+    mime_type: Option<String>,
+    size_bytes: u64,
+}
+
+impl From<&StoredFileMetadata> for StoredFileResponse {
+    fn from(file: &StoredFileMetadata) -> Self {
+        Self {
+            id: file.id().as_uuid(),
+            position: file.position(),
+            presentation: file.presentation(),
+            filename: file.filename().as_str().to_owned(),
+            mime_type: file.mime_type().map(|value| value.as_str().to_owned()),
+            size_bytes: file.size_bytes(),
+        }
+    }
 }
 
 impl From<&StudentAssignment> for StudentAssignmentResponse {
@@ -142,6 +167,7 @@ impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
     fn from(details: &StudentAssignmentDetails) -> Self {
         Self {
             assignment: StudentAssignmentResponse::from(&details.assignment),
+            files: details.files.iter().map(Into::into).collect(),
             submissions: details.submissions.iter().map(Into::into).collect(),
         }
     }

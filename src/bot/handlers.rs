@@ -841,7 +841,15 @@ pub(super) async fn handle_callback(
                 send_stale_button(&bot, chat_id).await?;
                 return Ok(());
             };
-            show_assignment(&bot, chat_id, actor, AssignmentId::from_uuid(id), &services).await?;
+            show_assignment(
+                &bot,
+                chat_id,
+                actor,
+                AssignmentId::from_uuid(id),
+                &services,
+                &transfers,
+            )
+            .await?;
         }
         _ if data.starts_with("submit:") => {
             let Some(id) = parse_uuid_callback(data, "submit:") else {
@@ -955,6 +963,7 @@ async fn show_assignment(
     actor: Actor,
     assignment_id: AssignmentId,
     services: &BotServices,
+    transfers: &FileTransfers,
 ) -> HandlerResult {
     let details = match services
         .assignments
@@ -994,6 +1003,23 @@ async fn show_assignment(
     bot.send_message(chat_id, "Текст задания:").await?;
     bot.send_message(chat_id, assignment.body().as_str())
         .await?;
+    if !details.files.is_empty() {
+        bot.send_message(chat_id, "Вложения задания:").await?;
+        let _permit = transfers.acquire().await?;
+        for metadata in &details.files {
+            match services
+                .files
+                .open_assignment_file_for_student(actor, assignment.id(), metadata.id())
+                .await
+            {
+                Ok(file) => transfers.send(chat_id, file).await?,
+                Err(error) => {
+                    send_app_error(bot, chat_id, error).await?;
+                    return Ok(());
+                }
+            }
+        }
+    }
     for submission in &details.submissions {
         bot.send_message(
             chat_id,

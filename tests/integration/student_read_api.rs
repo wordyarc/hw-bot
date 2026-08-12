@@ -1,4 +1,6 @@
 use axum::http::StatusCode;
+use hw_bot::app::AddAssignmentFile;
+use hw_bot::domain::FilePresentation;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -150,10 +152,51 @@ async fn the_card_of_an_untouched_assignment_has_no_submissions() {
         .ok();
 
     assert_eq!(body["submissions"], json!([]));
+    assert_eq!(body["files"], json!([]));
     assert_eq!(
         body["assignment"]["body"],
         json!("Send a pull request link.")
     );
+}
+
+#[tokio::test]
+async fn the_card_carries_assignment_file_metadata_without_content() {
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    let card = app
+        .application
+        .files
+        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
+        .await
+        .unwrap();
+    let added = app
+        .application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: app.teacher_actor(),
+            expected_revision: card.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            content: b"read the notes".to_vec(),
+        })
+        .await
+        .unwrap();
+
+    let body = app
+        .student_assignment(app.assignment(), app.student())
+        .await
+        .ok();
+
+    assert_eq!(body["files"][0]["id"], json!(added.files[0].id().as_uuid()));
+    assert_eq!(body["files"][0]["position"], json!(1));
+    assert_eq!(body["files"][0]["presentation"], json!("document"));
+    assert_eq!(body["files"][0]["filename"], json!("assignment-note.txt"));
+    assert_eq!(body["files"][0]["mime_type"], json!("text/plain"));
+    assert_eq!(body["files"][0]["size_bytes"], json!(14));
+    assert!(body["files"][0].get("content").is_none());
+    assert!(body["files"][0].get("sha256").is_none());
 }
 
 /// Пересдача: задание сняли, но свои попытки и комментарии студент читать не перестаёт.

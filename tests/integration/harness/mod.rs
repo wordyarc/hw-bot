@@ -82,6 +82,10 @@ impl TestApp {
         self.fixture.student.telegram_user_id().as_i64()
     }
 
+    pub fn student_actor(&self) -> Actor {
+        Actor::new(self.fixture.student.id())
+    }
+
     pub fn next_telegram_id(&self) -> i64 {
         self.next_telegram_id.fetch_add(1, Ordering::Relaxed)
     }
