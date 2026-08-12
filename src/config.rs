@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer};
 
@@ -43,6 +44,8 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
     pub run_migrations: bool,
+    pub run_bootstrap: bool,
+    pub bootstrap_file: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -128,6 +131,8 @@ mod tests {
                 url = "postgres://postgres:postgres@localhost:5432/hw-bot"
                 max_connections = 5
                 run_migrations = true
+                run_bootstrap = false
+                bootstrap_file = "bootstrap/data.json"
 
                 [logging]
                 level = "hw_bot=info,tower_http=info,sqlx=warn"
@@ -170,6 +175,11 @@ mod tests {
         );
         assert_eq!(config.database.max_connections, 5);
         assert!(config.database.run_migrations);
+        assert!(!config.database.run_bootstrap);
+        assert_eq!(
+            config.database.bootstrap_file,
+            PathBuf::from("bootstrap/data.json")
+        );
         assert_eq!(
             config.logging.level,
             "hw_bot=info,tower_http=info,sqlx=warn"

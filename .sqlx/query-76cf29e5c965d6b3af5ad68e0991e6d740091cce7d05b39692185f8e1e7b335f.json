@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into users (id, telegram_user_id, role, display_name, registered_at)\n        values ($1, $2, $3, $4, $5)\n        on conflict (telegram_user_id) do nothing\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76cf29e5c965d6b3af5ad68e0991e6d740091cce7d05b39692185f8e1e7b335f"
+}

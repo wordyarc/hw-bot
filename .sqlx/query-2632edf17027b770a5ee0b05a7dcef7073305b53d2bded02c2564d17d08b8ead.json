@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select exists (\n            select 1\n            from teaching_course_teachers course_teacher\n            join users teacher on teacher.id = course_teacher.teacher_id\n            where teacher.role = 'student'\n        ) as \"exists!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2632edf17027b770a5ee0b05a7dcef7073305b53d2bded02c2564d17d08b8ead"
+}

@@ -8,6 +8,7 @@ mod actor_api;
 mod assignment_teacher_queries;
 mod assignments_api;
 mod attempts_api;
+mod bootstrap;
 mod db_schema;
 mod health_api;
 mod notification_outbox;

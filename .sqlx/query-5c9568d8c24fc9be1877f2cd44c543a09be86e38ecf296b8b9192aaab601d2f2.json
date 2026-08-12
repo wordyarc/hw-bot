@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into student_groups (id, code, education_level, study_year)\n        values ($1, $2, $3, $4)\n        on conflict (code) do nothing\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c9568d8c24fc9be1877f2cd44c543a09be86e38ecf296b8b9192aaab601d2f2"
+}

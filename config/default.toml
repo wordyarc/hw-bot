@@ -9,6 +9,8 @@ port = 3000
 url = "postgres://postgres:postgres@localhost:5432/hw-bot"
 max_connections = 5
 run_migrations = true
+run_bootstrap = false
+bootstrap_file = "bootstrap/data.json"
 
 [logging]
 level = "hw_bot=info,tower_http=info,sqlx=warn"

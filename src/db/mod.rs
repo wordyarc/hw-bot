@@ -5,6 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 pub mod academic;
 pub mod assignments;
 pub mod attempts;
+mod bootstrap;
 mod convert;
 mod enums;
 mod error;
@@ -12,6 +13,7 @@ pub mod notifications;
 pub mod submissions;
 pub mod users;
 
+pub use bootstrap::{BootstrapError, run_bootstrap};
 pub use error::{DbError, DbResult};
 
 pub(crate) use convert::checked_num_cast;

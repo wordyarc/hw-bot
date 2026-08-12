@@ -35,6 +35,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     tracing::info!(
         max_connections = config.database.max_connections,
         run_migrations = config.database.run_migrations,
+        run_bootstrap = config.database.run_bootstrap,
         "connecting to database"
     );
     let db_pool =
@@ -51,6 +52,28 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
         tracing::info!("database migrations completed");
     } else {
         tracing::info!("database migrations disabled");
+    }
+
+    if config.database.run_bootstrap {
+        let bootstrap_file = &config.database.bootstrap_file;
+        tracing::info!(path = %bootstrap_file.display(), "running database bootstrap");
+        let data = tokio::fs::read_to_string(bootstrap_file)
+            .await
+            .with_context(|| {
+                format!("failed to read bootstrap file {}", bootstrap_file.display())
+            })?;
+        let seed = serde_json::from_str(&data).with_context(|| {
+            format!(
+                "failed to parse bootstrap file {}",
+                bootstrap_file.display()
+            )
+        })?;
+        db::run_bootstrap(&db_pool, &seed)
+            .await
+            .context("failed to run database bootstrap")?;
+        tracing::info!("database bootstrap completed");
+    } else {
+        tracing::info!("database bootstrap disabled");
     }
 
     let cancellation = CancellationToken::new();
