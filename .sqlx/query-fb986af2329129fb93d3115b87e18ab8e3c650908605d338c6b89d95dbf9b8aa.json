@@ -1,0 +1,136 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            id, assignment_id, submission_id, position, presentation, filename, mime_type,\n            size_bytes, sha256, created_at\n        from stored_files\n        where assignment_id = $1\n        order by position\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "submission_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "submission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "position",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "presentation",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "presentation"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "filename",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "filename"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "mime_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "mime_type"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "size_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "size_bytes"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "sha256",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fb986af2329129fb93d3115b87e18ab8e3c650908605d338c6b89d95dbf9b8aa"
+}

@@ -142,6 +142,32 @@ create index submissions_pending_review_queue_idx
 create index submissions_student_assignment_idx
     on submissions (student_id, assignment_id);
 
+-- Assignment and submission attachments. Installation-specific size and count limits live in app.
+
+create table stored_files (
+    id uuid primary key default uuidv7(),
+    assignment_id uuid references assignments (id) on delete restrict,
+    submission_id uuid references submissions (id) on delete restrict,
+    position bigint not null check (position > 0),
+    presentation text not null check (presentation in ('document', 'image')),
+    filename text not null check (btrim(filename) <> ''),
+    mime_type text check (mime_type is null or btrim(mime_type) <> ''),
+    size_bytes bigint not null check (size_bytes >= 0),
+    sha256 bytea not null check (octet_length(sha256) = 32),
+    content bytea not null,
+    created_at timestamptz not null default now(),
+    check (num_nonnulls(assignment_id, submission_id) = 1),
+    check (octet_length(content)::bigint = size_bytes)
+);
+
+create unique index stored_files_assignment_position_idx
+    on stored_files (assignment_id, position)
+    where assignment_id is not null;
+
+create unique index stored_files_submission_position_idx
+    on stored_files (submission_id, position)
+    where submission_id is not null;
+
 -- Per-student assignment progress.
 
 create table student_assignment_progress (

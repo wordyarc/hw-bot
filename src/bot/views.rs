@@ -5,7 +5,8 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::app::{AssignmentStudentSummary, TeachingCourseSummary};
 use crate::domain::{
-    Assignment, AssignmentStatus, SubmissionId, SubmissionStatus, TeachingCourseId,
+    Assignment, AssignmentStatus, StoredFileMetadata, SubmissionId, SubmissionStatus,
+    TeachingCourseId,
 };
 
 use super::HandlerResult;
@@ -137,6 +138,10 @@ pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
         )]);
     }
     rows.push(vec![InlineKeyboardButton::callback(
+        "Вложения",
+        format!("files:{assignment_id}"),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
         "Выдать дополнительные попытки",
         format!("attempts:{assignment_id}"),
     )]);
@@ -146,6 +151,60 @@ pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
     )]);
 
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn assignment_files_keyboard(
+    assignment: &Assignment,
+    files: &[StoredFileMetadata],
+    can_add: bool,
+    creation_flow: bool,
+) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        rows.push(vec![
+            InlineKeyboardButton::callback(
+                button_label(file.filename().as_str()),
+                format!("file:open:{index}"),
+            ),
+            InlineKeyboardButton::callback("Удалить", format!("file:delete:{index}")),
+        ]);
+    }
+    if can_add {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "Добавить вложение",
+            "file:add",
+        )]);
+    }
+    if creation_flow {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "Завершить создание",
+            "file:finish",
+        )]);
+    } else {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "К заданию",
+            format!("manage:{}", assignment.id().as_uuid()),
+        )]);
+    }
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("Удалить", "file:confirm-delete"),
+        InlineKeyboardButton::callback("Отмена", "file:cancel-delete"),
+    ]])
+}
+
+pub(super) fn format_file_size(size_bytes: u64) -> String {
+    if size_bytes < 1024 {
+        format!("{size_bytes} Б")
+    } else if size_bytes < 1024 * 1024 {
+        format!("{:.1} КиБ", size_bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} МиБ", size_bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 pub(super) fn assignment_students_keyboard(
@@ -303,6 +362,43 @@ mod tests {
 
         for assignment in [draft, published, archived] {
             let json = serde_json::to_value(assignment_actions_keyboard(&assignment)).unwrap();
+            for row in json["inline_keyboard"].as_array().unwrap() {
+                for button in row.as_array().unwrap() {
+                    assert!(button["callback_data"].as_str().unwrap().len() <= 64);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn attachment_callbacks_fit_telegram_limit() {
+        use crate::domain::{
+            FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
+        };
+        use crate::test_support::{assignment, course_for, student_group, teacher};
+
+        let teacher = teacher(1);
+        let group = student_group("test-group");
+        let course = course_for(&group, &teacher);
+        let assignment = assignment(&course, &teacher).build();
+        let file = StoredFileMetadata::restore(StoredFileParts {
+            id: StoredFileId::new(),
+            owner: StoredFileOwner::Assignment(assignment.id()),
+            position: 1,
+            presentation: FilePresentation::Document,
+            filename: "file.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            size_bytes: 4,
+            sha256: [0; 32],
+            created_at: Utc::now(),
+        })
+        .unwrap();
+
+        for keyboard in [
+            assignment_files_keyboard(&assignment, &[file], true, true),
+            confirm_file_deletion_keyboard(),
+        ] {
+            let json = serde_json::to_value(keyboard).unwrap();
             for row in json["inline_keyboard"].as_array().unwrap() {
                 for button in row.as_array().unwrap() {
                     assert!(button["callback_data"].as_str().unwrap().len() <= 64);

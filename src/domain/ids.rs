@@ -34,6 +34,7 @@ uuid_id!(SubjectId, Uuid::new_v4);
 uuid_id!(TeachingCourseId, Uuid::now_v7);
 uuid_id!(AssignmentId, Uuid::now_v7);
 uuid_id!(SubmissionId, Uuid::now_v7);
+uuid_id!(StoredFileId, Uuid::now_v7);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct TelegramUserId(i64);
@@ -62,6 +63,7 @@ mod tests {
         assert_eq!(TeachingCourseId::new().as_uuid().get_version_num(), 7);
         assert_eq!(AssignmentId::new().as_uuid().get_version_num(), 7);
         assert_eq!(SubmissionId::new().as_uuid().get_version_num(), 7);
+        assert_eq!(StoredFileId::new().as_uuid().get_version_num(), 7);
     }
 
     #[test]

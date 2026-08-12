@@ -79,6 +79,32 @@ where
     Ok(())
 }
 
+pub async fn advance_revision<'e, E>(
+    executor: E,
+    assignment_id: AssignmentId,
+    expected_revision: i64,
+) -> DbResult<i64>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_scalar!(
+        r#"
+        update assignments
+        set revision = revision + 1
+        where id = $1
+          and revision = $2
+        returning revision
+        "#,
+        assignment_id.as_uuid(),
+        expected_revision,
+    )
+    .fetch_optional(executor)
+    .await?
+    .ok_or(DbError::Conflict {
+        message: "assignment was changed by a concurrent request",
+    })
+}
+
 #[derive(Debug)]
 pub struct VersionedAssignment {
     assignment: Assignment,

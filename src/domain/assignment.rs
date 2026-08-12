@@ -208,7 +208,7 @@ impl Assignment {
         Ok(())
     }
 
-    fn ensure_managed_by(
+    pub(crate) fn ensure_managed_by(
         &self,
         teaching_course: &TeachingCourse,
         actor: &User,

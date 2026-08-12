@@ -1,6 +1,6 @@
 use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
-use hw_bot::app::ApplicationContainer;
+use hw_bot::app::{ApplicationContainer, FilePolicy};
 use hw_bot::bot::{TelegramBot, TelegramBotSettings};
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
@@ -95,7 +95,26 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     .context("failed to initialize runtime database pool")?;
 
     let cancellation = CancellationToken::new();
-    let application = ApplicationContainer::new(db_pool.clone());
+    ensure!(
+        config.files.max_file_size_bytes > 0,
+        "file size limit must be positive"
+    );
+    ensure!(
+        config.files.max_files_per_assignment > 0,
+        "assignment file limit must be positive"
+    );
+    ensure!(
+        config.files.max_files_per_submission > 0,
+        "submission file limit must be positive"
+    );
+    let max_file_size_bytes = usize::try_from(config.files.max_file_size_bytes)
+        .context("file size limit does not fit this platform")?;
+    let file_policy = FilePolicy {
+        max_file_size_bytes,
+        max_files_per_assignment: config.files.max_files_per_assignment,
+        max_files_per_submission: config.files.max_files_per_submission,
+    };
+    let application = ApplicationContainer::new(db_pool.clone(), file_policy);
     let telegram_bot = start_telegram_bot(&config, application.clone(), cancellation.clone())?;
     let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
     ensure!(
@@ -162,6 +181,8 @@ fn start_telegram_bot(
             rate_limit_replenish: Duration::from_millis(config.telegram.rate_limit_replenish_ms),
             rate_limit_burst: config.telegram.rate_limit_burst,
             max_concurrent_updates: config.telegram.max_concurrent_updates,
+            file_transfer_timeout: Duration::from_millis(config.files.transfer_timeout_ms),
+            max_concurrent_file_transfers: config.files.max_concurrent_transfers,
         },
     )?;
 

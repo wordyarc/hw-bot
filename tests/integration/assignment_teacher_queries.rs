@@ -1,12 +1,12 @@
 use hw_bot::app::{Actor, ApplicationContainer, ErrorCode};
 
-use crate::harness::TestApp;
+use crate::harness::{TestApp, test_file_policy};
 
 #[tokio::test]
 async fn course_teacher_can_open_a_draft_assignment_card() {
     let app = TestApp::start().await;
     let draft = app.add_draft_assignment().await;
-    let application = ApplicationContainer::new(app.pool.clone());
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
 
     let assignment = application
         .assignments
@@ -21,7 +21,7 @@ async fn course_teacher_can_open_a_draft_assignment_card() {
 async fn unrelated_teacher_cannot_open_an_assignment_card() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider").await;
-    let application = ApplicationContainer::new(app.pool.clone());
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
 
     let error = application
         .assignments
@@ -36,7 +36,7 @@ async fn unrelated_teacher_cannot_open_an_assignment_card() {
 async fn unrelated_teacher_cannot_list_assignment_students() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider").await;
-    let application = ApplicationContainer::new(app.pool.clone());
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
 
     let error = application
         .assignments
@@ -55,7 +55,7 @@ async fn assignment_student_list_includes_only_its_group_with_default_progress()
     let foreign_student = app
         .add_student_to_group("Foreign student", &foreign.group)
         .await;
-    let application = ApplicationContainer::new(app.pool.clone());
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
 
     let students = application
         .assignments
@@ -94,7 +94,7 @@ async fn assignment_student_list_contains_submission_and_extra_attempt_facts() {
     )
     .await
     .ok();
-    let application = ApplicationContainer::new(app.pool.clone());
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
 
     let students = application
         .assignments
@@ -122,7 +122,7 @@ async fn assignment_student_list_contains_accepted_submission_facts() {
     app.review(submission, app.teacher(), "accept", "good")
         .await
         .ok();
-    let application = ApplicationContainer::new(app.pool.clone());
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
 
     let students = application
         .assignments

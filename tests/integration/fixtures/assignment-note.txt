@@ -1,0 +1,2 @@
+Rust homework attachment fixture.
+Line two is intentionally stable.

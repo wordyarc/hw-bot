@@ -11,6 +11,7 @@ mod bootstrap;
 mod convert;
 mod enums;
 pub(crate) mod error;
+pub mod files;
 pub mod notifications;
 pub mod submissions;
 pub mod users;

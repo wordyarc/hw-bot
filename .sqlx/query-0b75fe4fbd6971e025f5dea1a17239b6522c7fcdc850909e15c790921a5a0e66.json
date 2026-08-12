@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        delete from stored_files\n        where assignment_id = $1\n          and id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b75fe4fbd6971e025f5dea1a17239b6522c7fcdc850909e15c790921a5a0e66"
+}

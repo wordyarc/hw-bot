@@ -20,7 +20,10 @@ str_enum! {
         SubmissionPendingReview => "submission_pending_review",
         SubmissionAlreadyReviewed => "submission_already_reviewed",
         AlreadyRegistered => "already_registered",
-        ConcurrentModification => "concurrent_modification"
+        ConcurrentModification => "concurrent_modification",
+        FileTooLarge => "file_too_large",
+        FileLimitReached => "file_limit_reached",
+        ConfirmationRequired => "confirmation_required"
     }
 }
 
@@ -34,6 +37,18 @@ pub enum AppError {
 
     #[error("assignment was changed by a concurrent request")]
     AssignmentChangedConcurrently,
+
+    #[error("file must be at most {max_bytes} bytes, got {actual_bytes}")]
+    FileTooLarge {
+        max_bytes: usize,
+        actual_bytes: usize,
+    },
+
+    #[error("assignment must have at most {max_files} files")]
+    AssignmentFileLimitReached { max_files: usize },
+
+    #[error("deleting an attachment from a published or archived assignment requires confirmation")]
+    AttachmentDeletionRequiresConfirmation,
 
     #[error(transparent)]
     Db(DbError),
@@ -72,6 +87,9 @@ impl AppError {
             },
             Self::NotFound { .. } => ErrorCode::NotFound,
             Self::AssignmentChangedConcurrently => ErrorCode::ConcurrentModification,
+            Self::FileTooLarge { .. } => ErrorCode::FileTooLarge,
+            Self::AssignmentFileLimitReached { .. } => ErrorCode::FileLimitReached,
+            Self::AttachmentDeletionRequiresConfirmation => ErrorCode::ConfirmationRequired,
             Self::Db(_) => ErrorCode::InternalError,
         }
     }

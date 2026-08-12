@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
+    pub files: FilesConfig,
     pub telegram: TelegramConfig,
     pub notification_worker: NotificationWorkerConfig,
 }
@@ -61,6 +62,15 @@ pub struct LoggingConfig {
     pub file_suffix: String,
     pub rotation: LogRotation,
     pub also_stdout: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct FilesConfig {
+    pub max_file_size_bytes: u64,
+    pub max_files_per_assignment: usize,
+    pub max_files_per_submission: usize,
+    pub transfer_timeout_ms: u64,
+    pub max_concurrent_transfers: usize,
 }
 
 #[derive(Clone, Deserialize)]
@@ -154,6 +164,13 @@ mod tests {
                 rotation = "daily"
                 also_stdout = true
 
+                [files]
+                max_file_size_bytes = 5242880
+                max_files_per_assignment = 5
+                max_files_per_submission = 1
+                transfer_timeout_ms = 60000
+                max_concurrent_transfers = 4
+
                 [telegram]
                 enabled = false
                 api_base_url = "https://api.telegram.org"
@@ -208,6 +225,11 @@ mod tests {
         assert_eq!(config.logging.file_suffix, "log");
         assert!(matches!(config.logging.rotation, LogRotation::Daily));
         assert!(config.logging.also_stdout);
+        assert_eq!(config.files.max_file_size_bytes, 5_242_880);
+        assert_eq!(config.files.max_files_per_assignment, 5);
+        assert_eq!(config.files.max_files_per_submission, 1);
+        assert_eq!(config.files.transfer_timeout_ms, 60_000);
+        assert_eq!(config.files.max_concurrent_transfers, 4);
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
         assert!(!config.telegram.enabled);

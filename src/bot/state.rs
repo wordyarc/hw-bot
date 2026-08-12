@@ -1,7 +1,9 @@
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
-use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId, UserId};
+use crate::domain::{
+    AssignmentId, ReviewDecision, StoredFileId, SubmissionId, TeachingCourseId, UserId,
+};
 
 pub(super) type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
 
@@ -37,6 +39,25 @@ pub(super) enum BotState {
         message_id: MessageId,
         course_id: TeachingCourseId,
         assignment_id: AssignmentId,
+    },
+    ManagingAssignmentFiles {
+        message_id: MessageId,
+        assignment_id: AssignmentId,
+        revision: i64,
+        file_ids: Vec<StoredFileId>,
+        creation_flow: bool,
+    },
+    AwaitingAssignmentFile {
+        assignment_id: AssignmentId,
+        expected_revision: i64,
+        creation_flow: bool,
+    },
+    ConfirmingAssignmentFileDeletion {
+        message_id: MessageId,
+        assignment_id: AssignmentId,
+        file_id: StoredFileId,
+        expected_revision: i64,
+        creation_flow: bool,
     },
     AwaitingAssignmentTitle {
         course_id: TeachingCourseId,

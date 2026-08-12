@@ -1,32 +1,36 @@
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, NaiveDateTime, Utc};
+use futures::StreamExt;
+use teloxide::net::Download;
 use teloxide::payloads::{AnswerCallbackQuerySetters, SendMessageSetters};
 use teloxide::prelude::{Bot, Requester};
 use teloxide::types::{
-    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId, User,
+    CallbackQuery, ChatId, FileId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Message,
+    MessageId, User,
 };
 use teloxide::utils::command::BotCommands;
 use uuid::Uuid;
 
 use crate::app::{
-    Actor, ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, RegisterStudent,
-    ReviewSubmission, SubmitHomework,
+    Actor, AddAssignmentFile, ChangeDeadline, CreateAssignment, DeleteAssignmentFile, ErrorCode,
+    GrantExtraAttempts, RegisterStudent, ReviewSubmission, SubmitHomework,
 };
 use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, AssignmentStatus, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS,
-    ReviewDecision, Role, SubmissionId, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN,
-    UserId,
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, AssignmentStatus, DISPLAY_NAME_MAX_LEN,
+    FILE_NAME_MAX_LEN, FilePresentation, MAX_ATTEMPTS, ReviewDecision, Role, StoredFileId,
+    StoredFileMetadata, SubmissionId, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
 };
 
 use super::errors::send_app_error;
 use super::state::{BotDialogue, BotState};
 use super::views::{
-    assignment_actions_keyboard, assignment_status, assignment_students_keyboard, button_label,
-    course_assignments_keyboard, courses_keyboard, format_deadline, group_keyboard,
-    review_keyboard, send_message_chunks, send_stale_button, student_menu, submission_status,
-    teacher_menu,
+    assignment_actions_keyboard, assignment_files_keyboard, assignment_status,
+    assignment_students_keyboard, button_label, confirm_file_deletion_keyboard,
+    course_assignments_keyboard, courses_keyboard, format_deadline, format_file_size,
+    group_keyboard, review_keyboard, send_message_chunks, send_stale_button, student_menu,
+    submission_status, teacher_menu,
 };
-use super::{BotServices, HandlerResult};
+use super::{BotServices, FileTransfers, HandlerResult};
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
@@ -91,16 +95,12 @@ pub(super) async fn handle_message(
     message: Message,
     dialogue: BotDialogue,
     services: BotServices,
+    transfers: FileTransfers,
 ) -> HandlerResult {
     if !ensure_private_message(&bot, &message).await? {
         return Ok(());
     }
 
-    let Some(text) = message.text() else {
-        bot.send_message(message.chat.id, "Пришлите текстовое сообщение.")
-            .await?;
-        return Ok(());
-    };
     let actor = actor_from_message(&message)?;
 
     match dialogue.get().await?.unwrap_or_default() {
@@ -112,6 +112,9 @@ pub(super) async fn handle_message(
             .await?;
         }
         BotState::AwaitingRegistrationName => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             if text.trim().is_empty() {
                 bot.send_message(message.chat.id, "Имя не должно быть пустым.")
                     .await?;
@@ -156,6 +159,9 @@ pub(super) async fn handle_message(
                 .await?;
         }
         BotState::AwaitingSubmission { assignment_id } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             if !ensure_text_limit(
                 &bot,
                 message.chat.id,
@@ -198,6 +204,9 @@ pub(super) async fn handle_message(
             submission_id,
             decision,
         } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             if !ensure_text_limit(
                 &bot,
                 message.chat.id,
@@ -255,7 +264,126 @@ pub(super) async fn handle_message(
             bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
                 .await?;
         }
+        BotState::ManagingAssignmentFiles { .. } => {
+            bot.send_message(
+                message.chat.id,
+                "Выберите действие кнопкой под списком вложений.",
+            )
+            .await?;
+        }
+        BotState::AwaitingAssignmentFile {
+            assignment_id,
+            expected_revision,
+            creation_flow,
+        } => {
+            let Some(incoming) = incoming_file(&message) else {
+                bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
+                    .await?;
+                return Ok(());
+            };
+            let policy = services.files.policy();
+            if incoming
+                .declared_size
+                .is_some_and(|size| size > policy.max_file_size_bytes)
+            {
+                bot.send_message(message.chat.id, "Файл превышает допустимый размер.")
+                    .await?;
+                return Ok(());
+            }
+            let transfer_permit = transfers
+                .semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .context("file transfer semaphore closed")?;
+            let content = match download_file(
+                &transfers.bot,
+                &incoming.file_id,
+                policy.max_file_size_bytes,
+            )
+            .await
+            {
+                Ok(content) => content,
+                Err(error) => {
+                    tracing::warn!(error = ?error, "Telegram file download failed");
+                    bot.send_message(
+                        message.chat.id,
+                        "Не удалось скачать файл. Попробуйте ещё раз.",
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+            if incoming
+                .declared_size
+                .is_some_and(|declared| declared != content.len())
+            {
+                bot.send_message(
+                    message.chat.id,
+                    "Telegram передал файл с неверным размером. Попробуйте ещё раз.",
+                )
+                .await?;
+                return Ok(());
+            }
+            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
+                return Ok(());
+            };
+            match services
+                .files
+                .add_assignment_file(AddAssignmentFile {
+                    assignment_id,
+                    actor,
+                    expected_revision,
+                    presentation: incoming.presentation,
+                    filename: incoming.filename,
+                    mime_type: incoming.mime_type,
+                    content,
+                })
+                .await
+            {
+                Ok(_) => {
+                    drop(transfer_permit);
+                    bot.send_message(message.chat.id, "Вложение добавлено.")
+                        .await?;
+                    show_assignment_files(
+                        &bot,
+                        message.chat.id,
+                        actor,
+                        assignment_id,
+                        creation_flow,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) if error.code() == ErrorCode::ConcurrentModification => {
+                    drop(transfer_permit);
+                    send_app_error(&bot, message.chat.id, error).await?;
+                    show_assignment_files(
+                        &bot,
+                        message.chat.id,
+                        actor,
+                        assignment_id,
+                        creation_flow,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    drop(transfer_permit);
+                    send_app_error(&bot, message.chat.id, error).await?;
+                }
+            }
+        }
+        BotState::ConfirmingAssignmentFileDeletion { .. } => {
+            bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
+                .await?;
+        }
         BotState::AwaitingAssignmentTitle { course_id } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             if text.trim().is_empty() {
                 bot.send_message(message.chat.id, "Название не должно быть пустым.")
                     .await?;
@@ -282,6 +410,9 @@ pub(super) async fn handle_message(
                 .await?;
         }
         BotState::AwaitingAssignmentBody { course_id, title } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             if text.trim().is_empty() {
                 bot.send_message(message.chat.id, "Текст задания не должен быть пустым.")
                     .await?;
@@ -316,6 +447,9 @@ pub(super) async fn handle_message(
             title,
             body,
         } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             let Some(max_attempts) = parse_positive_attempts(text) else {
                 bot.send_message(
                     message.chat.id,
@@ -344,6 +478,9 @@ pub(super) async fn handle_message(
             body,
             max_attempts,
         } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             let Some(deadline_at) = parse_deadline(text) else {
                 send_deadline_format_error(&bot, message.chat.id).await?;
                 return Ok(());
@@ -368,11 +505,12 @@ pub(super) async fn handle_message(
                 Ok(assignment) => {
                     bot.send_message(message.chat.id, "Черновик создан.")
                         .await?;
-                    show_teacher_assignment(
+                    show_assignment_files(
                         &bot,
                         message.chat.id,
                         actor,
                         assignment.id(),
+                        true,
                         &services,
                         &dialogue,
                     )
@@ -382,6 +520,9 @@ pub(super) async fn handle_message(
             }
         }
         BotState::AwaitingDeadlineChange { assignment_id } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             let Some(deadline_at) = parse_deadline(text) else {
                 send_deadline_format_error(&bot, message.chat.id).await?;
                 return Ok(());
@@ -422,6 +563,9 @@ pub(super) async fn handle_message(
             assignment_id,
             student_id,
         } => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
             let Some(amount) = parse_positive_attempts(text) else {
                 bot.send_message(
                     message.chat.id,
@@ -494,6 +638,7 @@ pub(super) async fn handle_callback(
     query: CallbackQuery,
     dialogue: BotDialogue,
     services: BotServices,
+    transfers: FileTransfers,
 ) -> HandlerResult {
     bot.answer_callback_query(query.id.clone())
         .cache_time(0)
@@ -622,6 +767,11 @@ pub(super) async fn handle_callback(
                     assignment_id: current_assignment_id,
                     ..
                 } => *message_id == message.id && *current_assignment_id == assignment_id,
+                BotState::ManagingAssignmentFiles {
+                    message_id,
+                    assignment_id: current_assignment_id,
+                    ..
+                } => *message_id == message.id && *current_assignment_id == assignment_id,
                 _ => false,
             };
             if !valid {
@@ -682,6 +832,240 @@ pub(super) async fn handle_callback(
                 }
                 Err(error) => send_app_error(&bot, chat_id, error).await?,
             }
+        }
+        _ if data.starts_with("files:") => {
+            let Some(assignment_id) =
+                managed_assignment_callback(data, "files:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            show_assignment_files(
+                &bot,
+                chat_id,
+                actor,
+                assignment_id,
+                false,
+                &services,
+                &dialogue,
+            )
+            .await?;
+        }
+        "file:add" => {
+            let BotState::ManagingAssignmentFiles {
+                message_id,
+                assignment_id,
+                revision,
+                creation_flow,
+                ..
+            } = state
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            if message_id != message.id {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            dialogue
+                .update(BotState::AwaitingAssignmentFile {
+                    assignment_id,
+                    expected_revision: revision,
+                    creation_flow,
+                })
+                .await?;
+            bot.send_message(chat_id, "Пришлите файл или фотографию.")
+                .await?;
+        }
+        "file:finish" => {
+            let BotState::ManagingAssignmentFiles {
+                message_id,
+                assignment_id,
+                creation_flow: true,
+                ..
+            } = state
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            if message_id != message.id {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            show_teacher_assignment(&bot, chat_id, actor, assignment_id, &services, &dialogue)
+                .await?;
+        }
+        _ if data.starts_with("file:open:") => {
+            let Some((assignment_id, file_id)) =
+                current_file_callback(data, "file:open:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            let _permit = transfers
+                .semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .context("file transfer semaphore closed")?;
+            match services
+                .files
+                .open_assignment_file_for_teacher(actor, assignment_id, file_id)
+                .await
+            {
+                Ok(file) => {
+                    let input = InputFile::memory(file.content)
+                        .file_name(file.metadata.filename().as_str().to_owned());
+                    match file.metadata.presentation() {
+                        FilePresentation::Document => {
+                            transfers.bot.send_document(chat_id, input).await?;
+                        }
+                        FilePresentation::Image => {
+                            transfers.bot.send_photo(chat_id, input).await?;
+                        }
+                    }
+                }
+                Err(error) => send_app_error(&bot, chat_id, error).await?,
+            }
+        }
+        _ if data.starts_with("file:delete:") => {
+            let Some((assignment_id, file_id)) =
+                current_file_callback(data, "file:delete:", message.id, &state)
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            let BotState::ManagingAssignmentFiles {
+                revision,
+                creation_flow,
+                ..
+            } = state
+            else {
+                unreachable!();
+            };
+            match services
+                .files
+                .delete_assignment_file(DeleteAssignmentFile {
+                    assignment_id,
+                    file_id,
+                    actor,
+                    expected_revision: revision,
+                    confirmed: false,
+                })
+                .await
+            {
+                Ok(_) => {
+                    bot.send_message(chat_id, "Вложение удалено.").await?;
+                    show_assignment_files(
+                        &bot,
+                        chat_id,
+                        actor,
+                        assignment_id,
+                        creation_flow,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) if error.code() == ErrorCode::ConfirmationRequired => {
+                    let confirmation = bot
+                        .send_message(chat_id, "Удалить вложение из уже выданного задания?")
+                        .reply_markup(confirm_file_deletion_keyboard())
+                        .await?;
+                    dialogue
+                        .update(BotState::ConfirmingAssignmentFileDeletion {
+                            message_id: confirmation.id,
+                            assignment_id,
+                            file_id,
+                            expected_revision: revision,
+                            creation_flow,
+                        })
+                        .await?;
+                }
+                Err(error) if error.code() == ErrorCode::ConcurrentModification => {
+                    send_app_error(&bot, chat_id, error).await?;
+                    show_assignment_files(
+                        &bot,
+                        chat_id,
+                        actor,
+                        assignment_id,
+                        creation_flow,
+                        &services,
+                        &dialogue,
+                    )
+                    .await?;
+                }
+                Err(error) => send_app_error(&bot, chat_id, error).await?,
+            }
+        }
+        "file:confirm-delete" => {
+            let BotState::ConfirmingAssignmentFileDeletion {
+                message_id,
+                assignment_id,
+                file_id,
+                expected_revision,
+                creation_flow,
+            } = state
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            if message_id != message.id {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            match services
+                .files
+                .delete_assignment_file(DeleteAssignmentFile {
+                    assignment_id,
+                    file_id,
+                    actor,
+                    expected_revision,
+                    confirmed: true,
+                })
+                .await
+            {
+                Ok(_) => {
+                    bot.send_message(chat_id, "Вложение удалено.").await?;
+                }
+                Err(error) => send_app_error(&bot, chat_id, error).await?,
+            };
+            show_assignment_files(
+                &bot,
+                chat_id,
+                actor,
+                assignment_id,
+                creation_flow,
+                &services,
+                &dialogue,
+            )
+            .await?;
+        }
+        "file:cancel-delete" => {
+            let BotState::ConfirmingAssignmentFileDeletion {
+                message_id,
+                assignment_id,
+                creation_flow,
+                ..
+            } = state
+            else {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            };
+            if message_id != message.id {
+                send_stale_button(&bot, chat_id).await?;
+                return Ok(());
+            }
+            show_assignment_files(
+                &bot,
+                chat_id,
+                actor,
+                assignment_id,
+                creation_flow,
+                &services,
+                &dialogue,
+            )
+            .await?;
         }
         _ if data.starts_with("archive:") => {
             let Some(assignment_id) =
@@ -1082,6 +1466,67 @@ async fn show_teacher_assignment(
     Ok(())
 }
 
+async fn show_assignment_files(
+    bot: &Bot,
+    chat_id: ChatId,
+    actor: Actor,
+    assignment_id: AssignmentId,
+    creation_flow: bool,
+    services: &BotServices,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    let card = match services
+        .files
+        .list_assignment_files_for_teacher(actor, assignment_id)
+        .await
+    {
+        Ok(card) => card,
+        Err(error) => {
+            send_app_error(bot, chat_id, error).await?;
+            return Ok(());
+        }
+    };
+    let policy = services.files.policy();
+    let mut text = if card.files.is_empty() {
+        String::from("Вложений нет.")
+    } else {
+        String::from("Вложения задания:\n")
+    };
+    for file in &card.files {
+        text.push_str(&format!(
+            "\n{}. {} · {}\n",
+            file.position(),
+            file.filename().as_str(),
+            format_file_size(file.size_bytes()),
+        ));
+    }
+    text.push_str(&format!(
+        "\nИспользовано: {} из {}.",
+        card.files.len(),
+        policy.max_files_per_assignment,
+    ));
+    let can_add = card.files.len() < policy.max_files_per_assignment;
+    let message = bot
+        .send_message(chat_id, text)
+        .reply_markup(assignment_files_keyboard(
+            &card.assignment,
+            &card.files,
+            can_add,
+            creation_flow,
+        ))
+        .await?;
+    dialogue
+        .update(BotState::ManagingAssignmentFiles {
+            message_id: message.id,
+            assignment_id,
+            revision: card.revision,
+            file_ids: card.files.iter().map(StoredFileMetadata::id).collect(),
+            creation_flow,
+        })
+        .await?;
+    Ok(())
+}
+
 async fn show_assignment_students(
     bot: &Bot,
     chat_id: ChatId,
@@ -1249,6 +1694,113 @@ fn managed_assignment_callback(
         .then_some(assignment_id)
 }
 
+fn current_file_callback(
+    data: &str,
+    prefix: &str,
+    message_id: MessageId,
+    state: &BotState,
+) -> Option<(AssignmentId, StoredFileId)> {
+    let index = data.strip_prefix(prefix)?.parse::<usize>().ok()?;
+    let BotState::ManagingAssignmentFiles {
+        message_id: current_message_id,
+        assignment_id,
+        file_ids,
+        ..
+    } = state
+    else {
+        return None;
+    };
+    (*current_message_id == message_id)
+        .then(|| file_ids.get(index).copied())
+        .flatten()
+        .map(|file_id| (*assignment_id, file_id))
+}
+
+struct IncomingFile {
+    file_id: FileId,
+    declared_size: Option<usize>,
+    presentation: FilePresentation,
+    filename: String,
+    mime_type: Option<String>,
+}
+
+fn incoming_file(message: &Message) -> Option<IncomingFile> {
+    if let Some(document) = message.document() {
+        let filename = document
+            .file_name
+            .as_deref()
+            .map(safe_filename)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("document-{}.bin", Uuid::now_v7()));
+        return Some(IncomingFile {
+            file_id: document.file.id.clone(),
+            declared_size: declared_file_size(document.file.size),
+            presentation: FilePresentation::Document,
+            filename,
+            mime_type: document.mime_type.as_ref().map(ToString::to_string),
+        });
+    }
+    let photo = message.photo()?.iter().max_by_key(|photo| {
+        (
+            photo.file.size,
+            u64::from(photo.width) * u64::from(photo.height),
+        )
+    })?;
+    Some(IncomingFile {
+        file_id: photo.file.id.clone(),
+        declared_size: declared_file_size(photo.file.size),
+        presentation: FilePresentation::Image,
+        filename: format!("photo-{}.jpg", Uuid::now_v7()),
+        mime_type: Some("image/jpeg".to_owned()),
+    })
+}
+
+fn declared_file_size(size: u32) -> Option<usize> {
+    (size != u32::MAX).then_some(size as usize)
+}
+
+fn safe_filename(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '/' | '\\') {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(FILE_NAME_MAX_LEN)
+        .collect()
+}
+
+async fn download_file(bot: &Bot, file_id: &FileId, max_size: usize) -> HandlerResult<Vec<u8>> {
+    let file = bot.get_file(file_id.clone()).await?;
+    let mut stream = bot.download_file_stream(&file.path);
+    let mut content = Vec::with_capacity((file.size as usize).min(max_size));
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let size = content
+            .len()
+            .checked_add(chunk.len())
+            .context("downloaded file size overflow")?;
+        if size > max_size {
+            return Err(anyhow!("downloaded file exceeds configured limit"));
+        }
+        content.extend_from_slice(&chunk);
+    }
+    Ok(content)
+}
+
+async fn require_text<'a>(bot: &Bot, message: &'a Message) -> HandlerResult<Option<&'a str>> {
+    let Some(text) = message.text() else {
+        bot.send_message(message.chat.id, "Пришлите текстовое сообщение.")
+            .await?;
+        return Ok(None);
+    };
+    Ok(Some(text))
+}
+
 fn parse_deadline(text: &str) -> Option<DateTime<Utc>> {
     let text = text.trim();
     let value = NaiveDateTime::parse_from_str(text, "%d.%m.%Y %H:%M").ok()?;
@@ -1297,7 +1849,7 @@ mod tests {
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use crate::app::ApplicationContainer;
+    use crate::app::{ApplicationContainer, FilePolicy};
 
     use super::*;
 
@@ -1462,7 +2014,14 @@ mod tests {
             message,
             Command::Help,
             dialogue,
-            ApplicationContainer::new(pool),
+            ApplicationContainer::new(
+                pool,
+                FilePolicy {
+                    max_file_size_bytes: 1024,
+                    max_files_per_assignment: 5,
+                    max_files_per_submission: 1,
+                },
+            ),
         )
         .await
         .unwrap();

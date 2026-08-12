@@ -11,9 +11,11 @@ use uuid::Uuid;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::harness::TestApp;
+use crate::harness::{TestApp, test_file_policy};
 
 const BOT_MESSAGE_ID: i32 = 900;
+const DOCUMENT_FIXTURE: &[u8] = include_bytes!("fixtures/assignment-note.txt");
+const IMAGE_FIXTURE: &[u8] = include_bytes!("fixtures/pixel.ppm");
 
 #[tokio::test]
 async fn teacher_creates_a_draft_through_telegram() {
@@ -48,6 +50,7 @@ async fn teacher_creates_a_draft_through_telegram() {
         ),
         message_update(7, app.teacher(), 4, "3"),
         message_update(8, app.teacher(), 5, &deadline_input),
+        callback_update(9, app.teacher(), "file:finish", BOT_MESSAGE_ID),
     ];
     let telegram = telegram_server(updates).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
@@ -68,6 +71,253 @@ async fn teacher_creates_a_draft_through_telegram() {
     assert!(callbacks.contains(&format!("create:{}", app.course())));
     assert!(callbacks.contains(&format!("publish:{id}")));
     assert!(callbacks.iter().all(|callback| callback.len() <= 64));
+}
+
+#[tokio::test]
+async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
+    let app = TestApp::start().await;
+    let deadline = (Utc::now() + chrono::Duration::days(7))
+        .format("%d.%m.%Y %H:%M")
+        .to_string();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("create:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(5, app.teacher(), 2, "Draft with attachment"),
+        message_update(6, app.teacher(), 3, "Read the attached notes."),
+        message_update(7, app.teacher(), 4, "2"),
+        message_update(8, app.teacher(), 5, &deadline),
+        callback_update(9, app.teacher(), "file:add", BOT_MESSAGE_ID),
+        document_update(
+            10,
+            app.teacher(),
+            6,
+            "fixture-document",
+            "assignment-note.txt",
+            DOCUMENT_FIXTURE.len(),
+        ),
+        callback_update(11, app.teacher(), "file:open:0", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    mock_file_download(
+        &telegram,
+        "fixture-document",
+        "files/assignment-note.txt",
+        DOCUMENT_FIXTURE,
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(telegram_document_response())
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let stored = wait_for_stored_file(&app.pool, "assignment-note.txt").await;
+    wait_for_request_path(&telegram, "/bottest-token/SendDocument").await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = telegram.received_requests().await.unwrap();
+
+    let (content, size_bytes, presentation) = stored.expect("document was stored");
+    assert_eq!(content, DOCUMENT_FIXTURE);
+    assert_eq!(size_bytes, DOCUMENT_FIXTURE.len() as i64);
+    assert_eq!(presentation, "document");
+    let upload = requests
+        .iter()
+        .find(|request| request.url.path() == "/bottest-token/SendDocument")
+        .expect("SendDocument request");
+    assert!(
+        upload
+            .body
+            .windows(DOCUMENT_FIXTURE.len())
+            .any(|window| window == DOCUMENT_FIXTURE)
+    );
+}
+
+#[tokio::test]
+async fn teacher_adds_and_opens_the_largest_photo_variant() {
+    let app = TestApp::start().await;
+    let assignment = app.assignment();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("manage:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            5,
+            app.teacher(),
+            &format!("files:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(6, app.teacher(), "file:add", BOT_MESSAGE_ID),
+        photo_update(7, app.teacher(), 2),
+        callback_update(8, app.teacher(), "file:open:0", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    mock_file_download(&telegram, "photo-large", "photos/pixel.jpg", IMAGE_FIXTURE).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendPhoto"))
+        .respond_with(telegram_photo_response())
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let stored = wait_for_presentation(&app.pool, "image").await;
+    wait_for_request_path(&telegram, "/bottest-token/SendPhoto").await;
+    stop_bot(cancellation, &mut task).await;
+
+    let (content, filename) = stored.expect("photo was stored");
+    assert_eq!(content, IMAGE_FIXTURE);
+    assert!(filename.starts_with("photo-"));
+    assert!(filename.ends_with(".jpg"));
+    let requests = recorded_requests(&telegram).await;
+    assert!(requests.contains("\"file_id\":\"photo-large\""));
+    assert!(!requests.contains("\"file_id\":\"photo-small\""));
+}
+
+#[tokio::test]
+async fn declared_oversized_document_is_rejected_without_get_file() {
+    let app = TestApp::start().await;
+    let assignment = app.assignment();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("manage:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            5,
+            app.teacher(),
+            &format!("files:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(6, app.teacher(), "file:add", BOT_MESSAGE_ID),
+        document_update(
+            7,
+            app.teacher(),
+            2,
+            "too-large",
+            "too-large.bin",
+            5 * 1024 * 1024 + 1,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let rejected = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "Файл превышает допустимый размер."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    tokio::time::timeout(Duration::from_secs(5), rejected.wait_until_satisfied())
+        .await
+        .expect("oversized file is rejected");
+    stop_bot(cancellation, &mut task).await;
+    let requests = telegram.received_requests().await.unwrap();
+
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != "/bottest-token/GetFile")
+    );
+}
+
+#[tokio::test]
+async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
+    use hw_bot::app::{Actor, AddAssignmentFile};
+    use hw_bot::domain::FilePresentation;
+
+    let app = TestApp::start().await;
+    let application = ApplicationContainer::new(app.pool.clone(), test_file_policy());
+    let assignment = app.fixture.assignment.id();
+    let card = application
+        .files
+        .list_assignment_files_for_teacher(Actor::new(app.fixture.teacher.id()), assignment)
+        .await
+        .unwrap();
+    application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: Actor::new(app.fixture.teacher.id()),
+            expected_revision: card.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            content: DOCUMENT_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("manage:{}", assignment.as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            5,
+            app.teacher(),
+            &format!("files:{}", assignment.as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(6, app.teacher(), "file:delete:0", BOT_MESSAGE_ID),
+        callback_update(7, app.teacher(), "file:confirm-delete", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_file_count(&app.pool, assignment.as_uuid(), 0).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+
+    assert!(requests.contains("Удалить вложение из уже выданного задания?"));
 }
 
 #[tokio::test]
@@ -373,7 +623,7 @@ fn start_bot_with_settings(
     settings: TelegramBotSettings,
 ) -> (CancellationToken, JoinHandle<()>) {
     let bot = TelegramBot::new(
-        ApplicationContainer::new(app.pool.clone()),
+        ApplicationContainer::new(app.pool.clone(), test_file_policy()),
         "test-token",
         &telegram.uri(),
         settings,
@@ -392,6 +642,8 @@ fn bot_settings_with(update: impl FnOnce(&mut TelegramBotSettings)) -> TelegramB
         rate_limit_replenish: Duration::from_secs(1),
         rate_limit_burst: 100,
         max_concurrent_updates: 32,
+        file_transfer_timeout: Duration::from_secs(5),
+        max_concurrent_file_transfers: 2,
     };
     update(&mut settings);
     settings
@@ -494,6 +746,43 @@ fn telegram_message_response() -> ResponseTemplate {
     }))
 }
 
+fn telegram_document_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "ok": true,
+        "result": {
+            "message_id": BOT_MESSAGE_ID,
+            "date": 0,
+            "chat": { "id": 1000, "type": "private" },
+            "from": { "id": 999, "is_bot": true, "first_name": "Test Bot" },
+            "document": {
+                "file_id": "sent-document",
+                "file_unique_id": "sent-document-unique",
+                "file_size": DOCUMENT_FIXTURE.len(),
+                "file_name": "assignment-note.txt"
+            }
+        }
+    }))
+}
+
+fn telegram_photo_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "ok": true,
+        "result": {
+            "message_id": BOT_MESSAGE_ID,
+            "date": 0,
+            "chat": { "id": 1000, "type": "private" },
+            "from": { "id": 999, "is_bot": true, "first_name": "Test Bot" },
+            "photo": [{
+                "file_id": "sent-photo",
+                "file_unique_id": "sent-photo-unique",
+                "file_size": IMAGE_FIXTURE.len(),
+                "width": 1,
+                "height": 1
+            }]
+        }
+    }))
+}
+
 async fn expect_sent_messages(
     telegram: &MockServer,
     count: u64,
@@ -546,6 +835,185 @@ fn message_update(update_id: u32, user_id: i64, message_id: i32, text: &str) -> 
             "text": text
         }
     })
+}
+
+fn document_update(
+    update_id: u32,
+    user_id: i64,
+    message_id: i32,
+    file_id: &str,
+    filename: &str,
+    size: usize,
+) -> Value {
+    json!({
+        "update_id": update_id,
+        "message": {
+            "message_id": message_id,
+            "date": 0,
+            "chat": { "id": user_id, "type": "private" },
+            "from": {
+                "id": user_id,
+                "is_bot": false,
+                "first_name": "Teacher"
+            },
+            "document": {
+                "file_id": file_id,
+                "file_unique_id": format!("{file_id}-unique"),
+                "file_size": size,
+                "file_name": filename,
+                "mime_type": "text/plain"
+            }
+        }
+    })
+}
+
+fn photo_update(update_id: u32, user_id: i64, message_id: i32) -> Value {
+    json!({
+        "update_id": update_id,
+        "message": {
+            "message_id": message_id,
+            "date": 0,
+            "chat": { "id": user_id, "type": "private" },
+            "from": {
+                "id": user_id,
+                "is_bot": false,
+                "first_name": "Teacher"
+            },
+            "photo": [
+                {
+                    "file_id": "photo-small",
+                    "file_unique_id": "photo-small-unique",
+                    "file_size": 10,
+                    "width": 90,
+                    "height": 90
+                },
+                {
+                    "file_id": "photo-large",
+                    "file_unique_id": "photo-large-unique",
+                    "file_size": IMAGE_FIXTURE.len(),
+                    "width": 800,
+                    "height": 600
+                }
+            ]
+        }
+    })
+}
+
+async fn mock_file_download(
+    telegram: &MockServer,
+    file_id: &str,
+    file_path: &str,
+    content: &'static [u8],
+) {
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetFile"))
+        .and(body_json(json!({ "file_id": file_id })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": {
+                "file_id": file_id,
+                "file_unique_id": format!("{file_id}-unique"),
+                "file_size": content.len(),
+                "file_path": file_path
+            }
+        })))
+        .expect(1)
+        .mount(telegram)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/file/bottest-token/{}",
+            file_path.replace('/', "%2F")
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(content))
+        .expect(1)
+        .mount(telegram)
+        .await;
+}
+
+async fn wait_for_request_path(telegram: &MockServer, expected: &str) {
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if telegram
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| request.url.path() == expected)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    if result.is_err() {
+        panic!(
+            "Telegram request {expected} was not sent; requests:\n{}",
+            recorded_requests(telegram).await
+        );
+    }
+}
+
+async fn wait_for_stored_file(pool: &PgPool, filename: &str) -> Option<(Vec<u8>, i64, String)> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = sqlx::query_as::<_, (Vec<u8>, i64, String)>(
+                "select content, size_bytes, presentation from stored_files where filename = $1",
+            )
+            .bind(filename)
+            .fetch_optional(pool)
+            .await
+            .unwrap();
+            if row.is_some() {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn wait_for_presentation(pool: &PgPool, presentation: &str) -> Option<(Vec<u8>, String)> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = sqlx::query_as::<_, (Vec<u8>, String)>(
+                "select content, filename from stored_files where presentation = $1",
+            )
+            .bind(presentation)
+            .fetch_optional(pool)
+            .await
+            .unwrap();
+            if row.is_some() {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn wait_for_file_count(pool: &PgPool, assignment_id: Uuid, expected: i64) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let count: i64 =
+                sqlx::query_scalar("select count(*) from stored_files where assignment_id = $1")
+                    .bind(assignment_id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            if count == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("stored file count reaches expected value");
 }
 
 fn callback_update(update_id: u32, user_id: i64, data: &str, message_id: i32) -> Value {

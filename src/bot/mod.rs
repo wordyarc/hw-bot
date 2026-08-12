@@ -40,6 +40,7 @@ pub struct TelegramBot {
     application: ApplicationContainer,
     settings: TelegramBotSettings,
     admission: UpdateAdmission,
+    file_transfers: FileTransfers,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +50,14 @@ pub struct TelegramBotSettings {
     pub rate_limit_replenish: Duration,
     pub rate_limit_burst: u32,
     pub max_concurrent_updates: usize,
+    pub file_transfer_timeout: Duration,
+    pub max_concurrent_file_transfers: usize,
+}
+
+#[derive(Clone)]
+struct FileTransfers {
+    bot: Bot,
+    semaphore: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -90,6 +99,14 @@ impl TelegramBot {
             "Telegram max concurrent updates must be positive"
         );
         anyhow::ensure!(
+            !settings.file_transfer_timeout.is_zero(),
+            "Telegram file transfer timeout must be positive"
+        );
+        anyhow::ensure!(
+            settings.max_concurrent_file_transfers > 0,
+            "Telegram max concurrent file transfers must be positive"
+        );
+        anyhow::ensure!(
             settings.max_concurrent_updates <= MAX_CONCURRENT_UPDATES,
             "Telegram max concurrent updates is too large"
         );
@@ -123,8 +140,12 @@ impl TelegramBot {
             telegram_http_client(settings.request_timeout)?,
         )
         .set_api_url(api_url.clone());
-        let polling_bot = Bot::with_client(token, telegram_http_client(polling_http_timeout)?)
-            .set_api_url(api_url);
+        let polling_bot =
+            Bot::with_client(token.clone(), telegram_http_client(polling_http_timeout)?)
+                .set_api_url(api_url.clone());
+        let transfer_bot =
+            Bot::with_client(token, telegram_http_client(settings.file_transfer_timeout)?)
+                .set_api_url(api_url);
         let admission = UpdateAdmission {
             rate_limiter: Arc::new(RateLimiter::keyed(quota)),
             semaphore: Arc::new(Semaphore::new(settings.max_concurrent_updates)),
@@ -140,6 +161,10 @@ impl TelegramBot {
             application,
             settings,
             admission,
+            file_transfers: FileTransfers {
+                bot: transfer_bot,
+                semaphore: Arc::new(Semaphore::new(settings.max_concurrent_file_transfers)),
+            },
         })
     }
 
@@ -149,7 +174,8 @@ impl TelegramBot {
             .dependencies(dptree::deps![
                 storage,
                 self.application,
-                self.admission.clone()
+                self.admission.clone(),
+                self.file_transfers
             ])
             .distribution_function(|update| update.chat().map(|chat| chat.id))
             .worker_queue_size(self.settings.max_concurrent_updates)

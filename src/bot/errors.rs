@@ -29,6 +29,9 @@ fn app_error_message(code: ErrorCode) -> &'static str {
         ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",
         ErrorCode::AlreadyRegistered => "Вы уже зарегистрированы.",
         ErrorCode::ConcurrentModification => "Данные уже изменились. Повторите действие.",
+        ErrorCode::FileTooLarge => "Файл превышает допустимый размер.",
+        ErrorCode::FileLimitReached => "Достигнут лимит вложений для задания.",
+        ErrorCode::ConfirmationRequired => "Подтвердите удаление вложения.",
     }
 }
 

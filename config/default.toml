@@ -25,6 +25,13 @@ file_suffix = "log"
 rotation = "daily"
 also_stdout = true
 
+[files]
+max_file_size_bytes = 5242880
+max_files_per_assignment = 5
+max_files_per_submission = 1
+transfer_timeout_ms = 60000
+max_concurrent_transfers = 4
+
 [telegram]
 enabled = false
 api_base_url = "https://api.telegram.org"

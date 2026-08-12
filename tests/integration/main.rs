@@ -5,6 +5,7 @@
 mod harness;
 
 mod actor_api;
+mod assignment_files;
 mod assignment_teacher_queries;
 mod assignments_api;
 mod attempts_api;

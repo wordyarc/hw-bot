@@ -7,7 +7,7 @@ use axum::http::Request;
 use axum::http::request::Builder;
 use chrono::{DateTime, Duration, Utc};
 use hw_bot::api::{self, ACTOR_HEADER, AppState};
-use hw_bot::app::ApplicationContainer;
+use hw_bot::app::{ApplicationContainer, FilePolicy};
 use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, StudentGroup, TeachingCourse, User};
 use hw_bot::test_support::{
@@ -43,7 +43,7 @@ impl TestApp {
     pub async fn start_with_http_timeout(request_timeout: StdDuration) -> Self {
         let pool = migrated_database().await;
         let fixture = Fixture::insert(&pool).await;
-        let application = ApplicationContainer::new(pool.clone());
+        let application = ApplicationContainer::new(pool.clone(), test_file_policy());
         let router = api::router(
             AppState::new("hw-bot-test", pool.clone(), application),
             request_timeout,
@@ -434,6 +434,14 @@ impl TestApp {
             .expect("insert published assignment");
 
         assignment
+    }
+}
+
+pub fn test_file_policy() -> FilePolicy {
+    FilePolicy {
+        max_file_size_bytes: 5 * 1024 * 1024,
+        max_files_per_assignment: 5,
+        max_files_per_submission: 1,
     }
 }
 

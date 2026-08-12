@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use hw_bot::db;
-use hw_bot::domain::{AssignmentStatus, EducationLevel, SubmissionStatus};
+use hw_bot::domain::{AssignmentStatus, EducationLevel, FilePresentation, SubmissionStatus};
 use sqlx::PgPool;
 
 use crate::harness::{TestApp, fresh_database};
@@ -24,6 +24,7 @@ async fn migrations_apply_to_empty_postgres() -> anyhow::Result<()> {
         "teaching_course_teachers",
         "assignments",
         "submissions",
+        "stored_files",
         "student_assignment_progress",
         "review_notification_outbox",
     ] {
@@ -38,6 +39,8 @@ async fn migrations_apply_to_empty_postgres() -> anyhow::Result<()> {
         "submissions_one_accepted_per_student_assignment_idx",
         "submissions_pending_review_queue_idx",
         "review_notification_outbox_pending_idx",
+        "stored_files_assignment_position_idx",
+        "stored_files_submission_position_idx",
     ] {
         assert!(
             index_exists(&pool, index_name).await?,
@@ -111,6 +114,132 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         .unwrap_or_else(|error| panic!("submission status {} rejected: {error}", status.as_str()));
     }
 
+    for (position, presentation) in FilePresentation::ALL.iter().enumerate() {
+        sqlx::query(
+            r#"
+            insert into stored_files (
+                assignment_id, position, presentation, filename, size_bytes, sha256, content
+            )
+            values ($1, $2, $3, $4, 0, $5, $6)
+            "#,
+        )
+        .bind(fixture.assignment.id().as_uuid())
+        .bind(position as i64 + 1)
+        .bind(presentation.as_str())
+        .bind(format!("{}.bin", presentation.as_str()))
+        .bind([0_u8; 32].as_slice())
+        .bind(Vec::<u8>::new())
+        .execute(&app.pool)
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "file presentation {} rejected: {error}",
+                presentation.as_str()
+            )
+        });
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stored_file_requires_exactly_one_owner() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let valid = |assignment: Option<uuid::Uuid>, submission: Option<uuid::Uuid>, position: i64| {
+        sqlx::query(
+            r#"
+            insert into stored_files (
+                assignment_id, submission_id, position, presentation, filename,
+                size_bytes, sha256, content
+            )
+            values ($1, $2, $3, 'document', 'file.bin', 0, $4, $5)
+            "#,
+        )
+        .bind(assignment)
+        .bind(submission)
+        .bind(position)
+        .bind([0_u8; 32].as_slice())
+        .bind(Vec::<u8>::new())
+        .execute(&app.pool)
+    };
+
+    assert!(valid(None, None, 1).await.is_err());
+    assert!(
+        valid(
+            Some(app.fixture.assignment.id().as_uuid()),
+            Some(app.queued_submission(app.student(), "pull/1").await),
+            2,
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        valid(Some(app.fixture.assignment.id().as_uuid()), None, 3)
+            .await
+            .is_ok()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stored_file_schema_has_no_installation_size_or_count_limit() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let content = vec![0x5a_u8; 5 * 1024 * 1024 + 1];
+
+    for position in 1_i64..=6 {
+        sqlx::query(
+            r#"
+            insert into stored_files (
+                assignment_id, position, presentation, filename,
+                size_bytes, sha256, content
+            )
+            values ($1, $2, 'document', $3, $4, $5, $6)
+            "#,
+        )
+        .bind(app.fixture.assignment.id().as_uuid())
+        .bind(position)
+        .bind(format!("file-{position}.bin"))
+        .bind(content.len() as i64)
+        .bind([0_u8; 32].as_slice())
+        .bind(&content)
+        .execute(&app.pool)
+        .await?;
+    }
+
+    let count: i64 =
+        sqlx::query_scalar("select count(*) from stored_files where assignment_id = $1")
+            .bind(app.fixture.assignment.id().as_uuid())
+            .fetch_one(&app.pool)
+            .await?;
+    assert_eq!(count, 6);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stored_file_size_and_checksum_shape_are_hard_invariants() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+
+    for (size, sha256) in [(2_i64, vec![0_u8; 32]), (1_i64, vec![0_u8; 31])] {
+        let result = sqlx::query(
+            r#"
+            insert into stored_files (
+                assignment_id, position, presentation, filename,
+                size_bytes, sha256, content
+            )
+            values ($1, $2, 'document', 'file.bin', $3, $4, $5)
+            "#,
+        )
+        .bind(app.fixture.assignment.id().as_uuid())
+        .bind(size)
+        .bind(size)
+        .bind(sha256)
+        .bind(vec![1_u8])
+        .execute(&app.pool)
+        .await;
+
+        assert!(result.is_err());
+    }
     Ok(())
 }
 
