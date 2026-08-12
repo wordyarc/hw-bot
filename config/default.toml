@@ -4,10 +4,13 @@ name = "hw-bot"
 [server]
 host = "127.0.0.1"
 port = 3000
+request_timeout_ms = 10000
 
 [database]
 url = "postgres://postgres:postgres@localhost:5432/hw-bot"
 max_connections = 5
+acquire_timeout_ms = 3000
+statement_timeout_ms = 5000
 run_migrations = true
 run_bootstrap = false
 bootstrap_file = "bootstrap/data.json"
@@ -26,6 +29,10 @@ also_stdout = true
 enabled = false
 api_base_url = "https://api.telegram.org"
 request_timeout_ms = 5000
+polling_timeout_ms = 10000
+rate_limit_burst = 8
+rate_limit_replenish_ms = 1000
+max_concurrent_updates = 32
 shutdown_grace_ms = 10000
 
 [notification_worker]

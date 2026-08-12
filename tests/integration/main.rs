@@ -13,6 +13,7 @@ mod db_schema;
 mod health_api;
 mod notification_outbox;
 mod notification_worker;
+mod resilience;
 mod review_api;
 mod student_read_api;
 mod submission_repository;

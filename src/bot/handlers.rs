@@ -13,8 +13,9 @@ use crate::app::{
     ReviewSubmission, SubmitHomework,
 };
 use crate::domain::{
-    AssignmentId, AssignmentStatus, MAX_ATTEMPTS, ReviewDecision, Role, SubmissionId,
-    TeachingCourseId, TelegramUserId, UserId,
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, AssignmentStatus, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS,
+    ReviewDecision, Role, SubmissionId, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN,
+    UserId,
 };
 
 use super::errors::send_app_error;
@@ -116,6 +117,10 @@ pub(super) async fn handle_message(
                     .await?;
                 return Ok(());
             }
+            if !ensure_text_limit(&bot, message.chat.id, text, DISPLAY_NAME_MAX_LEN, "Имя").await?
+            {
+                return Ok(());
+            }
             let groups = match services.users.list_student_groups().await {
                 Ok(groups) => groups,
                 Err(error) => {
@@ -151,6 +156,17 @@ pub(super) async fn handle_message(
                 .await?;
         }
         BotState::AwaitingSubmission { assignment_id } => {
+            if !ensure_text_limit(
+                &bot,
+                message.chat.id,
+                text,
+                USER_TEXT_MAX_LEN,
+                "Текст работы",
+            )
+            .await?
+            {
+                return Ok(());
+            }
             let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
                 return Ok(());
             };
@@ -182,6 +198,17 @@ pub(super) async fn handle_message(
             submission_id,
             decision,
         } => {
+            if !ensure_text_limit(
+                &bot,
+                message.chat.id,
+                text,
+                USER_TEXT_MAX_LEN,
+                "Комментарий",
+            )
+            .await?
+            {
+                return Ok(());
+            }
             let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
                 return Ok(());
             };
@@ -234,6 +261,17 @@ pub(super) async fn handle_message(
                     .await?;
                 return Ok(());
             }
+            if !ensure_text_limit(
+                &bot,
+                message.chat.id,
+                text,
+                ASSIGNMENT_TITLE_MAX_LEN,
+                "Название",
+            )
+            .await?
+            {
+                return Ok(());
+            }
             dialogue
                 .update(BotState::AwaitingAssignmentBody {
                     course_id,
@@ -247,6 +285,17 @@ pub(super) async fn handle_message(
             if text.trim().is_empty() {
                 bot.send_message(message.chat.id, "Текст задания не должен быть пустым.")
                     .await?;
+                return Ok(());
+            }
+            if !ensure_text_limit(
+                &bot,
+                message.chat.id,
+                text,
+                USER_TEXT_MAX_LEN,
+                "Текст задания",
+            )
+            .await?
+            {
                 return Ok(());
             }
             dialogue
@@ -419,6 +468,25 @@ pub(super) async fn handle_message(
     }
 
     Ok(())
+}
+
+async fn ensure_text_limit(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: &str,
+    max_len: usize,
+    field: &str,
+) -> HandlerResult<bool> {
+    if text.trim().chars().count() <= max_len {
+        return Ok(true);
+    }
+
+    bot.send_message(
+        chat_id,
+        format!("{field} не должно быть длиннее {max_len} символов."),
+    )
+    .await?;
+    Ok(false)
 }
 
 pub(super) async fn handle_callback(

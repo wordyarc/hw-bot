@@ -39,10 +39,27 @@ impl DbError {
 
 impl From<sqlx::Error> for DbError {
     fn from(error: sqlx::Error) -> Self {
+        log_timeout(&error);
         match unique_violation(&error) {
             Some(mapped) => mapped,
             None => Self::Database(error),
         }
+    }
+}
+
+pub(crate) fn log_timeout(error: &sqlx::Error) {
+    if matches!(error, sqlx::Error::PoolTimedOut) {
+        tracing::warn!(
+            kind = "pool_acquire_timeout",
+            "database operation timed out"
+        );
+    } else if error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .as_deref()
+        == Some("57014")
+    {
+        tracing::warn!(kind = "statement_timeout", "database operation timed out");
     }
 }
 

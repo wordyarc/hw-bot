@@ -27,7 +27,11 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         .await
     {
         Ok(1) => StatusCode::OK,
-        Ok(_) | Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        Ok(_) => StatusCode::SERVICE_UNAVAILABLE,
+        Err(error) => {
+            crate::db::error::log_timeout(&error);
+            StatusCode::SERVICE_UNAVAILABLE
+        }
     }
 }
 

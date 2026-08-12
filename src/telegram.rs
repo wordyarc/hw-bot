@@ -53,6 +53,7 @@ impl TelegramClient {
                     "transport error".to_owned()
                 },
                 retry_after: None,
+                rate_limited: false,
             })?;
 
         let status = response.status();
@@ -72,6 +73,7 @@ impl TelegramClient {
                 Err(TelegramError::Retryable {
                     message: format!("HTTP {status}"),
                     retry_after: None,
+                    rate_limited: status.as_u16() == 429,
                 })
             }
             Err(_) if status.is_client_error() => Err(TelegramError::Permanent {
@@ -80,6 +82,7 @@ impl TelegramClient {
             Err(_) => Err(TelegramError::Retryable {
                 message: "malformed response".to_owned(),
                 retry_after: None,
+                rate_limited: false,
             }),
         }
     }
@@ -91,6 +94,7 @@ pub enum TelegramError {
     Retryable {
         message: String,
         retry_after: Option<Duration>,
+        rate_limited: bool,
     },
 
     #[error("Telegram rejected the message: {message}")]
@@ -107,6 +111,16 @@ impl TelegramError {
 
     pub fn is_permanent(&self) -> bool {
         matches!(self, Self::Permanent { .. })
+    }
+
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(
+            self,
+            Self::Retryable {
+                rate_limited: true,
+                ..
+            }
+        )
     }
 }
 
@@ -138,8 +152,22 @@ fn classify_error(
         TelegramError::Retryable {
             message,
             retry_after,
+            rate_limited: error_code == 429,
         }
     } else {
         TelegramError::Permanent { message }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_telegram_429_without_retry_after() {
+        let error = classify_error(429, "too many requests".to_owned(), None);
+
+        assert!(error.is_rate_limited());
+        assert_eq!(error.retry_after(), None);
     }
 }

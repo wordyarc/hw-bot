@@ -1,7 +1,7 @@
 use anyhow::{Context, ensure};
 use hw_bot::api::{self, AppState};
 use hw_bot::app::ApplicationContainer;
-use hw_bot::bot::TelegramBot;
+use hw_bot::bot::{TelegramBot, TelegramBotSettings};
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat};
 use hw_bot::db;
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
@@ -38,7 +38,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
         run_bootstrap = config.database.run_bootstrap,
         "connecting to database"
     );
-    let db_pool =
+    let setup_pool =
         db::connect_with_max_connections(&config.database.url, config.database.max_connections)
             .await
             .context("failed to connect to database")?;
@@ -46,7 +46,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
 
     if config.database.run_migrations {
         tracing::info!("running database migrations");
-        db::run_migrations(&db_pool)
+        db::run_migrations(&setup_pool)
             .await
             .context("failed to run database migrations")?;
         tracing::info!("database migrations completed");
@@ -68,7 +68,7 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
                 bootstrap_file.display()
             )
         })?;
-        db::run_bootstrap(&db_pool, &seed)
+        db::run_bootstrap(&setup_pool, &seed)
             .await
             .context("failed to run database bootstrap")?;
         tracing::info!("database bootstrap completed");
@@ -76,11 +76,36 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
         tracing::info!("database bootstrap disabled");
     }
 
+    setup_pool.close().await;
+    ensure!(
+        config.database.acquire_timeout_ms > 0,
+        "database acquire timeout must be positive"
+    );
+    ensure!(
+        config.database.statement_timeout_ms > 0,
+        "database statement timeout must be positive"
+    );
+    let db_pool = db::connect_runtime(
+        &config.database.url,
+        config.database.max_connections,
+        Duration::from_millis(config.database.acquire_timeout_ms),
+        Duration::from_millis(config.database.statement_timeout_ms),
+    )
+    .await
+    .context("failed to initialize runtime database pool")?;
+
     let cancellation = CancellationToken::new();
     let application = ApplicationContainer::new(db_pool.clone());
     let telegram_bot = start_telegram_bot(&config, application.clone(), cancellation.clone())?;
     let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
-    let app = api::router(AppState::new(config.app.name, db_pool, application));
+    ensure!(
+        config.server.request_timeout_ms > 0,
+        "HTTP request timeout must be positive"
+    );
+    let app = api::router(
+        AppState::new(config.app.name, db_pool, application),
+        Duration::from_millis(config.server.request_timeout_ms),
+    );
 
     let addr = SocketAddr::new(config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -131,6 +156,13 @@ fn start_telegram_bot(
         application,
         required_bot_token(config)?,
         &config.telegram.api_base_url,
+        TelegramBotSettings {
+            request_timeout: Duration::from_millis(config.telegram.request_timeout_ms),
+            polling_timeout: Duration::from_millis(config.telegram.polling_timeout_ms),
+            rate_limit_replenish: Duration::from_millis(config.telegram.rate_limit_replenish_ms),
+            rate_limit_burst: config.telegram.rate_limit_burst,
+            max_concurrent_updates: config.telegram.max_concurrent_updates,
+        },
     )?;
 
     tracing::info!("Telegram bot enabled");

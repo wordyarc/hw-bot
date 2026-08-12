@@ -1,5 +1,10 @@
 use axum::Router;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use std::time::Duration;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 mod actor;
@@ -18,7 +23,9 @@ pub use error::ApiError;
 pub use json::JsonBody;
 pub use state::AppState;
 
-pub fn router(state: AppState) -> Router {
+pub const REQUEST_BODY_LIMIT: usize = 64 * 1024;
+
+pub fn router(state: AppState, request_timeout: Duration) -> Router {
     Router::new()
         .route("/", get(health::root))
         .route("/health", get(health::health))
@@ -66,6 +73,30 @@ pub fn router(state: AppState) -> Router {
             "/submissions/{submission_id}/review",
             post(review::review_submission),
         )
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ))
+        .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT))
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::map_response(normalize_transport_error))
         .with_state(state)
+}
+
+async fn normalize_transport_error(response: Response) -> Response {
+    match response.status() {
+        StatusCode::REQUEST_TIMEOUT => ApiError::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "request_timeout",
+            "request timed out",
+        )
+        .into_response(),
+        StatusCode::PAYLOAD_TOO_LARGE => ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        )
+        .into_response(),
+        _ => response,
+    }
 }

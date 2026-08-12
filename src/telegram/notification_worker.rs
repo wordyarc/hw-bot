@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::TelegramClient;
+use super::{TelegramClient, TelegramError};
 use crate::db::{self, DbError, DbResult};
 use crate::domain::SubmissionStatus;
 
@@ -85,6 +85,7 @@ impl NotificationWorker {
                 if error.is_permanent()
                     || notification.attempt_count >= self.settings.max_attempts =>
             {
+                log_retry_after(&error);
                 let last_error = bounded_error(&error.to_string());
                 ensure_claim_updated(
                     db::notifications::mark_failed(
@@ -99,6 +100,7 @@ impl NotificationWorker {
                 Ok(DeliveryOutcome::Failed)
             }
             Err(error) => {
+                log_retry_after(&error);
                 let retry_after = error
                     .retry_after()
                     .unwrap_or_else(|| self.retry_delay(notification.attempt_count));
@@ -146,6 +148,15 @@ impl NotificationWorker {
 
     fn retry_delay(&self, attempt_count: u32) -> Duration {
         retry_delay(&self.settings, attempt_count)
+    }
+}
+
+fn log_retry_after(error: &TelegramError) {
+    if error.is_rate_limited() {
+        tracing::warn!(
+            retry_after_seconds = error.retry_after().map(|value| value.as_secs()),
+            "Telegram rate limited a notification request"
+        );
     }
 }
 

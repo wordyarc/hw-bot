@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration as StdDuration;
 
 use axum::Router;
 use axum::body::Body;
@@ -36,10 +37,17 @@ pub struct TestApp {
 
 impl TestApp {
     pub async fn start() -> Self {
+        Self::start_with_http_timeout(StdDuration::from_secs(10)).await
+    }
+
+    pub async fn start_with_http_timeout(request_timeout: StdDuration) -> Self {
         let pool = migrated_database().await;
         let fixture = Fixture::insert(&pool).await;
         let application = ApplicationContainer::new(pool.clone());
-        let router = api::router(AppState::new("hw-bot-test", pool.clone(), application));
+        let router = api::router(
+            AppState::new("hw-bot-test", pool.clone(), application),
+            request_timeout,
+        );
 
         Self {
             pool,
@@ -108,6 +116,14 @@ impl TestApp {
 
     pub async fn post(&self, path: &str, body: Value) -> TestResponse {
         self.send(json_request(Request::post(path), body)).await
+    }
+
+    pub async fn post_raw(&self, path: &str, body: Vec<u8>) -> TestResponse {
+        let request = Request::post(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("valid request");
+        self.send(request).await
     }
 
     pub async fn post_as(&self, path: &str, actor: i64, body: Value) -> TestResponse {

@@ -23,6 +23,7 @@ pub struct ServerConfig {
     #[serde(deserialize_with = "deserialize_loopback_ip")]
     pub host: IpAddr,
     pub port: u16,
+    pub request_timeout_ms: u64,
 }
 
 fn deserialize_loopback_ip<'de, D>(deserializer: D) -> Result<IpAddr, D::Error>
@@ -43,6 +44,8 @@ where
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
+    pub acquire_timeout_ms: u64,
+    pub statement_timeout_ms: u64,
     pub run_migrations: bool,
     pub run_bootstrap: bool,
     pub bootstrap_file: PathBuf,
@@ -66,6 +69,10 @@ pub struct TelegramConfig {
     pub api_base_url: String,
     pub bot_token: Option<String>,
     pub request_timeout_ms: u64,
+    pub polling_timeout_ms: u64,
+    pub rate_limit_burst: u32,
+    pub rate_limit_replenish_ms: u64,
+    pub max_concurrent_updates: usize,
     pub shutdown_grace_ms: u64,
 }
 
@@ -126,10 +133,13 @@ mod tests {
                 [server]
                 host = "127.0.0.1"
                 port = 3000
+                request_timeout_ms = 10000
 
                 [database]
                 url = "postgres://postgres:postgres@localhost:5432/hw-bot"
                 max_connections = 5
+                acquire_timeout_ms = 3000
+                statement_timeout_ms = 5000
                 run_migrations = true
                 run_bootstrap = false
                 bootstrap_file = "bootstrap/data.json"
@@ -148,6 +158,10 @@ mod tests {
                 enabled = false
                 api_base_url = "https://api.telegram.org"
                 request_timeout_ms = 5000
+                polling_timeout_ms = 10000
+                rate_limit_burst = 8
+                rate_limit_replenish_ms = 1000
+                max_concurrent_updates = 32
                 shutdown_grace_ms = 10000
 
                 [notification_worker]
@@ -169,11 +183,14 @@ mod tests {
         assert_eq!(config.app.name, "hw-bot");
         assert_eq!(config.server.host, "127.0.0.1".parse::<IpAddr>().unwrap());
         assert_eq!(config.server.port, 3000);
+        assert_eq!(config.server.request_timeout_ms, 10000);
         assert_eq!(
             config.database.url,
             "postgres://postgres:postgres@localhost:5432/hw-bot"
         );
         assert_eq!(config.database.max_connections, 5);
+        assert_eq!(config.database.acquire_timeout_ms, 3000);
+        assert_eq!(config.database.statement_timeout_ms, 5000);
         assert!(config.database.run_migrations);
         assert!(!config.database.run_bootstrap);
         assert_eq!(
@@ -194,6 +211,10 @@ mod tests {
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
         assert!(!config.telegram.enabled);
+        assert_eq!(config.telegram.polling_timeout_ms, 10000);
+        assert_eq!(config.telegram.rate_limit_burst, 8);
+        assert_eq!(config.telegram.rate_limit_replenish_ms, 1000);
+        assert_eq!(config.telegram.max_concurrent_updates, 32);
         assert_eq!(config.telegram.shutdown_grace_ms, 10000);
         assert!(!config.notification_worker.enabled);
         assert_eq!(config.notification_worker.max_attempts, 10);
@@ -239,6 +260,7 @@ mod tests {
         ::config::Config::builder()
             .set_override("host", host.to_owned())?
             .set_override("port", 3000)?
+            .set_override("request_timeout_ms", 10000)?
             .build()?
             .try_deserialize()
     }
