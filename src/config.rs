@@ -346,7 +346,7 @@ mod tests {
                 statement_timeout_ms = 5000
                 run_migrations = true
                 run_bootstrap = false
-                bootstrap_file = "bootstrap/data.json"
+                bootstrap_file = "tools/deploy/bootstrap.production.json"
 
                 [logging]
                 level = "hw_bot=info,tower_http=info,sqlx=warn"
@@ -406,7 +406,7 @@ mod tests {
         assert!(!config.database.run_bootstrap);
         assert_eq!(
             config.database.bootstrap_file,
-            PathBuf::from("bootstrap/data.json")
+            PathBuf::from("tools/deploy/bootstrap.production.json")
         );
         assert_eq!(
             config.logging.level,
