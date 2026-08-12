@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select attempt_count, lease_token, lease_expires_at, delivered_at, failed_at\n        from review_notification_outbox\n        where submission_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attempt_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "attempt_count"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "lease_token",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "lease_token"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "lease_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "lease_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "delivered_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "delivered_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "failed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "failed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9370ba7e05502fc5b88c481c8cc504db9a4595e6f9c5877bc76968ab20f424d7"
+}

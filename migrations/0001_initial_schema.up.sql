@@ -121,6 +121,7 @@ create table submissions (
             status in ('accepted', 'rejected')
             and reviewed_by is not null
             and reviewed_at is not null
+            and review_comment is not null
             and btrim(review_comment) <> ''
         )
     ),

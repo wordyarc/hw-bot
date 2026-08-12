@@ -186,6 +186,19 @@ pub async fn list_student_assignments(
     Ok(Json(assignments.iter().map(Into::into).collect()))
 }
 
+pub async fn list_archived_student_assignments(
+    State(state): State<AppState>,
+    actor: Actor,
+) -> Result<Json<Vec<StudentAssignmentResponse>>, ApiError> {
+    let assignments = state
+        .application
+        .assignments
+        .list_archived_for_student(actor)
+        .await?;
+
+    Ok(Json(assignments.iter().map(Into::into).collect()))
+}
+
 pub async fn find_student_assignment(
     State(state): State<AppState>,
     actor: Actor,

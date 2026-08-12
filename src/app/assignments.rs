@@ -173,11 +173,30 @@ impl AssignmentService {
         let group_id = student.student_group_id().required("student group")?;
 
         let assignments = db::assignments::list_published_for_group(&self.pool, group_id).await?;
+        self.with_student_histories(assignments, student.id()).await
+    }
+
+    pub async fn list_archived_for_student(
+        &self,
+        actor: Actor,
+    ) -> AppResult<Vec<StudentAssignment>> {
+        let student = self.student(actor).await?;
+        let group_id = student.student_group_id().required("student group")?;
+
+        let assignments = db::assignments::list_archived_for_group(&self.pool, group_id).await?;
+        self.with_student_histories(assignments, student.id()).await
+    }
+
+    async fn with_student_histories(
+        &self,
+        assignments: Vec<Assignment>,
+        student_id: UserId,
+    ) -> AppResult<Vec<StudentAssignment>> {
         let ids: Vec<_> = assignments
             .iter()
             .map(|assignment| assignment.id().as_uuid())
             .collect();
-        let mut histories = db::submissions::load_histories(&self.pool, &ids, student.id()).await?;
+        let mut histories = db::submissions::load_histories(&self.pool, &ids, student_id).await?;
 
         Ok(assignments
             .into_iter()
@@ -357,8 +376,11 @@ pub(crate) async fn load_visible_assignment_for_student(
         .await?
         .required("assignment")?;
 
-    // Черновика для студента не существует, поэтому 404, а не 403
-    if assignment.status() == AssignmentStatus::Draft {
+    // Никогда не опубликованного задания для студента не существует, поэтому 404, а не 403
+    if assignment.status() == AssignmentStatus::Draft
+        || (assignment.status() == AssignmentStatus::Archived
+            && assignment.published_at().is_none())
+    {
         return Err(AppError::NotFound {
             resource: "assignment",
         });

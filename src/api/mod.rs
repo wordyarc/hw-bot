@@ -28,7 +28,9 @@ pub const REQUEST_BODY_LIMIT: usize = 64 * 1024;
 pub fn router(state: AppState, request_timeout: Duration) -> Router {
     Router::new()
         .route("/", get(health::root))
-        .route("/health", get(health::health))
+        .route("/health", get(health::readiness))
+        .route("/health/live", get(health::liveness))
+        .route("/health/ready", get(health::readiness))
         .route("/echo", post(health::echo))
         .route(
             "/teaching-courses/{teaching_course_id}/assignments",
@@ -61,6 +63,10 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
         .route(
             "/me/assignments",
             get(assignments::list_student_assignments),
+        )
+        .route(
+            "/me/assignments/archive",
+            get(assignments::list_archived_student_assignments),
         )
         .route(
             "/me/assignments/{assignment_id}",

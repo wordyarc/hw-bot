@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use hw_bot::telegram::{
-    DeliveryOutcome, NotificationWorker, NotificationWorkerSettings, TelegramClient,
+    DeliveryOutcome, NotificationWorker, NotificationWorkerError, NotificationWorkerSettings,
+    TelegramClient,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, method, path};
@@ -130,6 +131,49 @@ async fn permanent_telegram_error_fails_notification() {
     .await
     .expect("load failure status");
     assert!(failed);
+}
+
+#[tokio::test]
+async fn invalid_credentials_preserve_the_notification_for_a_fixed_deployment() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    app.review(submission, app.teacher(), "accept", "good")
+        .await
+        .ok();
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "ok": false,
+            "error_code": 401,
+            "description": "Unauthorized"
+        })))
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let worker = worker(&app, &telegram, 1);
+
+    assert!(matches!(
+        worker.deliver_one(Utc::now()).await,
+        Err(NotificationWorkerError::InvalidCredentials)
+    ));
+
+    let state = sqlx::query!(
+        r#"
+        select attempt_count, lease_token, lease_expires_at, delivered_at, failed_at
+        from review_notification_outbox
+        where submission_id = $1
+        "#,
+        submission,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("load preserved notification");
+    assert_eq!(state.attempt_count, 0);
+    assert!(state.lease_token.is_none());
+    assert!(state.lease_expires_at.is_none());
+    assert!(state.delivered_at.is_none());
+    assert!(state.failed_at.is_none());
 }
 
 fn worker(app: &TestApp, telegram: &MockServer, max_attempts: u32) -> NotificationWorker {

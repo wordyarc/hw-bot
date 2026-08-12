@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use sqlx::Row;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::str::FromStr;
@@ -56,4 +57,40 @@ pub async fn connect_runtime(
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), MigrateError> {
     MIGRATOR.run(pool).await
+}
+
+pub async fn validate_migrations(pool: &PgPool) -> Result<(), MigrateError> {
+    let rows =
+        sqlx::query("select version, checksum, success from _sqlx_migrations order by version")
+            .fetch_all(pool)
+            .await?;
+    let mut applied = std::collections::HashMap::new();
+
+    for row in rows {
+        let version: i64 = row.try_get("version")?;
+        let checksum: Vec<u8> = row.try_get("checksum")?;
+        let success: bool = row.try_get("success")?;
+        if !success {
+            return Err(MigrateError::Dirty(version));
+        }
+        applied.insert(version, checksum);
+    }
+
+    for migration in MIGRATOR
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration())
+    {
+        let Some(checksum) = applied.remove(&migration.version) else {
+            return Err(MigrateError::VersionNotPresent(migration.version));
+        };
+        if checksum != migration.checksum.as_ref() {
+            return Err(MigrateError::VersionMismatch(migration.version));
+        }
+    }
+
+    if let Some(version) = applied.into_keys().next() {
+        return Err(MigrateError::VersionMissing(version));
+    }
+
+    Ok(())
 }

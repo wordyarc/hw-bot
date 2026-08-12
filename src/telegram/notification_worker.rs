@@ -2,12 +2,14 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{TelegramClient, TelegramError};
 use crate::db::{self, DbError, DbResult};
 use crate::domain::SubmissionStatus;
+use crate::health::ComponentHealth;
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
 const LAST_ERROR_LIMIT: usize = 1000;
@@ -27,6 +29,18 @@ pub enum DeliveryOutcome {
     Delivered,
     Rescheduled,
     Failed,
+}
+
+#[derive(Debug, Error)]
+pub enum NotificationWorkerError {
+    #[error("Telegram credentials were rejected")]
+    InvalidCredentials,
+
+    #[error(transparent)]
+    Telegram(#[from] TelegramError),
+
+    #[error(transparent)]
+    Database(#[from] DbError),
 }
 
 #[derive(Clone)]
@@ -49,7 +63,10 @@ impl NotificationWorker {
         }
     }
 
-    pub async fn deliver_one(&self, now: DateTime<Utc>) -> DbResult<DeliveryOutcome> {
+    pub async fn deliver_one(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<DeliveryOutcome, NotificationWorkerError> {
         let lease_token = Uuid::new_v4();
         let lease_expires_at = now + chrono_duration(self.settings.lease_duration)?;
         let Some(notification) =
@@ -80,6 +97,19 @@ impl NotificationWorker {
                     .await?,
                 )?;
                 Ok(DeliveryOutcome::Delivered)
+            }
+            Err(error) if error.is_invalid_credentials() => {
+                let last_error = bounded_error(&error.to_string());
+                ensure_claim_updated(
+                    db::notifications::release_after_credentials_failure(
+                        &self.pool,
+                        notification.id,
+                        notification.lease_token,
+                        &last_error,
+                    )
+                    .await?,
+                )?;
+                Err(NotificationWorkerError::InvalidCredentials)
             }
             Err(error)
                 if error.is_permanent()
@@ -121,24 +151,43 @@ impl NotificationWorker {
         }
     }
 
-    pub async fn run(self, cancellation: CancellationToken) {
+    pub async fn run(
+        self,
+        cancellation: CancellationToken,
+        health: ComponentHealth,
+    ) -> Result<(), NotificationWorkerError> {
+        tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            result = self.telegram.validate_credentials() => match result {
+                Ok(()) => {}
+                Err(error) if error.is_invalid_credentials() => {
+                    return Err(NotificationWorkerError::InvalidCredentials);
+                }
+                Err(error) => return Err(error.into()),
+            },
+        }
+        let _ready = health.ready();
+
         loop {
             if cancellation.is_cancelled() {
-                return;
+                return Ok(());
             }
 
             match self.deliver_one(Utc::now()).await {
                 Ok(DeliveryOutcome::Idle) => {
                     tokio::select! {
-                        () = cancellation.cancelled() => return,
+                        () = cancellation.cancelled() => return Ok(()),
                         () = tokio::time::sleep(self.settings.poll_interval) => {}
                     }
                 }
                 Ok(_) => {}
+                Err(NotificationWorkerError::InvalidCredentials) => {
+                    return Err(NotificationWorkerError::InvalidCredentials);
+                }
                 Err(error) => {
                     tracing::error!(error = ?error, "notification worker failed to access database");
                     tokio::select! {
-                        () = cancellation.cancelled() => return,
+                        () = cancellation.cancelled() => return Ok(()),
                         () = tokio::time::sleep(self.settings.poll_interval) => {}
                     }
                 }

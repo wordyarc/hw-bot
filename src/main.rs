@@ -1,13 +1,14 @@
-use anyhow::{Context, ensure};
+use anyhow::Context;
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{ApplicationContainer, FilePolicy};
 use hw_bot::bot::{TelegramBot, TelegramBotSettings};
-use hw_bot::config::{AppConfig, FilesConfig, LogRotation, LoggingConfig, LoggingFormat};
+use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig};
 use hw_bot::db;
+use hw_bot::health::{CriticalComponent, HealthState};
+use hw_bot::supervision::{CriticalTask, Supervisor};
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -19,7 +20,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = AppConfig::load().context("failed to load application config")?;
+    let config = AppConfig::load()
+        .context("failed to load application config")?
+        .validate()?;
     let _log_guard = init_logging(&config.logging)?;
 
     if let Err(error) = run(config).await {
@@ -30,8 +33,13 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run(config: AppConfig) -> anyhow::Result<()> {
-    let file_policy = validate_files_config(&config.files)?;
+async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
+    let file_policy = FilePolicy {
+        max_file_size_bytes: usize::try_from(config.files.max_file_size_bytes)
+            .expect("validated file size fits usize"),
+        max_files_per_assignment: config.files.max_files_per_assignment,
+        max_files_per_submission: config.files.max_files_per_submission,
+    };
     tracing::info!(app = %config.app.name, "starting application");
     tracing::info!(
         max_connections = config.database.max_connections,
@@ -52,7 +60,10 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
             .context("failed to run database migrations")?;
         tracing::info!("database migrations completed");
     } else {
-        tracing::info!("database migrations disabled");
+        tracing::info!("database migrations disabled, validating schema");
+        db::validate_migrations(&setup_pool)
+            .await
+            .context("database schema does not match embedded migrations")?;
     }
 
     if config.database.run_bootstrap {
@@ -78,14 +89,6 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     }
 
     setup_pool.close().await;
-    ensure!(
-        config.database.acquire_timeout_ms > 0,
-        "database acquire timeout must be positive"
-    );
-    ensure!(
-        config.database.statement_timeout_ms > 0,
-        "database statement timeout must be positive"
-    );
     let db_pool = db::connect_runtime(
         &config.database.url,
         config.database.max_connections,
@@ -96,15 +99,17 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
     .context("failed to initialize runtime database pool")?;
 
     let cancellation = CancellationToken::new();
+    let health = HealthState::new(config.telegram.enabled, config.notification_worker.enabled);
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
-    let telegram_bot = start_telegram_bot(&config, application.clone(), cancellation.clone())?;
-    let worker = start_notification_worker(&config, db_pool.clone(), cancellation.clone())?;
-    ensure!(
-        config.server.request_timeout_ms > 0,
-        "HTTP request timeout must be positive"
-    );
+    let telegram_bot = build_telegram_bot(&config, application.clone())?;
+    let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
-        AppState::new(config.app.name, db_pool, application),
+        AppState::new(
+            config.app.name.clone(),
+            db_pool.clone(),
+            application,
+            health.clone(),
+        ),
         Duration::from_millis(config.server.request_timeout_ms),
     );
 
@@ -115,85 +120,58 @@ async fn run(config: AppConfig) -> anyhow::Result<()> {
 
     tracing::info!("listening on http://{addr}");
 
-    let shutdown = cancellation.clone();
-    let server_result = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            shutdown.cancel();
-        })
-        .await
-        .context("failed to serve HTTP application");
+    let shutdown_grace = Duration::from_millis(
+        config
+            .server
+            .request_timeout_ms
+            .max(config.telegram.shutdown_grace_ms)
+            .max(config.notification_worker.shutdown_grace_ms),
+    );
+    let mut supervisor = Supervisor::new(cancellation.clone(), health.clone(), shutdown_grace);
 
-    cancellation.cancel();
-    stop_telegram_bot(
-        telegram_bot,
-        Duration::from_millis(config.telegram.shutdown_grace_ms),
-    )
-    .await?;
-    stop_notification_worker(
-        worker,
-        Duration::from_millis(config.notification_worker.shutdown_grace_ms),
-    )
-    .await?;
+    let http_cancellation = cancellation.clone();
+    supervisor.spawn(CriticalTask::Http, async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(http_cancellation.cancelled_owned())
+            .await
+            .context("failed to serve HTTP application")
+    });
 
-    server_result
+    if let Some(bot) = telegram_bot {
+        let bot_cancellation = cancellation.clone();
+        let component = health.component(CriticalComponent::TelegramBot);
+        supervisor.spawn(CriticalTask::TelegramBot, async move {
+            bot.run(bot_cancellation, component)
+                .await
+                .map_err(Into::into)
+        });
+    }
+
+    if let Some(worker) = worker {
+        let worker_cancellation = cancellation.clone();
+        let component = health.component(CriticalComponent::NotificationWorker);
+        supervisor.spawn(CriticalTask::NotificationWorker, async move {
+            worker
+                .run(worker_cancellation, component)
+                .await
+                .map_err(Into::into)
+        });
+    }
+
+    let result = supervisor.run(shutdown_signal()).await;
+    db_pool.close().await;
+    result
 }
 
-fn validate_files_config(config: &FilesConfig) -> anyhow::Result<FilePolicy> {
-    const MAX_ASSIGNMENT_FILES: usize = 10;
-
-    ensure!(
-        config.max_file_size_bytes > 0,
-        "file size limit must be positive"
-    );
-    ensure!(
-        config.max_files_per_assignment > 0,
-        "assignment file limit must be positive"
-    );
-    ensure!(
-        config.max_files_per_assignment <= MAX_ASSIGNMENT_FILES,
-        "assignment file limit must not exceed {MAX_ASSIGNMENT_FILES}"
-    );
-    ensure!(
-        config.max_files_per_submission > 0,
-        "submission file limit must be positive"
-    );
-    ensure!(
-        config.transfer_timeout_ms > 0,
-        "file transfer timeout must be positive"
-    );
-    ensure!(
-        config.max_concurrent_transfers > 0,
-        "max concurrent file transfers must be positive"
-    );
-
-    let max_file_size_bytes = usize::try_from(config.max_file_size_bytes)
-        .context("file size limit does not fit this platform")?;
-    max_file_size_bytes
-        .checked_mul(config.max_concurrent_transfers)
-        .context("total concurrent file transfer size is too large")?;
-
-    Ok(FilePolicy {
-        max_file_size_bytes,
-        max_files_per_assignment: config.max_files_per_assignment,
-        max_files_per_submission: config.max_files_per_submission,
-    })
-}
-
-fn start_telegram_bot(
+fn build_telegram_bot(
     config: &AppConfig,
     application: ApplicationContainer,
-    cancellation: CancellationToken,
-) -> anyhow::Result<Option<JoinHandle<()>>> {
+) -> anyhow::Result<Option<TelegramBot>> {
     if !config.telegram.enabled {
         tracing::info!("Telegram bot disabled");
         return Ok(None);
     }
 
-    ensure!(
-        config.telegram.shutdown_grace_ms > 0,
-        "Telegram bot shutdown grace must be positive"
-    );
     let bot = TelegramBot::new(
         application,
         required_bot_token(config)?,
@@ -210,73 +188,20 @@ fn start_telegram_bot(
     )?;
 
     tracing::info!("Telegram bot enabled");
-    Ok(Some(tokio::spawn(bot.run(cancellation))))
+    Ok(Some(bot))
 }
 
-async fn stop_telegram_bot(bot: Option<JoinHandle<()>>, grace: Duration) -> anyhow::Result<()> {
-    let Some(mut bot) = bot else {
-        return Ok(());
-    };
-
-    match tokio::time::timeout(grace, &mut bot).await {
-        Ok(result) => result.context("Telegram bot task failed"),
-        Err(_) => {
-            tracing::warn!("Telegram bot did not stop within shutdown grace");
-            bot.abort();
-            Ok(())
-        }
-    }
-}
-
-fn start_notification_worker(
+fn build_notification_worker(
     config: &AppConfig,
     pool: sqlx::PgPool,
-    cancellation: CancellationToken,
-) -> anyhow::Result<Option<JoinHandle<()>>> {
+) -> anyhow::Result<Option<NotificationWorker>> {
     if !config.notification_worker.enabled {
         tracing::info!("review notification worker disabled");
         return Ok(None);
     }
 
     let worker = &config.notification_worker;
-    ensure!(
-        worker.poll_interval_ms > 0,
-        "worker poll interval must be positive"
-    );
-    ensure!(
-        worker.lease_duration_ms > 0,
-        "worker lease duration must be positive"
-    );
-    ensure!(
-        worker.max_attempts > 0,
-        "worker max attempts must be positive"
-    );
-    ensure!(
-        worker.retry_initial_ms > 0,
-        "worker initial retry must be positive"
-    );
-    ensure!(
-        worker.retry_max_ms >= worker.retry_initial_ms,
-        "worker max retry must not be less than initial retry"
-    );
-    ensure!(
-        worker.shutdown_grace_ms > 0,
-        "worker shutdown grace must be positive"
-    );
-    ensure!(
-        config.telegram.request_timeout_ms > 0,
-        "Telegram request timeout must be positive"
-    );
-    ensure!(
-        worker.lease_duration_ms > config.telegram.request_timeout_ms,
-        "worker lease duration must exceed Telegram request timeout"
-    );
-
     let bot_token = required_bot_token(config)?;
-    ensure!(
-        !config.telegram.api_base_url.trim().is_empty(),
-        "Telegram API base URL must not be empty"
-    );
 
     let telegram = TelegramClient::new(
         &config.telegram.api_base_url,
@@ -297,7 +222,7 @@ fn start_notification_worker(
     );
 
     tracing::info!("review notification worker enabled");
-    Ok(Some(tokio::spawn(worker.run(cancellation))))
+    Ok(Some(worker))
 }
 
 fn required_bot_token(config: &AppConfig) -> anyhow::Result<&str> {
@@ -309,50 +234,34 @@ fn required_bot_token(config: &AppConfig) -> anyhow::Result<&str> {
         .context("Telegram bot token is required when a Telegram component is enabled")
 }
 
-async fn stop_notification_worker(
-    worker: Option<JoinHandle<()>>,
-    grace: Duration,
-) -> anyhow::Result<()> {
-    let Some(mut worker) = worker else {
-        return Ok(());
-    };
-
-    match tokio::time::timeout(grace, &mut worker).await {
-        Ok(result) => result.context("notification worker task failed"),
-        Err(_) => {
-            tracing::warn!("notification worker did not stop within shutdown grace");
-            worker.abort();
-            Ok(())
-        }
-    }
-}
-
-async fn shutdown_signal() {
+async fn shutdown_signal() -> anyhow::Result<()> {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
-            .expect("failed to install Ctrl+C handler");
+            .context("failed to install Ctrl+C handler")
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?
             .recv()
             .await;
+        Ok::<_, std::io::Error>(())
     };
 
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let terminate = std::future::pending::<std::io::Result<()>>();
 
     tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+        result = ctrl_c => result?,
+        result = terminate => result?,
     }
+
+    Ok(())
 }
 
 fn init_logging(config: &LoggingConfig) -> anyhow::Result<Option<WorkerGuard>> {
-    let env_filter = EnvFilter::builder().parse_lossy(&config.level);
+    let env_filter = EnvFilter::try_new(&config.level)?;
 
     if config.file_enabled {
         std::fs::create_dir_all(&config.file_dir)
@@ -407,46 +316,4 @@ where
         .try_init()?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn files_config() -> FilesConfig {
-        FilesConfig {
-            max_file_size_bytes: 5 * 1024 * 1024,
-            max_files_per_assignment: 5,
-            max_files_per_submission: 1,
-            transfer_timeout_ms: 60_000,
-            max_concurrent_transfers: 4,
-        }
-    }
-
-    #[test]
-    fn file_config_rejects_more_than_ten_assignment_files() {
-        let error = validate_files_config(&FilesConfig {
-            max_files_per_assignment: 11,
-            ..files_config()
-        })
-        .unwrap_err();
-
-        assert!(error.to_string().contains("must not exceed 10"));
-    }
-
-    #[test]
-    fn file_config_rejects_total_transfer_size_overflow() {
-        let error = validate_files_config(&FilesConfig {
-            max_file_size_bytes: usize::MAX as u64,
-            max_concurrent_transfers: 2,
-            ..files_config()
-        })
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("total concurrent file transfer size")
-        );
-    }
 }

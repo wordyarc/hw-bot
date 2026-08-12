@@ -12,6 +12,17 @@ async fn health_endpoint_checks_the_database() {
 }
 
 #[tokio::test]
+async fn liveness_does_not_depend_on_the_database() {
+    let app = TestApp::start().await;
+    app.pool.close().await;
+
+    app.get("/health/live").await.expect(StatusCode::OK);
+    app.get("/health/ready")
+        .await
+        .expect(StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn echo_returns_the_app_name() {
     let app = TestApp::start().await;
 

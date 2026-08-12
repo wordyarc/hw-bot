@@ -1,9 +1,11 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer};
 
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     pub app: AppInfoConfig,
     pub server: ServerConfig,
@@ -15,11 +17,13 @@ pub struct AppConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppInfoConfig {
     pub name: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(deserialize_with = "deserialize_loopback_ip")]
     pub host: IpAddr,
@@ -42,6 +46,7 @@ where
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
@@ -53,6 +58,7 @@ pub struct DatabaseConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     pub level: String,
     pub format: LoggingFormat,
@@ -65,6 +71,7 @@ pub struct LoggingConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FilesConfig {
     pub max_file_size_bytes: u64,
     pub max_files_per_assignment: usize,
@@ -74,6 +81,7 @@ pub struct FilesConfig {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TelegramConfig {
     pub enabled: bool,
     pub api_base_url: String,
@@ -87,6 +95,7 @@ pub struct TelegramConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotificationWorkerConfig {
     pub enabled: bool,
     pub poll_interval_ms: u64,
@@ -125,6 +134,191 @@ impl AppConfig {
             )
             .build()?
             .try_deserialize()
+    }
+
+    pub fn validate(self) -> Result<ValidatedAppConfig, ConfigValidationError> {
+        validate_non_empty("app.name", &self.app.name)?;
+        validate(self.server.port != 0, "server.port must be positive")?;
+        validate_positive("server.request_timeout_ms", self.server.request_timeout_ms)?;
+
+        sqlx::postgres::PgConnectOptions::from_str(&self.database.url)
+            .map_err(|_| invalid("database.url must be a valid PostgreSQL URL"))?;
+        validate(
+            self.database.max_connections > 0,
+            "database.max_connections must be positive",
+        )?;
+        validate_positive(
+            "database.acquire_timeout_ms",
+            self.database.acquire_timeout_ms,
+        )?;
+        validate_positive(
+            "database.statement_timeout_ms",
+            self.database.statement_timeout_ms,
+        )?;
+
+        tracing_subscriber::EnvFilter::try_new(&self.logging.level)
+            .map_err(|_| invalid("logging.level contains an invalid filter directive"))?;
+        if self.logging.file_enabled {
+            validate_non_empty("logging.file_dir", &self.logging.file_dir)?;
+            validate_non_empty("logging.file_prefix", &self.logging.file_prefix)?;
+            validate_non_empty("logging.file_suffix", &self.logging.file_suffix)?;
+        }
+
+        validate_files(&self.files)?;
+        validate_telegram(&self.telegram)?;
+        validate_worker(&self.notification_worker, &self.telegram)?;
+
+        if self.telegram.enabled || self.notification_worker.enabled {
+            validate(
+                self.telegram
+                    .bot_token
+                    .as_deref()
+                    .is_some_and(|token| !token.trim().is_empty()),
+                "telegram.bot_token is required when a Telegram component is enabled",
+            )?;
+        }
+
+        Ok(ValidatedAppConfig(self))
+    }
+}
+
+pub struct ValidatedAppConfig(AppConfig);
+
+impl std::ops::Deref for ValidatedAppConfig {
+    type Target = AppConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid application configuration: {message}")]
+pub struct ConfigValidationError {
+    message: String,
+}
+
+fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
+    validate(
+        config.max_file_size_bytes > 0,
+        "files.max_file_size_bytes must be positive",
+    )?;
+    validate(
+        config.max_file_size_bytes <= i64::MAX as u64,
+        "files.max_file_size_bytes is too large",
+    )?;
+    validate(
+        config.max_files_per_assignment > 0,
+        "files.max_files_per_assignment must be positive",
+    )?;
+    validate(
+        config.max_files_per_assignment <= 10,
+        "files.max_files_per_assignment must not exceed 10",
+    )?;
+    validate(
+        config.max_files_per_submission > 0,
+        "files.max_files_per_submission must be positive",
+    )?;
+    validate_positive("files.transfer_timeout_ms", config.transfer_timeout_ms)?;
+    validate(
+        config.max_concurrent_transfers > 0,
+        "files.max_concurrent_transfers must be positive",
+    )?;
+    validate(
+        config.max_concurrent_transfers <= tokio::sync::Semaphore::MAX_PERMITS,
+        "files.max_concurrent_transfers is too large",
+    )?;
+
+    let size = usize::try_from(config.max_file_size_bytes)
+        .map_err(|_| invalid("files.max_file_size_bytes does not fit this platform"))?;
+    size.checked_mul(config.max_concurrent_transfers)
+        .ok_or_else(|| invalid("total concurrent file transfer size is too large"))?;
+    Ok(())
+}
+
+fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationError> {
+    let url = reqwest::Url::parse(&config.api_base_url)
+        .map_err(|_| invalid("telegram.api_base_url must be a valid URL"))?;
+    validate(
+        matches!(url.scheme(), "http" | "https"),
+        "telegram.api_base_url must use HTTP or HTTPS",
+    )?;
+    validate_positive("telegram.request_timeout_ms", config.request_timeout_ms)?;
+    validate(
+        config.polling_timeout_ms >= 1000 && config.polling_timeout_ms.is_multiple_of(1000),
+        "telegram.polling_timeout_ms must use whole seconds",
+    )?;
+    validate(
+        config.polling_timeout_ms / 1000 <= u64::from(u32::MAX),
+        "telegram.polling_timeout_ms is too large",
+    )?;
+    validate(
+        config.rate_limit_burst > 0,
+        "telegram.rate_limit_burst must be positive",
+    )?;
+    validate_positive(
+        "telegram.rate_limit_replenish_ms",
+        config.rate_limit_replenish_ms,
+    )?;
+    validate(
+        (1..=1024).contains(&config.max_concurrent_updates),
+        "telegram.max_concurrent_updates must be between 1 and 1024",
+    )?;
+    validate_positive("telegram.shutdown_grace_ms", config.shutdown_grace_ms)
+}
+
+fn validate_worker(
+    config: &NotificationWorkerConfig,
+    telegram: &TelegramConfig,
+) -> Result<(), ConfigValidationError> {
+    validate_positive(
+        "notification_worker.poll_interval_ms",
+        config.poll_interval_ms,
+    )?;
+    validate_positive(
+        "notification_worker.lease_duration_ms",
+        config.lease_duration_ms,
+    )?;
+    validate(
+        config.lease_duration_ms > telegram.request_timeout_ms,
+        "notification_worker.lease_duration_ms must exceed telegram.request_timeout_ms",
+    )?;
+    validate(
+        config.max_attempts > 0,
+        "notification_worker.max_attempts must be positive",
+    )?;
+    validate_positive(
+        "notification_worker.retry_initial_ms",
+        config.retry_initial_ms,
+    )?;
+    validate(
+        config.retry_max_ms >= config.retry_initial_ms,
+        "notification_worker.retry_max_ms must not be less than retry_initial_ms",
+    )?;
+    validate_positive(
+        "notification_worker.shutdown_grace_ms",
+        config.shutdown_grace_ms,
+    )
+}
+
+fn validate_positive(field: &'static str, value: u64) -> Result<(), ConfigValidationError> {
+    validate(value > 0, format!("{field} must be positive"))
+}
+
+fn validate_non_empty(field: &'static str, value: &str) -> Result<(), ConfigValidationError> {
+    validate(
+        !value.trim().is_empty(),
+        format!("{field} must not be empty"),
+    )
+}
+
+fn validate(condition: bool, message: impl Into<String>) -> Result<(), ConfigValidationError> {
+    condition.then_some(()).ok_or_else(|| invalid(message))
+}
+
+fn invalid(message: impl Into<String>) -> ConfigValidationError {
+    ConfigValidationError {
+        message: message.into(),
     }
 }
 
@@ -269,6 +463,56 @@ mod tests {
                 "host: {host}, error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn validation_rejects_enabled_telegram_without_token() {
+        let mut config = app_config();
+        config.telegram.enabled = true;
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(error.to_string().contains("telegram.bot_token"));
+    }
+
+    #[test]
+    fn validation_rejects_zero_database_connections() {
+        let mut config = app_config();
+        config.database.max_connections = 0;
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(error.to_string().contains("database.max_connections"));
+    }
+
+    #[test]
+    fn validation_rejects_unknown_fields() {
+        let error = ::config::Config::builder()
+            .add_source(::config::File::from_str(
+                r#"
+                [server]
+                host = "127.0.0.1"
+                port = 3000
+                request_timeout_ms = 10000
+                typo = true
+                "#,
+                ::config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize::<ServerConfig>()
+            .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    fn app_config() -> AppConfig {
+        ::config::Config::builder()
+            .add_source(::config::File::with_name("config/default"))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap()
     }
 
     #[test]

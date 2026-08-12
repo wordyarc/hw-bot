@@ -48,6 +48,34 @@ async fn an_archived_assignment_leaves_the_student_list() {
 }
 
 #[tokio::test]
+async fn a_previously_published_assignment_appears_in_the_student_archive() {
+    let app = TestApp::start().await;
+    app.archive_assignment(app.assignment(), app.teacher())
+        .await
+        .ok();
+
+    let body = app.archived_student_assignments(app.student()).await.ok();
+
+    let item = only(&body);
+    assert_eq!(item["assignment"]["id"], json!(app.assignment()));
+    assert_eq!(item["assignment"]["status"], json!("archived"));
+    assert!(item["assignment"]["published_at"].is_string());
+}
+
+#[tokio::test]
+async fn a_never_published_assignment_stays_out_of_the_student_archive() {
+    let app = TestApp::start().await;
+    let draft = app.add_draft_assignment().await;
+    app.archive_assignment(draft.id().as_uuid(), app.teacher())
+        .await
+        .ok();
+
+    let body = app.archived_student_assignments(app.student()).await.ok();
+
+    assert_eq!(body, json!([]));
+}
+
+#[tokio::test]
 async fn assignments_of_another_group_are_invisible() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_student().await;
@@ -215,11 +243,46 @@ async fn the_card_survives_archiving() {
     assert_eq!(body["assignment"]["status"], json!("archived"));
 }
 
+#[tokio::test]
+async fn an_archived_card_keeps_submission_history_and_review_comments() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    app.review(submission, app.teacher(), "reject", "Add tests.")
+        .await
+        .ok();
+    app.archive_assignment(app.assignment(), app.teacher())
+        .await
+        .ok();
+
+    let body = app
+        .student_assignment(app.assignment(), app.student())
+        .await
+        .ok();
+
+    assert_eq!(
+        body["submissions"][0]["review_comment"],
+        json!("Add tests.")
+    );
+}
+
 /// 404, а не 403: о существовании черновика студент знать не должен.
 #[tokio::test]
 async fn a_draft_card_does_not_exist_for_a_student() {
     let app = TestApp::start().await;
     let draft = app.add_draft_assignment().await;
+
+    app.student_assignment(draft.id().as_uuid(), app.student())
+        .await
+        .not_found();
+}
+
+#[tokio::test]
+async fn a_never_published_archived_card_does_not_exist_for_a_student() {
+    let app = TestApp::start().await;
+    let draft = app.add_draft_assignment().await;
+    app.archive_assignment(draft.id().as_uuid(), app.teacher())
+        .await
+        .ok();
 
     app.student_assignment(draft.id().as_uuid(), app.student())
         .await
@@ -250,6 +313,15 @@ async fn a_teacher_has_no_student_assignments() {
     let app = TestApp::start().await;
 
     app.student_assignments(app.teacher())
+        .await
+        .error(StatusCode::FORBIDDEN, "permission_denied");
+}
+
+#[tokio::test]
+async fn a_teacher_has_no_student_archive() {
+    let app = TestApp::start().await;
+
+    app.archived_student_assignments(app.teacher())
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
 }

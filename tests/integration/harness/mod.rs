@@ -10,6 +10,7 @@ use hw_bot::api::{self, ACTOR_HEADER, AppState};
 use hw_bot::app::{Actor, ApplicationContainer, FilePolicy};
 use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, StudentGroup, TeachingCourse, User};
+use hw_bot::health::HealthState;
 use hw_bot::test_support::{
     named_admin, named_student, named_teacher, student_group_in, teaching_course,
 };
@@ -46,7 +47,12 @@ impl TestApp {
         let fixture = Fixture::insert(&pool).await;
         let application = ApplicationContainer::new(pool.clone(), test_file_policy());
         let router = api::router(
-            AppState::new("hw-bot-test", pool.clone(), application.clone()),
+            AppState::new(
+                "hw-bot-test",
+                pool.clone(),
+                application.clone(),
+                HealthState::new(false, false),
+            ),
             request_timeout,
         );
 
@@ -104,6 +110,10 @@ impl TestApp {
 
     pub async fn student_assignments(&self, actor: i64) -> TestResponse {
         self.get_as("/me/assignments", actor).await
+    }
+
+    pub async fn archived_student_assignments(&self, actor: i64) -> TestResponse {
+        self.get_as("/me/assignments/archive", actor).await
     }
 
     pub async fn student_assignment(&self, assignment: Uuid, actor: i64) -> TestResponse {

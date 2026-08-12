@@ -14,10 +14,13 @@ use super::HandlerResult;
 const MESSAGE_LIMIT: usize = 4096;
 
 pub(super) fn student_menu() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "Мои задания",
-        "menu:assignments",
-    )]])
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            "Мои задания",
+            "menu:assignments",
+        )],
+        vec![InlineKeyboardButton::callback("Архив", "menu:archive")],
+    ])
 }
 
 pub(super) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {

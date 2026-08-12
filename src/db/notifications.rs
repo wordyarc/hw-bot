@@ -174,6 +174,39 @@ where
     Ok(result.rows_affected() == 1)
 }
 
+pub async fn release_after_credentials_failure<'e, E>(
+    executor: E,
+    id: Uuid,
+    lease_token: Uuid,
+    last_error: &str,
+) -> DbResult<bool>
+where
+    E: PgExecutor<'e>,
+{
+    let result = sqlx::query!(
+        r#"
+        update review_notification_outbox
+        set
+            attempt_count = attempt_count - 1,
+            lease_token = null,
+            lease_expires_at = null,
+            last_error = $3
+        where id = $1
+          and lease_token = $2
+          and attempt_count > 0
+          and delivered_at is null
+          and failed_at is null
+        "#,
+        id,
+        lease_token,
+        last_error,
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
 pub async fn mark_failed<'e, E>(
     executor: E,
     id: Uuid,

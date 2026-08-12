@@ -193,6 +193,34 @@ where
     .collect()
 }
 
+pub async fn list_archived_for_group<'e, E>(
+    executor: E,
+    student_group_id: StudentGroupId,
+) -> DbResult<Vec<Assignment>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        AssignmentRow,
+        r#"
+        select
+            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+            status, created_by, created_at, deadline_at, published_at
+        from assignments
+        where student_group_id = $1
+          and status = 'archived'
+          and published_at is not null
+        order by published_at desc, id
+        "#,
+        student_group_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(Assignment::try_from)
+    .collect()
+}
+
 /// Всё, что есть у курса, включая черновики и архив - экран преподавателя.
 pub async fn list_for_course<'e, E>(
     executor: E,

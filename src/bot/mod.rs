@@ -4,7 +4,7 @@ use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use teloxide::dispatching::UpdateHandler;
@@ -14,11 +14,13 @@ use teloxide::prelude::*;
 use teloxide::stop::StopToken;
 use teloxide::types::{AllowedUpdate, UpdateId};
 use teloxide::update_listeners::{AsUpdateStream, Polling, UpdateListener};
+use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::ApplicationContainer;
 use crate::domain::TelegramUserId;
+use crate::health::ComponentHealth;
 
 const MAX_CONCURRENT_UPDATES: usize = 1024;
 
@@ -70,6 +72,19 @@ struct UpdateAdmission {
 struct AdmissionListener<L> {
     inner: L,
     admission: UpdateAdmission,
+    invalid_credentials: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Error)]
+pub enum TelegramBotError {
+    #[error("Telegram credentials were rejected")]
+    InvalidCredentials,
+
+    #[error("Telegram bot startup request failed: {0}")]
+    Startup(#[source] teloxide::RequestError),
+
+    #[error("Telegram dispatcher stopped unexpectedly")]
+    UnexpectedTermination,
 }
 
 impl TelegramBot {
@@ -165,7 +180,31 @@ impl TelegramBot {
         })
     }
 
-    pub async fn run(self, cancellation: CancellationToken) {
+    pub async fn run(
+        self,
+        cancellation: CancellationToken,
+        health: ComponentHealth,
+    ) -> Result<(), TelegramBotError> {
+        tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            result = self.bot.get_me().send() => {
+                result.map_err(map_startup_error)?;
+            }
+        }
+        let webhook = self
+            .polling_bot
+            .get_webhook_info()
+            .send()
+            .await
+            .map_err(map_startup_error)?;
+        if webhook.url.is_some() {
+            self.polling_bot
+                .delete_webhook()
+                .send()
+                .await
+                .map_err(map_startup_error)?;
+        }
+        let _ready = health.ready();
         let storage = InMemStorage::<BotState>::new();
         let mut dispatcher = Dispatcher::builder(self.bot, schema())
             .dependencies(dptree::deps![
@@ -192,24 +231,45 @@ impl TelegramBot {
             .build();
         let listener = Polling::builder(self.polling_bot)
             .timeout(self.settings.polling_timeout)
-            .delete_webhook()
-            .await
             .build();
-        let listener = admitted_listener(listener, self.admission.clone());
+        let invalid_credentials = Arc::new(AtomicBool::new(false));
+        let listener = admitted_listener(
+            listener,
+            self.admission.clone(),
+            invalid_credentials.clone(),
+        );
         let shutdown = dispatcher.shutdown_token();
-        let dispatch = dispatcher.dispatch_with_listener(
+        let dispatch = dispatcher.try_dispatch_with_listener(
             listener,
             LoggingErrorHandler::with_custom_text("Telegram update listener failed"),
         );
         tokio::pin!(dispatch);
 
         tokio::select! {
-            () = &mut dispatch => {},
+            result = &mut dispatch => result.map_err(map_startup_error)?,
             () = cancellation.cancelled() => {
                 let _ = shutdown.shutdown();
-                dispatch.await;
+                dispatch.await.map_err(map_startup_error)?;
+                return Ok(());
             }
         }
+
+        if invalid_credentials.load(Ordering::Acquire) {
+            Err(TelegramBotError::InvalidCredentials)
+        } else {
+            Err(TelegramBotError::UnexpectedTermination)
+        }
+    }
+}
+
+fn map_startup_error(error: teloxide::RequestError) -> TelegramBotError {
+    if matches!(
+        error,
+        teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)
+    ) {
+        TelegramBotError::InvalidCredentials
+    } else {
+        TelegramBotError::Startup(error)
     }
 }
 
@@ -288,41 +348,61 @@ fn log_rejection(
     }
 }
 
-fn admitted_listener<L>(listener: L, admission: UpdateAdmission) -> AdmissionListener<L>
+fn admitted_listener<L>(
+    listener: L,
+    admission: UpdateAdmission,
+    invalid_credentials: Arc<AtomicBool>,
+) -> AdmissionListener<L>
 where
-    L: UpdateListener,
+    L: UpdateListener<Err = teloxide::RequestError>,
 {
     AdmissionListener {
         inner: listener,
         admission,
+        invalid_credentials,
     }
 }
 
 impl<'a, L> AsUpdateStream<'a> for AdmissionListener<L>
 where
-    L: UpdateListener + Send + 'a,
-    L::Err: Send + 'a,
+    L: UpdateListener<Err = teloxide::RequestError> + Send + 'a,
     <L as AsUpdateStream<'a>>::Stream: Send,
 {
-    type StreamErr = L::Err;
-    type Stream = Pin<Box<dyn Stream<Item = Result<Update, L::Err>> + Send + 'a>>;
+    type StreamErr = teloxide::RequestError;
+    type Stream = Pin<Box<dyn Stream<Item = Result<Update, teloxide::RequestError>> + Send + 'a>>;
 
     fn as_stream(&'a mut self) -> Self::Stream {
         let admission = self.admission.clone();
-        Box::pin(self.inner.as_stream().filter_map(move |result| {
-            future::ready(match result {
-                Ok(update) if admit_update(&update, &admission) => Some(Ok(update)),
-                Ok(_) => None,
-                Err(error) => Some(Err(error)),
-            })
-        }))
+        let invalid_credentials = self.invalid_credentials.clone();
+        Box::pin(
+            self.inner
+                .as_stream()
+                .take_while(move |result| {
+                    let keep_polling = !matches!(
+                        result,
+                        Err(teloxide::RequestError::Api(
+                            teloxide::ApiError::InvalidToken
+                        ))
+                    );
+                    if !keep_polling {
+                        invalid_credentials.store(true, Ordering::Release);
+                    }
+                    future::ready(keep_polling)
+                })
+                .filter_map(move |result| {
+                    future::ready(match result {
+                        Ok(update) if admit_update(&update, &admission) => Some(Ok(update)),
+                        Ok(_) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                }),
+        )
     }
 }
 
 impl<L> UpdateListener for AdmissionListener<L>
 where
-    L: UpdateListener + Send + 'static,
-    L::Err: Send + 'static,
+    L: UpdateListener<Err = teloxide::RequestError> + Send + 'static,
     for<'a> <L as AsUpdateStream<'a>>::Stream: Send,
 {
     type Err = L::Err;

@@ -610,6 +610,7 @@ pub(super) async fn handle_callback(
 
     match data {
         "menu:assignments" => show_student_assignments(&bot, chat_id, actor, &services).await?,
+        "menu:archive" => show_student_archive(&bot, chat_id, actor, &services).await?,
         "menu:courses" => show_courses(&bot, chat_id, actor, &services, &dialogue).await?,
         "review:next" => show_next_review(&bot, chat_id, actor, &services, &dialogue).await?,
         _ if data.starts_with("review:accept:") || data.starts_with("review:reject:") => {
@@ -957,6 +958,46 @@ async fn show_student_assignments(
     Ok(())
 }
 
+async fn show_student_archive(
+    bot: &Bot,
+    chat_id: ChatId,
+    actor: Actor,
+    services: &BotServices,
+) -> HandlerResult {
+    let assignments = match services.assignments.list_archived_for_student(actor).await {
+        Ok(assignments) => assignments,
+        Err(error) => {
+            send_app_error(bot, chat_id, error).await?;
+            return Ok(());
+        }
+    };
+
+    if assignments.is_empty() {
+        bot.send_message(chat_id, "Архив заданий пока пуст.")
+            .reply_markup(student_menu())
+            .await?;
+        return Ok(());
+    }
+
+    let mut text = String::from("Архив заданий:\n");
+    let mut rows = Vec::with_capacity(assignments.len());
+    for item in assignments {
+        let assignment = &item.assignment;
+        text.push_str(&format!(
+            "\n{}\nиспользовано попыток: {}\n",
+            assignment.title().as_str(),
+            item.history.used_attempts(),
+        ));
+        rows.push(vec![InlineKeyboardButton::callback(
+            button_label(assignment.title().as_str()),
+            format!("assignment:{}", assignment.id().as_uuid()),
+        )]);
+    }
+
+    send_message_chunks(bot, chat_id, text, Some(InlineKeyboardMarkup::new(rows))).await?;
+    Ok(())
+}
+
 async fn show_assignment(
     bot: &Bot,
     chat_id: ChatId,
@@ -994,9 +1035,14 @@ async fn show_assignment(
             format!("submit:{}", assignment.id().as_uuid()),
         )]);
     }
+    let (back_label, back_callback) = if assignment.status() == AssignmentStatus::Archived {
+        ("К архиву", "menu:archive")
+    } else {
+        ("К списку заданий", "menu:assignments")
+    };
     rows.push(vec![InlineKeyboardButton::callback(
-        "К списку заданий",
-        "menu:assignments",
+        back_label,
+        back_callback,
     )]);
 
     bot.send_message(chat_id, summary).await?;

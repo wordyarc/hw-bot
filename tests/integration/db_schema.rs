@@ -51,6 +51,22 @@ async fn migrations_apply_to_empty_postgres() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn migrated_database_matches_the_embedded_migration_set() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+
+    db::validate_migrations(&app.pool).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn database_without_migrations_is_not_ready() {
+    let pool = fresh_database().await;
+
+    assert!(db::validate_migrations(&pool).await.is_err());
+}
+
 /// Имена вариантов живут в двух местах: `str_enum!` в домене и CHECK-констрейнты миграции.
 #[tokio::test]
 async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<()> {
@@ -140,6 +156,37 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn completed_review_requires_a_comment() {
+    let app = TestApp::start().await;
+
+    for status in [SubmissionStatus::Accepted, SubmissionStatus::Rejected] {
+        let error = sqlx::query(
+            r#"
+            insert into submissions (
+                assignment_id, student_id, attempt_number, content, status,
+                reviewed_by, reviewed_at, review_comment
+            )
+            values ($1, $2, 1, 'https://example.test/pr', $3, $4, now(), null)
+            "#,
+        )
+        .bind(app.fixture.assignment.id().as_uuid())
+        .bind(app.fixture.student.id().as_uuid())
+        .bind(status.as_str())
+        .bind(app.fixture.teacher.id().as_uuid())
+        .execute(&app.pool)
+        .await
+        .expect_err("completed review without a comment must be rejected");
+
+        assert_eq!(
+            error.as_database_error().and_then(|error| error.code()),
+            Some("23514".into()),
+            "status: {}",
+            status.as_str()
+        );
+    }
 }
 
 #[tokio::test]

@@ -175,6 +175,44 @@ async fn a_draft_assignment_file_does_not_exist_for_a_student() {
 }
 
 #[tokio::test]
+async fn a_never_published_archived_file_does_not_exist_for_a_student() {
+    let app = TestApp::start().await;
+    let application = application(&app);
+    let draft = app.add_draft_assignment().await;
+    let card = application
+        .files
+        .list_assignment_files_for_teacher(app.teacher_actor(), draft.id())
+        .await
+        .unwrap();
+    let added = application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: draft.id(),
+            actor: app.teacher_actor(),
+            expected_revision: card.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            content: DOCUMENT.to_vec(),
+        })
+        .await
+        .unwrap();
+    application
+        .assignments
+        .archive(draft.id(), app.teacher_actor())
+        .await
+        .unwrap();
+
+    let error = application
+        .files
+        .open_assignment_file_for_student(app.student_actor(), draft.id(), added.files[0].id())
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::NotFound);
+}
+
+#[tokio::test]
 async fn another_group_cannot_open_an_assignment_file() {
     let app = TestApp::start().await;
     let application = application(&app);

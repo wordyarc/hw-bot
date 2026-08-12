@@ -3,6 +3,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use hw_bot::app::ApplicationContainer;
 use hw_bot::bot::{TelegramBot, TelegramBotSettings};
+use hw_bot::health::{CriticalComponent, HealthState};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::task::JoinHandle;
@@ -601,6 +602,49 @@ async fn student_receives_assignment_attachments_after_the_text() {
 }
 
 #[tokio::test]
+async fn student_opens_a_previously_published_assignment_from_the_archive() {
+    let app = TestApp::start().await;
+    app.archive_assignment(app.assignment(), app.teacher())
+        .await
+        .ok();
+    let updates = vec![
+        message_update(1, app.student(), 1, "/menu"),
+        callback_update(2, app.student(), "menu:archive", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.student(),
+            &format!("assignment:{}", app.assignment()),
+            BOT_MESSAGE_ID,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let opened = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.student(),
+            "text": "Send a pull request link."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    tokio::time::timeout(Duration::from_secs(5), opened.wait_until_satisfied())
+        .await
+        .expect("archived assignment is opened");
+    stop_bot(cancellation, &mut task).await;
+    let callbacks = sent_callbacks(&telegram).await;
+
+    assert!(callbacks.iter().any(|callback| callback == "menu:archive"));
+    assert!(
+        !callbacks
+            .iter()
+            .any(|callback| callback.starts_with("submit:"))
+    );
+}
+
+#[tokio::test]
 async fn teacher_changes_an_assignment_and_grants_attempts_through_telegram() {
     let app = TestApp::start().await;
     let deadline = Utc::now() + chrono::Duration::days(14);
@@ -893,7 +937,41 @@ async fn telegram_rejects_oversized_input_before_registration() {
     assert!(!exists);
 }
 
-fn start_bot(app: &TestApp, telegram: &MockServer) -> (CancellationToken, JoinHandle<()>) {
+#[tokio::test]
+async fn invalid_token_stops_the_telegram_bot() {
+    let app = TestApp::start().await;
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetMe"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "ok": false,
+            "error_code": 401,
+            "description": "Unauthorized"
+        })))
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let (cancellation, task) = start_bot(&app, &telegram);
+
+    let result = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("invalid token stops the bot")
+        .expect("Telegram task does not panic");
+
+    assert!(matches!(
+        result,
+        Err(hw_bot::bot::TelegramBotError::InvalidCredentials)
+    ));
+    cancellation.cancel();
+}
+
+fn start_bot(
+    app: &TestApp,
+    telegram: &MockServer,
+) -> (
+    CancellationToken,
+    JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
+) {
     start_bot_with_settings(app, telegram, bot_settings_with(|_| {}))
 }
 
@@ -901,7 +979,10 @@ fn start_bot_with_settings(
     app: &TestApp,
     telegram: &MockServer,
     settings: TelegramBotSettings,
-) -> (CancellationToken, JoinHandle<()>) {
+) -> (
+    CancellationToken,
+    JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
+) {
     start_bot_with_application(telegram, app.application.clone(), settings)
 }
 
@@ -909,10 +990,17 @@ fn start_bot_with_application(
     telegram: &MockServer,
     application: ApplicationContainer,
     settings: TelegramBotSettings,
-) -> (CancellationToken, JoinHandle<()>) {
+) -> (
+    CancellationToken,
+    JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
+) {
     let bot = TelegramBot::new(application, "test-token", &telegram.uri(), settings).unwrap();
     let cancellation = CancellationToken::new();
-    let task = tokio::spawn(bot.run(cancellation.clone()));
+    let health = HealthState::new(true, false);
+    let task = tokio::spawn(bot.run(
+        cancellation.clone(),
+        health.component(CriticalComponent::TelegramBot),
+    ));
 
     (cancellation, task)
 }
@@ -958,10 +1046,14 @@ fn bot_settings_with(update: impl FnOnce(&mut TelegramBotSettings)) -> TelegramB
     settings
 }
 
-async fn stop_bot(cancellation: CancellationToken, task: &mut JoinHandle<()>) {
+async fn stop_bot(
+    cancellation: CancellationToken,
+    task: &mut JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
+) {
     cancellation.cancel();
     match tokio::time::timeout(Duration::from_secs(3), &mut *task).await {
-        Ok(Ok(())) => {}
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => panic!("Telegram bot failed: {error}"),
         Ok(Err(error)) => panic!("Telegram bot task failed: {error}"),
         Err(_) => {
             task.abort();
@@ -1000,7 +1092,7 @@ async fn telegram_server(updates: Vec<Value>) -> MockServer {
                 "has_main_web_app": false
             }
         })))
-        .expect(1)
+        .expect(2)
         .mount(&telegram)
         .await;
     Mock::given(method("POST"))
