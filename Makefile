@@ -30,10 +30,15 @@ test-lib:
 test-integration:
 	SQLX_OFFLINE=$(SQLX_OFFLINE) cargo test --test integration
 
+ci: fmt check lint test-lib test-integration
+
+image:
+	docker build --pull --tag hw-bot:local .
+
 compose-up:
 	$(COMPOSE) up -d
 
 compose-down:
 	$(COMPOSE) down --volumes --remove-orphans
 
-.PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration compose-up compose-down
+.PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration ci image compose-up compose-down

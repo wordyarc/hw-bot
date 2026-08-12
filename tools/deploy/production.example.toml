@@ -1,0 +1,51 @@
+[app]
+name = "hw-bot"
+
+[server]
+host = "127.0.0.1"
+port = 3000
+request_timeout_ms = 10000
+
+[database]
+max_connections = 4
+acquire_timeout_ms = 2000
+statement_timeout_ms = 5000
+run_migrations = true
+run_bootstrap = false
+bootstrap_file = "/run/bootstrap/data.json"
+
+[logging]
+level = "hw_bot=info,tower_http=info,sqlx=warn"
+format = "json"
+file_enabled = false
+file_dir = "logs/hw-bot"
+file_prefix = "hw-bot"
+file_suffix = "log"
+rotation = "daily"
+also_stdout = true
+
+[files]
+max_file_size_bytes = 5242880
+max_files_per_assignment = 5
+max_files_per_submission = 1
+transfer_timeout_ms = 60000
+max_concurrent_transfers = 1
+
+[telegram]
+enabled = true
+api_base_url = "https://api.telegram.org"
+request_timeout_ms = 5000
+polling_timeout_ms = 20000
+rate_limit_burst = 6
+rate_limit_replenish_ms = 1000
+max_concurrent_updates = 8
+shutdown_grace_ms = 10000
+
+[notification_worker]
+enabled = true
+poll_interval_ms = 1000
+lease_duration_ms = 15000
+max_attempts = 10
+retry_initial_ms = 1000
+retry_max_ms = 300000
+shutdown_grace_ms = 10000

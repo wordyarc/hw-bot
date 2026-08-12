@@ -2,3 +2,7 @@
 /.idea
 /logs
 /bootstrap/data.json
+/tools/deploy/.env.production
+/tools/deploy/production.toml
+/tools/deploy/bootstrap.production.json
+/backups
