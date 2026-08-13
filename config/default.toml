@@ -13,7 +13,7 @@ acquire_timeout_ms = 3000
 statement_timeout_ms = 5000
 run_migrations = true
 run_bootstrap = false
-bootstrap_file = "tools/deploy/bootstrap.production.json"
+bootstrap_file = "config/bootstrap.json"
 
 [logging]
 level = "hw_bot=info,tower_http=info,sqlx=warn"

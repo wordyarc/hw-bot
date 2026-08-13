@@ -1,6 +1,7 @@
 SQLX_OFFLINE := true
 TEST_CONTAINER := hw-bot-test-postgres
 COMPOSE := docker compose -f tools/docker-compose.yml
+PROD_COMPOSE := docker compose --env-file tools/deploy/.env.production -f tools/deploy/compose.yml
 
 run:
 	cargo run
@@ -41,4 +42,12 @@ compose-up:
 compose-down:
 	$(COMPOSE) down --volumes --remove-orphans
 
-.PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration ci image compose-up compose-down
+# Production Compose
+
+prod-bootstrap:
+	$(PROD_COMPOSE) -f tools/deploy/compose.bootstrap.yml up -d
+
+prod-up:
+	$(PROD_COMPOSE) up -d --force-recreate app
+
+.PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration ci image compose-up compose-down prod-bootstrap prod-up

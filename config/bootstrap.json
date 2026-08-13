@@ -1,0 +1,31 @@
+{
+  "admin": {
+    "telegram_user_id": 318438183,
+    "display_name": "First Admin"
+  },
+  "teachers": [
+    {
+      "telegram_user_id": 100000002,
+      "display_name": "Course Teacher"
+    }
+  ],
+  "student_groups": [
+    {
+      "code": "b9122-02.03.21",
+      "education_level": "bachelor",
+      "study_year": 1
+    }
+  ],
+  "subjects": [
+    {
+      "name": "Backend Development"
+    }
+  ],
+  "courses": [
+    {
+      "subject_name": "Backend Development",
+      "student_group_code": "b9122-02.03.21",
+      "teacher_telegram_user_ids": [318438183]
+    }
+  ]
+}
