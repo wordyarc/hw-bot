@@ -1,5 +1,13 @@
+use crate::app::{
+    Actor, ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, RegisterStudent,
+    ReviewSubmission, SubmitHomework,
+};
+use crate::domain::{
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, AssignmentStatus, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS,
+    Role, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
+};
 use anyhow::{Context, anyhow};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::{
     AnswerCallbackQuerySetters, EditMessageReplyMarkupSetters, SendMessageSetters,
@@ -11,30 +19,22 @@ use teloxide::types::{
     Message, MessageId, Recipient, User,
 };
 use teloxide::utils::command::BotCommands;
-use uuid::Uuid;
-
-use crate::app::{
-    Actor, ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, RegisterStudent,
-    ReviewSubmission, SubmitHomework,
-};
-use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, AssignmentStatus, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS,
-    ReviewDecision, Role, SubmissionId, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN,
-    UserId,
-};
 
 use super::assignment_files;
+use super::callbacks::{
+    self, AmountChoice, CallbackAction, DeadlineAction, EXTRA_ATTEMPTS_PREFIX, FlowAction,
+    MAX_ATTEMPTS_PREFIX, ReplayableAction, ScreenAction,
+};
 use super::errors::send_app_error;
-use super::state::{BotDialogue, BotState, DeadlineTarget};
+use super::state::{BotDialogue, BotState, DeadlineTarget, FlowState, ScreenState};
 use super::timezone::BotTimezone;
 use super::views::{
-    BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW,
-    EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX, MenuAction, ask_input, assignment_actions_keyboard,
-    assignment_status, assignment_students_keyboard, attempts_keyboard, button_label,
-    calendar_keyboard, course_assignments_keyboard, courses_keyboard, deadline_left,
-    deadline_options_keyboard, group_keyboard, main_keyboard, menu_action, parse_month_key,
-    review_keyboard, role_name, send_message_chunks, send_stale_button, student_keyboard,
-    student_menu, submission_status, teacher_keyboard, teacher_menu,
+    BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW, MenuAction,
+    ask_input, assignment_actions_keyboard, assignment_status, assignment_students_keyboard,
+    attempts_keyboard, button_label, calendar_keyboard, course_assignments_keyboard,
+    courses_keyboard, deadline_left, deadline_options_keyboard, group_keyboard, main_keyboard,
+    menu_action, review_keyboard, role_name, send_message_chunks, send_stale_button,
+    student_keyboard, student_menu, submission_status, teacher_keyboard, teacher_menu,
 };
 use super::{BotServices, HandlerResult};
 
@@ -290,7 +290,7 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        BotState::AwaitingRegistrationName => {
+        BotState::Flow(FlowState::AwaitingRegistrationName) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -324,20 +324,20 @@ pub(super) async fn handle_message(
                 .map(|group| group.code().as_str().to_owned())
                 .collect();
             dialogue
-                .update(BotState::AwaitingRegistrationGroup {
+                .update(BotState::Flow(FlowState::AwaitingRegistrationGroup {
                     display_name: text.trim().to_owned(),
                     group_codes: group_codes.clone(),
-                })
+                }))
                 .await?;
             bot.send_message(message.chat.id, "Выберите учебную группу:")
                 .reply_markup(group_keyboard(&group_codes))
                 .await?;
         }
-        BotState::AwaitingRegistrationGroup { .. } => {
+        BotState::Flow(FlowState::AwaitingRegistrationGroup { .. }) => {
             bot.send_message(message.chat.id, "Выберите группу кнопкой выше.")
                 .await?;
         }
-        BotState::AwaitingSubmission { assignment_id } => {
+        BotState::Flow(FlowState::AwaitingSubmission { assignment_id }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -380,14 +380,14 @@ pub(super) async fn handle_message(
                 Err(error) => send_app_error(&bot, message.chat.id, error).await?,
             }
         }
-        BotState::AwaitingReviewDecision { .. } => {
+        BotState::Flow(FlowState::AwaitingReviewDecision { .. }) => {
             bot.send_message(message.chat.id, "Выберите решение кнопкой под сдачей.")
                 .await?;
         }
-        BotState::AwaitingReviewComment {
+        BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id,
             decision,
-        } => {
+        }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -435,14 +435,14 @@ pub(super) async fn handle_message(
                 Err(error) => send_app_error(&bot, message.chat.id, error).await?,
             }
         }
-        BotState::ManagingAssignment { .. } => {
+        BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
             bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
                 .await?;
         }
-        BotState::ManagingAssignmentFiles { .. }
-        | BotState::AwaitingAssignmentFile { .. }
-        | BotState::ConfirmingAssignmentFileDeletion { .. } => unreachable!(),
-        BotState::AwaitingAssignmentTitle { course_id } => {
+        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. })
+        | BotState::Flow(FlowState::AwaitingAssignmentFile { .. })
+        | BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => unreachable!(),
+        BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -463,10 +463,10 @@ pub(super) async fn handle_message(
                 return Ok(());
             }
             dialogue
-                .update(BotState::AwaitingAssignmentBody {
+                .update(BotState::Flow(FlowState::AwaitingAssignmentBody {
                     course_id,
                     title: text.to_owned(),
-                })
+                }))
                 .await?;
             ask_input(
                 &bot,
@@ -475,7 +475,7 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        BotState::AwaitingAssignmentBody { course_id, title } => {
+        BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -505,12 +505,12 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        BotState::AwaitingAssignmentMaxAttempts {
+        BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
             course_id,
             title,
             body,
             ..
-        } => {
+        }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -537,9 +537,9 @@ pub(super) async fn handle_message(
             .await?;
         }
         // Пока висит клавиатура с пресетами, набранная дата - это тоже ответ, а не мимо-сообщение.
-        BotState::ChoosingDeadline { target, .. }
-        | BotState::PickingDeadlineDate { target, .. }
-        | BotState::AwaitingDeadlineText { target } => {
+        BotState::Flow(FlowState::ChoosingDeadline { target, .. })
+        | BotState::Flow(FlowState::PickingDeadlineDate { target, .. })
+        | BotState::Flow(FlowState::AwaitingDeadlineText { target }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -564,15 +564,15 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        BotState::ChoosingAttemptStudent { .. } => {
+        BotState::Flow(FlowState::ChoosingAttemptStudent { .. }) => {
             bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
                 .await?;
         }
-        BotState::AwaitingAttemptAmount {
+        BotState::Flow(FlowState::AwaitingAttemptAmount {
             assignment_id,
             student_id,
             ..
-        } => {
+        }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -686,69 +686,32 @@ pub(super) async fn handle_callback(
         return Ok(());
     };
     let state = dialogue.get().await?.unwrap_or_default();
-
-    if data == "cal:noop" {
+    let Some(action) = callbacks::parse(data) else {
+        send_stale_button(&bot, chat_id).await?;
+        return Ok(());
+    };
+    if action == CallbackAction::Noop {
         return Ok(());
     }
-
-    if let Some(index) = data.strip_prefix("register_group:") {
-        let BotState::AwaitingRegistrationGroup {
-            display_name,
-            group_codes,
-        } = state
-        else {
-            send_stale_button(&bot, chat_id).await?;
-            return Ok(());
-        };
-        let Some(group_code) = index
-            .parse::<usize>()
-            .ok()
-            .and_then(|index| group_codes.get(index))
-        else {
-            send_stale_button(&bot, chat_id).await?;
-            return Ok(());
-        };
-
-        match services
-            .users
-            .register_student(RegisterStudent {
-                telegram_user_id,
-                display_name,
-                student_group_code: group_code.clone(),
-                registered_at: Utc::now(),
-            })
-            .await
-        {
-            Ok(_) => {
-                reset_dialogue(&dialogue).await?;
-                bot.send_message(chat_id, "🎉 Регистрация завершена.")
-                    .await?;
-                show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
-            }
-            Err(error) => send_app_error(&bot, chat_id, error).await?,
-        }
-        return Ok(());
+    if let CallbackAction::Flow(FlowAction::SelectRegistrationGroup(index)) = action {
+        return select_registration_group(
+            &bot,
+            chat_id,
+            telegram_user_id,
+            index,
+            state,
+            &services,
+            &dialogue,
+        )
+        .await;
+    }
+    if matches!(action, CallbackAction::Replayable(_)) {
+        reset_dialogue(&dialogue).await?;
     }
 
     let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services).await? else {
         return Ok(());
     };
-    if assignment_files::handle_callback(assignment_files::CallbackContext {
-        bot: &bot,
-        chat_id,
-        message_id: message.id,
-        data,
-        state: &state,
-        actor,
-        dialogue: &dialogue,
-        services: &services,
-        transfers: &transfers,
-    })
-    .await?
-    {
-        return Ok(());
-    }
-
     let screen = Screen {
         bot: &bot,
         chat_id,
@@ -758,237 +721,349 @@ pub(super) async fn handle_callback(
         timezone: &timezone,
     };
 
-    match data {
-        "menu:assignments" => show_student_assignments(screen).await?,
-        "menu:archive" => show_student_archive(screen).await?,
-        "menu:queue" => show_student_queue(screen).await?,
-        "menu:profile" => show_profile(screen).await?,
-        "menu:courses" => show_courses(screen).await?,
-        "review:next" => show_next_review(screen).await?,
-        _ if data.starts_with("review:accept:") || data.starts_with("review:reject:") => {
-            let Some((decision, callback_submission_id)) = parse_review_callback(data) else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            let BotState::AwaitingReviewDecision { submission_id } = state else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            if submission_id != callback_submission_id {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            }
-            dialogue
-                .update(BotState::AwaitingReviewComment {
-                    submission_id,
-                    decision,
-                })
+    match action {
+        CallbackAction::Replayable(action) => {
+            handle_replayable_action(screen, action, &transfers).await
+        }
+        CallbackAction::Screen(action) => {
+            handle_screen_action(screen, message.id, action, state, &transfers).await
+        }
+        CallbackAction::Flow(action) => {
+            handle_flow_action(screen, message.id, action, state, &transfers).await
+        }
+        CallbackAction::Noop => Ok(()),
+    }
+}
+
+async fn select_registration_group(
+    bot: &Bot,
+    chat_id: ChatId,
+    telegram_user_id: TelegramUserId,
+    index: usize,
+    state: BotState,
+    services: &BotServices,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    let BotState::Flow(FlowState::AwaitingRegistrationGroup {
+        display_name,
+        group_codes,
+    }) = state
+    else {
+        return send_stale_button(bot, chat_id).await;
+    };
+    let Some(group_code) = group_codes.get(index) else {
+        return send_stale_button(bot, chat_id).await;
+    };
+
+    match services
+        .users
+        .register_student(RegisterStudent {
+            telegram_user_id,
+            display_name,
+            student_group_code: group_code.clone(),
+            registered_at: Utc::now(),
+        })
+        .await
+    {
+        Ok(_) => {
+            reset_dialogue(dialogue).await?;
+            bot.send_message(chat_id, "🎉 Регистрация завершена.")
+                .await?;
+            show_home(bot, chat_id, telegram_user_id, services, dialogue).await?;
+        }
+        Err(error) => send_app_error(bot, chat_id, error).await?,
+    }
+    Ok(())
+}
+
+async fn handle_replayable_action(
+    screen: Screen<'_>,
+    action: ReplayableAction,
+    transfers: &super::FileTransfers,
+) -> HandlerResult {
+    match action {
+        ReplayableAction::StudentAssignments => show_student_assignments(screen).await,
+        ReplayableAction::StudentArchive => show_student_archive(screen).await,
+        ReplayableAction::StudentQueue => show_student_queue(screen).await,
+        ReplayableAction::Profile => show_profile(screen).await,
+        ReplayableAction::Courses => show_courses(screen).await,
+        ReplayableAction::NextReview => show_next_review(screen).await,
+        ReplayableAction::Course(course_id) => show_course_assignments(screen, course_id).await,
+        ReplayableAction::Assignment(assignment_id) => {
+            show_assignment(screen, assignment_id, transfers).await
+        }
+        ReplayableAction::ManageAssignment(assignment_id) => {
+            show_teacher_assignment(screen, assignment_id).await
+        }
+        ReplayableAction::StartAssignmentCreation(course_id) => {
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::AwaitingAssignmentTitle {
+                    course_id,
+                }))
+                .await?;
+            ask_input(screen.bot, screen.chat_id, "1/4. Введите название задания:").await
+        }
+        ReplayableAction::StartSubmission(assignment_id) => {
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::AwaitingSubmission {
+                    assignment_id,
+                }))
                 .await?;
             ask_input(
-                &bot,
-                chat_id,
+                screen.bot,
+                screen.chat_id,
+                "Пришлите ссылку или текст сдачи одним сообщением:",
+            )
+            .await
+        }
+        ReplayableAction::AssignmentFiles(assignment_id) => {
+            assignment_files::show(
+                screen.bot,
+                screen.chat_id,
+                screen.actor,
+                assignment_id,
+                false,
+                screen.services,
+                screen.dialogue,
+            )
+            .await
+        }
+        ReplayableAction::GrantAttempts(assignment_id) => {
+            show_assignment_students(screen, assignment_id).await
+        }
+    }
+}
+
+async fn handle_screen_action(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    action: ScreenAction,
+    state: BotState,
+    transfers: &super::FileTransfers,
+) -> HandlerResult {
+    let context = assignment_files::CallbackContext {
+        bot: screen.bot,
+        chat_id: screen.chat_id,
+        message_id,
+        state: &state,
+        actor: screen.actor,
+        dialogue: screen.dialogue,
+        services: screen.services,
+        transfers,
+    };
+    if assignment_files::handle_screen_action(context, action).await? {
+        return Ok(());
+    }
+
+    let assignment_id = match action {
+        ScreenAction::Publish(assignment_id)
+        | ScreenAction::Archive(assignment_id)
+        | ScreenAction::ChangeDeadline(assignment_id) => {
+            let Some(assignment_id) = current_assignment_screen(assignment_id, message_id, &state)
+            else {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            };
+            assignment_id
+        }
+        ScreenAction::FinishFileCreation => {
+            let BotState::Screen(ScreenState::ManagingAssignmentFiles {
+                message_id: current_message_id,
+                assignment_id,
+                creation_flow: true,
+                ..
+            }) = state
+            else {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            };
+            if current_message_id != message_id {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            }
+            return show_teacher_assignment(screen, assignment_id).await;
+        }
+        ScreenAction::AddFile | ScreenAction::OpenFile(_) | ScreenAction::DeleteFile(_) => {
+            unreachable!("assignment file actions are handled by assignment_files")
+        }
+    };
+
+    match action {
+        ScreenAction::Publish(_) => match screen
+            .services
+            .assignments
+            .publish(assignment_id, screen.actor, Utc::now())
+            .await
+        {
+            Ok(_) => {
+                screen
+                    .bot
+                    .send_message(screen.chat_id, "🚀 Задание опубликовано.")
+                    .await?;
+                show_teacher_assignment(screen, assignment_id).await?;
+            }
+            Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
+        },
+        ScreenAction::Archive(_) => match screen
+            .services
+            .assignments
+            .archive(assignment_id, screen.actor)
+            .await
+        {
+            Ok(_) => {
+                screen
+                    .bot
+                    .send_message(screen.chat_id, "📦 Задание архивировано.")
+                    .await?;
+                show_teacher_assignment(screen, assignment_id).await?;
+            }
+            Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
+        },
+        ScreenAction::ChangeDeadline(_) => {
+            ask_deadline(
+                screen.bot,
+                screen.chat_id,
+                DeadlineTarget::Change { assignment_id },
+                screen.dialogue,
+                screen.timezone,
+            )
+            .await?;
+        }
+        ScreenAction::AddFile
+        | ScreenAction::OpenFile(_)
+        | ScreenAction::DeleteFile(_)
+        | ScreenAction::FinishFileCreation => unreachable!(),
+    }
+
+    Ok(())
+}
+
+async fn handle_flow_action(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    action: FlowAction,
+    state: BotState,
+    transfers: &super::FileTransfers,
+) -> HandlerResult {
+    let context = assignment_files::CallbackContext {
+        bot: screen.bot,
+        chat_id: screen.chat_id,
+        message_id,
+        state: &state,
+        actor: screen.actor,
+        dialogue: screen.dialogue,
+        services: screen.services,
+        transfers,
+    };
+    if assignment_files::handle_flow_action(context, action).await? {
+        return Ok(());
+    }
+
+    match action {
+        FlowAction::Review {
+            decision,
+            submission_id: callback_submission_id,
+        } => {
+            let BotState::Flow(FlowState::AwaitingReviewDecision { submission_id }) = state else {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            };
+            if submission_id != callback_submission_id {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            }
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::AwaitingReviewComment {
+                    submission_id,
+                    decision,
+                }))
+                .await?;
+            ask_input(
+                screen.bot,
+                screen.chat_id,
                 "Напишите обязательный комментарий к решению:",
             )
             .await?;
         }
-        _ if data.starts_with("course:") => {
-            let Some(id) = parse_uuid_callback(data, "course:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            show_course_assignments(screen, TeachingCourseId::from_uuid(id)).await?;
-        }
-        _ if data.starts_with("manage:") => {
-            let Some(id) = parse_uuid_callback(data, "manage:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            show_teacher_assignment(screen, AssignmentId::from_uuid(id)).await?;
-        }
-        _ if data.starts_with("create:") => {
-            let Some(id) = parse_uuid_callback(data, "create:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            dialogue
-                .update(BotState::AwaitingAssignmentTitle {
-                    course_id: TeachingCourseId::from_uuid(id),
-                })
-                .await?;
-            ask_input(&bot, chat_id, "1/4. Введите название задания:").await?;
-        }
-        _ if data.starts_with(MAX_ATTEMPTS_PREFIX) => {
-            let BotState::AwaitingAssignmentMaxAttempts {
-                message_id,
+        FlowAction::MaxAttempts(choice) => {
+            let BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
+                message_id: current_message_id,
                 course_id,
                 title,
                 body,
-            } = state
+            }) = state
             else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
+                return send_stale_button(screen.bot, screen.chat_id).await;
             };
-            if message_id != message.id {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
+            if current_message_id != message_id {
+                return send_stale_button(screen.bot, screen.chat_id).await;
             }
-            let Some(max_attempts) = data
-                .strip_prefix(MAX_ATTEMPTS_PREFIX)
-                .and_then(parse_positive_attempts)
-            else {
+            let Some(max_attempts) = chosen_amount(choice) else {
                 ask_input(
-                    &bot,
-                    chat_id,
+                    screen.bot,
+                    screen.chat_id,
                     &format!("Введите количество попыток от 1 до {MAX_ATTEMPTS}:"),
                 )
                 .await?;
                 return Ok(());
             };
             ask_deadline(
-                &bot,
-                chat_id,
+                screen.bot,
+                screen.chat_id,
                 DeadlineTarget::Create {
                     course_id,
                     title,
                     body,
                     max_attempts,
                 },
-                &dialogue,
-                &timezone,
+                screen.dialogue,
+                screen.timezone,
             )
             .await?;
         }
-        _ if data.starts_with("dl:") || data.starts_with("cal:") => {
-            handle_deadline_callback(screen, message.id, data, state).await?;
+        FlowAction::Deadline(action) => {
+            handle_deadline_callback(screen, message_id, action, state).await?;
         }
-        _ if data.starts_with("publish:") => {
-            let Some(assignment_id) =
-                managed_assignment_callback(data, "publish:", message.id, &state)
-            else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            match services
-                .assignments
-                .publish(assignment_id, actor, Utc::now())
-                .await
-            {
-                Ok(_) => {
-                    bot.send_message(chat_id, "🚀 Задание опубликовано.")
-                        .await?;
-                    show_teacher_assignment(screen, assignment_id).await?;
-                }
-                Err(error) => send_app_error(&bot, chat_id, error).await?,
-            }
-        }
-        "file:finish" => {
-            let BotState::ManagingAssignmentFiles {
-                message_id,
-                assignment_id,
-                creation_flow: true,
-                ..
-            } = state
-            else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            if message_id != message.id {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            }
-            show_teacher_assignment(screen, assignment_id).await?;
-        }
-        _ if data.starts_with("archive:") => {
-            let Some(assignment_id) =
-                managed_assignment_callback(data, "archive:", message.id, &state)
-            else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            match services.assignments.archive(assignment_id, actor).await {
-                Ok(_) => {
-                    bot.send_message(chat_id, "📦 Задание архивировано.")
-                        .await?;
-                    show_teacher_assignment(screen, assignment_id).await?;
-                }
-                Err(error) => send_app_error(&bot, chat_id, error).await?,
-            }
-        }
-        _ if data.starts_with("deadline:") => {
-            let Some(assignment_id) =
-                managed_assignment_callback(data, "deadline:", message.id, &state)
-            else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            ask_deadline(
-                &bot,
-                chat_id,
-                DeadlineTarget::Change { assignment_id },
-                &dialogue,
-                &timezone,
-            )
-            .await?;
-        }
-        _ if data.starts_with("attempts:") => {
-            let Some(id) = parse_uuid_callback(data, "attempts:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            show_assignment_students(screen, AssignmentId::from_uuid(id)).await?;
-        }
-        _ if data.starts_with("student:") => {
-            let Some(id) = parse_uuid_callback(data, "student:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            let student_id = UserId::from_uuid(id);
-            let BotState::ChoosingAttemptStudent {
-                message_id,
+        FlowAction::SelectStudent(student_id) => {
+            let BotState::Flow(FlowState::ChoosingAttemptStudent {
+                message_id: current_message_id,
                 assignment_id,
                 student_ids,
-            } = state
+            }) = state
             else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
+                return send_stale_button(screen.bot, screen.chat_id).await;
             };
-            if message_id != message.id || !student_ids.contains(&student_id) {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
+            if current_message_id != message_id || !student_ids.contains(&student_id) {
+                return send_stale_button(screen.bot, screen.chat_id).await;
             }
-            let sent = bot
-                .send_message(chat_id, "Сколько дополнительных попыток выдать?")
+            let sent = screen
+                .bot
+                .send_message(screen.chat_id, "Сколько дополнительных попыток выдать?")
                 .reply_markup(attempts_keyboard(EXTRA_ATTEMPTS_PREFIX))
                 .await?;
-            dialogue
-                .update(BotState::AwaitingAttemptAmount {
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::AwaitingAttemptAmount {
                     message_id: sent.id,
                     assignment_id,
                     student_id,
-                })
+                }))
                 .await?;
         }
-        _ if data.starts_with(EXTRA_ATTEMPTS_PREFIX) => {
-            let BotState::AwaitingAttemptAmount {
-                message_id,
+        FlowAction::ExtraAttempts(choice) => {
+            let BotState::Flow(FlowState::AwaitingAttemptAmount {
+                message_id: current_message_id,
                 assignment_id,
                 student_id,
-            } = state
+            }) = state
             else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
+                return send_stale_button(screen.bot, screen.chat_id).await;
             };
-            if message_id != message.id {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
+            if current_message_id != message_id {
+                return send_stale_button(screen.bot, screen.chat_id).await;
             }
-            let Some(amount) = data
-                .strip_prefix(EXTRA_ATTEMPTS_PREFIX)
-                .and_then(parse_positive_attempts)
-            else {
+            let Some(amount) = chosen_amount(choice) else {
                 ask_input(
-                    &bot,
-                    chat_id,
+                    screen.bot,
+                    screen.chat_id,
                     &format!("Введите целое число от 1 до {MAX_ATTEMPTS}:"),
                 )
                 .await?;
@@ -996,40 +1071,27 @@ pub(super) async fn handle_callback(
             };
             grant_attempts(screen, assignment_id, student_id, amount).await?;
         }
-        _ if data.starts_with("assignment:") => {
-            let Some(id) = parse_uuid_callback(data, "assignment:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            show_assignment(screen, AssignmentId::from_uuid(id), &transfers).await?;
+        FlowAction::SelectRegistrationGroup(_)
+        | FlowAction::ConfirmFileDeletion
+        | FlowAction::CancelFileDeletion => {
+            unreachable!("registration and file flow actions are handled before this point")
         }
-        _ if data.starts_with("submit:") => {
-            let Some(id) = parse_uuid_callback(data, "submit:") else {
-                send_stale_button(&bot, chat_id).await?;
-                return Ok(());
-            };
-            dialogue
-                .update(BotState::AwaitingSubmission {
-                    assignment_id: AssignmentId::from_uuid(id),
-                })
-                .await?;
-            ask_input(
-                &bot,
-                chat_id,
-                "Пришлите ссылку или текст сдачи одним сообщением:",
-            )
-            .await?;
-        }
-        _ => send_stale_button(&bot, chat_id).await?,
     }
 
     Ok(())
 }
 
+fn chosen_amount(choice: AmountChoice) -> Option<u16> {
+    match choice {
+        AmountChoice::Preset(value) if value > 0 && value <= MAX_ATTEMPTS => Some(value),
+        AmountChoice::Preset(_) | AmountChoice::Manual => None,
+    }
+}
+
 async fn handle_deadline_callback(
     screen: Screen<'_>,
     message_id: MessageId,
-    data: &str,
+    action: DeadlineAction,
     state: BotState,
 ) -> HandlerResult {
     let Screen {
@@ -1040,8 +1102,10 @@ async fn handle_deadline_callback(
         ..
     } = screen;
     let (current_message_id, target) = match state {
-        BotState::ChoosingDeadline { message_id, target }
-        | BotState::PickingDeadlineDate { message_id, target } => (message_id, target),
+        BotState::Flow(FlowState::ChoosingDeadline { message_id, target })
+        | BotState::Flow(FlowState::PickingDeadlineDate { message_id, target }) => {
+            (message_id, target)
+        }
         _ => {
             send_stale_button(bot, chat_id).await?;
             return Ok(());
@@ -1052,65 +1116,62 @@ async fn handle_deadline_callback(
         return Ok(());
     }
 
-    let date = if let Some(days) = data.strip_prefix("dl:days:") {
-        timezone.in_days(days.parse().unwrap_or(0))
-    } else if let Some(months) = data.strip_prefix("dl:months:") {
-        timezone.in_months(months.parse().unwrap_or(0))
-    } else if let Some(date) = data.strip_prefix("cal:pick:") {
-        NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
-    } else {
-        match data {
-            "dl:manual" => {
-                dialogue
-                    .update(BotState::AwaitingDeadlineText { target })
-                    .await?;
-                ask_input(
-                    bot,
-                    chat_id,
-                    &format!(
-                        "Введите дату в формате ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ ({}):",
-                        timezone.suffix()
-                    ),
-                )
+    let date = match action {
+        DeadlineAction::Days(days) => timezone.in_days(u64::from(days)),
+        DeadlineAction::Months(months) => timezone.in_months(months),
+        DeadlineAction::Pick(date) => Some(date),
+        DeadlineAction::Manual => {
+            dialogue
+                .update(BotState::Flow(FlowState::AwaitingDeadlineText { target }))
                 .await?;
-                return Ok(());
-            }
-            "dl:options" => {
-                let sent = bot
-                    .send_message(chat_id, deadline_prompt(&target, timezone))
-                    .reply_markup(deadline_options_keyboard(timezone))
-                    .await?;
-                dialogue
-                    .update(BotState::ChoosingDeadline {
-                        message_id: sent.id,
-                        target,
-                    })
-                    .await?;
-                return Ok(());
-            }
-            "dl:calendar" => {
-                let month = timezone.today();
-                bot.edit_message_reply_markup(chat_id, message_id)
-                    .reply_markup(calendar_keyboard(month, month))
-                    .await?;
-                dialogue
-                    .update(BotState::PickingDeadlineDate { message_id, target })
-                    .await?;
-                return Ok(());
-            }
-            _ => {
-                let Some(month) = data.strip_prefix("cal:").and_then(parse_month_key) else {
-                    send_stale_button(bot, chat_id).await?;
-                    return Ok(());
-                };
-                bot.edit_message_reply_markup(chat_id, message_id)
-                    .reply_markup(calendar_keyboard(month, timezone.today()))
-                    .await?;
-                dialogue
-                    .update(BotState::PickingDeadlineDate { message_id, target })
-                    .await?;
-                return Ok(());
-            }
+            ask_input(
+                bot,
+                chat_id,
+                &format!(
+                    "Введите дату в формате ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ ({}):",
+                    timezone.suffix()
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        DeadlineAction::Options => {
+            let sent = bot
+                .send_message(chat_id, deadline_prompt(&target, timezone))
+                .reply_markup(deadline_options_keyboard(timezone))
+                .await?;
+            dialogue
+                .update(BotState::Flow(FlowState::ChoosingDeadline {
+                    message_id: sent.id,
+                    target,
+                }))
+                .await?;
+            return Ok(());
+        }
+        DeadlineAction::Calendar => {
+            let month = timezone.today();
+            bot.edit_message_reply_markup(chat_id, message_id)
+                .reply_markup(calendar_keyboard(month, month))
+                .await?;
+            dialogue
+                .update(BotState::Flow(FlowState::PickingDeadlineDate {
+                    message_id,
+                    target,
+                }))
+                .await?;
+            return Ok(());
+        }
+        DeadlineAction::Month(month) => {
+            bot.edit_message_reply_markup(chat_id, message_id)
+                .reply_markup(calendar_keyboard(month, timezone.today()))
+                .await?;
+            dialogue
+                .update(BotState::Flow(FlowState::PickingDeadlineDate {
+                    message_id,
+                    target,
+                }))
+                .await?;
+            return Ok(());
         }
     };
 
@@ -1148,12 +1209,12 @@ async fn ask_max_attempts(
         .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
         .await?;
     dialogue
-        .update(BotState::AwaitingAssignmentMaxAttempts {
+        .update(BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
             message_id: sent.id,
             course_id,
             title,
             body,
-        })
+        }))
         .await?;
     Ok(())
 }
@@ -1170,10 +1231,10 @@ async fn ask_deadline(
         .reply_markup(deadline_options_keyboard(timezone))
         .await?;
     dialogue
-        .update(BotState::ChoosingDeadline {
+        .update(BotState::Flow(FlowState::ChoosingDeadline {
             message_id: sent.id,
             target,
-        })
+        }))
         .await?;
     Ok(())
 }
@@ -1354,7 +1415,9 @@ async fn show_home(
                 .await?;
         }
         Err(error) if error.code() == ErrorCode::NotFound => {
-            dialogue.update(BotState::AwaitingRegistrationName).await?;
+            dialogue
+                .update(BotState::Flow(FlowState::AwaitingRegistrationName))
+                .await?;
             // Без `ask_input`: у незарегистрированного нижнего меню ещё нет, а отменять регистрацию
             // некуда - до неё бот всё равно ничего не умеет.
             bot.send_message(chat_id, "Вы ещё не зарегистрированы. Как вас называть?")
@@ -1806,10 +1869,10 @@ async fn show_teacher_assignment(screen: Screen<'_>, assignment_id: AssignmentId
         .reply_markup(assignment_actions_keyboard(&assignment))
         .await?;
     dialogue
-        .update(BotState::ManagingAssignment {
+        .update(BotState::Screen(ScreenState::ManagingAssignment {
             message_id: message.id,
             assignment_id,
-        })
+        }))
         .await?;
     Ok(())
 }
@@ -1871,11 +1934,11 @@ async fn show_assignment_students(
         .reply_markup(assignment_students_keyboard(assignment_id, &students))
         .await?;
     dialogue
-        .update(BotState::ChoosingAttemptStudent {
+        .update(BotState::Flow(FlowState::ChoosingAttemptStudent {
             message_id: message.id,
             assignment_id,
             student_ids: students.iter().map(|item| item.student.id()).collect(),
-        })
+        }))
         .await?;
     Ok(())
 }
@@ -1905,9 +1968,9 @@ async fn show_next_review(screen: Screen<'_>) -> HandlerResult {
     };
 
     dialogue
-        .update(BotState::AwaitingReviewDecision {
+        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id: item.submission.id(),
-        })
+        }))
         .await?;
     let summary = format!(
         "{}\n👤 Студент: {}",
@@ -1951,34 +2014,16 @@ fn actor_from_user(user: &User) -> HandlerResult<TelegramUserId> {
     TelegramUserId::new(value).map_err(|error| anyhow!(error))
 }
 
-fn parse_uuid_callback(data: &str, prefix: &str) -> Option<Uuid> {
-    data.strip_prefix(prefix)?.parse().ok()
-}
-
-fn parse_review_callback(data: &str) -> Option<(ReviewDecision, SubmissionId)> {
-    let (decision, id) = data
-        .strip_prefix("review:accept:")
-        .map(|id| (ReviewDecision::Accept, id))
-        .or_else(|| {
-            data.strip_prefix("review:reject:")
-                .map(|id| (ReviewDecision::Reject, id))
-        })?;
-
-    Some((decision, SubmissionId::from_uuid(id.parse().ok()?)))
-}
-
-fn managed_assignment_callback(
-    data: &str,
-    prefix: &str,
+fn current_assignment_screen(
+    assignment_id: AssignmentId,
     message_id: MessageId,
     state: &BotState,
 ) -> Option<AssignmentId> {
-    let assignment_id = AssignmentId::from_uuid(parse_uuid_callback(data, prefix)?);
-    let BotState::ManagingAssignment {
+    let BotState::Screen(ScreenState::ManagingAssignment {
         message_id: current_message_id,
         assignment_id: current_assignment_id,
         ..
-    } = state
+    }) = state
     else {
         return None;
     };
@@ -2047,7 +2092,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::app::{ApplicationContainer, FilePolicy};
-    use crate::domain::StudentGroupId;
+    use crate::domain::{StudentGroupId, SubmissionId};
 
     use super::*;
 
@@ -2056,25 +2101,6 @@ mod tests {
             FixedOffset::east_opt(10 * 3600).unwrap(),
             NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
         )
-    }
-
-    #[test]
-    fn callback_uuid_parser_rejects_wrong_prefix_and_invalid_uuid() {
-        let id = Uuid::now_v7();
-
-        assert_eq!(
-            parse_uuid_callback(&format!("assignment:{id}"), "assignment:"),
-            Some(id)
-        );
-        assert_eq!(
-            parse_uuid_callback(&format!("submit:{id}"), "assignment:"),
-            None
-        );
-        assert_eq!(parse_uuid_callback("assignment:nope", "assignment:"), None);
-        assert_eq!(
-            parse_uuid_callback(&format!("submit:{id}"), "submit:"),
-            Some(id)
-        );
     }
 
     #[test]
@@ -2170,32 +2196,6 @@ mod tests {
             .collect()
     }
 
-    const ROUTES: [&str; 23] = [
-        "menu:assignments",
-        "menu:archive",
-        "menu:queue",
-        "menu:profile",
-        "menu:courses",
-        "review:next",
-        "review:accept:",
-        "review:reject:",
-        "register_group:",
-        "course:",
-        "manage:",
-        "create:",
-        MAX_ATTEMPTS_PREFIX,
-        EXTRA_ATTEMPTS_PREFIX,
-        "dl:",
-        "cal:",
-        "publish:",
-        "archive:",
-        "deadline:",
-        "attempts:",
-        "student:",
-        "files:",
-        "file:",
-    ];
-
     #[test]
     fn every_button_the_bot_sends_is_routable() {
         use crate::bot::views::{
@@ -2250,8 +2250,8 @@ mod tests {
                 for button in row.as_array().unwrap() {
                     let data = button["callback_data"].as_str().unwrap();
                     assert!(
-                        ROUTES.iter().any(|route| data.starts_with(route)),
-                        "button {:?} sends {data}, which no handler matches",
+                        callbacks::parse(data).is_some(),
+                        "button {:?} sends {data}, which the callback parser rejects",
                         button["text"],
                     );
                     assert!(data.len() <= 64, "{data} exceeds the Telegram limit");
@@ -2293,12 +2293,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            parse_review_callback(accept),
-            Some((ReviewDecision::Accept, submission_id))
+            callbacks::parse(accept),
+            Some(CallbackAction::Flow(FlowAction::Review {
+                decision: crate::domain::ReviewDecision::Accept,
+                submission_id,
+            }))
         );
         assert_eq!(
-            parse_review_callback(reject),
-            Some((ReviewDecision::Reject, submission_id))
+            callbacks::parse(reject),
+            Some(CallbackAction::Flow(FlowAction::Review {
+                decision: crate::domain::ReviewDecision::Reject,
+                submission_id,
+            }))
         );
         assert!(accept.len() <= 64);
         assert!(reject.len() <= 64);
@@ -2308,8 +2314,13 @@ mod tests {
     fn old_review_callback_identifies_a_different_submission() {
         let current = SubmissionId::new();
         let old = SubmissionId::new();
-        let (_, callback_submission) =
-            parse_review_callback(&format!("review:accept:{}", old.as_uuid())).unwrap();
+        let Some(CallbackAction::Flow(FlowAction::Review {
+            submission_id: callback_submission,
+            ..
+        })) = callbacks::parse(&format!("review:accept:{}", old.as_uuid()))
+        else {
+            panic!("review callback must parse");
+        };
 
         assert_ne!(callback_submission, current);
     }
@@ -2345,38 +2356,17 @@ mod tests {
     fn assignment_action_requires_current_keyboard_and_assignment() {
         let current = AssignmentId::new();
         let other = AssignmentId::new();
-        let state = BotState::ManagingAssignment {
+        let state = BotState::Screen(ScreenState::ManagingAssignment {
             message_id: MessageId(10),
             assignment_id: current,
-        };
+        });
 
         assert_eq!(
-            managed_assignment_callback(
-                &format!("archive:{}", current.as_uuid()),
-                "archive:",
-                MessageId(10),
-                &state,
-            ),
+            current_assignment_screen(current, MessageId(10), &state),
             Some(current)
         );
-        assert!(
-            managed_assignment_callback(
-                &format!("archive:{}", current.as_uuid()),
-                "archive:",
-                MessageId(11),
-                &state,
-            )
-            .is_none()
-        );
-        assert!(
-            managed_assignment_callback(
-                &format!("archive:{}", other.as_uuid()),
-                "archive:",
-                MessageId(10),
-                &state,
-            )
-            .is_none()
-        );
+        assert!(current_assignment_screen(current, MessageId(11), &state).is_none());
+        assert!(current_assignment_screen(other, MessageId(10), &state).is_none());
     }
 
     #[tokio::test]

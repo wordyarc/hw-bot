@@ -358,15 +358,6 @@ fn month_key(date: NaiveDate) -> String {
     date.format("%Y-%m").to_string()
 }
 
-pub(super) fn parse_month_key(value: &str) -> Option<NaiveDate> {
-    let (year, month) = value.split_once('-')?;
-
-    NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, 1)
-}
-
-pub(super) const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
-pub(super) const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
-
 pub(super) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
     let button = |amount: u16| {
         InlineKeyboardButton::callback(amount.to_string(), format!("{prefix}{amount}"))
@@ -659,15 +650,6 @@ mod tests {
         assert!(callbacks.contains(&"cal:pick:2026-08-13"));
         assert!(callbacks.contains(&"cal:pick:2026-08-31"));
         assert!(rows.iter().all(|row| row.as_array().unwrap().len() <= 7));
-    }
-
-    #[test]
-    fn month_keys_survive_a_round_trip() {
-        let september = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
-
-        assert_eq!(parse_month_key(&month_key(september)), Some(september));
-        assert_eq!(parse_month_key("2026-13"), None);
-        assert_eq!(parse_month_key("nope"), None);
     }
 
     #[test]

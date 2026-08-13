@@ -25,6 +25,7 @@ use crate::health::ComponentHealth;
 const MAX_CONCURRENT_UPDATES: usize = 1024;
 
 mod assignment_files;
+mod callbacks;
 mod errors;
 mod files;
 mod handlers;

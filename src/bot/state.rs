@@ -24,6 +24,28 @@ pub(super) enum DeadlineTarget {
 pub(super) enum BotState {
     #[default]
     Idle,
+    Screen(ScreenState),
+    Flow(FlowState),
+}
+
+#[derive(Clone)]
+pub(super) enum ScreenState {
+    ManagingAssignment {
+        message_id: MessageId,
+        assignment_id: AssignmentId,
+    },
+    ManagingAssignmentFiles {
+        message_id: MessageId,
+        assignment_id: AssignmentId,
+        revision: i64,
+        file_ids: Vec<StoredFileId>,
+        deletion_requires_confirmation: bool,
+        creation_flow: bool,
+    },
+}
+
+#[derive(Clone)]
+pub(super) enum FlowState {
     AwaitingRegistrationName,
     AwaitingRegistrationGroup {
         display_name: String,
@@ -38,18 +60,6 @@ pub(super) enum BotState {
     AwaitingReviewComment {
         submission_id: SubmissionId,
         decision: ReviewDecision,
-    },
-    ManagingAssignment {
-        message_id: MessageId,
-        assignment_id: AssignmentId,
-    },
-    ManagingAssignmentFiles {
-        message_id: MessageId,
-        assignment_id: AssignmentId,
-        revision: i64,
-        file_ids: Vec<StoredFileId>,
-        deletion_requires_confirmation: bool,
-        creation_flow: bool,
     },
     AwaitingAssignmentFile {
         assignment_id: AssignmentId,

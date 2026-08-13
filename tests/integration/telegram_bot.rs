@@ -183,6 +183,46 @@ async fn the_bottom_menu_opens_a_screen_even_in_the_middle_of_a_dialogue() {
 }
 
 #[tokio::test]
+async fn replayable_inline_navigation_cancels_the_previous_input_flow() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.student(), 1, "/menu"),
+        callback_update(
+            2,
+            app.student(),
+            &format!("submit:{}", app.assignment()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(3, app.student(), "menu:assignments", BOT_MESSAGE_ID - 5),
+        message_update(4, app.student(), 2, "https://example.test/pull/1"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let idle = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.student(),
+            "text": "Используйте меню под полем ввода или команду /menu."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let observed = tokio::time::timeout(Duration::from_secs(5), idle.wait_until_satisfied()).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    observed.unwrap_or_else(|_| panic!("the old flow remained active; requests:\n{requests}"));
+
+    let submissions: i64 = sqlx::query_scalar("select count(*) from submissions")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(submissions, 0, "navigation must cancel submission input");
+}
+
+#[tokio::test]
 async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
     let app = TestApp::start().await;
     let updates = vec![

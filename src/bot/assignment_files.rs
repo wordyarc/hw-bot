@@ -1,16 +1,15 @@
-use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::{Bot, Requester};
-use teloxide::types::{ChatId, Message, MessageId};
-use uuid::Uuid;
-
 use crate::app::{Actor, AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
 use crate::domain::{
     AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata, TelegramUserId,
 };
+use teloxide::payloads::SendMessageSetters;
+use teloxide::prelude::{Bot, Requester};
+use teloxide::types::{ChatId, Message, MessageId};
 
+use super::callbacks::{FlowAction, ScreenAction};
 use super::errors::send_app_error;
 use super::files::{FileTransfers, incoming_file};
-use super::state::{BotDialogue, BotState};
+use super::state::{BotDialogue, BotState, FlowState, ScreenState};
 use super::views::{
     ask_input, assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
     send_message_chunks, send_stale_button, teacher_keyboard,
@@ -21,7 +20,6 @@ pub(super) struct CallbackContext<'a> {
     pub bot: &'a Bot,
     pub chat_id: ChatId,
     pub message_id: MessageId,
-    pub data: &'a str,
     pub state: &'a BotState,
     pub actor: Actor,
     pub dialogue: &'a BotDialogue,
@@ -47,18 +45,18 @@ pub(super) async fn handle_message(
     telegram_user_id: TelegramUserId,
 ) -> HandlerResult<bool> {
     match state {
-        BotState::ManagingAssignmentFiles { .. } => {
+        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
             bot.send_message(
                 message.chat.id,
                 "Выберите действие кнопкой под списком вложений.",
             )
             .await?;
         }
-        BotState::AwaitingAssignmentFile {
+        BotState::Flow(FlowState::AwaitingAssignmentFile {
             assignment_id,
             expected_revision,
             creation_flow,
-        } => {
+        }) => {
             let Some(incoming) = incoming_file(message) else {
                 bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
                     .await?;
@@ -156,7 +154,7 @@ pub(super) async fn handle_message(
                 }
             }
         }
-        BotState::ConfirmingAssignmentFileDeletion { .. } => {
+        BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
             bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
                 .await?;
         }
@@ -165,12 +163,14 @@ pub(super) async fn handle_message(
     Ok(true)
 }
 
-pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResult<bool> {
+pub(super) async fn handle_screen_action(
+    context: CallbackContext<'_>,
+    action: ScreenAction,
+) -> HandlerResult<bool> {
     let CallbackContext {
         bot,
         chat_id,
         message_id,
-        data,
         state,
         actor,
         dialogue,
@@ -184,34 +184,15 @@ pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResu
         dialogue,
         services,
     };
-    if let Some(id) = data.strip_prefix("files:") {
-        let Some(assignment_id) = id.parse::<Uuid>().ok().map(AssignmentId::from_uuid) else {
-            send_stale_button(bot, chat_id).await?;
-            return Ok(true);
-        };
-        // stateless - открытие списка вложений - навигация: она разрешена и из старого сообщения
-        show(
-            bot,
-            chat_id,
-            actor,
-            assignment_id,
-            false,
-            services,
-            dialogue,
-        )
-        .await?;
-        return Ok(true);
-    }
-
-    match data {
-        "file:add" => {
-            let BotState::ManagingAssignmentFiles {
+    match action {
+        ScreenAction::AddFile => {
+            let BotState::Screen(ScreenState::ManagingAssignmentFiles {
                 message_id: current_message_id,
                 assignment_id,
                 revision,
                 creation_flow,
                 ..
-            } = state
+            }) = state
             else {
                 send_stale_button(bot, chat_id).await?;
                 return Ok(true);
@@ -221,22 +202,104 @@ pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResu
                 return Ok(true);
             }
             dialogue
-                .update(BotState::AwaitingAssignmentFile {
+                .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
                     assignment_id: *assignment_id,
                     expected_revision: *revision,
                     creation_flow: *creation_flow,
-                })
+                }))
                 .await?;
             ask_input(bot, chat_id, "Пришлите файл или фотографию.").await?;
         }
-        "file:confirm-delete" => {
-            let BotState::ConfirmingAssignmentFileDeletion {
+        ScreenAction::OpenFile(index) => {
+            let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
+                send_stale_button(bot, chat_id).await?;
+                return Ok(true);
+            };
+            let _permit = transfers.acquire().await?;
+            match services
+                .files
+                .open_assignment_file_for_teacher(actor, assignment_id, file_id)
+                .await
+            {
+                Ok(file) => transfers.send(chat_id, file).await?,
+                Err(error) => send_app_error(bot, chat_id, error).await?,
+            }
+        }
+        ScreenAction::DeleteFile(index) => {
+            let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
+                send_stale_button(bot, chat_id).await?;
+                return Ok(true);
+            };
+            let BotState::Screen(ScreenState::ManagingAssignmentFiles {
+                revision,
+                deletion_requires_confirmation,
+                creation_flow,
+                ..
+            }) = state
+            else {
+                unreachable!();
+            };
+            if *deletion_requires_confirmation {
+                let confirmation = bot
+                    .send_message(chat_id, "Удалить вложение из уже выданного задания?")
+                    .reply_markup(confirm_file_deletion_keyboard())
+                    .await?;
+                dialogue
+                    .update(BotState::Flow(
+                        FlowState::ConfirmingAssignmentFileDeletion {
+                            message_id: confirmation.id,
+                            assignment_id,
+                            file_id,
+                            expected_revision: *revision,
+                            creation_flow: *creation_flow,
+                        },
+                    ))
+                    .await?;
+            } else {
+                workflow
+                    .delete(assignment_id, file_id, *revision, *creation_flow)
+                    .await?;
+            }
+        }
+        ScreenAction::FinishFileCreation => return Ok(false),
+        ScreenAction::Publish(_) | ScreenAction::Archive(_) | ScreenAction::ChangeDeadline(_) => {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(super) async fn handle_flow_action(
+    context: CallbackContext<'_>,
+    action: FlowAction,
+) -> HandlerResult<bool> {
+    let CallbackContext {
+        bot,
+        chat_id,
+        message_id,
+        state,
+        actor,
+        dialogue,
+        services,
+        transfers: _,
+    } = context;
+    let workflow = Workflow {
+        bot,
+        chat_id,
+        actor,
+        dialogue,
+        services,
+    };
+
+    match action {
+        FlowAction::ConfirmFileDeletion => {
+            let BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion {
                 message_id: current_message_id,
                 assignment_id,
                 file_id,
                 expected_revision,
                 creation_flow,
-            } = state
+            }) = state
             else {
                 send_stale_button(bot, chat_id).await?;
                 return Ok(true);
@@ -249,13 +312,13 @@ pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResu
                 .delete(*assignment_id, *file_id, *expected_revision, *creation_flow)
                 .await?;
         }
-        "file:cancel-delete" => {
-            let BotState::ConfirmingAssignmentFileDeletion {
+        FlowAction::CancelFileDeletion => {
+            let BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion {
                 message_id: current_message_id,
                 assignment_id,
                 creation_flow,
                 ..
-            } = state
+            }) = state
             else {
                 send_stale_button(bot, chat_id).await?;
                 return Ok(true);
@@ -275,60 +338,12 @@ pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResu
             )
             .await?;
         }
-        _ if data.starts_with("file:open:") => {
-            let Some((assignment_id, file_id)) =
-                current_file(data, "file:open:", message_id, state)
-            else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(true);
-            };
-            let _permit = transfers.acquire().await?;
-            match services
-                .files
-                .open_assignment_file_for_teacher(actor, assignment_id, file_id)
-                .await
-            {
-                Ok(file) => transfers.send(chat_id, file).await?,
-                Err(error) => send_app_error(bot, chat_id, error).await?,
-            }
-        }
-        _ if data.starts_with("file:delete:") => {
-            let Some((assignment_id, file_id)) =
-                current_file(data, "file:delete:", message_id, state)
-            else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(true);
-            };
-            let BotState::ManagingAssignmentFiles {
-                revision,
-                deletion_requires_confirmation,
-                creation_flow,
-                ..
-            } = state
-            else {
-                unreachable!();
-            };
-            if *deletion_requires_confirmation {
-                let confirmation = bot
-                    .send_message(chat_id, "Удалить вложение из уже выданного задания?")
-                    .reply_markup(confirm_file_deletion_keyboard())
-                    .await?;
-                dialogue
-                    .update(BotState::ConfirmingAssignmentFileDeletion {
-                        message_id: confirmation.id,
-                        assignment_id,
-                        file_id,
-                        expected_revision: *revision,
-                        creation_flow: *creation_flow,
-                    })
-                    .await?;
-            } else {
-                workflow
-                    .delete(assignment_id, file_id, *revision, *creation_flow)
-                    .await?;
-            }
-        }
-        _ => return Ok(false),
+        FlowAction::SelectRegistrationGroup(_)
+        | FlowAction::Review { .. }
+        | FlowAction::MaxAttempts(_)
+        | FlowAction::Deadline(_)
+        | FlowAction::SelectStudent(_)
+        | FlowAction::ExtraAttempts(_) => return Ok(false),
     }
     Ok(true)
 }
@@ -384,14 +399,14 @@ pub(super) async fn show(
         ))
         .await?;
     dialogue
-        .update(BotState::ManagingAssignmentFiles {
+        .update(BotState::Screen(ScreenState::ManagingAssignmentFiles {
             message_id: message.id,
             assignment_id,
             revision: card.revision,
             file_ids: card.files.iter().map(StoredFileMetadata::id).collect(),
             deletion_requires_confirmation: card.assignment.status() != AssignmentStatus::Draft,
             creation_flow,
-        })
+        }))
         .await?;
     Ok(())
 }
@@ -436,18 +451,16 @@ impl Workflow<'_> {
 }
 
 fn current_file(
-    data: &str,
-    prefix: &str,
+    index: usize,
     message_id: MessageId,
     state: &BotState,
 ) -> Option<(AssignmentId, StoredFileId)> {
-    let index = data.strip_prefix(prefix)?.parse::<usize>().ok()?;
-    let BotState::ManagingAssignmentFiles {
+    let BotState::Screen(ScreenState::ManagingAssignmentFiles {
         message_id: current_message_id,
         assignment_id,
         file_ids,
         ..
-    } = state
+    }) = state
     else {
         return None;
     };
