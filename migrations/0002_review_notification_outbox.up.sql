@@ -2,6 +2,9 @@ create table review_notification_outbox (
     id uuid primary key default uuidv7(),
     submission_id uuid not null unique references submissions (id) on delete restrict,
     recipient_telegram_user_id bigint not null references users (telegram_user_id) on delete restrict,
+    subject_name text not null check (
+        btrim(subject_name) <> '' and char_length(subject_name) <= 200
+    ),
     assignment_title text not null check (
         btrim(assignment_title) <> '' and char_length(assignment_title) <= 200
     ),

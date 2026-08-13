@@ -6,8 +6,8 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, StoredFileMetadata,
-    StudentAssignmentProgress, Submission, SubmissionHistory, TeachingCourse, TeachingCourseId,
-    User, UserId,
+    StudentAssignmentProgress, Subject, Submission, SubmissionHistory, TeachingCourse,
+    TeachingCourseId, User, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +40,7 @@ pub struct GrantExtraAttempts {
 #[derive(Clone, Debug)]
 pub struct StudentAssignment {
     pub assignment: Assignment,
+    pub subject: Subject,
     pub history: SubmissionHistory,
 }
 
@@ -189,20 +190,21 @@ impl AssignmentService {
 
     async fn with_student_histories(
         &self,
-        assignments: Vec<Assignment>,
+        cards: Vec<db::assignments::StudentAssignmentCard>,
         student_id: UserId,
     ) -> AppResult<Vec<StudentAssignment>> {
-        let ids: Vec<_> = assignments
+        let ids: Vec<_> = cards
             .iter()
-            .map(|assignment| assignment.id().as_uuid())
+            .map(|card| card.assignment.id().as_uuid())
             .collect();
         let mut histories = db::submissions::load_histories(&self.pool, &ids, student_id).await?;
 
-        Ok(assignments
+        Ok(cards
             .into_iter()
-            .map(|assignment| StudentAssignment {
-                history: histories.remove(&assignment.id()).unwrap_or_default(),
-                assignment,
+            .map(|card| StudentAssignment {
+                history: histories.remove(&card.assignment.id()).unwrap_or_default(),
+                assignment: card.assignment,
+                subject: card.subject,
             })
             .collect())
     }
@@ -220,10 +222,14 @@ impl AssignmentService {
         let submissions =
             db::submissions::list_for_student(&self.pool, assignment.id(), student.id()).await?;
         let files = db::files::list_for_assignment(&self.pool, assignment.id()).await?;
+        let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
+            .await?
+            .required("subject")?;
 
         Ok(StudentAssignmentDetails {
             assignment: StudentAssignment {
                 assignment,
+                subject,
                 history,
             },
             files,

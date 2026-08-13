@@ -240,6 +240,7 @@ async fn completed_review_enqueues_notification_for_the_student() {
         r#"
         select
             recipient_telegram_user_id,
+            subject_name,
             assignment_title,
             outcome,
             review_comment
@@ -253,6 +254,7 @@ async fn completed_review_enqueues_notification_for_the_student() {
     .expect("notification is enqueued");
 
     assert_eq!(notification.recipient_telegram_user_id, app.student());
+    assert_eq!(notification.subject_name, "Backend development");
     assert_eq!(notification.assignment_title, "Rust ownership");
     assert_eq!(notification.outcome, "accepted");
     assert_eq!(notification.review_comment, "95/100");

@@ -7,6 +7,19 @@ use crate::domain::{
 
 pub(super) type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
 
+#[derive(Clone)]
+pub(super) enum DeadlineTarget {
+    Create {
+        course_id: TeachingCourseId,
+        title: String,
+        body: String,
+        max_attempts: u16,
+    },
+    Change {
+        assignment_id: AssignmentId,
+    },
+}
+
 #[derive(Clone, Default)]
 pub(super) enum BotState {
     #[default]
@@ -26,18 +39,8 @@ pub(super) enum BotState {
         submission_id: SubmissionId,
         decision: ReviewDecision,
     },
-    ChoosingCourse {
-        message_id: MessageId,
-        course_ids: Vec<TeachingCourseId>,
-    },
-    ChoosingAssignment {
-        message_id: MessageId,
-        course_id: TeachingCourseId,
-        assignment_ids: Vec<AssignmentId>,
-    },
     ManagingAssignment {
         message_id: MessageId,
-        course_id: TeachingCourseId,
         assignment_id: AssignmentId,
     },
     ManagingAssignmentFiles {
@@ -68,18 +71,21 @@ pub(super) enum BotState {
         title: String,
     },
     AwaitingAssignmentMaxAttempts {
+        message_id: MessageId,
         course_id: TeachingCourseId,
         title: String,
         body: String,
     },
-    AwaitingAssignmentDeadline {
-        course_id: TeachingCourseId,
-        title: String,
-        body: String,
-        max_attempts: u16,
+    ChoosingDeadline {
+        message_id: MessageId,
+        target: DeadlineTarget,
     },
-    AwaitingDeadlineChange {
-        assignment_id: AssignmentId,
+    PickingDeadlineDate {
+        message_id: MessageId,
+        target: DeadlineTarget,
+    },
+    AwaitingDeadlineText {
+        target: DeadlineTarget,
     },
     ChoosingAttemptStudent {
         message_id: MessageId,
@@ -87,6 +93,7 @@ pub(super) enum BotState {
         student_ids: Vec<UserId>,
     },
     AwaitingAttemptAmount {
+        message_id: MessageId,
         assignment_id: AssignmentId,
         student_id: UserId,
     },

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            recipient_telegram_user_id,\n            assignment_title,\n            outcome,\n            review_comment\n        from review_notification_outbox\n        where submission_id = $1\n        ",
+  "query": "\n        select\n            recipient_telegram_user_id,\n            subject_name,\n            assignment_title,\n            outcome,\n            review_comment\n        from review_notification_outbox\n        where submission_id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "subject_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "assignment_title",
         "type_info": "Text",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "outcome",
         "type_info": "Text",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "review_comment",
         "type_info": "Text",
         "origin": {
@@ -57,8 +68,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "c1730e2d97577c0bfc55bbba21428b7938a24f9ca6b780ec1e6502e04c3ab788"
+  "hash": "c78957ae7ed50aa5a84a269aedca3b8a2f398117432628ab95784fd29d7a38b3"
 }

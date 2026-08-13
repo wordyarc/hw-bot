@@ -12,7 +12,7 @@ use hw_bot::db;
 use hw_bot::domain::{Assignment, EducationLevel, StudentGroup, TeachingCourse, User};
 use hw_bot::health::HealthState;
 use hw_bot::test_support::{
-    named_admin, named_student, named_teacher, student_group_in, teaching_course,
+    named_admin, named_student, named_teacher, student_group_in, subject, teaching_course,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -437,6 +437,19 @@ impl TestApp {
             teacher,
             course,
         }
+    }
+
+    /// Второй предмет той же группы: студент учится на нескольких курсах сразу.
+    pub async fn add_subject_course(&self, subject_name: &str) -> TeachingCourse {
+        let subject = subject(subject_name);
+        db::academic::insert_subject(&self.pool, &subject)
+            .await
+            .expect("insert subject");
+
+        let course = teaching_course(&subject, &self.fixture.group, &self.fixture.teacher);
+        insert_course(&self.pool, &course).await;
+
+        course
     }
 
     pub async fn add_published_assignment(

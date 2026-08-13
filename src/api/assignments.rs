@@ -150,6 +150,7 @@ impl From<&StudentAssignment> for ProgressResponse {
     fn from(view: &StudentAssignment) -> Self {
         let StudentAssignment {
             assignment,
+            subject: _,
             history,
         } = view;
 

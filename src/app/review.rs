@@ -130,8 +130,17 @@ impl ReviewService {
         let student = db::users::find_by_id(&mut *tx, submission.student_id())
             .await?
             .required("student")?;
-        db::notifications::enqueue_review_result(&mut *tx, &submission, &assignment, &student)
-            .await?;
+        let subject = db::academic::find_subject_by_id(&mut *tx, teaching_course.subject_id())
+            .await?
+            .required("subject")?;
+        db::notifications::enqueue_review_result(
+            &mut *tx,
+            &submission,
+            &assignment,
+            &subject,
+            &student,
+        )
+        .await?;
 
         tx.commit().await?;
 

@@ -32,7 +32,6 @@ impl From<StaffRole> for Role {
 }
 
 impl Role {
-    /// Имя роли одно и то же в БД и в wire-формате API, как и у плоских `str_enum!`-ов.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Student { .. } => "student",

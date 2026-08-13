@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        with next_notification as (\n            select id\n            from review_notification_outbox\n            where delivered_at is null\n              and failed_at is null\n              and available_at <= $1\n              and (lease_expires_at is null or lease_expires_at <= $1)\n            order by available_at, created_at, id\n            for update skip locked\n            limit 1\n        )\n        update review_notification_outbox notification\n        set\n            lease_token = $2,\n            lease_expires_at = $3,\n            attempt_count = notification.attempt_count + 1\n        from next_notification\n        where notification.id = next_notification.id\n        returning\n            notification.id,\n            notification.submission_id,\n            notification.recipient_telegram_user_id,\n            notification.assignment_title,\n            notification.outcome,\n            notification.review_comment,\n            notification.attempt_count,\n            notification.lease_token as \"lease_token!\"\n        ",
+  "query": "\n        with next_notification as (\n            select id\n            from review_notification_outbox\n            where delivered_at is null\n              and failed_at is null\n              and available_at <= $1\n              and (lease_expires_at is null or lease_expires_at <= $1)\n            order by available_at, created_at, id\n            for update skip locked\n            limit 1\n        )\n        update review_notification_outbox notification\n        set\n            lease_token = $2,\n            lease_expires_at = $3,\n            attempt_count = notification.attempt_count + 1\n        from next_notification\n        where notification.id = next_notification.id\n        returning\n            notification.id,\n            notification.submission_id,\n            notification.recipient_telegram_user_id,\n            notification.subject_name,\n            notification.assignment_title,\n            notification.outcome,\n            notification.review_comment,\n            notification.attempt_count,\n            notification.lease_token as \"lease_token!\"\n        ",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_notification_outbox",
+            "name": "subject_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "assignment_title",
         "type_info": "Text",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "outcome",
         "type_info": "Text",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "review_comment",
         "type_info": "Text",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "attempt_count",
         "type_info": "Int4",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "lease_token!",
         "type_info": "Uuid",
         "origin": {
@@ -107,8 +118,9 @@
       false,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "e43b3165c0ae2466b337ecd3cd3f7662266cfdf4c5cc8edd27f0c8dee40867f7"
+  "hash": "42b124bca1d0dcafff6e05954160a383134fa19c4fb71f22d0c3cfc3cbf53437"
 }

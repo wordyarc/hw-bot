@@ -32,6 +32,10 @@ max_files_per_submission = 1
 transfer_timeout_ms = 60000
 max_concurrent_transfers = 4
 
+[ui]
+utc_offset = "+10:00"
+deadline_time = "23:59"
+
 [telegram]
 enabled = false
 api_base_url = "https://api.telegram.org"

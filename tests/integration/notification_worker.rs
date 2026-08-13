@@ -23,7 +23,7 @@ async fn successful_telegram_delivery_completes_notification() {
         .and(path("/bottest-token/sendMessage"))
         .and(body_json(json!({
             "chat_id": app.student(),
-            "text": "Работа принята.\nЗадание: Rust ownership\n\nКомментарий преподавателя:\n95/100"
+            "text": "✅ Работа принята.\n📘 Предмет: Backend development\n📚 Задание: Rust ownership\n\n💬 Комментарий преподавателя:\n95/100"
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "ok": true })))
         .expect(1)

@@ -77,6 +77,7 @@ impl NotificationWorker {
 
         let text = render_review_notification(
             notification.outcome,
+            &notification.subject_name,
             &notification.assignment_title,
             &notification.review_comment,
         );
@@ -211,16 +212,18 @@ fn log_retry_after(error: &TelegramError) {
 
 fn render_review_notification(
     outcome: SubmissionStatus,
+    subject_name: &str,
     assignment_title: &str,
     review_comment: &str,
 ) -> String {
     let verdict = match outcome {
-        SubmissionStatus::Accepted => "Работа принята.",
-        SubmissionStatus::Rejected => "Работа отклонена.",
+        SubmissionStatus::Accepted => "✅ Работа принята.",
+        SubmissionStatus::Rejected => "❌ Работа отклонена.",
         SubmissionStatus::PendingReview => unreachable!("outbox contains only completed reviews"),
     };
     let text = format!(
-        "{verdict}\nЗадание: {assignment_title}\n\nКомментарий преподавателя:\n{review_comment}"
+        "{verdict}\n📘 Предмет: {subject_name}\n📚 Задание: {assignment_title}\n\n\
+         💬 Комментарий преподавателя:\n{review_comment}"
     );
 
     truncate_chars(text, TELEGRAM_MESSAGE_LIMIT)
@@ -276,12 +279,29 @@ mod tests {
     fn review_message_is_bounded_by_telegram_limit() {
         let message = render_review_notification(
             SubmissionStatus::Rejected,
+            "Backend development",
             "Ownership",
             &"x".repeat(TELEGRAM_MESSAGE_LIMIT * 2),
         );
 
         assert_eq!(message.chars().count(), TELEGRAM_MESSAGE_LIMIT);
         assert!(message.ends_with("..."));
+    }
+
+    #[test]
+    fn review_message_names_the_subject_the_assignment_belongs_to() {
+        let message = render_review_notification(
+            SubmissionStatus::Accepted,
+            "Backend development",
+            "Ownership",
+            "95/100",
+        );
+
+        assert!(
+            message.contains("Предмет: Backend development"),
+            "{message}"
+        );
+        assert!(message.contains("Задание: Ownership"), "{message}");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use axum::http::StatusCode;
-use hw_bot::app::AddAssignmentFile;
+use hw_bot::app::{Actor, AddAssignmentFile};
 use hw_bot::domain::FilePresentation;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -23,6 +23,38 @@ async fn a_student_sees_the_published_assignments_of_their_group() {
     let item = only(&body);
     assert_eq!(item["assignment"]["id"], json!(app.assignment()));
     assert_eq!(item["assignment"]["title"], json!("Rust ownership"));
+}
+
+#[tokio::test]
+async fn the_student_list_names_the_subject_and_groups_assignments_by_it() {
+    let app = TestApp::start().await;
+    let algorithms = app.add_subject_course("Algorithms").await;
+    app.add_published_assignment(&algorithms, &app.fixture.teacher, "Sorting")
+        .await;
+
+    let assignments = app
+        .application
+        .assignments
+        .list_for_student(Actor::new(app.fixture.student.id()))
+        .await
+        .expect("the student list is readable");
+
+    let listed: Vec<_> = assignments
+        .iter()
+        .map(|item| {
+            (
+                item.subject.name().as_str(),
+                item.assignment.title().as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Algorithms", "Sorting"),
+            ("Backend development", "Rust ownership"),
+        ]
+    );
 }
 
 #[tokio::test]

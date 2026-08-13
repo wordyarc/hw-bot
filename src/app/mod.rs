@@ -20,5 +20,5 @@ pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
 };
 pub use review::{ReviewQueueItem, ReviewService, ReviewSubmission};
-pub use submissions::{SubmissionService, SubmitHomework};
+pub use submissions::{QueuePlace, SubmissionService, SubmitHomework};
 pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService};

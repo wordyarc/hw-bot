@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use chrono::{FixedOffset, NaiveTime};
 use serde::{Deserialize, Deserializer};
 
 #[derive(Clone, Deserialize)]
@@ -12,6 +13,7 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
     pub files: FilesConfig,
+    pub ui: UiConfig,
     pub telegram: TelegramConfig,
     pub notification_worker: NotificationWorkerConfig,
 }
@@ -78,6 +80,23 @@ pub struct FilesConfig {
     pub max_files_per_submission: usize,
     pub transfer_timeout_ms: u64,
     pub max_concurrent_transfers: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiConfig {
+    pub utc_offset: String,
+    pub deadline_time: String,
+}
+
+impl UiConfig {
+    pub fn resolved_utc_offset(&self) -> Option<FixedOffset> {
+        self.utc_offset.trim().parse().ok()
+    }
+
+    pub fn resolved_deadline_time(&self) -> Option<NaiveTime> {
+        NaiveTime::parse_from_str(self.deadline_time.trim(), "%H:%M").ok()
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -165,6 +184,7 @@ impl AppConfig {
         }
 
         validate_files(&self.files)?;
+        validate_ui(&self.ui)?;
         validate_telegram(&self.telegram)?;
         validate_worker(&self.notification_worker, &self.telegram)?;
 
@@ -234,6 +254,23 @@ fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
     size.checked_mul(config.max_concurrent_transfers)
         .ok_or_else(|| invalid("total concurrent file transfer size is too large"))?;
     Ok(())
+}
+
+fn validate_ui(config: &UiConfig) -> Result<(), ConfigValidationError> {
+    validate(
+        config.resolved_utc_offset().is_some(),
+        format!(
+            "ui.utc_offset must look like +10:00, got {}",
+            config.utc_offset
+        ),
+    )?;
+    validate(
+        config.resolved_deadline_time().is_some(),
+        format!(
+            "ui.deadline_time must use HH:MM, got {}",
+            config.deadline_time
+        ),
+    )
 }
 
 fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationError> {
@@ -365,6 +402,10 @@ mod tests {
                 transfer_timeout_ms = 60000
                 max_concurrent_transfers = 4
 
+                [ui]
+                utc_offset = "+10:00"
+                deadline_time = "23:59"
+
                 [telegram]
                 enabled = false
                 api_base_url = "https://api.telegram.org"
@@ -424,6 +465,14 @@ mod tests {
         assert_eq!(config.files.max_files_per_submission, 1);
         assert_eq!(config.files.transfer_timeout_ms, 60_000);
         assert_eq!(config.files.max_concurrent_transfers, 4);
+        assert_eq!(
+            config.ui.resolved_utc_offset(),
+            FixedOffset::east_opt(10 * 3600)
+        );
+        assert_eq!(
+            config.ui.resolved_deadline_time(),
+            NaiveTime::from_hms_opt(23, 59, 0)
+        );
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
         assert!(!config.telegram.enabled);
@@ -473,6 +522,44 @@ mod tests {
         let error = config.validate().err().expect("config must be rejected");
 
         assert!(error.to_string().contains("telegram.bot_token"));
+    }
+
+    #[test]
+    fn validation_rejects_an_unparsable_utc_offset() {
+        for offset in ["UTC+10", "+10", "10:00", ""] {
+            let mut config = app_config();
+            config.ui.utc_offset = offset.to_owned();
+
+            let error = config
+                .validate()
+                .err()
+                .unwrap_or_else(|| panic!("offset {offset} must be rejected"));
+
+            assert!(
+                error.to_string().contains("ui.utc_offset"),
+                "offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_rejects_an_unparsable_deadline_time() {
+        let mut config = app_config();
+        config.ui.deadline_time = "24:00".to_owned();
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(error.to_string().contains("ui.deadline_time"));
+    }
+
+    #[test]
+    fn the_installation_timezone_defaults_to_utc_plus_ten() {
+        let config = app_config();
+
+        assert_eq!(
+            config.ui.resolved_utc_offset().unwrap().local_minus_utc(),
+            10 * 3600
+        );
     }
 
     #[test]

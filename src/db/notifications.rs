@@ -3,7 +3,9 @@ use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, checked_num_cast};
-use crate::domain::{Assignment, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User};
+use crate::domain::{
+    Assignment, Subject, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User,
+};
 
 const ATTEMPT_COUNT: &str = "review_notification_outbox.attempt_count";
 const OUTCOME: &str = "review_notification_outbox.outcome";
@@ -13,6 +15,7 @@ pub struct ClaimedReviewNotification {
     pub id: Uuid,
     pub submission_id: SubmissionId,
     pub recipient_telegram_user_id: TelegramUserId,
+    pub subject_name: String,
     pub assignment_title: String,
     pub outcome: SubmissionStatus,
     pub review_comment: String,
@@ -24,6 +27,7 @@ pub async fn enqueue_review_result<'e, E>(
     executor: E,
     submission: &Submission,
     assignment: &Assignment,
+    subject: &Subject,
     student: &User,
 ) -> DbResult<()>
 where
@@ -42,12 +46,14 @@ where
     sqlx::query!(
         r#"
         insert into review_notification_outbox (
-            submission_id, recipient_telegram_user_id, assignment_title, outcome, review_comment
+            submission_id, recipient_telegram_user_id, subject_name, assignment_title, outcome,
+            review_comment
         )
-        values ($1, $2, $3, $4, $5)
+        values ($1, $2, $3, $4, $5, $6)
         "#,
         submission.id().as_uuid(),
         student.telegram_user_id().as_i64(),
+        subject.name().as_str(),
         assignment.title().as_str(),
         submission.status().as_str(),
         review_comment.as_str(),
@@ -92,6 +98,7 @@ where
             notification.id,
             notification.submission_id,
             notification.recipient_telegram_user_id,
+            notification.subject_name,
             notification.assignment_title,
             notification.outcome,
             notification.review_comment,
@@ -246,6 +253,7 @@ struct ClaimedReviewNotificationRow {
     id: Uuid,
     submission_id: Uuid,
     recipient_telegram_user_id: i64,
+    subject_name: String,
     assignment_title: String,
     outcome: String,
     review_comment: String,
@@ -265,6 +273,7 @@ impl TryFrom<ClaimedReviewNotificationRow> for ClaimedReviewNotification {
             id: row.id,
             submission_id: SubmissionId::from_uuid(row.submission_id),
             recipient_telegram_user_id: TelegramUserId::new(row.recipient_telegram_user_id)?,
+            subject_name: row.subject_name,
             assignment_title: row.assignment_title,
             outcome,
             review_comment: row.review_comment,

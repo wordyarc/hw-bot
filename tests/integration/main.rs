@@ -17,6 +17,7 @@ mod notification_worker;
 mod resilience;
 mod review_api;
 mod student_read_api;
+mod student_review_queue;
 mod submission_repository;
 mod submit_homework_api;
 mod teacher_read_api;

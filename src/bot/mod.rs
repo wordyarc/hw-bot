@@ -29,11 +29,13 @@ mod errors;
 mod files;
 mod handlers;
 mod state;
+mod timezone;
 mod views;
 
 use files::FileTransfers;
-use handlers::{Command, handle_callback, handle_command, handle_message};
+use handlers::{Command, default_commands, handle_callback, handle_command, handle_message};
 use state::BotState;
+pub use timezone::BotTimezone;
 
 type HandlerResult<T = ()> = anyhow::Result<T>;
 type BotServices = ApplicationContainer;
@@ -44,6 +46,7 @@ pub struct TelegramBot {
     polling_bot: Bot,
     application: ApplicationContainer,
     settings: TelegramBotSettings,
+    timezone: BotTimezone,
     admission: UpdateAdmission,
     file_transfers: FileTransfers,
 }
@@ -93,6 +96,7 @@ impl TelegramBot {
         token: impl Into<String>,
         api_base_url: &str,
         settings: TelegramBotSettings,
+        timezone: BotTimezone,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !settings.request_timeout.is_zero(),
@@ -172,6 +176,7 @@ impl TelegramBot {
             polling_bot,
             application,
             settings,
+            timezone,
             admission,
             file_transfers: FileTransfers::new(
                 transfer_bot,
@@ -204,6 +209,7 @@ impl TelegramBot {
                 .await
                 .map_err(map_startup_error)?;
         }
+        announce_commands(&self.bot).await;
         let _ready = health.ready();
         let storage = InMemStorage::<BotState>::new();
         let mut dispatcher = Dispatcher::builder(self.bot, schema())
@@ -211,7 +217,8 @@ impl TelegramBot {
                 storage,
                 self.application,
                 self.admission.clone(),
-                self.file_transfers
+                self.file_transfers,
+                self.timezone
             ])
             .distribution_function(|update| update.chat().map(|chat| chat.id))
             .worker_queue_size(self.settings.max_concurrent_updates)
@@ -259,6 +266,20 @@ impl TelegramBot {
         } else {
             Err(TelegramBotError::UnexpectedTermination)
         }
+    }
+}
+
+async fn announce_commands(bot: &Bot) {
+    if let Err(error) = bot.set_my_commands(default_commands()).send().await {
+        tracing::warn!(error = ?error, "failed to publish Telegram command hints");
+    }
+    if let Err(error) = bot
+        .set_chat_menu_button()
+        .menu_button(teloxide::types::MenuButton::Commands)
+        .send()
+        .await
+    {
+        tracing::warn!(error = ?error, "failed to set the Telegram menu button");
     }
 }
 

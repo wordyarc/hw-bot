@@ -115,6 +115,26 @@ where
     Ok(())
 }
 
+pub async fn find_subject_by_id<'e, E>(executor: E, id: SubjectId) -> DbResult<Option<Subject>>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query!(
+        r#"
+        select id, name
+        from subjects
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(|row| Subject::new(SubjectId::from_uuid(row.id), row.name))
+        .transpose()
+        .map_err(DbError::from)
+}
+
 /// Connection, not executor: a course without teachers is invalid, so both statements have to
 /// land in the caller's transaction.
 pub async fn insert_teaching_course(

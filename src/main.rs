@@ -1,7 +1,7 @@
 use anyhow::Context;
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{ApplicationContainer, FilePolicy};
-use hw_bot::bot::{TelegramBot, TelegramBotSettings};
+use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings};
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig};
 use hw_bot::db;
 use hw_bot::health::{CriticalComponent, HealthState};
@@ -172,6 +172,15 @@ fn build_telegram_bot(
         return Ok(None);
     }
 
+    let utc_offset = config
+        .ui
+        .resolved_utc_offset()
+        .context("validated config must resolve ui.utc_offset")?;
+    let deadline_time = config
+        .ui
+        .resolved_deadline_time()
+        .context("validated config must resolve ui.deadline_time")?;
+
     let bot = TelegramBot::new(
         application,
         required_bot_token(config)?,
@@ -185,9 +194,10 @@ fn build_telegram_bot(
             file_transfer_timeout: Duration::from_millis(config.files.transfer_timeout_ms),
             max_concurrent_file_transfers: config.files.max_concurrent_transfers,
         },
+        BotTimezone::new(utc_offset, deadline_time),
     )?;
 
-    tracing::info!("Telegram bot enabled");
+    tracing::info!(utc_offset = %utc_offset, "Telegram bot enabled");
     Ok(Some(bot))
 }
 

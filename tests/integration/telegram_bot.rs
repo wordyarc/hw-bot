@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, NaiveTime, Utc};
 use hw_bot::app::ApplicationContainer;
-use hw_bot::bot::{TelegramBot, TelegramBotSettings};
+use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings};
 use hw_bot::health::{CriticalComponent, HealthState};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -15,6 +15,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::harness::{TestApp, test_file_policy};
 
 const BOT_MESSAGE_ID: i32 = 900;
+const ATTEMPTS_CALLBACK: &str = "maxattempts:3";
 const DOCUMENT_FIXTURE: &[u8] = include_bytes!("fixtures/assignment-note.txt");
 const IMAGE_FIXTURE: &[u8] = include_bytes!("fixtures/pixel.ppm");
 
@@ -22,11 +23,8 @@ const IMAGE_FIXTURE: &[u8] = include_bytes!("fixtures/pixel.ppm");
 async fn teacher_creates_a_draft_through_telegram() {
     let app = TestApp::start().await;
     let deadline = Utc::now() + chrono::Duration::days(7);
-    let deadline_input = deadline.format("%d.%m.%Y %H:%M").to_string();
-    let expected_deadline =
-        chrono::NaiveDateTime::parse_from_str(&deadline_input, "%d.%m.%Y %H:%M")
-            .unwrap()
-            .and_utc();
+    let deadline_input = deadline_input(deadline);
+    let expected_deadline = expected_deadline(&deadline_input);
     let updates = vec![
         message_update(1, app.teacher(), 1, "/menu"),
         callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
@@ -75,11 +73,230 @@ async fn teacher_creates_a_draft_through_telegram() {
 }
 
 #[tokio::test]
+async fn a_prompt_hides_the_menu_and_the_finished_step_brings_it_back() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.student(), 1, "/menu"),
+        callback_update(
+            2,
+            app.student(),
+            &format!("submit:{}", app.assignment()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(3, app.student(), 2, "https://example.test/pull/1"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let prompt = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.student(),
+            "text": "Пришлите ссылку или текст сдачи одним сообщением:\n\n/cancel — отменить",
+            "reply_markup": { "remove_keyboard": true }
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let restored = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.student(),
+            "text": "✅ Работа отправлена на проверку. Место в очереди видно в «⏳ Очередь проверки».",
+            "reply_markup": {
+                "keyboard": [
+                    [{ "text": "📚 Мои задания" }, { "text": "⏳ Очередь проверки" }],
+                    [{ "text": "🗄 Архив" }, { "text": "👤 Профиль" }],
+                    [{ "text": "❓ Помощь" }]
+                ],
+                "is_persistent": true,
+                "resize_keyboard": true,
+                "input_field_placeholder": "Выберите пункт меню"
+            }
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let asked = tokio::time::timeout(Duration::from_secs(5), prompt.wait_until_satisfied()).await;
+    let returned =
+        tokio::time::timeout(Duration::from_secs(5), restored.wait_until_satisfied()).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    asked.unwrap_or_else(|_| panic!("the prompt did not hide the menu; requests:\n{requests}"));
+    returned.unwrap_or_else(|_| panic!("the menu did not come back; requests:\n{requests}"));
+}
+
+#[tokio::test]
+async fn the_bottom_menu_opens_a_screen_even_in_the_middle_of_a_dialogue() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.student(), 1, "/menu"),
+        callback_update(
+            2,
+            app.student(),
+            &format!("submit:{}", app.assignment()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(3, app.student(), 2, "⏳ Очередь проверки"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let queue = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.student(),
+            "text": "⏳ Сейчас ни одна ваша работа не ждёт проверки.",
+            "reply_markup": {
+                "inline_keyboard": [
+                    [{ "text": "📚 Мои задания", "callback_data": "menu:assignments" }],
+                    [
+                        { "text": "⏳ Очередь проверки", "callback_data": "menu:queue" },
+                        { "text": "🗄 Архив", "callback_data": "menu:archive" }
+                    ],
+                    [{ "text": "👤 Профиль", "callback_data": "menu:profile" }]
+                ]
+            }
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let observed = tokio::time::timeout(Duration::from_secs(5), queue.wait_until_satisfied()).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    observed.unwrap_or_else(|_| panic!("the queue screen did not open; requests:\n{requests}"));
+
+    let submissions: i64 = sqlx::query_scalar("select count(*) from submissions")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        submissions, 0,
+        "a menu button is not the text of a submission"
+    );
+}
+
+#[tokio::test]
+async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("create:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(5, app.teacher(), 2, "Deadline in a week"),
+        message_update(6, app.teacher(), 3, "Send a pull request."),
+        callback_update(7, app.teacher(), ATTEMPTS_CALLBACK, BOT_MESSAGE_ID),
+        callback_update(8, app.teacher(), "dl:days:7", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let created = wait_for_created_assignment(&app.pool, "Deadline in a week").await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    assert!(
+        requests.contains(&format!(r#""callback_data":"{ATTEMPTS_CALLBACK}""#)),
+        "the keyboard must send exactly what the handler matches; requests:\n{requests}"
+    );
+    let (_, status, _, max_attempts, deadline) =
+        created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    assert_eq!(status, "draft");
+    assert_eq!(
+        max_attempts, 3,
+        "attempts came from a button, not from text"
+    );
+    let local = deadline.with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap());
+    assert_eq!(
+        local.date_naive(),
+        (Utc::now() + chrono::Duration::days(7))
+            .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
+            .date_naive(),
+        "«через неделю» is a week from today in the configured timezone"
+    );
+    assert_eq!(
+        local.format("%H:%M").to_string(),
+        "23:59",
+        "presets expire at the end of the local day"
+    );
+}
+
+#[tokio::test]
+async fn teacher_picks_a_deadline_from_the_calendar() {
+    let app = TestApp::start().await;
+    let picked = (Utc::now() + chrono::Duration::days(3))
+        .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
+        .date_naive();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("create:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(5, app.teacher(), 2, "Calendar draft"),
+        message_update(6, app.teacher(), 3, "Send a pull request."),
+        callback_update(7, app.teacher(), "maxattempts:1", BOT_MESSAGE_ID),
+        callback_update(8, app.teacher(), "dl:calendar", BOT_MESSAGE_ID),
+        callback_update(
+            9,
+            app.teacher(),
+            &format!("cal:pick:{}", picked.format("%Y-%m-%d")),
+            BOT_MESSAGE_ID,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let created = wait_for_created_assignment(&app.pool, "Calendar draft").await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    let (_, _, _, _, deadline) =
+        created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    assert_eq!(
+        deadline
+            .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
+            .date_naive(),
+        picked
+    );
+    assert!(
+        requests.contains("EditMessageReplyMarkup"),
+        "the calendar replaces the keyboard in place; requests:\n{requests}"
+    );
+}
+
+#[tokio::test]
 async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
     let app = TestApp::start().await;
-    let deadline = (Utc::now() + chrono::Duration::days(7))
-        .format("%d.%m.%Y %H:%M")
-        .to_string();
+    let deadline = deadline_input(Utc::now() + chrono::Duration::days(7));
     let updates = vec![
         message_update(1, app.teacher(), 1, "/menu"),
         callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
@@ -479,7 +696,7 @@ async fn stale_file_callback_does_not_delete_the_attachment() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": app.teacher(),
-            "text": "Эта кнопка устарела. Откройте /menu ещё раз."
+            "text": "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu."
         })))
         .respond_with(telegram_message_response())
         .expect(1)
@@ -648,11 +865,8 @@ async fn student_opens_a_previously_published_assignment_from_the_archive() {
 async fn teacher_changes_an_assignment_and_grants_attempts_through_telegram() {
     let app = TestApp::start().await;
     let deadline = Utc::now() + chrono::Duration::days(14);
-    let deadline_input = deadline.format("%d.%m.%Y %H:%M").to_string();
-    let expected_deadline =
-        chrono::NaiveDateTime::parse_from_str(&deadline_input, "%d.%m.%Y %H:%M")
-            .unwrap()
-            .and_utc();
+    let deadline_input = deadline_input(deadline);
+    let expected_deadline = expected_deadline(&deadline_input);
     let assignment = app.assignment();
     let student = app.fixture.student.id().as_uuid();
     let updates = vec![
@@ -774,7 +988,7 @@ async fn stale_assignment_button_does_not_mutate_the_assignment() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": app.teacher(),
-            "text": "Эта кнопка устарела. Откройте /menu ещё раз."
+            "text": "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu."
         })))
         .respond_with(telegram_message_response())
         .expect(1)
@@ -994,7 +1208,14 @@ fn start_bot_with_application(
     CancellationToken,
     JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
 ) {
-    let bot = TelegramBot::new(application, "test-token", &telegram.uri(), settings).unwrap();
+    let bot = TelegramBot::new(
+        application,
+        "test-token",
+        &telegram.uri(),
+        settings,
+        bot_timezone(),
+    )
+    .unwrap();
     let cancellation = CancellationToken::new();
     let health = HealthState::new(true, false);
     let task = tokio::spawn(bot.run(
@@ -1030,6 +1251,28 @@ fn file_upload_updates(app: &TestApp, assignment: Uuid, file: Value) -> Vec<Valu
         callback_update(6, app.teacher(), "file:add", BOT_MESSAGE_ID),
         file,
     ]
+}
+
+fn bot_timezone() -> BotTimezone {
+    BotTimezone::new(
+        FixedOffset::east_opt(10 * 3600).unwrap(),
+        NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
+    )
+}
+
+fn deadline_input(deadline: DateTime<Utc>) -> String {
+    deadline
+        .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
+        .format("%d.%m.%Y %H:%M")
+        .to_string()
+}
+
+fn expected_deadline(input: &str) -> DateTime<Utc> {
+    chrono::NaiveDateTime::parse_from_str(input, "%d.%m.%Y %H:%M")
+        .unwrap()
+        .and_local_timezone(FixedOffset::east_opt(10 * 3600).unwrap())
+        .unwrap()
+        .with_timezone(&Utc)
 }
 
 fn bot_settings_with(update: impl FnOnce(&mut TelegramBotSettings)) -> TelegramBotSettings {
@@ -1130,6 +1373,16 @@ async fn telegram_server(updates: Vec<Value>) -> MockServer {
         .with_priority(10)
         .mount(&telegram)
         .await;
+    for endpoint in ["SetMyCommands", "SetChatMenuButton"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottest-token/{endpoint}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "result": true
+            })))
+            .mount(&telegram)
+            .await;
+    }
 
     telegram
 }
@@ -1534,4 +1787,186 @@ async fn sent_callbacks(telegram: &MockServer) -> Vec<String> {
     }
 
     callbacks
+}
+
+#[tokio::test]
+async fn an_empty_review_queue_answers_the_teacher_instead_of_failing() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        message_update(2, app.teacher(), 2, "✅ Проверить работы"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let empty = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "🎉 Очередь проверки пуста.",
+            "reply_markup": {
+                "inline_keyboard": [
+                    [{ "text": "✅ Проверить работы (0)", "callback_data": "review:next" }],
+                    [{ "text": "📘 Мои курсы", "callback_data": "menu:courses" }],
+                    [{ "text": "👤 Профиль", "callback_data": "menu:profile" }]
+                ]
+            }
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let observed = tokio::time::timeout(Duration::from_secs(5), empty.wait_until_satisfied()).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    observed.unwrap_or_else(|_| panic!("the teacher got no answer; requests:\n{requests}"));
+}
+
+#[tokio::test]
+async fn the_first_start_in_a_fresh_chat_answers_with_the_menu() {
+    let app = TestApp::start().await;
+    let updates = vec![message_update(1, app.student(), 1, "/start")];
+    let telegram = telegram_server(updates).await;
+    let greeting = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.student(),
+            "text": "👋 Здравствуйте, Student!\nВыберите пункт меню ниже 👇",
+            "reply_markup": {
+                "keyboard": [
+                    [{ "text": "📚 Мои задания" }, { "text": "⏳ Очередь проверки" }],
+                    [{ "text": "🗄 Архив" }, { "text": "👤 Профиль" }],
+                    [{ "text": "❓ Помощь" }]
+                ],
+                "is_persistent": true,
+                "resize_keyboard": true,
+                "input_field_placeholder": "Выберите пункт меню"
+            }
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let observed =
+        tokio::time::timeout(Duration::from_secs(5), greeting.wait_until_satisfied()).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    observed.unwrap_or_else(|_| panic!("/start did not answer; requests:\n{requests}"));
+}
+
+#[tokio::test]
+async fn navigation_from_an_older_message_still_opens_the_screen() {
+    let app = TestApp::start().await;
+    let assignment = app.assignment();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        // Экран курса открыт с более нового сообщения, а жмём кнопки со старого.
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID - 5,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("manage:{assignment}"),
+            BOT_MESSAGE_ID - 5,
+        ),
+        callback_update(
+            5,
+            app.teacher(),
+            &format!("attempts:{assignment}"),
+            BOT_MESSAGE_ID - 5,
+        ),
+        callback_update(
+            6,
+            app.teacher(),
+            &format!("files:{assignment}"),
+            BOT_MESSAGE_ID - 5,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let stale = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(0)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_request_path(&telegram, "/bottest-token/SendMessage").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    drop(stale);
+
+    for expected in ["Выберите задание или создайте новое:", "Выберите студента:"]
+    {
+        assert!(
+            requests.contains(expected),
+            "{expected} was never shown; requests:\n{requests}"
+        );
+    }
+    assert!(
+        !requests.contains("старого сообщения"),
+        "navigation must not be refused; requests:\n{requests}"
+    );
+}
+
+/// А вот мутация со старой клавиатуры по-прежнему не проходит: один тап меняет задание.
+#[tokio::test]
+async fn a_mutation_from_an_older_message_is_still_refused() {
+    let app = TestApp::start().await;
+    let assignment = app.assignment();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(
+            2,
+            app.teacher(),
+            &format!("manage:{assignment}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("archive:{assignment}"),
+            BOT_MESSAGE_ID - 5,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let stale = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(json!({
+            "chat_id": app.teacher(),
+            "text": "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu."
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let observed = tokio::time::timeout(Duration::from_secs(5), stale.wait_until_satisfied()).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    observed.unwrap_or_else(|_| panic!("stale mutation was not refused; requests:\n{requests}"));
+
+    let status: String = sqlx::query_scalar("select status from assignments where id = $1")
+        .bind(assignment)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "published", "the assignment must not be archived");
 }

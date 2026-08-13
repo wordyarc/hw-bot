@@ -1,36 +1,125 @@
-use chrono::Utc;
+use chrono::{Datelike, NaiveDate, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::{Bot, ChatId, Requester};
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use teloxide::types::{
+    InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup, KeyboardRemove,
+};
 
 use crate::app::{AssignmentStudentSummary, TeachingCourseSummary};
 use crate::domain::{
-    Assignment, AssignmentStatus, StoredFileMetadata, SubmissionId, SubmissionStatus,
+    Assignment, AssignmentStatus, Role, StoredFileMetadata, SubmissionId, SubmissionStatus,
     TeachingCourseId,
 };
 
 use super::HandlerResult;
+use super::timezone::BotTimezone;
 
 const MESSAGE_LIMIT: usize = 4096;
+
+pub(super) const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
+pub(super) const BUTTON_ARCHIVE: &str = "🗄 Архив";
+pub(super) const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
+pub(super) const BUTTON_REVIEW: &str = "✅ Проверить работы";
+pub(super) const BUTTON_COURSES: &str = "📘 Мои курсы";
+pub(super) const BUTTON_PROFILE: &str = "👤 Профиль";
+pub(super) const BUTTON_HELP: &str = "❓ Помощь";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MenuAction {
+    Assignments,
+    Archive,
+    Queue,
+    Review,
+    Courses,
+    Profile,
+    Help,
+}
+
+pub(super) fn menu_action(text: &str) -> Option<MenuAction> {
+    match text.trim() {
+        BUTTON_ASSIGNMENTS => Some(MenuAction::Assignments),
+        BUTTON_ARCHIVE => Some(MenuAction::Archive),
+        BUTTON_QUEUE => Some(MenuAction::Queue),
+        BUTTON_REVIEW => Some(MenuAction::Review),
+        BUTTON_COURSES => Some(MenuAction::Courses),
+        BUTTON_PROFILE => Some(MenuAction::Profile),
+        BUTTON_HELP => Some(MenuAction::Help),
+        _ => None,
+    }
+}
+
+/// Постоянная нижняя клавиатура: главное меню всегда под рукой, без поиска старого сообщения.
+pub(super) fn main_keyboard(role: Role) -> KeyboardMarkup {
+    match role {
+        Role::Student { .. } => student_keyboard(),
+        Role::Teacher | Role::Admin => teacher_keyboard(),
+    }
+}
+
+pub(super) fn student_keyboard() -> KeyboardMarkup {
+    bottom_menu(vec![
+        vec![
+            KeyboardButton::new(BUTTON_ASSIGNMENTS),
+            KeyboardButton::new(BUTTON_QUEUE),
+        ],
+        vec![
+            KeyboardButton::new(BUTTON_ARCHIVE),
+            KeyboardButton::new(BUTTON_PROFILE),
+        ],
+        vec![KeyboardButton::new(BUTTON_HELP)],
+    ])
+}
+
+pub(super) fn teacher_keyboard() -> KeyboardMarkup {
+    bottom_menu(vec![
+        vec![KeyboardButton::new(BUTTON_REVIEW)],
+        vec![
+            KeyboardButton::new(BUTTON_COURSES),
+            KeyboardButton::new(BUTTON_PROFILE),
+        ],
+        vec![KeyboardButton::new(BUTTON_HELP)],
+    ])
+}
+
+fn bottom_menu(rows: Vec<Vec<KeyboardButton>>) -> KeyboardMarkup {
+    KeyboardMarkup::new(rows)
+        .resize_keyboard()
+        .persistent()
+        .input_field_placeholder("Выберите пункт меню")
+}
 
 pub(super) fn student_menu() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
-            "Мои задания",
+            BUTTON_ASSIGNMENTS,
             "menu:assignments",
         )],
-        vec![InlineKeyboardButton::callback("Архив", "menu:archive")],
+        vec![
+            InlineKeyboardButton::callback(BUTTON_QUEUE, "menu:queue"),
+            InlineKeyboardButton::callback(BUTTON_ARCHIVE, "menu:archive"),
+        ],
+        vec![InlineKeyboardButton::callback(
+            BUTTON_PROFILE,
+            "menu:profile",
+        )],
     ])
 }
 
 pub(super) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
     let review_label = pending.map_or_else(
-        || "Проверить следующую".to_owned(),
-        |pending| format!("Проверить следующую ({pending})"),
+        || BUTTON_REVIEW.to_owned(),
+        |pending| format!("✅ Проверить работы ({pending})"),
     );
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(review_label, "review:next")],
-        vec![InlineKeyboardButton::callback("Мои курсы", "menu:courses")],
+        vec![InlineKeyboardButton::callback(
+            BUTTON_COURSES,
+            "menu:courses",
+        )],
+        vec![InlineKeyboardButton::callback(
+            BUTTON_PROFILE,
+            "menu:profile",
+        )],
     ])
 }
 
@@ -41,7 +130,7 @@ pub(super) fn group_keyboard(group_codes: &[String]) -> InlineKeyboardMarkup {
             .enumerate()
             .map(|(index, code)| {
                 vec![InlineKeyboardButton::callback(
-                    code.clone(),
+                    format!("🎓 {code}"),
                     format!("register_group:{index}"),
                 )]
             })
@@ -52,11 +141,11 @@ pub(super) fn group_keyboard(group_codes: &[String]) -> InlineKeyboardMarkup {
 pub(super) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback(
-            "Принять",
+            "✅ Принять",
             format!("review:accept:{}", submission_id.as_uuid()),
         ),
         InlineKeyboardButton::callback(
-            "Отклонить",
+            "❌ Отклонить",
             format!("review:reject:{}", submission_id.as_uuid()),
         ),
     ]])
@@ -69,7 +158,7 @@ pub(super) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeybo
             .map(|course| {
                 vec![InlineKeyboardButton::callback(
                     button_label(&format!(
-                        "{} · {}",
+                        "📘 {} · {}",
                         course.subject.name().as_str(),
                         course.group.code().as_str()
                     )),
@@ -89,20 +178,20 @@ pub(super) fn course_assignments_keyboard(
         .map(|assignment| {
             vec![InlineKeyboardButton::callback(
                 button_label(&format!(
-                    "{} · {}",
+                    "{} {}",
+                    assignment_status_icon(assignment.status()),
                     assignment.title().as_str(),
-                    assignment_status(assignment.status())
                 )),
                 format!("manage:{}", assignment.id().as_uuid()),
             )]
         })
         .collect();
     rows.push(vec![InlineKeyboardButton::callback(
-        "Создать черновик",
+        "➕ Создать задание",
         format!("create:{}", course_id.as_uuid()),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "К списку курсов",
+        "⬅️ К списку курсов",
         "menu:courses",
     )]);
 
@@ -116,44 +205,181 @@ pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
     match assignment.status() {
         AssignmentStatus::Draft => {
             rows.push(vec![InlineKeyboardButton::callback(
-                "Опубликовать",
+                "🚀 Опубликовать",
                 format!("publish:{assignment_id}"),
             )]);
             rows.push(vec![InlineKeyboardButton::callback(
-                "Архивировать",
+                "📦 Архивировать",
                 format!("archive:{assignment_id}"),
             )]);
         }
         AssignmentStatus::Published => rows.push(vec![InlineKeyboardButton::callback(
-            "Архивировать",
+            "📦 Архивировать",
             format!("archive:{assignment_id}"),
         )]),
         AssignmentStatus::Archived => rows.push(vec![InlineKeyboardButton::callback(
-            "Опубликовать снова",
+            "🚀 Опубликовать снова",
             format!("publish:{assignment_id}"),
         )]),
     }
 
     if assignment.status() != AssignmentStatus::Archived {
         rows.push(vec![InlineKeyboardButton::callback(
-            "Изменить дедлайн",
+            "⏰ Изменить дедлайн",
             format!("deadline:{assignment_id}"),
         )]);
     }
     rows.push(vec![InlineKeyboardButton::callback(
-        "Вложения",
+        "📎 Вложения",
         format!("files:{assignment_id}"),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "Выдать дополнительные попытки",
+        "🎁 Выдать попытки",
         format!("attempts:{assignment_id}"),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "К заданиям курса",
+        "⬅️ К заданиям курса",
         format!("course:{}", assignment.teaching_course_id().as_uuid()),
     )]);
 
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+    let mut preset = |label: &str, date: Option<NaiveDate>, callback: &str| {
+        if let Some(date) = date {
+            rows.push(vec![InlineKeyboardButton::callback(
+                format!("📅 {label} · {}", timezone.format_date(date)),
+                callback.to_owned(),
+            )]);
+        }
+    };
+
+    preset("Через неделю", timezone.in_days(7), "dl:days:7");
+    preset("Через 2 недели", timezone.in_days(14), "dl:days:14");
+    preset("Через месяц", timezone.in_months(1), "dl:months:1");
+    rows.push(vec![InlineKeyboardButton::callback(
+        "🗓 Выбрать дату",
+        "dl:calendar",
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "✍️ Ввести вручную",
+        "dl:manual",
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+const MONTHS: [&str; 12] = [
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+];
+
+pub(super) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {
+    let blank = || InlineKeyboardButton::callback("·", "cal:noop");
+    let first = month.with_day(1).unwrap_or(month);
+    let previous = first.checked_sub_months(chrono::Months::new(1));
+    let next = first.checked_add_months(chrono::Months::new(1));
+
+    let back = match previous {
+        Some(previous) if previous >= today.with_day(1).unwrap_or(today) => {
+            InlineKeyboardButton::callback("◀️", format!("cal:{}", month_key(previous)))
+        }
+        _ => blank(),
+    };
+    let forward = next.map_or_else(blank, |next| {
+        InlineKeyboardButton::callback("▶️", format!("cal:{}", month_key(next)))
+    });
+
+    let mut rows = vec![
+        vec![
+            back,
+            InlineKeyboardButton::callback(
+                format!("{} {}", MONTHS[(first.month() - 1) as usize], first.year()),
+                "cal:noop",
+            ),
+            forward,
+        ],
+        ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+            .into_iter()
+            .map(|day| InlineKeyboardButton::callback(day, "cal:noop"))
+            .collect(),
+    ];
+
+    let mut week = vec![blank(); first.weekday().num_days_from_monday() as usize];
+    let mut day = first;
+    while day.month() == first.month() {
+        week.push(if day < today {
+            blank()
+        } else if day == today {
+            InlineKeyboardButton::callback(
+                format!("»{}", day.day()),
+                format!("cal:pick:{}", day.format("%Y-%m-%d")),
+            )
+        } else {
+            InlineKeyboardButton::callback(
+                day.day().to_string(),
+                format!("cal:pick:{}", day.format("%Y-%m-%d")),
+            )
+        });
+        if week.len() == 7 {
+            rows.push(std::mem::take(&mut week));
+        }
+        let Some(tomorrow) = day.succ_opt() else {
+            break;
+        };
+        day = tomorrow;
+    }
+    if !week.is_empty() {
+        week.resize(7, blank());
+        rows.push(week);
+    }
+
+    rows.push(vec![InlineKeyboardButton::callback(
+        "⬅️ Назад",
+        "dl:options",
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+fn month_key(date: NaiveDate) -> String {
+    date.format("%Y-%m").to_string()
+}
+
+pub(super) fn parse_month_key(value: &str) -> Option<NaiveDate> {
+    let (year, month) = value.split_once('-')?;
+
+    NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, 1)
+}
+
+pub(super) const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
+pub(super) const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
+
+pub(super) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
+    let button = |amount: u16| {
+        InlineKeyboardButton::callback(amount.to_string(), format!("{prefix}{amount}"))
+    };
+
+    InlineKeyboardMarkup::new(vec![
+        [1, 2, 3].into_iter().map(button).collect(),
+        [5, 10].into_iter().map(button).collect(),
+        vec![InlineKeyboardButton::callback(
+            "✍️ Другое число",
+            format!("{prefix}manual"),
+        )],
+    ])
 }
 
 pub(super) fn assignment_files_keyboard(
@@ -166,26 +392,26 @@ pub(super) fn assignment_files_keyboard(
     for (index, file) in files.iter().enumerate() {
         rows.push(vec![
             InlineKeyboardButton::callback(
-                button_label(file.filename().as_str()),
+                button_label(&format!("📄 {}", file.filename().as_str())),
                 format!("file:open:{index}"),
             ),
-            InlineKeyboardButton::callback("Удалить", format!("file:delete:{index}")),
+            InlineKeyboardButton::callback("🗑", format!("file:delete:{index}")),
         ]);
     }
     if can_add {
         rows.push(vec![InlineKeyboardButton::callback(
-            "Добавить вложение",
+            "📎 Добавить вложение",
             "file:add",
         )]);
     }
     if creation_flow {
         rows.push(vec![InlineKeyboardButton::callback(
-            "Завершить создание",
+            "✅ Завершить создание",
             "file:finish",
         )]);
     } else {
         rows.push(vec![InlineKeyboardButton::callback(
-            "К заданию",
+            "⬅️ К заданию",
             format!("manage:{}", assignment.id().as_uuid()),
         )]);
     }
@@ -195,8 +421,8 @@ pub(super) fn assignment_files_keyboard(
 
 pub(super) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("Удалить", "file:confirm-delete"),
-        InlineKeyboardButton::callback("Отмена", "file:cancel-delete"),
+        InlineKeyboardButton::callback("🗑 Удалить", "file:confirm-delete"),
+        InlineKeyboardButton::callback("↩️ Отмена", "file:cancel-delete"),
     ]])
 }
 
@@ -218,36 +444,66 @@ pub(super) fn assignment_students_keyboard(
         .iter()
         .map(|student| {
             vec![InlineKeyboardButton::callback(
-                button_label(student.student.display_name().as_str()),
+                button_label(&format!("👤 {}", student.student.display_name().as_str())),
                 format!("student:{}", student.student.id().as_uuid()),
             )]
         })
         .collect::<Vec<_>>();
     rows.push(vec![InlineKeyboardButton::callback(
-        "К заданию",
+        "⬅️ К заданию",
         format!("manage:{}", assignment_id.as_uuid()),
     )]);
 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn format_deadline(deadline: chrono::DateTime<Utc>) -> String {
-    deadline.format("%d.%m.%Y %H:%M UTC").to_string()
+pub(super) fn deadline_left(deadline: chrono::DateTime<Utc>) -> String {
+    let left = deadline - Utc::now();
+
+    if left.num_seconds() <= 0 {
+        return "дедлайн прошёл".to_owned();
+    }
+
+    let days = left.num_days();
+    let hours = left.num_hours() % 24;
+    if days > 0 {
+        format!("осталось {days} д {hours} ч")
+    } else if left.num_hours() > 0 {
+        format!("осталось {} ч", left.num_hours())
+    } else {
+        format!("осталось {} мин", left.num_minutes().max(1))
+    }
 }
 
 pub(super) fn submission_status(status: SubmissionStatus) -> &'static str {
     match status {
-        SubmissionStatus::PendingReview => "на проверке",
-        SubmissionStatus::Accepted => "принята",
-        SubmissionStatus::Rejected => "отклонена",
+        SubmissionStatus::PendingReview => "⏳ на проверке",
+        SubmissionStatus::Accepted => "✅ принята",
+        SubmissionStatus::Rejected => "❌ отклонена",
     }
 }
 
 pub(super) fn assignment_status(status: AssignmentStatus) -> &'static str {
     match status {
-        AssignmentStatus::Draft => "черновик",
-        AssignmentStatus::Published => "опубликовано",
-        AssignmentStatus::Archived => "архив",
+        AssignmentStatus::Draft => "⚪️ черновик",
+        AssignmentStatus::Published => "🟢 опубликовано",
+        AssignmentStatus::Archived => "📦 архив",
+    }
+}
+
+fn assignment_status_icon(status: AssignmentStatus) -> &'static str {
+    match status {
+        AssignmentStatus::Draft => "⚪️",
+        AssignmentStatus::Published => "🟢",
+        AssignmentStatus::Archived => "📦",
+    }
+}
+
+pub(super) fn role_name(role: Role) -> &'static str {
+    match role {
+        Role::Student { .. } => "🎓 студент",
+        Role::Teacher => "👨‍🏫 преподаватель",
+        Role::Admin => "🛠 администратор",
     }
 }
 
@@ -305,15 +561,39 @@ pub(super) async fn send_message_chunks(
     Ok(())
 }
 
-pub(super) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
-    bot.send_message(chat_id, "Эта кнопка устарела. Откройте /menu ещё раз.")
+/// Просит ввод и убирает нижнее меню: его кнопка вместо ответа оборвала бы шаг, а подсказка поля
+/// зовёт выбрать пункт меню. Вместо кнопок остаётся `/cancel`, а клавиатуру возвращает то
+/// сообщение, которым шаг заканчивается.
+pub(super) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {
+    bot.send_message(chat_id, format!("{prompt}\n\n/cancel — отменить"))
+        .reply_markup(KeyboardRemove::new())
         .await?;
+    Ok(())
+}
+
+/// Остаётся только там, где кнопка правда не может сработать: у мутаций и у кнопок, чей смысл
+/// лежит в состоянии диалога. Навигация по старым сообщениям сюда не попадает.
+pub(super) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
+    bot.send_message(
+        chat_id,
+        "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu.",
+    )
+    .await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, FixedOffset, NaiveTime};
+
     use super::*;
+
+    fn timezone() -> BotTimezone {
+        BotTimezone::new(
+            FixedOffset::east_opt(10 * 3600).unwrap(),
+            NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
+        )
+    }
 
     #[test]
     fn long_messages_are_split_without_losing_content() {
@@ -349,6 +629,74 @@ mod tests {
         assert_eq!(button_label("Мои задания"), "Мои задания");
         assert_eq!(button_label(&"я".repeat(61)).chars().count(), 63);
         assert!(button_label(&"я".repeat(61)).ends_with("..."));
+    }
+
+    #[test]
+    fn bottom_menu_buttons_route_back_to_their_screens() {
+        assert_eq!(
+            menu_action(BUTTON_ASSIGNMENTS),
+            Some(MenuAction::Assignments)
+        );
+        assert_eq!(menu_action(BUTTON_QUEUE), Some(MenuAction::Queue));
+        assert_eq!(menu_action(BUTTON_REVIEW), Some(MenuAction::Review));
+        assert_eq!(menu_action("ссылка на pull request"), None);
+    }
+
+    #[test]
+    fn calendar_hides_past_days_and_the_way_back_to_past_months() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
+        let json = serde_json::to_value(calendar_keyboard(today, today)).unwrap();
+        let rows = json["inline_keyboard"].as_array().unwrap();
+        let callbacks: Vec<_> = rows
+            .iter()
+            .flat_map(|row| row.as_array().unwrap())
+            .map(|button| button["callback_data"].as_str().unwrap())
+            .collect();
+
+        assert!(!callbacks.contains(&"cal:2026-07"));
+        assert!(callbacks.contains(&"cal:2026-09"));
+        assert!(!callbacks.contains(&"cal:pick:2026-08-12"));
+        assert!(callbacks.contains(&"cal:pick:2026-08-13"));
+        assert!(callbacks.contains(&"cal:pick:2026-08-31"));
+        assert!(rows.iter().all(|row| row.as_array().unwrap().len() <= 7));
+    }
+
+    #[test]
+    fn month_keys_survive_a_round_trip() {
+        let september = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+
+        assert_eq!(parse_month_key(&month_key(september)), Some(september));
+        assert_eq!(parse_month_key("2026-13"), None);
+        assert_eq!(parse_month_key("nope"), None);
+    }
+
+    #[test]
+    fn deadline_presets_offer_a_week_two_weeks_and_a_month() {
+        let json = serde_json::to_value(deadline_options_keyboard(&timezone())).unwrap();
+        let callbacks: Vec<_> = json["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row[0]["callback_data"].as_str().unwrap().to_owned())
+            .collect();
+
+        assert_eq!(
+            callbacks,
+            [
+                "dl:days:7",
+                "dl:days:14",
+                "dl:months:1",
+                "dl:calendar",
+                "dl:manual"
+            ]
+        );
+    }
+
+    #[test]
+    fn passed_deadlines_are_not_reported_as_time_left() {
+        let past: DateTime<Utc> = Utc::now() - chrono::Duration::hours(1);
+
+        assert_eq!(deadline_left(past), "дедлайн прошёл");
     }
 
     #[test]

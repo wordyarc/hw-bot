@@ -237,6 +237,92 @@ where
     .collect()
 }
 
+#[derive(Clone, Debug)]
+pub struct PendingQueuePlace {
+    pub assignment_id: AssignmentId,
+    pub subject_name: String,
+    pub assignment_title: String,
+    pub submitted_at: DateTime<Utc>,
+    pub position: u32,
+    pub total: u32,
+}
+
+/// Место сдачи студента в очереди проверки. Очередь ревьюера склеена из всех его курсов, поэтому
+/// считаем не по курсу задания, а по всем сдачам, которые видит хотя бы один его преподаватель.
+/// Порядок обязан совпадать с `lock_next_pending_for_reviewer`.
+pub async fn pending_queue_places<'e, E>(
+    executor: E,
+    student_id: UserId,
+) -> DbResult<Vec<PendingQueuePlace>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        with visible as (
+            select
+                mine.id as mine_id,
+                other.id as other_id,
+                other.submitted_at as other_submitted_at
+            from submissions mine
+            join assignments mine_assignment
+              on mine_assignment.id = mine.assignment_id
+            join assignments other_assignment
+              on exists (
+                  select 1
+                  from teaching_course_teachers mine_teacher
+                  join teaching_course_teachers other_teacher
+                    on other_teacher.teacher_id = mine_teacher.teacher_id
+                  where mine_teacher.teaching_course_id = mine_assignment.teaching_course_id
+                    and other_teacher.teaching_course_id = other_assignment.teaching_course_id
+              )
+            join submissions other
+              on other.assignment_id = other_assignment.id
+             and other.status = 'pending_review'
+            where mine.student_id = $1
+              and mine.status = 'pending_review'
+        )
+        select
+            submissions.assignment_id as "assignment_id!",
+            subjects.name as "subject_name!",
+            assignments.title as "assignment_title!",
+            submissions.submitted_at as "submitted_at!",
+            count(visible.other_id) filter (
+                where (visible.other_submitted_at, visible.other_id)
+                   <= (submissions.submitted_at, submissions.id)
+            ) as "position!",
+            count(visible.other_id) as "total!"
+        from submissions
+        join assignments
+          on assignments.id = submissions.assignment_id
+        join subjects
+          on subjects.id = assignments.subject_id
+        left join visible
+          on visible.mine_id = submissions.id
+        where submissions.student_id = $1
+          and submissions.status = 'pending_review'
+        group by submissions.id, submissions.submitted_at, submissions.assignment_id,
+                 subjects.name, assignments.title
+        order by submissions.submitted_at, submissions.id
+        "#,
+        student_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(PendingQueuePlace {
+            assignment_id: AssignmentId::from_uuid(row.assignment_id),
+            subject_name: row.subject_name,
+            assignment_title: row.assignment_title,
+            submitted_at: row.submitted_at,
+            position: checked_num_cast("review_queue.position", row.position)?,
+            total: checked_num_cast("review_queue.total", row.total)?,
+        })
+    })
+    .collect()
+}
+
 /// Видимость обязана совпадать с `lock_next_pending_for_reviewer`!!
 /// иначе бот может показать например очередь из трёх сдач, а `POST /submissions/next` вернёт 204.
 pub async fn count_pending_for_reviewer<'e, E>(executor: E, reviewer: &User) -> DbResult<u32>

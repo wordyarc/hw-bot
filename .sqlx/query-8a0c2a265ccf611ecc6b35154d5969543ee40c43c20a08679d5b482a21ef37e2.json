@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n            status, created_by, created_at, deadline_at, published_at\n        from assignments\n        where student_group_id = $1\n          and status = 'published'\n        order by deadline_at, id\n        ",
+  "query": "\n        select\n            assignments.id, assignments.teaching_course_id, assignments.subject_id,\n            assignments.student_group_id, assignments.title, assignments.body,\n            assignments.max_attempts, assignments.status, assignments.created_by,\n            assignments.created_at, assignments.deadline_at, assignments.published_at,\n            subjects.name as subject_name\n        from assignments\n        join subjects\n          on subjects.id = assignments.subject_id\n        where assignments.student_group_id = $1\n          and assignments.status = 'archived'\n          and assignments.published_at is not null\n        order by subjects.name, assignments.published_at desc, assignments.id\n        ",
   "describe": {
     "columns": [
       {
@@ -134,6 +134,17 @@
             "name": "published_at"
           }
         }
+      },
+      {
+        "ordinal": 12,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
       }
     ],
     "parameters": {
@@ -153,8 +164,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "cdb5e2b5587e4438e5116e67e571e9da12a69f338723a21c99dae2ebb9191867"
+  "hash": "8a0c2a265ccf611ecc6b35154d5969543ee40c43c20a08679d5b482a21ef37e2"
 }

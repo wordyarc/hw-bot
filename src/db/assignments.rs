@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentParts, AssignmentStatus, StudentGroupId, SubjectId,
-    TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentParts, AssignmentStatus, StudentGroupId, Subject,
+    SubjectId, TeachingCourseId, UserId,
 };
 
 const MAX_ATTEMPTS: &str = "assignments.max_attempts";
@@ -166,58 +166,70 @@ where
     row.map(Assignment::try_from).transpose()
 }
 
+/// Список студента идёт по предметам: у группы их несколько, и без названия предмета задания
+/// сливаются в одну кучу. Внутри предмета порядок прежний - по сроку.
 pub async fn list_published_for_group<'e, E>(
     executor: E,
     student_group_id: StudentGroupId,
-) -> DbResult<Vec<Assignment>>
+) -> DbResult<Vec<StudentAssignmentCard>>
 where
     E: PgExecutor<'e>,
 {
     sqlx::query_as!(
-        AssignmentRow,
+        StudentAssignmentCardRow,
         r#"
         select
-            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            status, created_by, created_at, deadline_at, published_at
+            assignments.id, assignments.teaching_course_id, assignments.subject_id,
+            assignments.student_group_id, assignments.title, assignments.body,
+            assignments.max_attempts, assignments.status, assignments.created_by,
+            assignments.created_at, assignments.deadline_at, assignments.published_at,
+            subjects.name as subject_name
         from assignments
-        where student_group_id = $1
-          and status = 'published'
-        order by deadline_at, id
+        join subjects
+          on subjects.id = assignments.subject_id
+        where assignments.student_group_id = $1
+          and assignments.status = 'published'
+        order by subjects.name, assignments.deadline_at, assignments.id
         "#,
         student_group_id.as_uuid(),
     )
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(Assignment::try_from)
+    .map(StudentAssignmentCard::try_from)
     .collect()
 }
 
 pub async fn list_archived_for_group<'e, E>(
     executor: E,
     student_group_id: StudentGroupId,
-) -> DbResult<Vec<Assignment>>
+) -> DbResult<Vec<StudentAssignmentCard>>
 where
     E: PgExecutor<'e>,
 {
     sqlx::query_as!(
-        AssignmentRow,
+        StudentAssignmentCardRow,
         r#"
         select
-            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            status, created_by, created_at, deadline_at, published_at
+            assignments.id, assignments.teaching_course_id, assignments.subject_id,
+            assignments.student_group_id, assignments.title, assignments.body,
+            assignments.max_attempts, assignments.status, assignments.created_by,
+            assignments.created_at, assignments.deadline_at, assignments.published_at,
+            subjects.name as subject_name
         from assignments
-        where student_group_id = $1
-          and status = 'archived'
-          and published_at is not null
-        order by published_at desc, id
+        join subjects
+          on subjects.id = assignments.subject_id
+        where assignments.student_group_id = $1
+          and assignments.status = 'archived'
+          and assignments.published_at is not null
+        order by subjects.name, assignments.published_at desc, assignments.id
         "#,
         student_group_id.as_uuid(),
     )
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(Assignment::try_from)
+    .map(StudentAssignmentCard::try_from)
     .collect()
 }
 
@@ -304,6 +316,56 @@ impl TryFrom<VersionedAssignmentRow> for VersionedAssignment {
         Ok(Self {
             assignment,
             revision,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StudentAssignmentCard {
+    pub assignment: Assignment,
+    pub subject: Subject,
+}
+
+#[derive(Debug)]
+struct StudentAssignmentCardRow {
+    id: Uuid,
+    teaching_course_id: Uuid,
+    subject_id: Uuid,
+    student_group_id: Uuid,
+    title: String,
+    body: String,
+    max_attempts: i16,
+    status: String,
+    created_by: Uuid,
+    created_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    published_at: Option<DateTime<Utc>>,
+    subject_name: String,
+}
+
+impl TryFrom<StudentAssignmentCardRow> for StudentAssignmentCard {
+    type Error = DbError;
+
+    fn try_from(row: StudentAssignmentCardRow) -> Result<Self, Self::Error> {
+        let subject = Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?;
+        let assignment = Assignment::try_from(AssignmentRow {
+            id: row.id,
+            teaching_course_id: row.teaching_course_id,
+            subject_id: row.subject_id,
+            student_group_id: row.student_group_id,
+            title: row.title,
+            body: row.body,
+            max_attempts: row.max_attempts,
+            status: row.status,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            deadline_at: row.deadline_at,
+            published_at: row.published_at,
+        })?;
+
+        Ok(Self {
+            assignment,
+            subject,
         })
     }
 }

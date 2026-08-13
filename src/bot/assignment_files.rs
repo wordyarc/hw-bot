@@ -12,8 +12,8 @@ use super::errors::send_app_error;
 use super::files::{FileTransfers, incoming_file};
 use super::state::{BotDialogue, BotState};
 use super::views::{
-    assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
-    send_message_chunks, send_stale_button,
+    ask_input, assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
+    send_message_chunks, send_stale_button, teacher_keyboard,
 };
 use super::{BotServices, HandlerResult};
 
@@ -123,6 +123,7 @@ pub(super) async fn handle_message(
                 Ok(_) => {
                     drop(transfer_permit);
                     bot.send_message(message.chat.id, "Вложение добавлено.")
+                        .reply_markup(teacher_keyboard())
                         .await?;
                     show(
                         bot,
@@ -188,19 +189,7 @@ pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResu
             send_stale_button(bot, chat_id).await?;
             return Ok(true);
         };
-        let BotState::ManagingAssignment {
-            message_id: current_message_id,
-            assignment_id: current_assignment_id,
-            ..
-        } = state
-        else {
-            send_stale_button(bot, chat_id).await?;
-            return Ok(true);
-        };
-        if *current_message_id != message_id || *current_assignment_id != assignment_id {
-            send_stale_button(bot, chat_id).await?;
-            return Ok(true);
-        }
+        // stateless - открытие списка вложений - навигация: она разрешена и из старого сообщения
         show(
             bot,
             chat_id,
@@ -238,8 +227,7 @@ pub(super) async fn handle_callback(context: CallbackContext<'_>) -> HandlerResu
                     creation_flow: *creation_flow,
                 })
                 .await?;
-            bot.send_message(chat_id, "Пришлите файл или фотографию.")
-                .await?;
+            ask_input(bot, chat_id, "Пришлите файл или фотографию.").await?;
         }
         "file:confirm-delete" => {
             let BotState::ConfirmingAssignmentFileDeletion {
