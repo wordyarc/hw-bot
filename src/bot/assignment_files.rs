@@ -43,7 +43,7 @@ pub(super) async fn handle_message(
     services: &BotServices,
     transfers: &FileTransfers,
     telegram_user_id: TelegramUserId,
-) -> HandlerResult<bool> {
+) -> HandlerResult {
     match state {
         BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
             bot.send_message(
@@ -60,7 +60,7 @@ pub(super) async fn handle_message(
             let Some(incoming) = incoming_file(message) else {
                 bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
                     .await?;
-                return Ok(true);
+                return Ok(());
             };
             let policy = services.files.policy();
             if incoming
@@ -69,7 +69,7 @@ pub(super) async fn handle_message(
             {
                 bot.send_message(message.chat.id, "Файл превышает допустимый размер.")
                     .await?;
-                return Ok(true);
+                return Ok(());
             }
             let transfer_permit = transfers.acquire().await?;
             let content = match transfers
@@ -84,7 +84,7 @@ pub(super) async fn handle_message(
                         "Не удалось скачать файл. Попробуйте ещё раз.",
                     )
                     .await?;
-                    return Ok(true);
+                    return Ok(());
                 }
             };
             if incoming
@@ -96,13 +96,13 @@ pub(super) async fn handle_message(
                     "Telegram передал файл с неверным размером. Попробуйте ещё раз.",
                 )
                 .await?;
-                return Ok(true);
+                return Ok(());
             }
             let actor = match services.users.resolve_actor(telegram_user_id).await {
                 Ok(actor) => actor,
                 Err(error) => {
                     send_app_error(bot, message.chat.id, error).await?;
-                    return Ok(true);
+                    return Ok(());
                 }
             };
             match services
@@ -158,15 +158,15 @@ pub(super) async fn handle_message(
             bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
                 .await?;
         }
-        _ => return Ok(false),
+        _ => unreachable!("not an assignment file state"),
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(super) async fn handle_screen_action(
     context: CallbackContext<'_>,
     action: ScreenAction,
-) -> HandlerResult<bool> {
+) -> HandlerResult {
     let CallbackContext {
         bot,
         chat_id,
@@ -195,11 +195,11 @@ pub(super) async fn handle_screen_action(
             }) = state
             else {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             };
             if *current_message_id != message_id {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             }
             dialogue
                 .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
@@ -213,7 +213,7 @@ pub(super) async fn handle_screen_action(
         ScreenAction::OpenFile(index) => {
             let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             };
             let _permit = transfers.acquire().await?;
             match services
@@ -228,7 +228,7 @@ pub(super) async fn handle_screen_action(
         ScreenAction::DeleteFile(index) => {
             let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             };
             let BotState::Screen(ScreenState::ManagingAssignmentFiles {
                 revision,
@@ -261,18 +261,18 @@ pub(super) async fn handle_screen_action(
                     .await?;
             }
         }
-        ScreenAction::FinishFileCreation => return Ok(false),
-        ScreenAction::Publish(_) | ScreenAction::Archive(_) | ScreenAction::ChangeDeadline(_) => {
-            return Ok(false);
-        }
+        ScreenAction::FinishFileCreation
+        | ScreenAction::Publish(_)
+        | ScreenAction::Archive(_)
+        | ScreenAction::ChangeDeadline(_) => unreachable!("not an assignment file action"),
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(super) async fn handle_flow_action(
     context: CallbackContext<'_>,
     action: FlowAction,
-) -> HandlerResult<bool> {
+) -> HandlerResult {
     let CallbackContext {
         bot,
         chat_id,
@@ -302,11 +302,11 @@ pub(super) async fn handle_flow_action(
             }) = state
             else {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             };
             if *current_message_id != message_id {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             }
             workflow
                 .delete(*assignment_id, *file_id, *expected_revision, *creation_flow)
@@ -321,11 +321,11 @@ pub(super) async fn handle_flow_action(
             }) = state
             else {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             };
             if *current_message_id != message_id {
                 send_stale_button(bot, chat_id).await?;
-                return Ok(true);
+                return Ok(());
             }
             show(
                 bot,
@@ -343,9 +343,9 @@ pub(super) async fn handle_flow_action(
         | FlowAction::MaxAttempts(_)
         | FlowAction::Deadline(_)
         | FlowAction::SelectStudent(_)
-        | FlowAction::ExtraAttempts(_) => return Ok(false),
+        | FlowAction::ExtraAttempts(_) => unreachable!("not an assignment file action"),
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(super) async fn show(

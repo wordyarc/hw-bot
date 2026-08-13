@@ -48,7 +48,6 @@ pub(super) fn menu_action(text: &str) -> Option<MenuAction> {
     }
 }
 
-/// Постоянная нижняя клавиатура: главное меню всегда под рукой, без поиска старого сообщения.
 pub(super) fn main_keyboard(role: Role) -> KeyboardMarkup {
     match role {
         Role::Student { .. } => student_keyboard(),
@@ -448,8 +447,8 @@ pub(super) fn assignment_students_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn deadline_left(deadline: chrono::DateTime<Utc>) -> String {
-    let left = deadline - Utc::now();
+pub(super) fn deadline_left(deadline: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -> String {
+    let left = deadline - now;
 
     if left.num_seconds() <= 0 {
         return "дедлайн прошёл".to_owned();
@@ -552,9 +551,6 @@ pub(super) async fn send_message_chunks(
     Ok(())
 }
 
-/// Просит ввод и убирает нижнее меню: его кнопка вместо ответа оборвала бы шаг, а подсказка поля
-/// зовёт выбрать пункт меню. Вместо кнопок остаётся `/cancel`, а клавиатуру возвращает то
-/// сообщение, которым шаг заканчивается.
 pub(super) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {
     bot.send_message(chat_id, format!("{prompt}\n\n/cancel — отменить"))
         .reply_markup(KeyboardRemove::new())
@@ -562,8 +558,8 @@ pub(super) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> Handl
     Ok(())
 }
 
-/// Остаётся только там, где кнопка правда не может сработать: у мутаций и у кнопок, чей смысл
-/// лежит в состоянии диалога. Навигация по старым сообщениям сюда не попадает.
+/// Остаётся только там, где кнопка не может сработать: у мутаций и у кнопок, чей смысл
+/// лежит в стейте диалога
 pub(super) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
     bot.send_message(
         chat_id,
@@ -678,7 +674,7 @@ mod tests {
     fn passed_deadlines_are_not_reported_as_time_left() {
         let past: DateTime<Utc> = Utc::now() - chrono::Duration::hours(1);
 
-        assert_eq!(deadline_left(past), "дедлайн прошёл");
+        assert_eq!(deadline_left(past, Utc::now()), "дедлайн прошёл");
     }
 
     #[test]

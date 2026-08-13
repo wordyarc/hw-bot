@@ -1,42 +1,33 @@
-use crate::app::{
-    Actor, ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, RegisterStudent,
-    ReviewSubmission, SubmitHomework,
-};
+use crate::app::{Actor, ErrorCode, RegisterStudent, ReviewSubmission, SubmitHomework};
 use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, AssignmentStatus, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS,
-    Role, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS, Role,
+    TelegramUserId, USER_TEXT_MAX_LEN,
 };
 use anyhow::{Context, anyhow};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use teloxide::dispatching::dialogue::InMemStorageError;
-use teloxide::payloads::{
-    AnswerCallbackQuerySetters, EditMessageReplyMarkupSetters, SendMessageSetters,
-    SetMyCommandsSetters,
-};
+use teloxide::payloads::{AnswerCallbackQuerySetters, SendMessageSetters, SetMyCommandsSetters};
 use teloxide::prelude::{Bot, Requester};
 use teloxide::types::{
-    BotCommand, BotCommandScope, CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup,
-    Message, MessageId, Recipient, User,
+    BotCommand, BotCommandScope, CallbackQuery, ChatId, Message, MessageId, Recipient, User,
 };
 use teloxide::utils::command::BotCommands;
 
 use super::assignment_files;
-use super::callbacks::{
-    self, AmountChoice, CallbackAction, DeadlineAction, EXTRA_ATTEMPTS_PREFIX, FlowAction,
-    MAX_ATTEMPTS_PREFIX, ReplayableAction, ScreenAction,
-};
+use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
 use super::errors::send_app_error;
 use super::state::{BotDialogue, BotState, DeadlineTarget, FlowState, ScreenState};
 use super::timezone::BotTimezone;
 use super::views::{
     BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW, MenuAction,
-    ask_input, assignment_actions_keyboard, assignment_status, assignment_students_keyboard,
-    attempts_keyboard, button_label, calendar_keyboard, course_assignments_keyboard,
-    courses_keyboard, deadline_left, deadline_options_keyboard, group_keyboard, main_keyboard,
-    menu_action, review_keyboard, role_name, send_message_chunks, send_stale_button,
-    student_keyboard, student_menu, submission_status, teacher_keyboard, teacher_menu,
+    ask_input, group_keyboard, main_keyboard, menu_action, role_name, send_message_chunks,
+    send_stale_button, student_keyboard, student_menu, teacher_keyboard, teacher_menu,
 };
 use super::{BotServices, HandlerResult};
+
+mod review;
+mod student;
+mod teacher;
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
@@ -99,7 +90,7 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Role) {
 }
 
 #[derive(Clone, Copy)]
-struct Screen<'a> {
+pub(super) struct Screen<'a> {
     bot: &'a Bot,
     chat_id: ChatId,
     actor: Actor,
@@ -108,7 +99,7 @@ struct Screen<'a> {
     timezone: &'a BotTimezone,
 }
 
-async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
+pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
     match dialogue.exit().await {
         Ok(()) | Err(InMemStorageError::DialogueNotFound) => Ok(()),
     }
@@ -167,8 +158,6 @@ pub(super) async fn handle_command(
     .await
 }
 
-/// Помощь по своей роли: чужие разделы студенту и преподавателю только мешают, а команду из
-/// подсказки Telegram делает кликабельной - нажатие на чужую заканчивалось отказом в правах.
 async fn send_help(
     bot: &Bot,
     chat_id: ChatId,
@@ -183,8 +172,7 @@ async fn send_help(
     {
         Ok(registered) => Some(registered.user.role()),
         Err(error) => {
-            // Незарегистрированный - обычное дело, а недоступная база не повод не показать
-            // справку: в обоих случаях остаётся общий текст.
+            // Незарегистрированный
             if error.code() != ErrorCode::NotFound {
                 tracing::warn!(error = ?error, "failed to resolve the role for help");
             }
@@ -274,12 +262,16 @@ pub(super) async fn handle_message(
         .await;
     }
 
-    if assignment_files::handle_message(
-        &bot, &message, &state, &dialogue, &services, &transfers, actor,
-    )
-    .await?
-    {
-        return Ok(());
+    if matches!(
+        state,
+        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. })
+            | BotState::Flow(FlowState::AwaitingAssignmentFile { .. })
+            | BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. })
+    ) {
+        return assignment_files::handle_message(
+            &bot, &message, &state, &dialogue, &services, &transfers, actor,
+        )
+        .await;
     }
 
     match state {
@@ -495,7 +487,7 @@ pub(super) async fn handle_message(
             {
                 return Ok(());
             }
-            ask_max_attempts(
+            teacher::ask_max_attempts(
                 &bot,
                 message.chat.id,
                 course_id,
@@ -522,7 +514,7 @@ pub(super) async fn handle_message(
                 .await?;
                 return Ok(());
             };
-            ask_deadline(
+            teacher::ask_deadline(
                 &bot,
                 message.chat.id,
                 DeadlineTarget::Create {
@@ -536,7 +528,6 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        // Пока висит клавиатура с пресетами, набранная дата - это тоже ответ, а не мимо-сообщение.
         BotState::Flow(FlowState::ChoosingDeadline { target, .. })
         | BotState::Flow(FlowState::PickingDeadlineDate { target, .. })
         | BotState::Flow(FlowState::AwaitingDeadlineText { target }) => {
@@ -550,7 +541,7 @@ pub(super) async fn handle_message(
             let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
                 return Ok(());
             };
-            apply_deadline(
+            teacher::apply_deadline(
                 Screen {
                     bot: &bot,
                     chat_id: message.chat.id,
@@ -587,7 +578,7 @@ pub(super) async fn handle_message(
             let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
                 return Ok(());
             };
-            grant_attempts(
+            teacher::grant_attempts(
                 Screen {
                     bot: &bot,
                     chat_id: message.chat.id,
@@ -633,11 +624,11 @@ async fn run_menu_action(
     };
 
     match action {
-        MenuAction::Assignments => show_student_assignments(screen).await,
-        MenuAction::Archive => show_student_archive(screen).await,
-        MenuAction::Queue => show_student_queue(screen).await,
-        MenuAction::Review => show_next_review(screen).await,
-        MenuAction::Courses => show_courses(screen).await,
+        MenuAction::Assignments => student::show_assignments(screen).await,
+        MenuAction::Archive => student::show_archive(screen).await,
+        MenuAction::Queue => student::show_queue(screen).await,
+        MenuAction::Review => review::show_next(screen).await,
+        MenuAction::Courses => teacher::show_courses(screen).await,
         MenuAction::Profile => show_profile(screen).await,
         MenuAction::Help => Ok(()),
     }
@@ -782,18 +773,20 @@ async fn handle_replayable_action(
     transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
-        ReplayableAction::StudentAssignments => show_student_assignments(screen).await,
-        ReplayableAction::StudentArchive => show_student_archive(screen).await,
-        ReplayableAction::StudentQueue => show_student_queue(screen).await,
+        ReplayableAction::StudentAssignments => student::show_assignments(screen).await,
+        ReplayableAction::StudentArchive => student::show_archive(screen).await,
+        ReplayableAction::StudentQueue => student::show_queue(screen).await,
         ReplayableAction::Profile => show_profile(screen).await,
-        ReplayableAction::Courses => show_courses(screen).await,
-        ReplayableAction::NextReview => show_next_review(screen).await,
-        ReplayableAction::Course(course_id) => show_course_assignments(screen, course_id).await,
+        ReplayableAction::Courses => teacher::show_courses(screen).await,
+        ReplayableAction::NextReview => review::show_next(screen).await,
+        ReplayableAction::Course(course_id) => {
+            teacher::show_course_assignments(screen, course_id).await
+        }
         ReplayableAction::Assignment(assignment_id) => {
-            show_assignment(screen, assignment_id, transfers).await
+            student::show_assignment(screen, assignment_id, transfers).await
         }
         ReplayableAction::ManageAssignment(assignment_id) => {
-            show_teacher_assignment(screen, assignment_id).await
+            teacher::show_assignment(screen, assignment_id).await
         }
         ReplayableAction::StartAssignmentCreation(course_id) => {
             screen
@@ -831,7 +824,7 @@ async fn handle_replayable_action(
             .await
         }
         ReplayableAction::GrantAttempts(assignment_id) => {
-            show_assignment_students(screen, assignment_id).await
+            teacher::show_students(screen, assignment_id).await
         }
     }
 }
@@ -843,98 +836,30 @@ async fn handle_screen_action(
     state: BotState,
     transfers: &super::FileTransfers,
 ) -> HandlerResult {
-    let context = assignment_files::CallbackContext {
-        bot: screen.bot,
-        chat_id: screen.chat_id,
-        message_id,
-        state: &state,
-        actor: screen.actor,
-        dialogue: screen.dialogue,
-        services: screen.services,
-        transfers,
-    };
-    if assignment_files::handle_screen_action(context, action).await? {
-        return Ok(());
-    }
-
-    let assignment_id = match action {
-        ScreenAction::Publish(assignment_id)
-        | ScreenAction::Archive(assignment_id)
-        | ScreenAction::ChangeDeadline(assignment_id) => {
-            let Some(assignment_id) = current_assignment_screen(assignment_id, message_id, &state)
-            else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            assignment_id
-        }
-        ScreenAction::FinishFileCreation => {
-            let BotState::Screen(ScreenState::ManagingAssignmentFiles {
-                message_id: current_message_id,
-                assignment_id,
-                creation_flow: true,
-                ..
-            }) = state
-            else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            if current_message_id != message_id {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            }
-            return show_teacher_assignment(screen, assignment_id).await;
-        }
-        ScreenAction::AddFile | ScreenAction::OpenFile(_) | ScreenAction::DeleteFile(_) => {
-            unreachable!("assignment file actions are handled by assignment_files")
-        }
-    };
-
     match action {
-        ScreenAction::Publish(_) => match screen
-            .services
-            .assignments
-            .publish(assignment_id, screen.actor, Utc::now())
-            .await
-        {
-            Ok(_) => {
-                screen
-                    .bot
-                    .send_message(screen.chat_id, "🚀 Задание опубликовано.")
-                    .await?;
-                show_teacher_assignment(screen, assignment_id).await?;
-            }
-            Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-        },
-        ScreenAction::Archive(_) => match screen
-            .services
-            .assignments
-            .archive(assignment_id, screen.actor)
-            .await
-        {
-            Ok(_) => {
-                screen
-                    .bot
-                    .send_message(screen.chat_id, "📦 Задание архивировано.")
-                    .await?;
-                show_teacher_assignment(screen, assignment_id).await?;
-            }
-            Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-        },
-        ScreenAction::ChangeDeadline(_) => {
-            ask_deadline(
-                screen.bot,
-                screen.chat_id,
-                DeadlineTarget::Change { assignment_id },
-                screen.dialogue,
-                screen.timezone,
+        ScreenAction::AddFile | ScreenAction::OpenFile(_) | ScreenAction::DeleteFile(_) => {
+            assignment_files::handle_screen_action(
+                assignment_files::CallbackContext {
+                    bot: screen.bot,
+                    chat_id: screen.chat_id,
+                    message_id,
+                    state: &state,
+                    actor: screen.actor,
+                    dialogue: screen.dialogue,
+                    services: screen.services,
+                    transfers,
+                },
+                action,
             )
-            .await?;
+            .await
         }
-        ScreenAction::AddFile
-        | ScreenAction::OpenFile(_)
-        | ScreenAction::DeleteFile(_)
-        | ScreenAction::FinishFileCreation => unreachable!(),
+        ScreenAction::FinishFileCreation
+        | ScreenAction::Publish(_)
+        | ScreenAction::Archive(_)
+        | ScreenAction::ChangeDeadline(_) => {
+            teacher::handle_screen_action(screen, message_id, action, state).await
+        }
     }
-
-    Ok(())
 }
 
 async fn handle_flow_action(
@@ -944,21 +869,23 @@ async fn handle_flow_action(
     state: BotState,
     transfers: &super::FileTransfers,
 ) -> HandlerResult {
-    let context = assignment_files::CallbackContext {
-        bot: screen.bot,
-        chat_id: screen.chat_id,
-        message_id,
-        state: &state,
-        actor: screen.actor,
-        dialogue: screen.dialogue,
-        services: screen.services,
-        transfers,
-    };
-    if assignment_files::handle_flow_action(context, action).await? {
-        return Ok(());
-    }
-
     match action {
+        FlowAction::ConfirmFileDeletion | FlowAction::CancelFileDeletion => {
+            assignment_files::handle_flow_action(
+                assignment_files::CallbackContext {
+                    bot: screen.bot,
+                    chat_id: screen.chat_id,
+                    message_id,
+                    state: &state,
+                    actor: screen.actor,
+                    dialogue: screen.dialogue,
+                    services: screen.services,
+                    transfers,
+                },
+                action,
+            )
+            .await?;
+        }
         FlowAction::Review {
             decision,
             submission_id: callback_submission_id,
@@ -984,382 +911,20 @@ async fn handle_flow_action(
             .await?;
         }
         FlowAction::MaxAttempts(choice) => {
-            let BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
-                message_id: current_message_id,
-                course_id,
-                title,
-                body,
-            }) = state
-            else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            if current_message_id != message_id {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            }
-            let Some(max_attempts) = chosen_amount(choice) else {
-                ask_input(
-                    screen.bot,
-                    screen.chat_id,
-                    &format!("Введите количество попыток от 1 до {MAX_ATTEMPTS}:"),
-                )
-                .await?;
-                return Ok(());
-            };
-            ask_deadline(
-                screen.bot,
-                screen.chat_id,
-                DeadlineTarget::Create {
-                    course_id,
-                    title,
-                    body,
-                    max_attempts,
-                },
-                screen.dialogue,
-                screen.timezone,
-            )
-            .await?;
+            teacher::handle_max_attempts(screen, message_id, choice, state).await?;
         }
         FlowAction::Deadline(action) => {
-            handle_deadline_callback(screen, message_id, action, state).await?;
+            teacher::handle_deadline(screen, message_id, action, state).await?;
         }
         FlowAction::SelectStudent(student_id) => {
-            let BotState::Flow(FlowState::ChoosingAttemptStudent {
-                message_id: current_message_id,
-                assignment_id,
-                student_ids,
-            }) = state
-            else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            if current_message_id != message_id || !student_ids.contains(&student_id) {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            }
-            let sent = screen
-                .bot
-                .send_message(screen.chat_id, "Сколько дополнительных попыток выдать?")
-                .reply_markup(attempts_keyboard(EXTRA_ATTEMPTS_PREFIX))
-                .await?;
-            screen
-                .dialogue
-                .update(BotState::Flow(FlowState::AwaitingAttemptAmount {
-                    message_id: sent.id,
-                    assignment_id,
-                    student_id,
-                }))
-                .await?;
+            teacher::select_student(screen, message_id, student_id, state).await?;
         }
         FlowAction::ExtraAttempts(choice) => {
-            let BotState::Flow(FlowState::AwaitingAttemptAmount {
-                message_id: current_message_id,
-                assignment_id,
-                student_id,
-            }) = state
-            else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            if current_message_id != message_id {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            }
-            let Some(amount) = chosen_amount(choice) else {
-                ask_input(
-                    screen.bot,
-                    screen.chat_id,
-                    &format!("Введите целое число от 1 до {MAX_ATTEMPTS}:"),
-                )
-                .await?;
-                return Ok(());
-            };
-            grant_attempts(screen, assignment_id, student_id, amount).await?;
+            teacher::handle_extra_attempts(screen, message_id, choice, state).await?;
         }
-        FlowAction::SelectRegistrationGroup(_)
-        | FlowAction::ConfirmFileDeletion
-        | FlowAction::CancelFileDeletion => {
-            unreachable!("registration and file flow actions are handled before this point")
+        FlowAction::SelectRegistrationGroup(_) => {
+            unreachable!("registration is handled before this point")
         }
-    }
-
-    Ok(())
-}
-
-fn chosen_amount(choice: AmountChoice) -> Option<u16> {
-    match choice {
-        AmountChoice::Preset(value) if value > 0 && value <= MAX_ATTEMPTS => Some(value),
-        AmountChoice::Preset(_) | AmountChoice::Manual => None,
-    }
-}
-
-async fn handle_deadline_callback(
-    screen: Screen<'_>,
-    message_id: MessageId,
-    action: DeadlineAction,
-    state: BotState,
-) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        dialogue,
-        timezone,
-        ..
-    } = screen;
-    let (current_message_id, target) = match state {
-        BotState::Flow(FlowState::ChoosingDeadline { message_id, target })
-        | BotState::Flow(FlowState::PickingDeadlineDate { message_id, target }) => {
-            (message_id, target)
-        }
-        _ => {
-            send_stale_button(bot, chat_id).await?;
-            return Ok(());
-        }
-    };
-    if current_message_id != message_id {
-        send_stale_button(bot, chat_id).await?;
-        return Ok(());
-    }
-
-    let date = match action {
-        DeadlineAction::Days(days) => timezone.in_days(u64::from(days)),
-        DeadlineAction::Months(months) => timezone.in_months(months),
-        DeadlineAction::Pick(date) => Some(date),
-        DeadlineAction::Manual => {
-            dialogue
-                .update(BotState::Flow(FlowState::AwaitingDeadlineText { target }))
-                .await?;
-            ask_input(
-                bot,
-                chat_id,
-                &format!(
-                    "Введите дату в формате ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ ({}):",
-                    timezone.suffix()
-                ),
-            )
-            .await?;
-            return Ok(());
-        }
-        DeadlineAction::Options => {
-            let sent = bot
-                .send_message(chat_id, deadline_prompt(&target, timezone))
-                .reply_markup(deadline_options_keyboard(timezone))
-                .await?;
-            dialogue
-                .update(BotState::Flow(FlowState::ChoosingDeadline {
-                    message_id: sent.id,
-                    target,
-                }))
-                .await?;
-            return Ok(());
-        }
-        DeadlineAction::Calendar => {
-            let month = timezone.today();
-            bot.edit_message_reply_markup(chat_id, message_id)
-                .reply_markup(calendar_keyboard(month, month))
-                .await?;
-            dialogue
-                .update(BotState::Flow(FlowState::PickingDeadlineDate {
-                    message_id,
-                    target,
-                }))
-                .await?;
-            return Ok(());
-        }
-        DeadlineAction::Month(month) => {
-            bot.edit_message_reply_markup(chat_id, message_id)
-                .reply_markup(calendar_keyboard(month, timezone.today()))
-                .await?;
-            dialogue
-                .update(BotState::Flow(FlowState::PickingDeadlineDate {
-                    message_id,
-                    target,
-                }))
-                .await?;
-            return Ok(());
-        }
-    };
-
-    let Some(deadline_at) = date.and_then(|date| timezone.end_of(date)) else {
-        send_stale_button(bot, chat_id).await?;
-        return Ok(());
-    };
-
-    apply_deadline(screen, target, deadline_at).await
-}
-
-fn deadline_prompt(target: &DeadlineTarget, timezone: &BotTimezone) -> String {
-    let question = match target {
-        DeadlineTarget::Create { .. } => "4/4. Когда истекает дедлайн?",
-        DeadlineTarget::Change { .. } => "Новый дедлайн.",
-    };
-
-    format!(
-        "{question} Время по умолчанию — {} ({}).",
-        timezone.deadline_time().format("%H:%M"),
-        timezone.suffix(),
-    )
-}
-
-async fn ask_max_attempts(
-    bot: &Bot,
-    chat_id: ChatId,
-    course_id: TeachingCourseId,
-    title: String,
-    body: String,
-    dialogue: &BotDialogue,
-) -> HandlerResult {
-    let sent = bot
-        .send_message(chat_id, "3/4. Сколько попыток даёте студенту?")
-        .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
-        .await?;
-    dialogue
-        .update(BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
-            message_id: sent.id,
-            course_id,
-            title,
-            body,
-        }))
-        .await?;
-    Ok(())
-}
-
-async fn ask_deadline(
-    bot: &Bot,
-    chat_id: ChatId,
-    target: DeadlineTarget,
-    dialogue: &BotDialogue,
-    timezone: &BotTimezone,
-) -> HandlerResult {
-    let sent = bot
-        .send_message(chat_id, deadline_prompt(&target, timezone))
-        .reply_markup(deadline_options_keyboard(timezone))
-        .await?;
-    dialogue
-        .update(BotState::Flow(FlowState::ChoosingDeadline {
-            message_id: sent.id,
-            target,
-        }))
-        .await?;
-    Ok(())
-}
-
-async fn apply_deadline(
-    screen: Screen<'_>,
-    target: DeadlineTarget,
-    deadline_at: DateTime<Utc>,
-) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        timezone,
-    } = screen;
-    match target {
-        DeadlineTarget::Create {
-            course_id,
-            title,
-            body,
-            max_attempts,
-        } => {
-            let result = services
-                .assignments
-                .create(CreateAssignment {
-                    teaching_course_id: course_id,
-                    actor,
-                    title,
-                    body,
-                    max_attempts,
-                    created_at: Utc::now(),
-                    deadline_at,
-                })
-                .await;
-
-            match result {
-                Ok(assignment) => {
-                    bot.send_message(
-                        chat_id,
-                        format!(
-                            "📝 Черновик создан. Дедлайн: {}",
-                            timezone.format(deadline_at)
-                        ),
-                    )
-                    .reply_markup(teacher_keyboard())
-                    .await?;
-                    assignment_files::show(
-                        bot,
-                        chat_id,
-                        actor,
-                        assignment.id(),
-                        true,
-                        services,
-                        dialogue,
-                    )
-                    .await?;
-                }
-                Err(error) => send_app_error(bot, chat_id, error).await?,
-            }
-        }
-        DeadlineTarget::Change { assignment_id } => {
-            match services
-                .assignments
-                .change_deadline(ChangeDeadline {
-                    assignment_id,
-                    actor,
-                    deadline_at,
-                })
-                .await
-            {
-                Ok(_) => {
-                    bot.send_message(
-                        chat_id,
-                        format!("⏰ Дедлайн изменён: {}", timezone.format(deadline_at)),
-                    )
-                    .reply_markup(teacher_keyboard())
-                    .await?;
-                    show_teacher_assignment(screen, assignment_id).await?;
-                }
-                Err(error) => send_app_error(bot, chat_id, error).await?,
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn grant_attempts(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
-    student_id: UserId,
-    amount: u16,
-) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        ..
-    } = screen;
-    match services
-        .assignments
-        .grant_extra_attempts(GrantExtraAttempts {
-            assignment_id,
-            student_id,
-            actor,
-            amount,
-        })
-        .await
-    {
-        Ok(progress) => {
-            bot.send_message(
-                chat_id,
-                format!(
-                    "🎁 Добавлено попыток: {amount}. Всего дополнительных: {}.",
-                    progress.extra_attempts()
-                ),
-            )
-            .reply_markup(teacher_keyboard())
-            .await?;
-            show_assignment_students(screen, assignment_id).await?;
-        }
-        Err(error) => send_app_error(bot, chat_id, error).await?,
     }
 
     Ok(())
@@ -1418,8 +983,6 @@ async fn show_home(
             dialogue
                 .update(BotState::Flow(FlowState::AwaitingRegistrationName))
                 .await?;
-            // Без `ask_input`: у незарегистрированного нижнего меню ещё нет, а отменять регистрацию
-            // некуда - до неё бот всё равно ничего не умеет.
             bot.send_message(chat_id, "Вы ещё не зарегистрированы. Как вас называть?")
                 .await?;
         }
@@ -1480,514 +1043,6 @@ async fn show_profile(screen: Screen<'_>) -> HandlerResult {
         Role::Teacher | Role::Admin => teacher_menu(None),
     };
     send_message_chunks(bot, chat_id, text, Some(keyboard)).await
-}
-
-async fn show_student_queue(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        timezone,
-        ..
-    } = screen;
-    let places = match services.submissions.pending_queue(actor).await {
-        Ok(places) => places,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-
-    if places.is_empty() {
-        bot.send_message(chat_id, "⏳ Сейчас ни одна ваша работа не ждёт проверки.")
-            .reply_markup(student_menu())
-            .await?;
-        return Ok(());
-    }
-
-    let mut text = String::from("⏳ Ваши работы на проверке:\n");
-    for place in &places {
-        text.push_str(&format!(
-            "\n📘 {} · {}\nотправлено {} · {}\n",
-            place.subject_name,
-            place.assignment_title,
-            timezone.format_short(place.submitted_at),
-            queue_place(place.position, place.total),
-        ));
-    }
-
-    send_message_chunks(bot, chat_id, text, Some(student_menu())).await
-}
-
-/// Позиция `0` означает, что очередь ещё некому разбирать: у курса нет преподавателя.
-fn queue_place(position: u32, total: u32) -> String {
-    if position == 0 {
-        "преподаватель ещё не назначен на курс".to_owned()
-    } else {
-        format!("ваш номер в очереди: {position} из {total}")
-    }
-}
-
-/// Заголовок предмета печатается один раз на группу: список студента отсортирован по предметам,
-/// иначе задания нескольких курсов читаются одной кучей. Кнопки заголовок не видят, поэтому предмет
-/// дублируется в подписи каждой.
-#[derive(Default)]
-struct SubjectHeadings {
-    current: Option<String>,
-}
-
-impl SubjectHeadings {
-    fn push(&mut self, text: &mut String, subject: &str) {
-        if self.current.as_deref() == Some(subject) {
-            return;
-        }
-        text.push_str(&format!("\n📘 {subject}\n"));
-        self.current = Some(subject.to_owned());
-    }
-}
-
-async fn show_student_assignments(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        timezone,
-        ..
-    } = screen;
-    let assignments = match services.assignments.list_for_student(actor).await {
-        Ok(assignments) => assignments,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-
-    if assignments.is_empty() {
-        bot.send_message(chat_id, "📚 Опубликованных заданий пока нет.")
-            .reply_markup(student_menu())
-            .await?;
-        return Ok(());
-    }
-
-    let mut text = String::from("📚 Ваши задания:\n");
-    let mut rows = Vec::with_capacity(assignments.len());
-    let mut subjects = SubjectHeadings::default();
-    for item in assignments {
-        let assignment = &item.assignment;
-        let subject = item.subject.name().as_str();
-        let remaining = item.history.remaining_attempts_for(assignment);
-        let status = if item.history.has_accepted_submission() {
-            "✅ принято"
-        } else if item.history.has_pending_submission() {
-            "⏳ на проверке"
-        } else {
-            "✍️ не сдано"
-        };
-        subjects.push(&mut text, subject);
-        text.push_str(&format!(
-            "\n{}\n{status} · до {} ({})\nосталось попыток: {}\n",
-            assignment.title().as_str(),
-            timezone.format(assignment.deadline_at()),
-            deadline_left(assignment.deadline_at()),
-            remaining,
-        ));
-        rows.push(vec![InlineKeyboardButton::callback(
-            button_label(&format!("{subject} · {}", assignment.title().as_str())),
-            format!("assignment:{}", assignment.id().as_uuid()),
-        )]);
-    }
-
-    send_message_chunks(bot, chat_id, text, Some(InlineKeyboardMarkup::new(rows))).await?;
-    Ok(())
-}
-
-async fn show_student_archive(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        ..
-    } = screen;
-    let assignments = match services.assignments.list_archived_for_student(actor).await {
-        Ok(assignments) => assignments,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-
-    if assignments.is_empty() {
-        bot.send_message(chat_id, "🗄 Архив заданий пока пуст.")
-            .reply_markup(student_menu())
-            .await?;
-        return Ok(());
-    }
-
-    let mut text = String::from("🗄 Архив заданий:\n");
-    let mut rows = Vec::with_capacity(assignments.len());
-    let mut subjects = SubjectHeadings::default();
-    for item in assignments {
-        let assignment = &item.assignment;
-        let subject = item.subject.name().as_str();
-        subjects.push(&mut text, subject);
-        text.push_str(&format!(
-            "\n{}\nиспользовано попыток: {}\n",
-            assignment.title().as_str(),
-            item.history.used_attempts(),
-        ));
-        rows.push(vec![InlineKeyboardButton::callback(
-            button_label(&format!("{subject} · {}", assignment.title().as_str())),
-            format!("assignment:{}", assignment.id().as_uuid()),
-        )]);
-    }
-
-    send_message_chunks(bot, chat_id, text, Some(InlineKeyboardMarkup::new(rows))).await?;
-    Ok(())
-}
-
-async fn show_assignment(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
-    transfers: &super::FileTransfers,
-) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        timezone,
-        ..
-    } = screen;
-    let details = match services
-        .assignments
-        .find_for_student(actor, assignment_id)
-        .await
-    {
-        Ok(details) => details,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-    let assignment = &details.assignment.assignment;
-    let history = details.assignment.history;
-    let mut summary = format!(
-        "📘 {}\n{}\n\n⏰ Дедлайн: {} ({})\n🔁 Попытки: использовано {}, доступно {}, осталось {}",
-        details.assignment.subject.name().as_str(),
-        assignment.title().as_str(),
-        timezone.format(assignment.deadline_at()),
-        deadline_left(assignment.deadline_at()),
-        history.used_attempts(),
-        history.allowed_attempts_for(assignment),
-        history.remaining_attempts_for(assignment),
-    );
-    if history.has_pending_submission()
-        && let Ok(places) = services.submissions.pending_queue(actor).await
-        && let Some(place) = places
-            .iter()
-            .find(|place| place.assignment_id == assignment_id)
-    {
-        summary.push_str(&format!(
-            "\n⏳ Работа на проверке, {}",
-            queue_place(place.position, place.total),
-        ));
-    }
-
-    let mut rows = Vec::new();
-    if assignment.status() == AssignmentStatus::Published {
-        rows.push(vec![InlineKeyboardButton::callback(
-            "📤 Сдать работу",
-            format!("submit:{}", assignment.id().as_uuid()),
-        )]);
-    }
-    let (back_label, back_callback) = if assignment.status() == AssignmentStatus::Archived {
-        ("⬅️ К архиву", "menu:archive")
-    } else {
-        ("⬅️ К списку заданий", "menu:assignments")
-    };
-    rows.push(vec![InlineKeyboardButton::callback(
-        back_label,
-        back_callback,
-    )]);
-
-    bot.send_message(chat_id, summary).await?;
-    bot.send_message(chat_id, "📄 Текст задания:").await?;
-    bot.send_message(chat_id, assignment.body().as_str())
-        .await?;
-    if !details.files.is_empty() {
-        bot.send_message(chat_id, "📎 Вложения задания:").await?;
-        let _permit = transfers.acquire().await?;
-        for metadata in &details.files {
-            match services
-                .files
-                .open_assignment_file_for_student(actor, assignment.id(), metadata.id())
-                .await
-            {
-                Ok(file) => transfers.send(chat_id, file).await?,
-                Err(error) => {
-                    send_app_error(bot, chat_id, error).await?;
-                    return Ok(());
-                }
-            }
-        }
-    }
-    for submission in &details.submissions {
-        bot.send_message(
-            chat_id,
-            format!(
-                "Попытка {}: {}",
-                submission.attempt_number(),
-                submission_status(submission.status()),
-            ),
-        )
-        .await?;
-        bot.send_message(chat_id, submission.content().as_str())
-            .await?;
-        if let Some(comment) = submission.review_comment() {
-            bot.send_message(chat_id, "💬 Комментарий преподавателя:")
-                .await?;
-            bot.send_message(chat_id, comment.as_str()).await?;
-        }
-    }
-    bot.send_message(chat_id, "Выберите действие:")
-        .reply_markup(InlineKeyboardMarkup::new(rows))
-        .await?;
-    Ok(())
-}
-
-async fn show_courses(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        ..
-    } = screen;
-    let courses = match services.courses.list_for_teacher(actor).await {
-        Ok(courses) => courses,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-    if courses.is_empty() {
-        reset_dialogue(dialogue).await?;
-        bot.send_message(chat_id, "📘 У вас пока нет учебных курсов.")
-            .reply_markup(teacher_menu(None))
-            .await?;
-        return Ok(());
-    }
-
-    bot.send_message(chat_id, "📘 Выберите курс:")
-        .reply_markup(courses_keyboard(&courses))
-        .await?;
-    reset_dialogue(dialogue).await?;
-    Ok(())
-}
-
-async fn show_course_assignments(screen: Screen<'_>, course_id: TeachingCourseId) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        timezone,
-    } = screen;
-    let assignments = match services.assignments.list_for_course(actor, course_id).await {
-        Ok(assignments) => assignments,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-
-    if assignments.is_empty() {
-        bot.send_message(chat_id, "В этом курсе пока нет заданий.")
-            .await?;
-    } else {
-        let mut text = String::from("Задания курса:\n");
-        for assignment in &assignments {
-            text.push_str(&format!(
-                "\n{} · {}\n⏰ {}\n",
-                assignment.title().as_str(),
-                assignment_status(assignment.status()),
-                timezone.format(assignment.deadline_at()),
-            ));
-        }
-        send_message_chunks(bot, chat_id, text, None).await?;
-    }
-
-    bot.send_message(chat_id, "Выберите задание или создайте новое:")
-        .reply_markup(course_assignments_keyboard(course_id, &assignments))
-        .await?;
-    reset_dialogue(dialogue).await?;
-    Ok(())
-}
-
-async fn show_teacher_assignment(screen: Screen<'_>, assignment_id: AssignmentId) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        timezone,
-    } = screen;
-    let assignment = match services
-        .assignments
-        .find_for_teacher(actor, assignment_id)
-        .await
-    {
-        Ok(assignment) => assignment,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-    let published = assignment
-        .published_at()
-        .map(|published_at| format!("\n🚀 Опубликовано: {}", timezone.format(published_at)))
-        .unwrap_or_default();
-    let text = format!(
-        "{}\n\nСтатус: {}\n⏰ Дедлайн: {} ({})\n🔁 Попыток: {}{}\n\n📄 Текст задания:\n{}",
-        assignment.title().as_str(),
-        assignment_status(assignment.status()),
-        timezone.format(assignment.deadline_at()),
-        deadline_left(assignment.deadline_at()),
-        assignment.max_attempts(),
-        published,
-        assignment.body().as_str(),
-    );
-    send_message_chunks(bot, chat_id, text, None).await?;
-    let message = bot
-        .send_message(chat_id, "Выберите действие:")
-        .reply_markup(assignment_actions_keyboard(&assignment))
-        .await?;
-    dialogue
-        .update(BotState::Screen(ScreenState::ManagingAssignment {
-            message_id: message.id,
-            assignment_id,
-        }))
-        .await?;
-    Ok(())
-}
-
-async fn show_assignment_students(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
-) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        ..
-    } = screen;
-    let students = match services
-        .assignments
-        .list_students_for_assignment(actor, assignment_id)
-        .await
-    {
-        Ok(students) => students,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-
-    if students.is_empty() {
-        bot.send_message(chat_id, "В группе пока нет студентов.")
-            .await?;
-    } else {
-        let mut text = String::from("👥 Студенты группы:\n");
-        for student in &students {
-            let pending = if student.history.has_pending_submission() {
-                " · ⏳ сдача на проверке"
-            } else {
-                ""
-            };
-            let accepted = if student.history.has_accepted_submission() {
-                " · ✅ работа принята"
-            } else {
-                ""
-            };
-            text.push_str(&format!(
-                "\n{} · использовано {} · дополнительных {}{}{}\n",
-                student.student.display_name().as_str(),
-                student.history.used_attempts(),
-                student.history.extra_attempts(),
-                pending,
-                accepted,
-            ));
-        }
-        send_message_chunks(bot, chat_id, text, None).await?;
-    }
-
-    let message = bot
-        .send_message(chat_id, "Выберите студента:")
-        .reply_markup(assignment_students_keyboard(assignment_id, &students))
-        .await?;
-    dialogue
-        .update(BotState::Flow(FlowState::ChoosingAttemptStudent {
-            message_id: message.id,
-            assignment_id,
-            student_ids: students.iter().map(|item| item.student.id()).collect(),
-        }))
-        .await?;
-    Ok(())
-}
-
-async fn show_next_review(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        ..
-    } = screen;
-    let item = match services.reviews.take_next_from_queue(actor).await {
-        Ok(item) => item,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-    let Some(item) = item else {
-        reset_dialogue(dialogue).await?;
-        bot.send_message(chat_id, "🎉 Очередь проверки пуста.")
-            .reply_markup(teacher_menu(Some(0)))
-            .await?;
-        return Ok(());
-    };
-
-    dialogue
-        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
-            submission_id: item.submission.id(),
-        }))
-        .await?;
-    let summary = format!(
-        "{}\n👤 Студент: {}",
-        item.assignment.title().as_str(),
-        item.student.display_name().as_str(),
-    );
-    let submission_id = item.submission.id();
-    let keyboard = review_keyboard(submission_id);
-    bot.send_message(chat_id, summary).await?;
-    bot.send_message(chat_id, "📄 Текст задания:").await?;
-    bot.send_message(chat_id, item.assignment.body().as_str())
-        .await?;
-    bot.send_message(chat_id, "📤 Сдача студента:").await?;
-    bot.send_message(chat_id, item.submission.content().as_str())
-        .reply_markup(keyboard)
-        .await?;
-    Ok(())
 }
 
 async fn ensure_private_message(bot: &Bot, message: &Message) -> HandlerResult<bool> {
@@ -2084,7 +1139,7 @@ async fn resolve_actor(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{FixedOffset, NaiveTime};
+    use chrono::{DateTime, FixedOffset, NaiveTime};
     use serde_json::json;
     use sqlx::postgres::PgPoolOptions;
     use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
@@ -2092,6 +1147,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::app::{ApplicationContainer, FilePolicy};
+    use crate::bot::callbacks::{EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX};
+    use crate::bot::views::{assignment_actions_keyboard, attempts_keyboard, review_keyboard};
     use crate::domain::{StudentGroupId, SubmissionId};
 
     use super::*;
@@ -2266,7 +1323,7 @@ mod tests {
             (MAX_ATTEMPTS_PREFIX, "maxattempts:3"),
             (EXTRA_ATTEMPTS_PREFIX, "attempt:3"),
         ] {
-            let json = serde_json::to_value(super::attempts_keyboard(prefix)).unwrap();
+            let json = serde_json::to_value(attempts_keyboard(prefix)).unwrap();
             let third = json["inline_keyboard"][0][2]["callback_data"]
                 .as_str()
                 .unwrap()
@@ -2348,8 +1405,11 @@ mod tests {
 
     #[test]
     fn a_queue_without_reviewers_does_not_show_a_made_up_position() {
-        assert_eq!(queue_place(2, 5), "ваш номер в очереди: 2 из 5");
-        assert_eq!(queue_place(0, 0), "преподаватель ещё не назначен на курс");
+        assert_eq!(student::queue_place(2, 5), "ваш номер в очереди: 2 из 5");
+        assert_eq!(
+            student::queue_place(0, 0),
+            "преподаватель ещё не назначен на курс"
+        );
     }
 
     #[test]

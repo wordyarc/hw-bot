@@ -1,6 +1,6 @@
 {
   "admin": {
-    "telegram_user_id": 318438183,
+    "telegram_user_id": 100000001,
     "display_name": "First Admin"
   },
   "teachers": [
@@ -25,7 +25,7 @@
     {
       "subject_name": "Backend Development",
       "student_group_code": "b9122-02.03.21",
-      "teacher_telegram_user_ids": [318438183]
+      "teacher_telegram_user_ids": [100000001]
     }
   ]
 }
