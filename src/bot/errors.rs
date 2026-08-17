@@ -9,6 +9,11 @@ pub(super) async fn send_app_error(bot: &Bot, chat_id: ChatId, error: AppError) 
     if code == ErrorCode::InternalError {
         tracing::error!(error = ?error, "Telegram command failed");
     }
+
+    send_error_code(bot, chat_id, code).await
+}
+
+pub(super) async fn send_error_code(bot: &Bot, chat_id: ChatId, code: ErrorCode) -> HandlerResult {
     bot.send_message(chat_id, app_error_message(code)).await?;
     Ok(())
 }
@@ -29,6 +34,9 @@ fn app_error_message(code: ErrorCode) -> &'static str {
         ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",
         ErrorCode::AlreadyRegistered => "Вы уже зарегистрированы.",
         ErrorCode::ConcurrentModification => "Данные уже изменились. Повторите действие.",
+        ErrorCode::InviteInvalid => {
+            "Приглашение недействительно. Попросите у преподавателя новую ссылку."
+        }
         ErrorCode::FileTooLarge => "Файл превышает допустимый размер.",
         ErrorCode::FileLimitReached => "Достигнут лимит вложений для задания.",
     }

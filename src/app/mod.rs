@@ -14,7 +14,7 @@ pub use assignments::{
     GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
-pub use courses::{CourseService, TeachingCourseSummary};
+pub use courses::{CourseService, GroupInviteState, TeachingCourseSummary};
 pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,

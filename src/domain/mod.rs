@@ -4,6 +4,7 @@ mod attempts;
 mod error;
 mod files;
 mod ids;
+mod invites;
 mod submission;
 mod text;
 mod user;
@@ -22,6 +23,7 @@ pub use ids::{
     AssignmentId, StoredFileId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId,
     TelegramUserId, UserId,
 };
+pub use invites::InviteGeneration;
 pub use submission::{ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
 pub use text::{
     ASSIGNMENT_TITLE_MAX_LEN, DISPLAY_NAME_MAX_LEN, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN,

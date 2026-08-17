@@ -21,6 +21,7 @@ str_enum! {
         SubmissionAlreadyReviewed => "submission_already_reviewed",
         AlreadyRegistered => "already_registered",
         ConcurrentModification => "concurrent_modification",
+        InviteInvalid => "invite_invalid",
         FileTooLarge => "file_too_large",
         FileLimitReached => "file_limit_reached"
     }
@@ -36,6 +37,12 @@ pub enum AppError {
 
     #[error("assignment was changed by a concurrent request")]
     AssignmentChangedConcurrently,
+
+    #[error("group invite was rotated by a concurrent request")]
+    GroupInviteChangedConcurrently,
+
+    #[error("group invite is not valid")]
+    InviteInvalid,
 
     #[error("file must be at most {max_bytes} bytes, got {actual_bytes}")]
     FileTooLarge {
@@ -73,7 +80,9 @@ impl AppError {
                 DomainError::StudentDoesNotBelongToAssignmentGroup
                 | DomainError::PermissionDenied { .. } => ErrorCode::PermissionDenied,
                 DomainError::UserAlreadyRegistered => ErrorCode::AlreadyRegistered,
-                DomainError::AssignmentDoesNotBelongToTeachingCourse
+                DomainError::InvalidInviteGeneration { .. }
+                | DomainError::InviteGenerationExhausted
+                | DomainError::AssignmentDoesNotBelongToTeachingCourse
                 | DomainError::TeachingCourseHasNoTeachers
                 | DomainError::InvalidAssignmentPublishedState
                 | DomainError::InvalidSubmissionAttemptNumber { .. }
@@ -82,7 +91,10 @@ impl AppError {
                 | DomainError::StudentProgressDoesNotBelongToAssignment => ErrorCode::InternalError,
             },
             Self::NotFound { .. } => ErrorCode::NotFound,
-            Self::AssignmentChangedConcurrently => ErrorCode::ConcurrentModification,
+            Self::AssignmentChangedConcurrently | Self::GroupInviteChangedConcurrently => {
+                ErrorCode::ConcurrentModification
+            }
+            Self::InviteInvalid => ErrorCode::InviteInvalid,
             Self::FileTooLarge { .. } => ErrorCode::FileTooLarge,
             Self::AssignmentFileLimitReached { .. } => ErrorCode::FileLimitReached,
             Self::Db(_) => ErrorCode::InternalError,

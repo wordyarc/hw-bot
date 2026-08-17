@@ -5,6 +5,8 @@ use std::str::FromStr;
 use chrono::{FixedOffset, NaiveTime};
 use serde::{Deserialize, Deserializer};
 
+use crate::invites::InviteSigningSecret;
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
@@ -16,6 +18,7 @@ pub struct AppConfig {
     pub ui: UiConfig,
     pub telegram: TelegramConfig,
     pub notification_worker: NotificationWorkerConfig,
+    pub group_invites: GroupInvitesConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -113,6 +116,18 @@ pub struct TelegramConfig {
     pub shutdown_grace_ms: u64,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupInvitesConfig {
+    pub invite_signing_secret: Option<String>,
+}
+
+impl GroupInvitesConfig {
+    pub fn resolved_signing_secret(&self) -> Option<InviteSigningSecret> {
+        InviteSigningSecret::from_base64url(self.invite_signing_secret.as_deref()?).ok()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationWorkerConfig {
@@ -197,6 +212,12 @@ impl AppConfig {
                 "telegram.bot_token is required when a Telegram component is enabled",
             )?;
         }
+
+        // Секрет нужен всегда: HTTP-регистрация проверяет инвайт и при выключенном Telegram.
+        validate(
+            self.group_invites.resolved_signing_secret().is_some(),
+            "group_invites.invite_signing_secret must be 32 random bytes in base64url without padding",
+        )?;
 
         Ok(ValidatedAppConfig(self))
     }
@@ -416,6 +437,9 @@ mod tests {
                 max_concurrent_updates = 32
                 shutdown_grace_ms = 10000
 
+                [group_invites]
+                invite_signing_secret = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
                 [notification_worker]
                 enabled = false
                 poll_interval_ms = 500
@@ -483,6 +507,34 @@ mod tests {
         assert_eq!(config.telegram.shutdown_grace_ms, 10000);
         assert!(!config.notification_worker.enabled);
         assert_eq!(config.notification_worker.max_attempts, 10);
+        assert!(config.group_invites.resolved_signing_secret().is_some());
+    }
+
+    #[test]
+    fn validation_rejects_a_missing_invite_signing_secret() {
+        let mut config = app_config();
+        config.telegram.enabled = false;
+        config.notification_worker.enabled = false;
+        config.group_invites.invite_signing_secret = None;
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(error.to_string().contains("group_invites"));
+    }
+
+    #[test]
+    fn validation_rejects_an_invite_signing_secret_of_the_wrong_size() {
+        for secret in ["", "AAEC", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"] {
+            let mut config = app_config();
+            config.group_invites.invite_signing_secret = Some(secret.to_owned());
+
+            let error = config
+                .validate()
+                .err()
+                .unwrap_or_else(|| panic!("secret {secret:?} must be rejected"));
+
+            assert!(error.to_string().contains("group_invites"), "{secret:?}");
+        }
     }
 
     #[test]
@@ -594,12 +646,15 @@ mod tests {
     }
 
     fn app_config() -> AppConfig {
-        ::config::Config::builder()
+        let mut config: AppConfig = ::config::Config::builder()
             .add_source(::config::File::with_name("config/default"))
             .build()
             .unwrap()
             .try_deserialize()
-            .unwrap()
+            .unwrap();
+        config.group_invites.invite_signing_secret =
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_owned());
+        config
     }
 
     #[test]

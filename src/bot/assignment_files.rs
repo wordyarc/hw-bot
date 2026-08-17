@@ -264,7 +264,8 @@ pub(super) async fn handle_screen_action(
         ScreenAction::FinishFileCreation
         | ScreenAction::Publish(_)
         | ScreenAction::Archive(_)
-        | ScreenAction::ChangeDeadline(_) => unreachable!("not an assignment file action"),
+        | ScreenAction::ChangeDeadline(_)
+        | ScreenAction::RotateGroupInvite => unreachable!("not an assignment file action"),
     }
     Ok(())
 }
@@ -338,7 +339,8 @@ pub(super) async fn handle_flow_action(
             )
             .await?;
         }
-        FlowAction::SelectRegistrationGroup(_)
+        FlowAction::ConfirmInviteRotation
+        | FlowAction::CancelInviteRotation
         | FlowAction::Review { .. }
         | FlowAction::MaxAttempts(_)
         | FlowAction::Deadline(_)

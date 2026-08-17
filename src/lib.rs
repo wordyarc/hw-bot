@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod health;
+pub mod invites;
 pub mod supervision;
 pub mod telegram;
 

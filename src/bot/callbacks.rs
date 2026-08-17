@@ -28,6 +28,7 @@ pub(super) enum ReplayableAction {
     StartSubmission(AssignmentId),
     AssignmentFiles(AssignmentId),
     GrantAttempts(AssignmentId),
+    GroupInvite(TeachingCourseId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,11 +40,11 @@ pub(super) enum ScreenAction {
     OpenFile(usize),
     DeleteFile(usize),
     FinishFileCreation,
+    RotateGroupInvite,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FlowAction {
-    SelectRegistrationGroup(usize),
     Review {
         decision: ReviewDecision,
         submission_id: SubmissionId,
@@ -54,6 +55,8 @@ pub(super) enum FlowAction {
     ExtraAttempts(AmountChoice),
     ConfirmFileDeletion,
     CancelFileDeletion,
+    ConfirmInviteRotation,
+    CancelInviteRotation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,6 +116,11 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
                 parse_uuid(data, "attempts:")
                     .map(AssignmentId::from_uuid)
                     .map(ReplayableAction::GrantAttempts)
+            })
+            .or_else(|| {
+                parse_uuid(data, "invite:")
+                    .map(TeachingCourseId::from_uuid)
+                    .map(ReplayableAction::GroupInvite)
             }),
     };
     if let Some(action) = replayable {
@@ -135,6 +143,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         .or_else(|| match data {
             "file:add" => Some(ScreenAction::AddFile),
             "file:finish" => Some(ScreenAction::FinishFileCreation),
+            "invite:rotate" => Some(ScreenAction::RotateGroupInvite),
             _ => data
                 .strip_prefix("file:open:")
                 .and_then(|index| index.parse().ok())
@@ -149,11 +158,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         return Some(CallbackAction::Screen(action));
     }
 
-    let flow = data
-        .strip_prefix("register_group:")
-        .and_then(|index| index.parse().ok())
-        .map(FlowAction::SelectRegistrationGroup)
-        .or_else(|| parse_review(data))
+    let flow = parse_review(data)
         .or_else(|| parse_amount(data, MAX_ATTEMPTS_PREFIX).map(FlowAction::MaxAttempts))
         .or_else(|| parse_deadline(data).map(FlowAction::Deadline))
         .or_else(|| {
@@ -165,6 +170,8 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         .or(match data {
             "file:confirm-delete" => Some(FlowAction::ConfirmFileDeletion),
             "file:cancel-delete" => Some(FlowAction::CancelFileDeletion),
+            "invite:confirm-rotate" => Some(FlowAction::ConfirmInviteRotation),
+            "invite:cancel-rotate" => Some(FlowAction::CancelInviteRotation),
             _ => None,
         });
     if let Some(action) = flow {
@@ -280,6 +287,7 @@ mod tests {
             (format!("submit:{assignment}"), "replayable"),
             (format!("files:{assignment}"), "replayable"),
             (format!("attempts:{assignment}"), "replayable"),
+            (format!("invite:{course}"), "replayable"),
             (format!("publish:{assignment}"), "screen"),
             (format!("archive:{assignment}"), "screen"),
             (format!("deadline:{assignment}"), "screen"),
@@ -287,13 +295,15 @@ mod tests {
             ("file:open:0".to_owned(), "screen"),
             ("file:delete:0".to_owned(), "screen"),
             ("file:finish".to_owned(), "screen"),
-            ("register_group:0".to_owned(), "flow"),
+            ("invite:rotate".to_owned(), "screen"),
             (format!("review:accept:{submission}"), "flow"),
             ("maxattempts:3".to_owned(), "flow"),
             ("dl:calendar".to_owned(), "flow"),
             (format!("student:{student}"), "flow"),
             ("attempt:3".to_owned(), "flow"),
             ("file:confirm-delete".to_owned(), "flow"),
+            ("invite:confirm-rotate".to_owned(), "flow"),
+            ("invite:cancel-rotate".to_owned(), "flow"),
         ];
 
         for (data, expected) in cases {

@@ -1,32 +1,26 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
+use hw_bot::domain::{InviteGeneration, StudentGroupId};
+
 use crate::harness::TestApp;
 
 #[tokio::test]
-async fn student_groups_are_listed_for_the_registration_picker() {
+async fn the_group_directory_is_no_longer_exposed() {
     let app = TestApp::start().await;
-    let code = app.fixture.group.code().as_str();
 
-    let body = app.get("/student-groups").await.ok();
+    let response = app.get("/student-groups").await;
 
-    let group = body
-        .as_array()
-        .expect("a json array")
-        .iter()
-        .find(|group| group["code"] == json!(code))
-        .unwrap_or_else(|| panic!("group {code} is missing in {body:#}"));
-
-    assert_eq!(group["education_level"], json!("bachelor"));
-    assert_eq!(group["study_year"], json!(1));
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn student_registers_themselves() {
+async fn student_registers_themselves_with_a_group_invite() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();
+    let token = app.group_invite_token().await;
 
-    let body = app.register_student(2001, "Ivan", &code).await.created();
+    let body = app.register_student(2001, "Ivan", &token).await.created();
 
     assert_eq!(body["role"], json!("student"));
     assert_eq!(body["display_name"], json!("Ivan"));
@@ -38,29 +32,61 @@ async fn student_registers_themselves() {
 #[tokio::test]
 async fn repeated_registration_is_a_conflict() {
     let app = TestApp::start().await;
-    let code = app.fixture.group.code().as_str().to_owned();
-    app.register_student(2001, "Ivan", &code).await.created();
+    let token = app.group_invite_token().await;
+    app.register_student(2001, "Ivan", &token).await.created();
 
-    app.register_student(2001, "Ivan again", &code)
+    app.register_student(2001, "Ivan again", &token)
         .await
         .error(StatusCode::CONFLICT, "already_registered");
 }
 
 #[tokio::test]
-async fn registration_into_unknown_group_is_not_found() {
+async fn one_invite_registers_several_students() {
+    let app = TestApp::start().await;
+    let token = app.group_invite_token().await;
+
+    app.register_student(2101, "Ivan", &token).await.created();
+    app.register_student(2102, "Petr", &token).await.created();
+}
+
+#[tokio::test]
+async fn registration_without_an_invite_is_rejected() {
     let app = TestApp::start().await;
 
-    app.register_student(2002, "Petr", "NO-SUCH-GROUP")
+    app.register_student(2002, "Petr", "")
         .await
-        .not_found();
+        .error(StatusCode::FORBIDDEN, "invite_invalid");
+}
+
+#[tokio::test]
+async fn a_tampered_invite_is_rejected() {
+    let app = TestApp::start().await;
+    let token = app.group_invite_token().await;
+    let tampered = format!("{}A", &token[..token.len() - 1]);
+
+    app.register_student(2002, "Petr", &tampered)
+        .await
+        .error(StatusCode::FORBIDDEN, "invite_invalid");
+}
+
+#[tokio::test]
+async fn a_signed_invite_for_an_unknown_group_is_rejected() {
+    let app = TestApp::start().await;
+    let token = app
+        .invites
+        .encode(StudentGroupId::new(), InviteGeneration::FIRST);
+
+    app.register_student(2002, "Petr", &token)
+        .await
+        .error(StatusCode::FORBIDDEN, "invite_invalid");
 }
 
 #[tokio::test]
 async fn empty_display_name_is_rejected() {
     let app = TestApp::start().await;
-    let code = app.fixture.group.code().as_str().to_owned();
+    let token = app.group_invite_token().await;
 
-    app.register_student(2002, "   ", &code)
+    app.register_student(2002, "   ", &token)
         .await
         .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
@@ -68,21 +94,19 @@ async fn empty_display_name_is_rejected() {
 #[tokio::test]
 async fn oversized_display_name_is_rejected() {
     let app = TestApp::start().await;
+    let token = app.group_invite_token().await;
 
-    app.register_student(
-        app.next_telegram_id(),
-        &"я".repeat(101),
-        app.fixture.group.code().as_str(),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    app.register_student(app.next_telegram_id(), &"я".repeat(101), &token)
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
 async fn a_registered_caller_reads_their_own_profile() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();
-    app.register_student(2001, "Ivan", &code).await.created();
+    let token = app.group_invite_token().await;
+    app.register_student(2001, "Ivan", &token).await.created();
 
     let body = app.get_as("/me", 2001).await.ok();
 
@@ -157,8 +181,8 @@ async fn student_is_not_a_staff_role() {
 #[tokio::test]
 async fn a_student_registered_over_http_can_submit_right_away() {
     let app = TestApp::start().await;
-    let code = app.fixture.group.code().as_str().to_owned();
-    app.register_student(2001, "Ivan", &code).await.created();
+    let token = app.group_invite_token().await;
+    app.register_student(2001, "Ivan", &token).await.created();
 
     let body = app
         .submit(

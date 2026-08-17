@@ -62,18 +62,24 @@ async fn the_actor_is_no_longer_accepted_in_the_body() {
 }
 
 #[tokio::test]
-async fn reference_data_is_readable_without_an_actor() {
+async fn registration_still_requires_the_telegram_identity_header() {
     let app = TestApp::start().await;
+    let token = app.group_invite_token().await;
 
-    app.get("/student-groups").await.ok();
+    app.post(
+        "/students",
+        json!({ "display_name": "Ivan", "invite_token": token }),
+    )
+    .await
+    .error(StatusCode::UNAUTHORIZED, "unauthenticated");
 }
 
 #[tokio::test]
 async fn registration_binds_the_account_to_the_calling_telegram_id() {
     let app = TestApp::start().await;
-    let code = app.fixture.group.code().as_str().to_owned();
+    let token = app.group_invite_token().await;
 
-    let body = app.register_student(2100, "Ivan", &code).await.created();
+    let body = app.register_student(2100, "Ivan", &token).await.created();
 
     assert_eq!(body["telegram_user_id"], json!(2100));
 }

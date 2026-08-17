@@ -2,8 +2,10 @@ use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
 use crate::domain::{
-    AssignmentId, ReviewDecision, StoredFileId, SubmissionId, TeachingCourseId, UserId,
+    AssignmentId, InviteGeneration, ReviewDecision, StoredFileId, SubmissionId, TeachingCourseId,
+    UserId,
 };
+use crate::invites::VerifiedInvite;
 
 pub(super) type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
 
@@ -42,14 +44,23 @@ pub(super) enum ScreenState {
         deletion_requires_confirmation: bool,
         creation_flow: bool,
     },
+    GroupInvite {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+        generation: InviteGeneration,
+    },
 }
 
 #[derive(Clone)]
 pub(super) enum FlowState {
-    AwaitingRegistrationName,
-    AwaitingRegistrationGroup {
-        display_name: String,
-        group_codes: Vec<String>,
+    /// bearer credential не должен пережить проверку подписи.
+    AwaitingRegistrationName {
+        invite: VerifiedInvite,
+    },
+    ConfirmingInviteRotation {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+        generation: InviteGeneration,
     },
     AwaitingSubmission {
         assignment_id: AssignmentId,

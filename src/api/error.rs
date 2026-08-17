@@ -98,7 +98,7 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ConcurrentModification
         | ErrorCode::FileLimitReached => StatusCode::CONFLICT,
         ErrorCode::FileTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-        ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
+        ErrorCode::PermissionDenied | ErrorCode::InviteInvalid => StatusCode::FORBIDDEN,
     }
 }
 

@@ -18,10 +18,16 @@ pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> D
 where
     E: PgExecutor<'e>,
 {
+    // экран ссылки только читает состояние и не включает регистрацию скрытой мутацией.
     sqlx::query!(
         r#"
-        insert into student_groups (id, code, education_level, study_year)
-        values ($1, $2, $3, $4)
+        with created as (
+            insert into student_groups (id, code, education_level, study_year)
+            values ($1, $2, $3, $4)
+            returning id
+        )
+        insert into student_group_invites (student_group_id, generation)
+        select id, 1 from created
         "#,
         group.id().as_uuid(),
         group.code().as_str(),
@@ -54,47 +60,6 @@ where
     .await?;
 
     row.map(StudentGroup::try_from).transpose()
-}
-
-pub async fn find_student_group_by_code<'e, E>(
-    executor: E,
-    code: &str,
-) -> DbResult<Option<StudentGroup>>
-where
-    E: PgExecutor<'e>,
-{
-    let row = sqlx::query_as!(
-        StudentGroupRow,
-        r#"
-        select id, code, education_level, study_year
-        from student_groups
-        where code = $1
-        "#,
-        code,
-    )
-    .fetch_optional(executor)
-    .await?;
-
-    row.map(StudentGroup::try_from).transpose()
-}
-
-pub async fn list_student_groups<'e, E>(executor: E) -> DbResult<Vec<StudentGroup>>
-where
-    E: PgExecutor<'e>,
-{
-    sqlx::query_as!(
-        StudentGroupRow,
-        r#"
-        select id, code, education_level, study_year
-        from student_groups
-        order by code
-        "#,
-    )
-    .fetch_all(executor)
-    .await?
-    .into_iter()
-    .map(StudentGroup::try_from)
-    .collect()
 }
 
 pub async fn insert_subject<'e, E>(executor: E, subject: &Subject) -> DbResult<()>
@@ -262,11 +227,11 @@ pub(crate) struct TeachingCourseCard {
 }
 
 #[derive(Debug)]
-struct StudentGroupRow {
-    id: Uuid,
-    code: String,
-    education_level: String,
-    study_year: i16,
+pub(super) struct StudentGroupRow {
+    pub(super) id: Uuid,
+    pub(super) code: String,
+    pub(super) education_level: String,
+    pub(super) study_year: i16,
 }
 
 impl TryFrom<StudentGroupRow> for StudentGroup {

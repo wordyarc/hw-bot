@@ -47,6 +47,44 @@ async fn bootstrap_creates_complete_initial_structure() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn bootstrap_gives_every_group_an_invite() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+
+    db::run_bootstrap(&pool, &seed()).await?;
+
+    let generation: i64 = sqlx::query_scalar(
+        "select generation from student_group_invites
+         join student_groups on student_groups.id = student_group_invites.student_group_id
+         where student_groups.code = 'b9122-02.03.21'",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(generation, 1);
+    Ok(())
+}
+
+/// Иначе повторный bootstrap чинил бы уже отозванные ссылки.
+#[tokio::test]
+async fn a_repeated_bootstrap_never_resets_a_rotated_invite() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    let seed = seed();
+    db::run_bootstrap(&pool, &seed).await?;
+    sqlx::query("update student_group_invites set generation = 7")
+        .execute(&pool)
+        .await?;
+
+    db::run_bootstrap(&pool, &seed).await?;
+
+    let generation: i64 = sqlx::query_scalar("select generation from student_group_invites")
+        .fetch_one(&pool)
+        .await?;
+
+    assert_eq!(generation, 7);
+    Ok(())
+}
+
+#[tokio::test]
 async fn bootstrap_can_be_repeated_without_duplicates() -> anyhow::Result<()> {
     let pool = migrated_database().await;
     let seed = seed();

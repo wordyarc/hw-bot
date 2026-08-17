@@ -15,13 +15,14 @@ use teloxide::utils::command::BotCommands;
 
 use super::assignment_files;
 use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
-use super::errors::send_app_error;
+use super::errors::{send_app_error, send_error_code};
+use super::invites::BotInvites;
 use super::state::{BotDialogue, BotState, DeadlineTarget, FlowState, ScreenState};
 use super::timezone::BotTimezone;
 use super::views::{
     BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW, MenuAction,
-    ask_input, group_keyboard, main_keyboard, menu_action, role_name, send_message_chunks,
-    send_stale_button, student_keyboard, student_menu, teacher_keyboard, teacher_menu,
+    ask_input, main_keyboard, menu_action, role_name, send_message_chunks, send_stale_button,
+    student_keyboard, student_menu, teacher_keyboard, teacher_menu,
 };
 use super::{BotServices, HandlerResult};
 
@@ -33,7 +34,7 @@ mod teacher;
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
 pub(super) enum Command {
     #[command(description = "🏠 начать работу и открыть меню")]
-    Start,
+    Start(String),
     #[command(description = "🏠 главное меню")]
     Menu,
     #[command(description = "📚 мои задания")]
@@ -53,6 +54,9 @@ pub(super) enum Command {
     #[command(description = "❓ помощь")]
     Help,
 }
+
+const GUEST_NEEDS_INVITE: &str = "Регистрация только по ссылке-приглашению группы. Попросите её у преподавателя и откройте \
+     присланную ссылку.";
 
 const STUDENT_COMMANDS: [&str; 7] = [
     "menu", "tasks", "queue", "archive", "profile", "cancel", "help",
@@ -89,6 +93,15 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Role) {
     }
 }
 
+/// Зависимости dispatcher-а, которые нужны ещё до разрешения актора.
+#[derive(Clone, Copy)]
+struct Deps<'a> {
+    services: &'a BotServices,
+    dialogue: &'a BotDialogue,
+    timezone: &'a BotTimezone,
+    invites: &'a BotInvites,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Screen<'a> {
     bot: &'a Bot,
@@ -97,6 +110,7 @@ pub(super) struct Screen<'a> {
     services: &'a BotServices,
     dialogue: &'a BotDialogue,
     timezone: &'a BotTimezone,
+    invites: &'a BotInvites,
 }
 
 pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
@@ -112,6 +126,7 @@ pub(super) async fn handle_command(
     dialogue: BotDialogue,
     services: BotServices,
     timezone: BotTimezone,
+    invites: BotInvites,
 ) -> HandlerResult {
     if !ensure_private_message(&bot, &message).await? {
         return Ok(());
@@ -121,16 +136,29 @@ pub(super) async fn handle_command(
     let chat_id = message.chat.id;
 
     let action = match command {
-        Command::Start | Command::Menu => {
+        Command::Start(payload) => {
             reset_dialogue(&dialogue).await?;
-            show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
+            return start_registration(
+                &bot,
+                chat_id,
+                telegram_user_id,
+                payload.trim(),
+                &services,
+                &dialogue,
+                &invites,
+            )
+            .await;
+        }
+        Command::Menu => {
+            reset_dialogue(&dialogue).await?;
+            show_home(&bot, chat_id, telegram_user_id, &services).await?;
             return Ok(());
         }
         Command::Cancel => {
             reset_dialogue(&dialogue).await?;
             bot.send_message(chat_id, "Текущее действие отменено.")
                 .await?;
-            show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
+            show_home(&bot, chat_id, telegram_user_id, &services).await?;
             return Ok(());
         }
         Command::Help => {
@@ -151,9 +179,12 @@ pub(super) async fn handle_command(
         chat_id,
         telegram_user_id,
         action,
-        &services,
-        &dialogue,
-        &timezone,
+        Deps {
+            services: &services,
+            dialogue: &dialogue,
+            timezone: &timezone,
+            invites: &invites,
+        },
     )
     .await
 }
@@ -240,6 +271,7 @@ pub(super) async fn handle_message(
     services: BotServices,
     transfers: super::FileTransfers,
     timezone: BotTimezone,
+    invites: BotInvites,
 ) -> HandlerResult {
     if !ensure_private_message(&bot, &message).await? {
         return Ok(());
@@ -255,9 +287,12 @@ pub(super) async fn handle_message(
             message.chat.id,
             actor,
             action,
-            &services,
-            &dialogue,
-            &timezone,
+            Deps {
+                services: &services,
+                dialogue: &dialogue,
+                timezone: &timezone,
+                invites: &invites,
+            },
         )
         .await;
     }
@@ -282,7 +317,7 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        BotState::Flow(FlowState::AwaitingRegistrationName) => {
+        BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
             };
@@ -295,39 +330,25 @@ pub(super) async fn handle_message(
             {
                 return Ok(());
             }
-            let groups = match services.users.list_student_groups().await {
-                Ok(groups) => groups,
-                Err(error) => {
-                    send_app_error(&bot, message.chat.id, error).await?;
-                    return Ok(());
-                }
-            };
-            if groups.is_empty() {
-                bot.send_message(
-                    message.chat.id,
-                    "Пока нет доступных учебных групп. Обратитесь к администратору.",
-                )
-                .await?;
-                return Ok(());
-            }
 
-            let group_codes: Vec<_> = groups
-                .iter()
-                .map(|group| group.code().as_str().to_owned())
-                .collect();
-            dialogue
-                .update(BotState::Flow(FlowState::AwaitingRegistrationGroup {
+            match services
+                .users
+                .register_student(RegisterStudent {
+                    telegram_user_id: actor,
                     display_name: text.trim().to_owned(),
-                    group_codes: group_codes.clone(),
-                }))
-                .await?;
-            bot.send_message(message.chat.id, "Выберите учебную группу:")
-                .reply_markup(group_keyboard(&group_codes))
-                .await?;
-        }
-        BotState::Flow(FlowState::AwaitingRegistrationGroup { .. }) => {
-            bot.send_message(message.chat.id, "Выберите группу кнопкой выше.")
-                .await?;
+                    invite,
+                    registered_at: Utc::now(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    reset_dialogue(&dialogue).await?;
+                    bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
+                        .await?;
+                    show_home(&bot, message.chat.id, actor, &services).await?;
+                }
+                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
+            }
         }
         BotState::Flow(FlowState::AwaitingSubmission { assignment_id }) => {
             let Some(text) = require_text(&bot, &message).await? else {
@@ -422,13 +443,18 @@ pub(super) async fn handle_message(
                 Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
                     reset_dialogue(&dialogue).await?;
                     send_app_error(&bot, message.chat.id, error).await?;
-                    show_home(&bot, message.chat.id, actor, &services, &dialogue).await?;
+                    show_home(&bot, message.chat.id, actor, &services).await?;
                 }
                 Err(error) => send_app_error(&bot, message.chat.id, error).await?,
             }
         }
         BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
             bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
+                .await?;
+        }
+        BotState::Screen(ScreenState::GroupInvite { .. })
+        | BotState::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
+            bot.send_message(message.chat.id, "Выберите действие кнопкой выше.")
                 .await?;
         }
         BotState::Screen(ScreenState::ManagingAssignmentFiles { .. })
@@ -549,6 +575,7 @@ pub(super) async fn handle_message(
                     services: &services,
                     dialogue: &dialogue,
                     timezone: &timezone,
+                    invites: &invites,
                 },
                 target,
                 deadline_at,
@@ -586,6 +613,7 @@ pub(super) async fn handle_message(
                     services: &services,
                     dialogue: &dialogue,
                     timezone: &timezone,
+                    invites: &invites,
                 },
                 assignment_id,
                 student_id,
@@ -603,10 +631,14 @@ async fn run_menu_action(
     chat_id: ChatId,
     telegram_user_id: TelegramUserId,
     action: MenuAction,
-    services: &BotServices,
-    dialogue: &BotDialogue,
-    timezone: &BotTimezone,
+    deps: Deps<'_>,
 ) -> HandlerResult {
+    let Deps {
+        services,
+        dialogue,
+        timezone,
+        invites,
+    } = deps;
     if action == MenuAction::Help {
         return send_help(bot, chat_id, telegram_user_id, services, timezone).await;
     }
@@ -621,6 +653,7 @@ async fn run_menu_action(
         services,
         dialogue,
         timezone,
+        invites,
     };
 
     match action {
@@ -660,6 +693,7 @@ pub(super) async fn handle_callback(
     services: BotServices,
     transfers: super::FileTransfers,
     timezone: BotTimezone,
+    invites: BotInvites,
 ) -> HandlerResult {
     bot.answer_callback_query(query.id.clone())
         .cache_time(0)
@@ -684,18 +718,6 @@ pub(super) async fn handle_callback(
     if action == CallbackAction::Noop {
         return Ok(());
     }
-    if let CallbackAction::Flow(FlowAction::SelectRegistrationGroup(index)) = action {
-        return select_registration_group(
-            &bot,
-            chat_id,
-            telegram_user_id,
-            index,
-            state,
-            &services,
-            &dialogue,
-        )
-        .await;
-    }
     if matches!(action, CallbackAction::Replayable(_)) {
         reset_dialogue(&dialogue).await?;
     }
@@ -710,6 +732,7 @@ pub(super) async fn handle_callback(
         services: &services,
         dialogue: &dialogue,
         timezone: &timezone,
+        invites: &invites,
     };
 
     match action {
@@ -724,47 +747,6 @@ pub(super) async fn handle_callback(
         }
         CallbackAction::Noop => Ok(()),
     }
-}
-
-async fn select_registration_group(
-    bot: &Bot,
-    chat_id: ChatId,
-    telegram_user_id: TelegramUserId,
-    index: usize,
-    state: BotState,
-    services: &BotServices,
-    dialogue: &BotDialogue,
-) -> HandlerResult {
-    let BotState::Flow(FlowState::AwaitingRegistrationGroup {
-        display_name,
-        group_codes,
-    }) = state
-    else {
-        return send_stale_button(bot, chat_id).await;
-    };
-    let Some(group_code) = group_codes.get(index) else {
-        return send_stale_button(bot, chat_id).await;
-    };
-
-    match services
-        .users
-        .register_student(RegisterStudent {
-            telegram_user_id,
-            display_name,
-            student_group_code: group_code.clone(),
-            registered_at: Utc::now(),
-        })
-        .await
-    {
-        Ok(_) => {
-            reset_dialogue(dialogue).await?;
-            bot.send_message(chat_id, "🎉 Регистрация завершена.")
-                .await?;
-            show_home(bot, chat_id, telegram_user_id, services, dialogue).await?;
-        }
-        Err(error) => send_app_error(bot, chat_id, error).await?,
-    }
-    Ok(())
 }
 
 async fn handle_replayable_action(
@@ -826,6 +808,9 @@ async fn handle_replayable_action(
         ReplayableAction::GrantAttempts(assignment_id) => {
             teacher::show_students(screen, assignment_id).await
         }
+        ReplayableAction::GroupInvite(course_id) => {
+            teacher::show_group_invite(screen, course_id).await
+        }
     }
 }
 
@@ -856,7 +841,8 @@ async fn handle_screen_action(
         ScreenAction::FinishFileCreation
         | ScreenAction::Publish(_)
         | ScreenAction::Archive(_)
-        | ScreenAction::ChangeDeadline(_) => {
+        | ScreenAction::ChangeDeadline(_)
+        | ScreenAction::RotateGroupInvite => {
             teacher::handle_screen_action(screen, message_id, action, state).await
         }
     }
@@ -922,8 +908,8 @@ async fn handle_flow_action(
         FlowAction::ExtraAttempts(choice) => {
             teacher::handle_extra_attempts(screen, message_id, choice, state).await?;
         }
-        FlowAction::SelectRegistrationGroup(_) => {
-            unreachable!("registration is handled before this point")
+        FlowAction::ConfirmInviteRotation | FlowAction::CancelInviteRotation => {
+            teacher::handle_invite_rotation(screen, message_id, action, state).await?;
         }
     }
 
@@ -935,7 +921,6 @@ async fn show_home(
     chat_id: ChatId,
     actor: TelegramUserId,
     services: &BotServices,
-    dialogue: &BotDialogue,
 ) -> HandlerResult {
     match services.users.find_by_telegram_user_id(actor).await {
         Ok(registered) => {
@@ -980,16 +965,61 @@ async fn show_home(
                 .await?;
         }
         Err(error) if error.code() == ErrorCode::NotFound => {
-            dialogue
-                .update(BotState::Flow(FlowState::AwaitingRegistrationName))
-                .await?;
-            bot.send_message(chat_id, "Вы ещё не зарегистрированы. Как вас называть?")
-                .await?;
+            bot.send_message(chat_id, GUEST_NEEDS_INVITE).await?;
         }
         Err(error) => send_app_error(bot, chat_id, error).await?,
     }
 
     Ok(())
+}
+
+async fn start_registration(
+    bot: &Bot,
+    chat_id: ChatId,
+    telegram_user_id: TelegramUserId,
+    payload: &str,
+    services: &BotServices,
+    dialogue: &BotDialogue,
+    invites: &BotInvites,
+) -> HandlerResult {
+    match services
+        .users
+        .find_by_telegram_user_id(telegram_user_id)
+        .await
+    {
+        Ok(_) => return show_home(bot, chat_id, telegram_user_id, services).await,
+        Err(error) if error.code() == ErrorCode::NotFound => {}
+        Err(error) => return send_app_error(bot, chat_id, error).await,
+    }
+
+    if payload.is_empty() {
+        bot.send_message(chat_id, GUEST_NEEDS_INVITE).await?;
+        return Ok(());
+    }
+
+    // Битая подпись и отозванная ссылка обязаны выглядеть для гостя одинаково.
+    let Ok(invite) = invites.decode(payload) else {
+        return send_error_code(bot, chat_id, ErrorCode::InviteInvalid).await;
+    };
+    let group = match services.users.resolve_group_invite(invite).await {
+        Ok(group) => group,
+        Err(error) => return send_app_error(bot, chat_id, error).await,
+    };
+
+    dialogue
+        .update(BotState::Flow(FlowState::AwaitingRegistrationName {
+            invite,
+        }))
+        .await?;
+    ask_input(
+        bot,
+        chat_id,
+        &format!(
+            "Регистрация в группу {}.\n\nКак вас называть?",
+            group.code().as_str()
+        ),
+    )
+    .await
 }
 
 async fn show_profile(screen: Screen<'_>) -> HandlerResult {
@@ -1257,8 +1287,8 @@ mod tests {
     fn every_button_the_bot_sends_is_routable() {
         use crate::bot::views::{
             assignment_files_keyboard, assignment_students_keyboard, attempts_keyboard,
-            calendar_keyboard, confirm_file_deletion_keyboard, course_assignments_keyboard,
-            deadline_options_keyboard, group_keyboard,
+            calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
+            course_assignments_keyboard, deadline_options_keyboard, group_invite_keyboard,
         };
         use crate::domain::{
             FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
@@ -1287,7 +1317,6 @@ mod tests {
         let keyboards = [
             student_menu(),
             teacher_menu(Some(1)),
-            group_keyboard(&["б9122".to_owned()]),
             review_keyboard(SubmissionId::new()),
             course_assignments_keyboard(course.id(), std::slice::from_ref(&assignment)),
             assignment_actions_keyboard(&assignment),
@@ -1299,6 +1328,8 @@ mod tests {
             assignment_files_keyboard(&assignment, &[], true, false),
             confirm_file_deletion_keyboard(),
             assignment_students_keyboard(assignment.id(), &[]),
+            group_invite_keyboard(course.id()),
+            confirm_invite_rotation_keyboard(),
         ];
 
         for keyboard in keyboards {
@@ -1474,8 +1505,42 @@ mod tests {
                 },
             ),
             timezone(),
+            BotInvites::new(test_codec(), "hw_test_bot".to_owned()),
         )
         .await
         .unwrap();
+    }
+
+    fn test_codec() -> crate::invites::GroupInviteCodec {
+        crate::invites::GroupInviteCodec::new(
+            crate::invites::InviteSigningSecret::from_base64url(
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn start_parses_with_and_without_an_invite_payload() {
+        assert!(matches!(
+            Command::parse("/start", "hw_test_bot"),
+            Ok(Command::Start(payload)) if payload.is_empty()
+        ));
+        assert!(matches!(
+            Command::parse("/start gi_payload", "hw_test_bot"),
+            Ok(Command::Start(payload)) if payload == "gi_payload"
+        ));
+    }
+
+    #[test]
+    fn the_invite_link_carries_the_bot_username_from_get_me() {
+        let invites = BotInvites::new(test_codec(), "hw_test_bot".to_owned());
+        let group = crate::domain::StudentGroupId::new();
+        let link = invites.link(group, crate::domain::InviteGeneration::FIRST);
+
+        let payload = link
+            .strip_prefix("https://t.me/hw_test_bot?start=")
+            .unwrap();
+        assert_eq!(invites.decode(payload).unwrap().group_id(), group);
     }
 }

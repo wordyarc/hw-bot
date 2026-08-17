@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{Actor, ApiError, AppState, JsonBody, TelegramIdentity};
-use crate::app::{RegisterStaff, RegisterStudent, RegisteredUser};
+use crate::app::{AppError, RegisterStaff, RegisterStudent, RegisteredUser};
 use crate::domain::{EducationLevel, StaffRole, StudentGroup, TelegramUserId};
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterStudentRequest {
     display_name: String,
-    student_group_code: String,
+    invite_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,7 +77,10 @@ pub async fn register_student(
     let command = RegisterStudent {
         telegram_user_id,
         display_name: request.display_name,
-        student_group_code: request.student_group_code,
+        invite: state
+            .invites
+            .decode(&request.invite_token)
+            .map_err(|_| AppError::InviteInvalid)?,
         registered_at: Utc::now(),
     };
 
@@ -105,7 +108,7 @@ pub async fn register_staff(
 }
 
 /// Первый запрос бота на каждое сообщение: кто это и что ему показывать.
-/// 404 здесь - сигнал «предложи регистрацию».
+/// 404 здесь - предложи регистрацию.
 pub async fn me(
     State(state): State<AppState>,
     actor: Actor,
@@ -113,14 +116,4 @@ pub async fn me(
     let registered = state.application.users.find_by_actor(actor).await?;
 
     Ok(Json(UserResponse::from(&registered)))
-}
-
-pub async fn list_student_groups(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<StudentGroupResponse>>, ApiError> {
-    let groups = state.application.users.list_student_groups().await?;
-
-    Ok(Json(
-        groups.iter().map(StudentGroupResponse::from).collect(),
-    ))
 }

@@ -5,6 +5,7 @@ use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings};
 use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig};
 use hw_bot::db;
 use hw_bot::health::{CriticalComponent, HealthState};
+use hw_bot::invites::GroupInviteCodec;
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
 use std::net::SocketAddr;
@@ -101,13 +102,20 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let cancellation = CancellationToken::new();
     let health = HealthState::new(config.telegram.enabled, config.notification_worker.enabled);
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
-    let telegram_bot = build_telegram_bot(&config, application.clone())?;
+    let invites = GroupInviteCodec::new(
+        config
+            .group_invites
+            .resolved_signing_secret()
+            .context("validated config must resolve group_invites.invite_signing_secret")?,
+    );
+    let telegram_bot = build_telegram_bot(&config, application.clone(), invites.clone())?;
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
         AppState::new(
             config.app.name.clone(),
             db_pool.clone(),
             application,
+            invites,
             health.clone(),
         ),
         Duration::from_millis(config.server.request_timeout_ms),
@@ -166,6 +174,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
 fn build_telegram_bot(
     config: &AppConfig,
     application: ApplicationContainer,
+    invites: GroupInviteCodec,
 ) -> anyhow::Result<Option<TelegramBot>> {
     if !config.telegram.enabled {
         tracing::info!("Telegram bot disabled");
@@ -195,6 +204,7 @@ fn build_telegram_bot(
             max_concurrent_file_transfers: config.files.max_concurrent_transfers,
         },
         BotTimezone::new(utc_offset, deadline_time),
+        invites,
     )?;
 
     tracing::info!(utc_offset = %utc_offset, "Telegram bot enabled");

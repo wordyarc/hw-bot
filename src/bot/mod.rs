@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app::ApplicationContainer;
 use crate::domain::TelegramUserId;
 use crate::health::ComponentHealth;
+use crate::invites::GroupInviteCodec;
 
 const MAX_CONCURRENT_UPDATES: usize = 1024;
 
@@ -29,12 +30,14 @@ mod callbacks;
 mod errors;
 mod files;
 mod handlers;
+mod invites;
 mod state;
 mod timezone;
 mod views;
 
 use files::FileTransfers;
 use handlers::{Command, default_commands, handle_callback, handle_command, handle_message};
+use invites::BotInvites;
 use state::BotState;
 pub use timezone::BotTimezone;
 
@@ -50,6 +53,7 @@ pub struct TelegramBot {
     timezone: BotTimezone,
     admission: UpdateAdmission,
     file_transfers: FileTransfers,
+    codec: GroupInviteCodec,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -87,6 +91,9 @@ pub enum TelegramBotError {
     #[error("Telegram bot startup request failed: {0}")]
     Startup(#[source] teloxide::RequestError),
 
+    #[error("Telegram bot has no username, group invite links cannot be built")]
+    MissingBotUsername,
+
     #[error("Telegram dispatcher stopped unexpectedly")]
     UnexpectedTermination,
 }
@@ -98,6 +105,7 @@ impl TelegramBot {
         api_base_url: &str,
         settings: TelegramBotSettings,
         timezone: BotTimezone,
+        codec: GroupInviteCodec,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !settings.request_timeout.is_zero(),
@@ -183,6 +191,7 @@ impl TelegramBot {
                 transfer_bot,
                 settings.max_concurrent_file_transfers,
             ),
+            codec,
         })
     }
 
@@ -191,12 +200,17 @@ impl TelegramBot {
         cancellation: CancellationToken,
         health: ComponentHealth,
     ) -> Result<(), TelegramBotError> {
-        tokio::select! {
+        let bot_username = tokio::select! {
             () = cancellation.cancelled() => return Ok(()),
             result = self.bot.get_me().send() => {
-                result.map_err(map_startup_error)?;
+                result
+                    .map_err(map_startup_error)?
+                    .user
+                    .username
+                    .ok_or(TelegramBotError::MissingBotUsername)?
             }
-        }
+        };
+        let invites = BotInvites::new(self.codec, bot_username);
         let webhook = self
             .polling_bot
             .get_webhook_info()
@@ -219,7 +233,8 @@ impl TelegramBot {
                 self.application,
                 self.admission.clone(),
                 self.file_transfers,
-                self.timezone
+                self.timezone,
+                invites
             ])
             .distribution_function(|update| update.chat().map(|chat| chat.id))
             .worker_queue_size(self.settings.max_concurrent_updates)

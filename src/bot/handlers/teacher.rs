@@ -3,23 +3,26 @@ use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
 use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
 
-use crate::app::{ChangeDeadline, CreateAssignment, GrantExtraAttempts};
+use crate::app::{
+    ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, GroupInviteState,
+};
 use crate::domain::{AssignmentId, MAX_ATTEMPTS, TeachingCourseId, UserId};
 
 use super::{Screen, current_assignment_screen, reset_dialogue};
 use crate::bot::HandlerResult;
 use crate::bot::assignment_files;
 use crate::bot::callbacks::{
-    AmountChoice, DeadlineAction, EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX, ScreenAction,
+    AmountChoice, DeadlineAction, EXTRA_ATTEMPTS_PREFIX, FlowAction, MAX_ATTEMPTS_PREFIX,
+    ScreenAction,
 };
 use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotDialogue, BotState, DeadlineTarget, FlowState, ScreenState};
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
     ask_input, assignment_actions_keyboard, assignment_status, assignment_students_keyboard,
-    attempts_keyboard, calendar_keyboard, course_assignments_keyboard, courses_keyboard,
-    deadline_left, deadline_options_keyboard, send_message_chunks, send_stale_button,
-    teacher_keyboard, teacher_menu,
+    attempts_keyboard, calendar_keyboard, confirm_invite_rotation_keyboard,
+    course_assignments_keyboard, courses_keyboard, deadline_left, deadline_options_keyboard,
+    group_invite_keyboard, send_message_chunks, send_stale_button, teacher_keyboard, teacher_menu,
 };
 
 pub(super) async fn show_courses(screen: Screen<'_>) -> HandlerResult {
@@ -63,6 +66,7 @@ pub(super) async fn show_course_assignments(
         services,
         dialogue,
         timezone,
+        ..
     } = screen;
     let assignments = match services.assignments.list_for_course(actor, course_id).await {
         Ok(assignments) => assignments,
@@ -105,6 +109,7 @@ pub(super) async fn show_assignment(
         services,
         dialogue,
         timezone,
+        ..
     } = screen;
     let assignment = match services
         .assignments
@@ -211,6 +216,112 @@ pub(super) async fn show_students(
     Ok(())
 }
 
+pub(super) async fn show_group_invite(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+) -> HandlerResult {
+    let invite = match screen
+        .services
+        .courses
+        .get_group_invite(screen.actor, course_id)
+        .await
+    {
+        Ok(invite) => invite,
+        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
+    };
+
+    send_group_invite(screen, course_id, &invite).await
+}
+
+async fn send_group_invite(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    invite: &GroupInviteState,
+) -> HandlerResult {
+    screen
+        .bot
+        .send_message(
+            screen.chat_id,
+            format!(
+                "🔗 Ссылка для регистрации в группу {}:",
+                invite.group.code().as_str()
+            ),
+        )
+        .await?;
+    screen
+        .bot
+        .send_message(
+            screen.chat_id,
+            screen.invites.link(invite.group.id(), invite.generation),
+        )
+        .await?;
+    let sent = screen
+        .bot
+        .send_message(
+            screen.chat_id,
+            "Ссылка многоразовая: её можно отправить всей группе.",
+        )
+        .reply_markup(group_invite_keyboard(course_id))
+        .await?;
+
+    screen
+        .dialogue
+        .update(BotState::Screen(ScreenState::GroupInvite {
+            message_id: sent.id,
+            course_id,
+            generation: invite.generation,
+        }))
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn handle_invite_rotation(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    action: FlowAction,
+    state: BotState,
+) -> HandlerResult {
+    let BotState::Flow(FlowState::ConfirmingInviteRotation {
+        message_id: current_message_id,
+        course_id,
+        generation,
+    }) = state
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    if current_message_id != message_id {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    }
+
+    screen
+        .bot
+        .edit_message_reply_markup(screen.chat_id, message_id)
+        .await?;
+
+    if action == FlowAction::CancelInviteRotation {
+        return show_group_invite(screen, course_id).await;
+    }
+
+    match screen
+        .services
+        .courses
+        .rotate_group_invite(screen.actor, course_id, generation)
+        .await
+    {
+        Ok(invite) => {
+            screen
+                .bot
+                .send_message(screen.chat_id, "♻️ Прежняя ссылка больше не работает.")
+                .await?;
+            send_group_invite(screen, course_id, &invite).await
+        }
+        Err(error) if error.code() == ErrorCode::ConcurrentModification => {
+            show_group_invite(screen, course_id).await
+        }
+        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await,
+    }
+}
+
 pub(super) async fn handle_screen_action(
     screen: Screen<'_>,
     message_id: MessageId,
@@ -220,6 +331,40 @@ pub(super) async fn handle_screen_action(
     match action {
         ScreenAction::AddFile | ScreenAction::OpenFile(_) | ScreenAction::DeleteFile(_) => {
             unreachable!("assignment file actions are routed directly")
+        }
+        ScreenAction::RotateGroupInvite => {
+            let BotState::Screen(ScreenState::GroupInvite {
+                message_id: current_message_id,
+                course_id,
+                generation,
+            }) = state
+            else {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            };
+            if current_message_id != message_id {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            }
+
+            let sent = screen
+                .bot
+                .send_message(
+                    screen.chat_id,
+                    "Перевыпустить ссылку? Прежняя сразу перестанет работать — в том числе у \
+                     других курсов этой же группы. Уже зарегистрированных студентов это не \
+                     затрагивает.",
+                )
+                .reply_markup(confirm_invite_rotation_keyboard())
+                .await?;
+
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::ConfirmingInviteRotation {
+                    message_id: sent.id,
+                    course_id,
+                    generation,
+                }))
+                .await?;
+            return Ok(());
         }
         ScreenAction::FinishFileCreation => {
             let BotState::Screen(ScreenState::ManagingAssignmentFiles {

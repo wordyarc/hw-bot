@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select id, code, education_level, study_year\n        from student_groups\n        order by code\n        ",
+  "query": "\n        select\n            student_groups.id,\n            student_groups.code,\n            student_groups.education_level,\n            student_groups.study_year\n        from student_group_invites\n        join student_groups on student_groups.id = student_group_invites.student_group_id\n        where student_group_invites.student_group_id = $1\n          and student_group_invites.generation = $2\n        for share of student_group_invites\n        ",
   "describe": {
     "columns": [
       {
@@ -49,7 +49,10 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
     },
     "nullable": [
       false,
@@ -58,5 +61,5 @@
       false
     ]
   },
-  "hash": "b4833a5009672759d587f48d854c48f57eafaefc08fbf4c010993ad3a0c87d10"
+  "hash": "fe36643e68f4bc5cf14ae76695a7903c5b4110ebdad3ce38988988400bb6da63"
 }

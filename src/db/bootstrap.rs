@@ -6,6 +6,7 @@ use sqlx::{PgConnection, PgPool};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::db::{DbError, group_invites};
 use crate::domain::{
     DomainError, EducationLevel, Role, StudentGroup, StudentGroupId, StudyProgram, Subject,
     SubjectId, TeachingCourseId, TelegramUserId, User, UserId,
@@ -26,6 +27,9 @@ pub enum BootstrapError {
 
     #[error("bootstrap: database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    #[error("bootstrap: database error: {0}")]
+    Db(#[from] DbError),
 }
 
 #[derive(Deserialize)]
@@ -300,7 +304,7 @@ async fn ensure_student_group(
         "#,
         group.code().as_str(),
     )
-    .fetch_one(connection)
+    .fetch_one(&mut *connection)
     .await?;
 
     if row.education_level != group.program().education_level().as_str()
@@ -311,6 +315,8 @@ async fn ensure_student_group(
             group.code().as_str()
         )));
     }
+
+    group_invites::ensure(connection, StudentGroupId::from_uuid(row.id)).await?;
 
     Ok(row.id)
 }

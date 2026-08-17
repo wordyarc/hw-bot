@@ -9,8 +9,11 @@ use chrono::{DateTime, Duration, Utc};
 use hw_bot::api::{self, ACTOR_HEADER, AppState};
 use hw_bot::app::{Actor, ApplicationContainer, FilePolicy};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, EducationLevel, StudentGroup, TeachingCourse, User};
+use hw_bot::domain::{
+    Assignment, EducationLevel, StudentGroup, StudentGroupId, TeachingCourse, User,
+};
 use hw_bot::health::HealthState;
+use hw_bot::invites::{GroupInviteCodec, InviteSigningSecret};
 use hw_bot::test_support::{
     named_admin, named_student, named_teacher, student_group_in, subject, teaching_course,
 };
@@ -29,10 +32,19 @@ pub use response::TestResponse;
 
 use fixture::{insert_course, insert_group, insert_user, wall_clock_assignment};
 
+/// Фиксированный секрет: тесты должны выпускать ровно те же ссылки, что и приложение под
+/// этим же `AppState`.
+const INVITE_SIGNING_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
+pub fn invite_codec() -> GroupInviteCodec {
+    GroupInviteCodec::new(InviteSigningSecret::from_base64url(INVITE_SIGNING_SECRET).unwrap())
+}
+
 pub struct TestApp {
     pub pool: PgPool,
     pub fixture: Fixture,
     pub application: ApplicationContainer,
+    pub invites: GroupInviteCodec,
     router: Router,
     next_telegram_id: AtomicI64,
 }
@@ -46,11 +58,13 @@ impl TestApp {
         let pool = migrated_database().await;
         let fixture = Fixture::insert(&pool).await;
         let application = ApplicationContainer::new(pool.clone(), test_file_policy());
+        let invites = invite_codec();
         let router = api::router(
             AppState::new(
                 "hw-bot-test",
                 pool.clone(),
                 application.clone(),
+                invites.clone(),
                 HealthState::new(false, false),
             ),
             request_timeout,
@@ -60,6 +74,7 @@ impl TestApp {
             pool,
             fixture,
             application,
+            invites,
             router,
             // Выше диапазона, который тесты занимают литералами.
             next_telegram_id: AtomicI64::new(5000),
@@ -311,18 +326,33 @@ impl TestApp {
         .await
     }
 
+    /// Действующая ссылка группы: generation читается из БД, поэтому после ротации токен
+    /// нужно взять заново.
+    pub async fn invite_token(&self, group_id: StudentGroupId) -> String {
+        let generation = db::group_invites::find_generation(&self.pool, group_id)
+            .await
+            .expect("read invite generation")
+            .expect("group has an invite");
+
+        self.invites.encode(group_id, generation)
+    }
+
+    pub async fn group_invite_token(&self) -> String {
+        self.invite_token(self.fixture.group.id()).await
+    }
+
     pub async fn register_student(
         &self,
         telegram_id: i64,
         display_name: &str,
-        group_code: &str,
+        invite_token: &str,
     ) -> TestResponse {
         self.post_as(
             "/students",
             telegram_id,
             json!({
                 "display_name": display_name,
-                "student_group_code": group_code,
+                "invite_token": invite_token,
             }),
         )
         .await

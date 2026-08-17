@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with created as (\n            insert into student_groups (id, code, education_level, study_year)\n            values ($1, $2, $3, $4)\n            returning id\n        )\n        insert into student_group_invites (student_group_id, generation)\n        select id, 1 from created\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf6d1f4655e2bec189cc9fd7a137cae4ffe774aadf250fad45021fb9ebacfcb6"
+}

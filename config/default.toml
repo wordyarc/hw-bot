@@ -46,6 +46,10 @@ rate_limit_replenish_ms = 1000
 max_concurrent_updates = 32
 shutdown_grace_ms = 10000
 
+[group_invites]
+# 32 случайных байта в base64url без padding. Задаётся окружением или config/local.toml.
+# invite_signing_secret = ""
+
 [notification_worker]
 enabled = false
 poll_interval_ms = 500

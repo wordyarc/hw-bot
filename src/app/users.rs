@@ -2,9 +2,10 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::postgres::PgExecutor;
 
-use crate::app::{Actor, AppResult, Required};
+use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{StaffRole, StudentGroup, TelegramUserId, User, UserId};
+use crate::invites::VerifiedInvite;
 
 pub(crate) async fn load_actor<'e, E>(
     executor: E,
@@ -23,7 +24,7 @@ where
 pub struct RegisterStudent {
     pub telegram_user_id: TelegramUserId,
     pub display_name: String,
-    pub student_group_code: String,
+    pub invite: VerifiedInvite,
     pub registered_at: DateTime<Utc>,
 }
 
@@ -52,13 +53,18 @@ impl UserService {
         Self { pool }
     }
 
+    /// Инвайт перепроверяется под `for share` в той же транзакции, что и вставка студента:
+    /// ссылка, заменённая между `/start` и вводом имени, регистрацию не проводит.
     pub async fn register_student(&self, command: RegisterStudent) -> AppResult<RegisteredUser> {
         let mut tx = self.pool.begin().await?;
 
-        let student_group =
-            db::academic::find_student_group_by_code(&mut *tx, &command.student_group_code)
-                .await?
-                .required("student group")?;
+        let student_group = db::group_invites::lock_group_for_registration(
+            &mut tx,
+            command.invite.group_id(),
+            command.invite.generation(),
+        )
+        .await?
+        .ok_or(AppError::InviteInvalid)?;
 
         let student = User::new_student(
             UserId::new(),
@@ -140,7 +146,14 @@ impl UserService {
         })
     }
 
-    pub async fn list_student_groups(&self) -> AppResult<Vec<StudentGroup>> {
-        Ok(db::academic::list_student_groups(&self.pool).await?)
+    pub async fn resolve_group_invite(&self, invite: VerifiedInvite) -> AppResult<StudentGroup> {
+        let generation = db::group_invites::find_generation(&self.pool, invite.group_id()).await?;
+        if generation != Some(invite.generation()) {
+            return Err(AppError::InviteInvalid);
+        }
+
+        db::academic::find_student_group_by_id(&self.pool, invite.group_id())
+            .await?
+            .ok_or(AppError::InviteInvalid)
     }
 }

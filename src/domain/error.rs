@@ -96,6 +96,12 @@ pub enum DomainError {
     #[error("telegram user is already registered")]
     UserAlreadyRegistered,
 
+    #[error("invite generation must be positive, got {value}")]
+    InvalidInviteGeneration { value: u32 },
+
+    #[error("invite generation cannot be rotated any further")]
+    InviteGenerationExhausted,
+
     #[error("permission denied for {action}")]
     PermissionDenied { action: &'static str },
 }

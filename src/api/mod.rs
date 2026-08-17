@@ -56,7 +56,6 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             "/assignments/{assignment_id}/submissions",
             post(submissions::submit_homework),
         )
-        .route("/student-groups", get(users::list_student_groups))
         .route("/students", post(users::register_student))
         .route("/staff", post(users::register_staff))
         .route("/me", get(users::me))

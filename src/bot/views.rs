@@ -122,21 +122,6 @@ pub(super) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn group_keyboard(group_codes: &[String]) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(
-        group_codes
-            .iter()
-            .enumerate()
-            .map(|(index, code)| {
-                vec![InlineKeyboardButton::callback(
-                    format!("🎓 {code}"),
-                    format!("register_group:{index}"),
-                )]
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
 pub(super) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback(
@@ -188,6 +173,10 @@ pub(super) fn course_assignments_keyboard(
     rows.push(vec![InlineKeyboardButton::callback(
         "➕ Создать задание",
         format!("create:{}", course_id.as_uuid()),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "🔗 Ссылка для группы",
+        format!("invite:{}", course_id.as_uuid()),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "⬅️ К списку курсов",
@@ -416,6 +405,26 @@ pub(super) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
     ]])
 }
 
+pub(super) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            "♻️ Перевыпустить ссылку",
+            "invite:rotate",
+        )],
+        vec![InlineKeyboardButton::callback(
+            "⬅️ К курсу",
+            format!("course:{}", course_id.as_uuid()),
+        )],
+    ])
+}
+
+pub(super) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("♻️ Перевыпустить", "invite:confirm-rotate"),
+        InlineKeyboardButton::callback("↩️ Отмена", "invite:cancel-rotate"),
+    ]])
+}
+
 pub(super) fn format_file_size(size_bytes: u64) -> String {
     if size_bytes < 1024 {
         format!("{size_bytes} Б")
@@ -594,21 +603,6 @@ mod tests {
                 .all(|chunk| chunk.chars().count() <= MESSAGE_LIMIT)
         );
         assert_eq!(chunks.concat(), source);
-    }
-
-    #[test]
-    fn group_keyboard_keeps_callback_data_short() {
-        let keyboard = group_keyboard(&["б9122-02.03.21".to_owned(), "магистратура-2".to_owned()]);
-        let json = serde_json::to_value(keyboard).unwrap();
-
-        assert_eq!(
-            json["inline_keyboard"][0][0]["callback_data"],
-            "register_group:0"
-        );
-        assert_eq!(
-            json["inline_keyboard"][1][0]["callback_data"],
-            "register_group:1"
-        );
     }
 
     #[test]
