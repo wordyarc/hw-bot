@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, NaiveTime, Utc};
@@ -16,6 +18,8 @@ use crate::harness::{TestApp, test_file_policy};
 
 const BOT_MESSAGE_ID: i32 = 900;
 const ATTEMPTS_CALLBACK: &str = "maxattempts:3";
+/// Задержка ответа Telegram, на которой первый обработчик удерживает единственный permit.
+const HELD_PERMIT: Duration = Duration::from_millis(600);
 const DOCUMENT_FIXTURE: &[u8] = include_bytes!("fixtures/assignment-note.txt");
 const IMAGE_FIXTURE: &[u8] = include_bytes!("fixtures/pixel.ppm");
 
@@ -1094,22 +1098,62 @@ async fn rate_limiter_has_an_independent_bucket_per_user() {
 }
 
 #[tokio::test]
-async fn concurrency_limit_drops_instead_of_queueing_updates() {
+async fn concurrency_limit_backpressures_instead_of_dropping_updates() {
     let app = TestApp::start().await;
     let updates = vec![
         message_update(1, app.teacher(), 1, "/help"),
         message_update(2, app.student(), 1, "/help"),
     ];
     let telegram = telegram_server(updates).await;
-    let sent = expect_sent_messages(&telegram, 1, Duration::from_millis(250)).await;
+    let sent = expect_sent_messages(&telegram, 2, HELD_PERMIT).await;
     let settings = bot_settings_with(|settings| settings.max_concurrent_updates = 1);
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
 
-    tokio::time::timeout(Duration::from_secs(2), sent.wait_until_satisfied())
-        .await
-        .expect("one update is admitted");
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    wait_for_sent_message_count(&telegram, 1).await;
+    tokio::time::sleep(HELD_PERMIT / 2).await;
+    let while_held = sent_message_count(&telegram).await;
+    let admitted = tokio::time::timeout(Duration::from_secs(3), sent.wait_until_satisfied()).await;
     stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+
+    assert_eq!(
+        while_held, 1,
+        "the single permit is still held by the first handler; requests:\n{requests}"
+    );
+    admitted.unwrap_or_else(|_| {
+        panic!("the waiting update was dropped instead of admitted; requests:\n{requests}")
+    });
+}
+
+#[tokio::test]
+async fn a_waiting_update_holds_back_the_polling_offset() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/help"),
+        message_update(2, app.student(), 1, "/help"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let sent = expect_sent_messages(&telegram, 2, HELD_PERMIT).await;
+    let settings = bot_settings_with(|settings| settings.max_concurrent_updates = 1);
+    let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
+
+    wait_for_sent_message_count(&telegram, 1).await;
+    let acknowledged_while_waiting = wait_for_poll_offset(&telegram, 3).await;
+    let admitted = tokio::time::timeout(Duration::from_secs(3), sent.wait_until_satisfied()).await;
+    let acknowledged_after_admission = wait_for_poll_offset(&telegram, 3).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+
+    assert!(
+        !acknowledged_while_waiting,
+        "the batch must not be acknowledged while an update waits for a permit; requests:\n{requests}"
+    );
+    admitted
+        .unwrap_or_else(|_| panic!("the waiting update was never admitted; requests:\n{requests}"));
+    assert!(
+        acknowledged_after_admission,
+        "polling continues with the new offset once the permit is free; requests:\n{requests}"
+    );
 }
 
 #[tokio::test]
@@ -1133,26 +1177,71 @@ async fn updates_from_one_chat_are_processed_sequentially() {
 }
 
 #[tokio::test]
-async fn interactive_timeout_does_not_break_long_polling_or_queue_updates() {
+async fn interactive_timeout_releases_the_permit_and_keeps_long_polling_alive() {
     let app = TestApp::start().await;
     let updates = vec![
         message_update(1, app.teacher(), 1, "/help"),
         message_update(2, app.teacher(), 2, "/help"),
     ];
     let telegram = telegram_server(updates).await;
-    let sent = expect_sent_messages(&telegram, 1, Duration::from_millis(200)).await;
+    let sent = expect_sent_messages(&telegram, 2, Duration::from_millis(200)).await;
     let settings = bot_settings_with(|settings| {
         settings.request_timeout = Duration::from_millis(50);
         settings.max_concurrent_updates = 1;
     });
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
 
-    tokio::time::timeout(Duration::from_secs(2), sent.wait_until_satisfied())
-        .await
-        .expect("the admitted request reaches Telegram");
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!task.is_finished(), "long polling must still be running");
+    let both = tokio::time::timeout(Duration::from_secs(3), sent.wait_until_satisfied()).await;
+    let polling = !task.is_finished();
     stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+
+    both.unwrap_or_else(|_| {
+        panic!("the timed out handler did not release its permit; requests:\n{requests}")
+    });
+    assert!(polling, "long polling must still be running");
+}
+
+/// Отмена при ожидающем допуске: бот обязан завершиться, а не зависнуть на семафоре.
+/// фиксируем фактическое поведение teloxide - остаток буферизованного batch дренируется,
+/// финальный polling-запрос уходит с новым offset, `limit = 1` и `timeout = 0`.
+#[tokio::test]
+async fn shutdown_finishes_while_an_update_waits_for_admission() {
+    let app = TestApp::start().await;
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/help"),
+        message_update(2, app.student(), 1, "/help"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let sent = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .respond_with(telegram_message_response().set_delay(HELD_PERMIT))
+        .expect(1..)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let settings = bot_settings_with(|settings| settings.max_concurrent_updates = 1);
+    let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
+
+    wait_for_sent_message_count(&telegram, 1).await;
+    let waiting = !wait_for_poll_offset(&telegram, 3).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    let last_poll = last_poll_request(&telegram).await;
+    drop(sent);
+
+    assert!(
+        waiting,
+        "the second update must still be waiting for a permit; requests:\n{requests}"
+    );
+    assert_eq!(
+        sent_message_count(&telegram).await,
+        2,
+        "the buffered rest of the batch is drained during graceful shutdown; requests:\n{requests}"
+    );
+    assert_eq!(last_poll["offset"], json!(3));
+    assert_eq!(last_poll["limit"], json!(1));
+    assert_eq!(last_poll["timeout"], json!(0));
 }
 
 #[tokio::test]
@@ -1218,6 +1307,38 @@ async fn invalid_token_stops_the_telegram_bot() {
         Err(hw_bot::bot::TelegramBotError::InvalidCredentials)
     ));
     cancellation.cancel();
+}
+
+#[tokio::test]
+async fn cancellation_during_the_dispatcher_startup_request_stops_the_bot() {
+    let app = TestApp::start().await;
+    let telegram = MockServer::start().await;
+    mount_startup_mocks(&telegram).await;
+    let answered = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetMe"))
+        .respond_with(move |_: &wiremock::Request| {
+            let response = ResponseTemplate::new(200).set_body_json(telegram_me_body());
+            // Второй GetMe делает уже dispatcher: задерживаем его, чтобы отмена пришла ровно в
+            // окно между стартовым запросом бота и запуском dispatcher-а.
+            if answered.fetch_add(1, AtomicOrdering::Relaxed) == 0 {
+                response
+            } else {
+                response.set_delay(Duration::from_secs(5))
+            }
+        })
+        .mount(&telegram)
+        .await;
+    let (cancellation, task) = start_bot(&app, &telegram);
+
+    wait_for_request_count(&telegram, "/bottest-token/GetMe", 2).await;
+    cancellation.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("cancellation during startup stops the bot")
+        .expect("Telegram task does not panic");
+
+    result.expect("startup cancellation is not a failure");
 }
 
 fn start_bot(
@@ -1349,34 +1470,10 @@ async fn stop_bot(
 
 async fn telegram_server(updates: Vec<Value>) -> MockServer {
     let telegram = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/bottest-token/GetWebhookInfo"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "ok": true,
-            "result": {
-                "url": "",
-                "has_custom_certificate": false,
-                "pending_update_count": 0
-            }
-        })))
-        .expect(1)
-        .mount(&telegram)
-        .await;
+    mount_startup_mocks(&telegram).await;
     Mock::given(method("POST"))
         .and(path("/bottest-token/GetMe"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "ok": true,
-            "result": {
-                "id": 999,
-                "is_bot": true,
-                "first_name": "Test Bot",
-                "username": "test_bot",
-                "can_join_groups": true,
-                "can_read_all_group_messages": false,
-                "supports_inline_queries": false,
-                "has_main_web_app": false
-            }
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(telegram_me_body()))
         .expect(2)
         .mount(&telegram)
         .await;
@@ -1420,6 +1517,24 @@ async fn telegram_server(updates: Vec<Value>) -> MockServer {
         .respond_with(telegram_message_response())
         .mount(&telegram)
         .await;
+
+    telegram
+}
+
+async fn mount_startup_mocks(telegram: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetWebhookInfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": {
+                "url": "",
+                "has_custom_certificate": false,
+                "pending_update_count": 0
+            }
+        })))
+        .expect(1)
+        .mount(telegram)
+        .await;
     for endpoint in ["SetMyCommands", "SetChatMenuButton"] {
         Mock::given(method("POST"))
             .and(path(format!("/bottest-token/{endpoint}")))
@@ -1427,11 +1542,25 @@ async fn telegram_server(updates: Vec<Value>) -> MockServer {
                 "ok": true,
                 "result": true
             })))
-            .mount(&telegram)
+            .mount(telegram)
             .await;
     }
+}
 
-    telegram
+fn telegram_me_body() -> Value {
+    json!({
+        "ok": true,
+        "result": {
+            "id": 999,
+            "is_bot": true,
+            "first_name": "Test Bot",
+            "username": "test_bot",
+            "can_join_groups": true,
+            "can_read_all_group_messages": false,
+            "supports_inline_queries": false,
+            "has_main_web_app": false
+        }
+    })
 }
 
 fn telegram_message_response() -> ResponseTemplate {
@@ -1509,6 +1638,43 @@ async fn wait_for_sent_message_count(telegram: &MockServer, expected: usize) {
     })
     .await
     .expect("Telegram request is sent");
+}
+
+async fn wait_for_poll_offset(telegram: &MockServer, offset: i64) -> bool {
+    tokio::time::timeout(Duration::from_millis(300), async {
+        loop {
+            if poll_offsets(telegram).await.contains(&offset) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+async fn last_poll_request(telegram: &MockServer) -> Value {
+    telegram
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/bottest-token/GetUpdates")
+        .filter_map(|request| request.body_json::<Value>().ok())
+        .next_back()
+        .expect("the bot polled Telegram at least once")
+}
+
+async fn poll_offsets(telegram: &MockServer) -> Vec<i64> {
+    telegram
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/bottest-token/GetUpdates")
+        .filter_map(|request| request.body_json::<Value>().ok())
+        .map(|body| body["offset"].as_i64().unwrap_or(0))
+        .collect()
 }
 
 async fn sent_message_count(telegram: &MockServer) -> usize {
@@ -1630,6 +1796,31 @@ async fn mock_file_download(
         .expect(1)
         .mount(telegram)
         .await;
+}
+
+async fn wait_for_request_count(telegram: &MockServer, expected: &str, count: usize) {
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let observed = telegram
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| request.url.path() == expected)
+                .count();
+            if observed >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if result.is_err() {
+        panic!(
+            "Telegram request {expected} was not sent {count} times; requests:\n{}",
+            recorded_requests(telegram).await
+        );
+    }
 }
 
 async fn wait_for_request_path(telegram: &MockServer, expected: &str) {

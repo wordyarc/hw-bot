@@ -73,7 +73,6 @@ struct UpdateAdmission {
     semaphore: Arc<Semaphore>,
     checks: Arc<AtomicU64>,
     rate_limit_rejections: Arc<AtomicU64>,
-    concurrency_rejections: Arc<AtomicU64>,
     permits: Arc<Mutex<HashMap<UpdateId, OwnedSemaphorePermit>>>,
 }
 
@@ -176,7 +175,6 @@ impl TelegramBot {
             semaphore: Arc::new(Semaphore::new(settings.max_concurrent_updates)),
             checks: Arc::new(AtomicU64::new(0)),
             rate_limit_rejections: Arc::new(AtomicU64::new(0)),
-            concurrency_rejections: Arc::new(AtomicU64::new(0)),
             permits: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -271,8 +269,11 @@ impl TelegramBot {
         tokio::select! {
             result = &mut dispatch => result.map_err(map_startup_error)?,
             () = cancellation.cancelled() => {
-                let _ = shutdown.shutdown();
-                dispatch.await.map_err(map_startup_error)?;
+                // Отмена может прийти, пока dispatcher ещё делает свой startup-запрос: тогда он
+                // idle, останавливать нечего, и ждать dispatch нельзя - он просто запустится.
+                if shutdown.shutdown().is_ok() {
+                    dispatch.await.map_err(map_startup_error)?;
+                }
                 return Ok(());
             }
         }
@@ -318,7 +319,7 @@ fn telegram_http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::E
         .build()
 }
 
-fn admit_update(update: &Update, admission: &UpdateAdmission) -> bool {
+async fn admit_update(update: &Update, admission: &UpdateAdmission) -> bool {
     let Some(from) = update.from() else {
         return false;
     };
@@ -337,46 +338,38 @@ fn admit_update(update: &Update, admission: &UpdateAdmission) -> bool {
         admission.rate_limiter.retain_recent();
     }
     if admission.rate_limiter.check_key(&telegram_user_id).is_err() {
-        log_rejection(
-            &admission.rate_limit_rejections,
-            telegram_user_id,
-            update.id,
-            "rate_limit",
-        );
+        log_rate_limit_rejection(admission, telegram_user_id, update.id);
         return false;
     }
 
-    match admission.semaphore.clone().try_acquire_owned() {
-        Ok(permit) => {
-            admission
-                .permits
-                .lock()
-                .expect("Telegram admission permit mutex poisoned")
-                .insert(update.id, permit);
-            true
-        }
-        Err(_) => {
-            log_rejection(
-                &admission.concurrency_rejections,
-                telegram_user_id,
-                update.id,
-                "concurrency_limit",
-            );
-            false
-        }
-    }
+    // Ждём permit до извлечения следующего update
+    let permit = admission
+        .semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("Telegram admission semaphore closed");
+    admission
+        .permits
+        .lock()
+        .expect("Telegram admission permit mutex poisoned")
+        .insert(update.id, permit);
+
+    true
 }
 
-fn log_rejection(
-    counter: &AtomicU64,
+fn log_rate_limit_rejection(
+    admission: &UpdateAdmission,
     telegram_user_id: TelegramUserId,
     update_id: UpdateId,
-    kind: &'static str,
 ) {
-    let rejected = counter.fetch_add(1, Ordering::Relaxed) + 1;
+    let rejected = admission
+        .rate_limit_rejections
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
     if rejected.is_power_of_two() {
         tracing::warn!(
-            kind,
+            kind = "rate_limit",
             rejected,
             telegram_user_id = telegram_user_id.as_i64(),
             update_id = update_id.0,
@@ -427,11 +420,15 @@ where
                     future::ready(keep_polling)
                 })
                 .filter_map(move |result| {
-                    future::ready(match result {
-                        Ok(update) if admit_update(&update, &admission) => Some(Ok(update)),
-                        Ok(_) => None,
-                        Err(error) => Some(Err(error)),
-                    })
+                    let admission = admission.clone();
+                    async move {
+                        match result {
+                            Ok(update) => admit_update(&update, &admission)
+                                .await
+                                .then_some(Ok(update)),
+                            Err(error) => Some(Err(error)),
+                        }
+                    }
                 }),
         )
     }
