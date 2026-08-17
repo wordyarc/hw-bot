@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n            status, created_by, created_at, deadline_at, published_at, revision\n        from assignments\n        where id = $1\n        ",
+  "query": "\n        select\n            assignments.id, assignments.teaching_course_id, assignments.subject_id,\n            assignments.student_group_id, assignments.title, assignments.body,\n            assignments.max_attempts, assignments.max_score, assignments.late_period_days,\n            assignments.late_penalty, assignments.late_max_periods, assignments.status,\n            assignments.created_by,\n            assignments.created_at, assignments.deadline_at, assignments.published_at,\n            subjects.name as subject_name\n        from assignments\n        join subjects\n          on subjects.id = assignments.subject_id\n        where assignments.student_group_id = $1\n          and assignments.status = 'archived'\n          and assignments.published_at is not null\n        order by subjects.name, assignments.published_at desc, assignments.id\n        ",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,50 @@
       },
       {
         "ordinal": 7,
+        "name": "max_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "late_period_days",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_period_days"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "late_penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "late_max_periods",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_max_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -92,7 +136,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 12,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -103,7 +147,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 13,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -114,7 +158,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 14,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -125,7 +169,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 15,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -136,13 +180,13 @@
         }
       },
       {
-        "ordinal": 12,
-        "name": "revision",
-        "type_info": "Int8",
+        "ordinal": 16,
+        "name": "subject_name",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "assignments",
-            "name": "revision"
+            "table": "subjects",
+            "name": "name"
           }
         }
       }
@@ -160,6 +204,10 @@
       false,
       false,
       false,
+      true,
+      true,
+      true,
+      true,
       false,
       false,
       false,
@@ -168,5 +216,5 @@
       false
     ]
   },
-  "hash": "28a15bc95fa4100acae53e7af9b1012ed1c899786f6de052b5064d5baf4537f0"
+  "hash": "d29f9005c86d68c6c2ef5150da7e3f14e5b260a312360c3cbf94314d2a3b73a4"
 }

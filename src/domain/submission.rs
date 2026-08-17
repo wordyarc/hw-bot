@@ -75,6 +75,60 @@ str_enum! {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Grade {
+    raw_score: u16,
+    late_periods: u16,
+    penalty: u16,
+    final_score: u16,
+}
+
+impl Grade {
+    pub(crate) fn new(raw_score: u16, late_periods: u16, penalty: u16) -> Self {
+        Self {
+            raw_score,
+            late_periods,
+            penalty,
+            // Штраф может превышать балл: итог зажимается в ноль, а не уходит в минус.
+            final_score: raw_score.saturating_sub(penalty),
+        }
+    }
+
+    fn restore(
+        raw_score: u16,
+        late_periods: u16,
+        penalty: u16,
+        final_score: u16,
+    ) -> DomainResult<Self> {
+        if final_score > raw_score {
+            return Err(DomainError::InvalidSubmissionGradeState);
+        }
+
+        Ok(Self {
+            raw_score,
+            late_periods,
+            penalty,
+            final_score,
+        })
+    }
+
+    pub fn raw_score(self) -> u16 {
+        self.raw_score
+    }
+
+    pub fn late_periods(self) -> u16 {
+        self.late_periods
+    }
+
+    pub fn penalty(self) -> u16 {
+        self.penalty
+    }
+
+    pub fn final_score(self) -> u16 {
+        self.final_score
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Submission {
     id: SubmissionId,
@@ -87,6 +141,7 @@ pub struct Submission {
     reviewed_by: Option<UserId>,
     reviewed_at: Option<DateTime<Utc>>,
     review_comment: Option<NonEmptyString>,
+    grade: Option<Grade>,
 }
 
 /// Поля сдачи россыпью: `restore` собирает сущность из них по именам, чтобы соседние
@@ -102,6 +157,10 @@ pub(crate) struct SubmissionParts {
     pub reviewed_by: Option<UserId>,
     pub reviewed_at: Option<DateTime<Utc>>,
     pub review_comment: Option<String>,
+    pub raw_score: Option<u16>,
+    pub late_periods: Option<u16>,
+    pub penalty: Option<u16>,
+    pub final_score: Option<u16>,
 }
 
 impl Submission {
@@ -130,6 +189,28 @@ impl Submission {
             _ => {}
         }
 
+        let grade = match (
+            parts.raw_score,
+            parts.late_periods,
+            parts.penalty,
+            parts.final_score,
+        ) {
+            (None, None, None, None) => None,
+            (Some(raw_score), Some(late_periods), Some(penalty), Some(final_score)) => {
+                if parts.status != SubmissionStatus::Accepted {
+                    return Err(DomainError::InvalidSubmissionGradeState);
+                }
+
+                Some(Grade::restore(
+                    raw_score,
+                    late_periods,
+                    penalty,
+                    final_score,
+                )?)
+            }
+            _ => return Err(DomainError::InvalidSubmissionGradeState),
+        };
+
         Ok(Self {
             id: parts.id,
             assignment_id: parts.assignment_id,
@@ -154,6 +235,7 @@ impl Submission {
                     )
                 })
                 .transpose()?,
+            grade,
         })
     }
 
@@ -175,12 +257,7 @@ impl Submission {
             return Err(DomainError::AssignmentIsNotPublished);
         }
 
-        if submitted_at > assignment.deadline_at() {
-            return Err(DomainError::AssignmentDeadlineExceeded {
-                deadline_at: assignment.deadline_at(),
-                submitted_at,
-            });
-        }
+        assignment.ensure_open_for_submission(submitted_at)?;
 
         if student.student_group_id() != Some(assignment.student_group_id()) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
@@ -213,6 +290,10 @@ impl Submission {
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
+            raw_score: None,
+            late_periods: None,
+            penalty: None,
+            final_score: None,
         })
     }
 
@@ -221,6 +302,7 @@ impl Submission {
         assignment: &Assignment,
         teaching_course: &TeachingCourse,
         reviewer: &User,
+        score: Option<u16>,
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
@@ -229,6 +311,7 @@ impl Submission {
             teaching_course,
             reviewer,
             SubmissionStatus::Accepted,
+            score,
             comment,
             reviewed_at,
         )
@@ -247,17 +330,20 @@ impl Submission {
             teaching_course,
             reviewer,
             SubmissionStatus::Rejected,
+            None,
             comment,
             reviewed_at,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn complete_review(
         &mut self,
         assignment: &Assignment,
         teaching_course: &TeachingCourse,
         reviewer: &User,
         status: SubmissionStatus,
+        score: Option<u16>,
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
@@ -277,6 +363,21 @@ impl Submission {
             return Err(DomainError::SubmissionIsNotPendingReview);
         }
 
+        let grade = match status {
+            SubmissionStatus::Accepted => {
+                // Опоздание считается по моменту отправки: скорость работы преподавателя не должна
+                // менять оценку студента.
+                let late_periods = assignment.late_periods_at(self.submitted_at);
+                let penalty = assignment.penalty_at(self.submitted_at);
+
+                assignment
+                    .grading()
+                    .validate_score(score)?
+                    .map(|raw_score| Grade::new(raw_score, late_periods, penalty))
+            }
+            _ => None,
+        };
+
         let review_comment =
             NonEmptyString::new_bounded("submission.review_comment", comment, USER_TEXT_MAX_LEN)?;
 
@@ -284,6 +385,7 @@ impl Submission {
         self.reviewed_by = Some(reviewer.id());
         self.reviewed_at = Some(reviewed_at);
         self.review_comment = Some(review_comment);
+        self.grade = grade;
 
         Ok(())
     }
@@ -328,6 +430,10 @@ impl Submission {
         self.review_comment.as_ref()
     }
 
+    pub fn grade(&self) -> Option<Grade> {
+        self.grade
+    }
+
     pub fn is_pending_review(&self) -> bool {
         self.status == SubmissionStatus::PendingReview
     }
@@ -350,6 +456,20 @@ mod tests {
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
+            raw_score: None,
+            late_periods: None,
+            penalty: None,
+            final_score: None,
+        }
+    }
+
+    fn accepted_parts() -> SubmissionParts {
+        SubmissionParts {
+            status: SubmissionStatus::Accepted,
+            reviewed_by: Some(UserId::new()),
+            reviewed_at: Some(t0()),
+            review_comment: Some("Good".to_owned()),
+            ..pending_parts()
         }
     }
 
@@ -383,6 +503,77 @@ mod tests {
             .unwrap_err(),
             DomainError::InvalidSubmissionReviewState
         );
+    }
+
+    #[test]
+    fn restore_rejects_partial_grade() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                raw_score: Some(4),
+                ..accepted_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionGradeState
+        );
+    }
+
+    #[test]
+    fn restore_rejects_grade_on_submission_that_is_not_accepted() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                status: SubmissionStatus::Rejected,
+                raw_score: Some(4),
+                late_periods: Some(0),
+                penalty: Some(0),
+                final_score: Some(4),
+                ..accepted_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionGradeState
+        );
+    }
+
+    #[test]
+    fn restore_rejects_final_score_above_raw_score() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                raw_score: Some(4),
+                late_periods: Some(0),
+                penalty: Some(0),
+                final_score: Some(5),
+                ..accepted_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionGradeState
+        );
+    }
+
+    #[test]
+    fn restore_accepts_full_grade_of_accepted_submission() {
+        let grade = Submission::restore(SubmissionParts {
+            raw_score: Some(4),
+            late_periods: Some(2),
+            penalty: Some(2),
+            final_score: Some(2),
+            ..accepted_parts()
+        })
+        .unwrap()
+        .grade()
+        .unwrap();
+
+        assert_eq!(grade.raw_score(), 4);
+        assert_eq!(grade.late_periods(), 2);
+        assert_eq!(grade.penalty(), 2);
+        assert_eq!(grade.final_score(), 2);
+    }
+
+    #[test]
+    fn grade_clamps_final_score_at_zero() {
+        let grade = Grade::new(4, 5, 5);
+
+        assert_eq!(grade.final_score(), 0);
+        assert_eq!(grade.raw_score(), 4);
+        assert_eq!(grade.penalty(), 5);
     }
 
     #[test]

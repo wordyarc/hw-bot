@@ -1,17 +1,18 @@
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::{Bot, ChatId, Requester};
 use teloxide::types::{
     InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup, KeyboardRemove,
 };
 
-use crate::app::{AssignmentStudentSummary, TeachingCourseSummary};
+use crate::app::{AssignmentStudentSummary, StudentGrades, TeachingCourseSummary};
 use crate::domain::{
-    Assignment, AssignmentStatus, Role, StoredFileMetadata, SubmissionId, SubmissionStatus,
+    Assignment, AssignmentStatus, Grade, Role, StoredFileMetadata, SubmissionId, SubmissionStatus,
     TeachingCourseId,
 };
 
 use super::HandlerResult;
+use super::callbacks::{GRADING_PREFIX, LATE_POLICY_PREFIX, REVIEW_SCORE_PREFIX};
 use super::timezone::BotTimezone;
 
 const MESSAGE_LIMIT: usize = 4096;
@@ -173,6 +174,10 @@ pub(super) fn course_assignments_keyboard(
     rows.push(vec![InlineKeyboardButton::callback(
         "➕ Создать задание",
         format!("create:{}", course_id.as_uuid()),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "📊 Оценки",
+        format!("grades:{}", course_id.as_uuid()),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "🔗 Ссылка для группы",
@@ -361,6 +366,69 @@ pub(super) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
     ])
 }
 
+pub(super) fn grading_keyboard() -> InlineKeyboardMarkup {
+    let preset = |max_score: u16| {
+        InlineKeyboardButton::callback(
+            format!("{max_score}-балльная"),
+            format!("{GRADING_PREFIX}{max_score}"),
+        )
+    };
+
+    InlineKeyboardMarkup::new(vec![
+        vec![preset(5), preset(10)],
+        vec![InlineKeyboardButton::callback(
+            "✍️ Другой максимум",
+            format!("{GRADING_PREFIX}manual"),
+        )],
+        vec![InlineKeyboardButton::callback(
+            "⏭ Без баллов, зачёт/незачёт",
+            format!("{GRADING_PREFIX}passfail"),
+        )],
+    ])
+}
+
+pub(super) fn late_policy_keyboard() -> InlineKeyboardMarkup {
+    let preset = |period_days: u16, penalty: u16, max_periods: u16| {
+        InlineKeyboardButton::callback(
+            format!("−{penalty} за {period_days} дн. · закрыть через {max_periods}"),
+            format!("{LATE_POLICY_PREFIX}{period_days}:{penalty}:{max_periods}"),
+        )
+    };
+
+    InlineKeyboardMarkup::new(vec![
+        vec![preset(7, 1, 4)],
+        vec![preset(14, 1, 2)],
+        vec![preset(14, 2, 2)],
+        vec![InlineKeyboardButton::callback(
+            "✍️ Свои значения",
+            format!("{LATE_POLICY_PREFIX}manual"),
+        )],
+        vec![InlineKeyboardButton::callback(
+            "⏭ Без штрафов за опоздание",
+            format!("{LATE_POLICY_PREFIX}none"),
+        )],
+    ])
+}
+
+/// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
+pub(super) fn review_score_keyboard(max_score: u16) -> InlineKeyboardMarkup {
+    let button = |score: u16| {
+        InlineKeyboardButton::callback(score.to_string(), format!("{REVIEW_SCORE_PREFIX}{score}"))
+    };
+
+    let mut rows: Vec<Vec<_>> = (0..=max_score)
+        .collect::<Vec<_>>()
+        .chunks(6)
+        .map(|chunk| chunk.iter().copied().map(button).collect())
+        .collect();
+    rows.push(vec![InlineKeyboardButton::callback(
+        "✍️ Другое число",
+        format!("{REVIEW_SCORE_PREFIX}manual"),
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
 pub(super) fn assignment_files_keyboard(
     assignment: &Assignment,
     files: &[StoredFileMetadata],
@@ -435,6 +503,32 @@ pub(super) fn format_file_size(size_bytes: u64) -> String {
     }
 }
 
+pub(super) fn gradebook_students_keyboard(
+    course_id: TeachingCourseId,
+    students: &[StudentGrades],
+) -> InlineKeyboardMarkup {
+    let mut rows = students
+        .iter()
+        .map(|student| {
+            vec![InlineKeyboardButton::callback(
+                button_label(&format!(
+                    "👤 {} · {} из {}",
+                    student.display_name,
+                    student.total(),
+                    student.max_total()
+                )),
+                format!("student:{}", student.student_id.as_uuid()),
+            )]
+        })
+        .collect::<Vec<_>>();
+    rows.push(vec![InlineKeyboardButton::callback(
+        "⬅️ К курсу",
+        format!("course:{}", course_id.as_uuid()),
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
+}
+
 pub(super) fn assignment_students_keyboard(
     assignment_id: crate::domain::AssignmentId,
     students: &[AssignmentStudentSummary],
@@ -472,6 +566,48 @@ pub(super) fn deadline_left(deadline: chrono::DateTime<Utc>, now: chrono::DateTi
     } else {
         format!("осталось {} мин", left.num_minutes().max(1))
     }
+}
+
+
+pub(super) fn grading_lines(
+    assignment: &Assignment,
+    now: DateTime<Utc>,
+    timezone: &BotTimezone,
+) -> String {
+    let Some(max_score) = assignment.grading().max_score() else {
+        return String::new();
+    };
+
+    let mut lines = format!("\n🏅 Оценивание: до {max_score} баллов");
+    if assignment.late_policy().is_none() {
+        return lines;
+    }
+
+    lines.push_str(&format!(
+        "\n🚪 Приём закрыт после: {}",
+        timezone.format(assignment.closes_at()),
+    ));
+
+    let penalty = assignment.penalty_at(now);
+    if penalty > 0 && now <= assignment.closes_at() {
+        lines.push_str(&format!("\n⏳ Штраф за опоздание сейчас: −{penalty}"));
+    }
+
+    lines
+}
+
+// Студенту показывается вся арифметика
+pub(super) fn grade_line(grade: Grade, max_score: u16) -> String {
+    if grade.penalty() == 0 {
+        return format!("🏅 Балл: {} из {max_score}", grade.final_score());
+    }
+
+    format!(
+        "🏅 Балл: {} − {} = {} из {max_score} (штраф за опоздание)",
+        grade.raw_score(),
+        grade.penalty(),
+        grade.final_score(),
+    )
 }
 
 pub(super) fn submission_status(status: SubmissionStatus) -> &'static str {

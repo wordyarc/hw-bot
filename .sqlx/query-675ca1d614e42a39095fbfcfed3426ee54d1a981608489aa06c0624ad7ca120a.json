@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n            reviewed_by, reviewed_at, review_comment\n        from submissions\n        where assignment_id = $1\n          and student_id = $2\n        order by attempt_number\n        ",
+  "query": "\n        select\n            id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score\n        from submissions\n        where assignment_id = $1\n          and student_id = $2\n        order by attempt_number\n        ",
   "describe": {
     "columns": [
       {
@@ -112,6 +112,50 @@
             "name": "review_comment"
           }
         }
+      },
+      {
+        "ordinal": 10,
+        "name": "raw_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "raw_score"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "late_periods",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "late_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "final_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "final_score"
+          }
+        }
       }
     ],
     "parameters": {
@@ -130,8 +174,12 @@
       false,
       true,
       true,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "723cad670649fbab3606b1316e4f52b2dbc3f58cf5aa3ceb2d948bd83773497a"
+  "hash": "675ca1d614e42a39095fbfcfed3426ee54d1a981608489aa06c0624ad7ca120a"
 }

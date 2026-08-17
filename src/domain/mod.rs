@@ -13,7 +13,10 @@ mod user;
 mod tests;
 
 pub use academic::{EducationLevel, StudentGroup, StudyProgram, Subject, TeachingCourse};
-pub use assignment::{Assignment, AssignmentStatus, MAX_ATTEMPTS};
+pub use assignment::{
+    Assignment, AssignmentStatus, Grading, LatePolicy, MAX_ATTEMPTS, MAX_LATE_PENALTY,
+    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_SCORE,
+};
 pub use attempts::StudentAssignmentProgress;
 pub use error::{DomainError, DomainResult};
 pub use files::{
@@ -24,7 +27,7 @@ pub use ids::{
     TelegramUserId, UserId,
 };
 pub use invites::InviteGeneration;
-pub use submission::{ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
+pub use submission::{Grade, ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
 pub use text::{
     ASSIGNMENT_TITLE_MAX_LEN, DISPLAY_NAME_MAX_LEN, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN,
     SUBJECT_NAME_MAX_LEN, USER_TEXT_MAX_LEN,

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
     ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, NonEmptyString,
@@ -7,6 +7,10 @@ use crate::domain::{
 use crate::string_enum::str_enum;
 
 pub const MAX_ATTEMPTS: u16 = i16::MAX as u16;
+pub const MAX_SCORE: u16 = 100;
+pub const MAX_LATE_PERIOD_DAYS: u16 = 365;
+pub const MAX_LATE_PENALTY: u16 = MAX_SCORE;
+pub const MAX_LATE_PERIODS: u16 = 100;
 
 str_enum! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +18,61 @@ str_enum! {
         Draft => "draft",
         Published => "published",
         Archived => "archived",
+    }
+}
+
+/// Шкала оценивания задания. Пятибалльная и десятибалльная - частные случаи одного числа: от вида
+/// шкалы не зависит ничего, кроме формы ввода балла.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Grading {
+    #[default]
+    PassFail,
+    Score {
+        max_score: u16,
+    },
+}
+
+impl Grading {
+    pub fn scored(max_score: u16) -> DomainResult<Self> {
+        if max_score == 0 || max_score > MAX_SCORE {
+            return Err(DomainError::InvalidMaxScore {
+                value: max_score,
+                max: MAX_SCORE,
+            });
+        }
+
+        Ok(Self::Score { max_score })
+    }
+
+    /// Отсутствие максимума - это «зачёт/незачёт», поэтому колонка в БД одна и nullable.
+    pub fn from_max_score(max_score: Option<u16>) -> DomainResult<Self> {
+        max_score.map_or(Ok(Self::PassFail), Self::scored)
+    }
+
+    pub fn max_score(self) -> Option<u16> {
+        match self {
+            Self::PassFail => None,
+            Self::Score { max_score } => Some(max_score),
+        }
+    }
+
+    pub fn is_scored(self) -> bool {
+        matches!(self, Self::Score { .. })
+    }
+
+    pub fn validate_score(self, score: Option<u16>) -> DomainResult<Option<u16>> {
+        match (self, score) {
+            (Self::PassFail, None) => Ok(None),
+            (Self::PassFail, Some(_)) => Err(DomainError::ScoreNotAllowed),
+            (Self::Score { .. }, None) => Err(DomainError::ScoreRequired),
+            (Self::Score { max_score }, Some(value)) if value > max_score => {
+                Err(DomainError::ScoreOutOfRange {
+                    value,
+                    max: max_score,
+                })
+            }
+            (Self::Score { .. }, Some(value)) => Ok(Some(value)),
+        }
     }
 }
 
@@ -26,11 +85,77 @@ pub struct Assignment {
     title: NonEmptyString,
     body: NonEmptyString,
     max_attempts: u16,
+    grading: Grading,
+    late_policy: Option<LatePolicy>,
     status: AssignmentStatus,
     created_by: UserId,
     created_at: DateTime<Utc>,
     deadline_at: DateTime<Utc>,
     published_at: Option<DateTime<Utc>>,
+}
+
+/// Политика опозданий: шаг, штраф за шаг и число шагов до закрытия приёма. Три значения задаются
+/// вместе, поэтому их отсутствие выражено `Option<LatePolicy>`
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LatePolicy {
+    period_days: u16,
+    penalty: u16,
+    max_periods: u16,
+}
+
+impl LatePolicy {
+    pub fn new(period_days: u16, penalty: u16, max_periods: u16) -> DomainResult<Self> {
+        check_range("period_days", period_days, MAX_LATE_PERIOD_DAYS)?;
+        check_range("penalty", penalty, MAX_LATE_PENALTY)?;
+        check_range("max_periods", max_periods, MAX_LATE_PERIODS)?;
+
+        Ok(Self {
+            period_days,
+            penalty,
+            max_periods,
+        })
+    }
+
+    pub fn period_days(self) -> u16 {
+        self.period_days
+    }
+
+    pub fn penalty(self) -> u16 {
+        self.penalty
+    }
+
+    pub fn max_periods(self) -> u16 {
+        self.max_periods
+    }
+
+    fn late_periods(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u16 {
+        if at <= deadline_at {
+            return 0;
+        }
+
+        let lateness = (at - deadline_at).num_seconds();
+        let period = i64::from(self.period_days) * 24 * 60 * 60;
+        let periods = (lateness + period - 1) / period;
+
+        u16::try_from(periods).unwrap_or(u16::MAX)
+    }
+
+    fn closes_at(self, deadline_at: DateTime<Utc>) -> DateTime<Utc> {
+        deadline_at + Duration::days(i64::from(self.period_days) * i64::from(self.max_periods))
+    }
+
+    /// Штраф выше максимума шкалы всё равно даёт ноль, переполнение зажимается
+    fn penalty_for(self, late_periods: u16) -> u16 {
+        late_periods.saturating_mul(self.penalty).min(MAX_SCORE)
+    }
+}
+
+fn check_range(field: &'static str, value: u16, max: u16) -> DomainResult<()> {
+    if value == 0 || value > max {
+        return Err(DomainError::InvalidLatePolicy { field, value, max });
+    }
+
+    Ok(())
 }
 
 /// Поля задания россыпью: `restore` собирает сущность из них по именам, чтобы соседние
@@ -43,6 +168,8 @@ pub(crate) struct AssignmentParts {
     pub title: String,
     pub body: String,
     pub max_attempts: u16,
+    pub grading: Grading,
+    pub late_policy: Option<LatePolicy>,
     pub status: AssignmentStatus,
     pub created_by: UserId,
     pub created_at: DateTime<Utc>,
@@ -60,6 +187,11 @@ impl Assignment {
 
         if parts.deadline_at <= parts.created_at {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
+        }
+
+        // Штраф выражен в баллах, поэтому у «зачёт/незачёт» политика опозданий смысла не имеет.
+        if parts.late_policy.is_some() && !parts.grading.is_scored() {
+            return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
 
         // An archived assignment may or may not have been published before, so it is the only
@@ -86,6 +218,8 @@ impl Assignment {
             )?,
             body: NonEmptyString::new_bounded("assignment.body", parts.body, USER_TEXT_MAX_LEN)?,
             max_attempts: parts.max_attempts,
+            grading: parts.grading,
+            late_policy: parts.late_policy,
             status: parts.status,
             created_by: parts.created_by,
             created_at: parts.created_at,
@@ -102,6 +236,8 @@ impl Assignment {
         title: impl Into<String>,
         body: impl Into<String>,
         max_attempts: u16,
+        grading: Grading,
+        late_policy: Option<LatePolicy>,
         created_at: DateTime<Utc>,
         deadline_at: DateTime<Utc>,
     ) -> DomainResult<Self> {
@@ -119,6 +255,8 @@ impl Assignment {
             title: title.into(),
             body: body.into(),
             max_attempts,
+            grading,
+            late_policy,
             status: AssignmentStatus::Draft,
             created_by: created_by.id(),
             created_at,
@@ -184,6 +322,29 @@ impl Assignment {
         Ok(())
     }
 
+    pub fn change_grading(
+        &mut self,
+        teaching_course: &TeachingCourse,
+        actor: &User,
+        grading: Grading,
+        late_policy: Option<LatePolicy>,
+    ) -> DomainResult<()> {
+        self.ensure_managed_by(teaching_course, actor, "change assignment grading")?;
+
+        if self.status == AssignmentStatus::Archived {
+            return Err(DomainError::AssignmentIsArchived);
+        }
+
+        if late_policy.is_some() && !grading.is_scored() {
+            return Err(DomainError::LatePolicyRequiresScoredGrading);
+        }
+
+        self.grading = grading;
+        self.late_policy = late_policy;
+
+        Ok(())
+    }
+
     pub fn id(&self) -> AssignmentId {
         self.id
     }
@@ -235,6 +396,48 @@ impl Assignment {
         self.max_attempts
     }
 
+    pub fn grading(&self) -> Grading {
+        self.grading
+    }
+
+    pub fn late_policy(&self) -> Option<LatePolicy> {
+        self.late_policy
+    }
+
+    pub fn closes_at(&self) -> DateTime<Utc> {
+        self.late_policy.map_or(self.deadline_at, |policy| {
+            policy.closes_at(self.deadline_at)
+        })
+    }
+
+    pub fn late_periods_at(&self, at: DateTime<Utc>) -> u16 {
+        self.late_policy
+            .map_or(0, |policy| policy.late_periods(self.deadline_at, at))
+    }
+
+    pub fn penalty_at(&self, at: DateTime<Utc>) -> u16 {
+        self.late_policy
+            .map_or(0, |policy| policy.penalty_for(self.late_periods_at(at)))
+    }
+
+    pub fn ensure_open_for_submission(&self, at: DateTime<Utc>) -> DomainResult<()> {
+        let closes_at = self.closes_at();
+        if at <= closes_at {
+            return Ok(());
+        }
+
+        Err(match self.late_policy {
+            None => DomainError::AssignmentDeadlineExceeded {
+                deadline_at: self.deadline_at,
+                submitted_at: at,
+            },
+            Some(_) => DomainError::SubmissionWindowClosed {
+                closes_at,
+                submitted_at: at,
+            },
+        })
+    }
+
     pub fn status(&self) -> AssignmentStatus {
         self.status
     }
@@ -282,6 +485,8 @@ mod tests {
             title: "Rust ownership".to_owned(),
             body: "Send a pull request link.".to_owned(),
             max_attempts,
+            grading: Grading::PassFail,
+            late_policy: None,
             status,
             created_by: UserId::new(),
             created_at,
@@ -329,6 +534,53 @@ mod tests {
         assert_eq!(
             restore(AssignmentStatus::Published, 1, None).unwrap_err(),
             DomainError::InvalidAssignmentPublishedState
+        );
+    }
+
+    #[test]
+    fn grading_rejects_max_score_outside_the_scale() {
+        for value in [0, MAX_SCORE + 1] {
+            assert_eq!(
+                Grading::scored(value).unwrap_err(),
+                DomainError::InvalidMaxScore {
+                    value,
+                    max: MAX_SCORE,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn missing_max_score_means_pass_fail() {
+        assert_eq!(Grading::from_max_score(None).unwrap(), Grading::PassFail);
+        assert_eq!(
+            Grading::from_max_score(Some(5)).unwrap(),
+            Grading::Score { max_score: 5 }
+        );
+    }
+
+    #[test]
+    fn scored_grading_requires_a_score_within_the_scale() {
+        let grading = Grading::scored(5).unwrap();
+
+        assert_eq!(grading.validate_score(Some(0)).unwrap(), Some(0));
+        assert_eq!(grading.validate_score(Some(5)).unwrap(), Some(5));
+        assert_eq!(
+            grading.validate_score(Some(6)).unwrap_err(),
+            DomainError::ScoreOutOfRange { value: 6, max: 5 }
+        );
+        assert_eq!(
+            grading.validate_score(None).unwrap_err(),
+            DomainError::ScoreRequired
+        );
+    }
+
+    #[test]
+    fn pass_fail_grading_rejects_any_score() {
+        assert_eq!(Grading::PassFail.validate_score(None).unwrap(), None);
+        assert_eq!(
+            Grading::PassFail.validate_score(Some(1)).unwrap_err(),
+            DomainError::ScoreNotAllowed
         );
     }
 

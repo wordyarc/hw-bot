@@ -7,12 +7,45 @@ use uuid::Uuid;
 
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    AssignmentId, DomainError, Role, Submission, SubmissionHistory, SubmissionId, SubmissionParts,
-    SubmissionStatus, User, UserId,
+    AssignmentId, DomainError, Role, StudentGroupId, Submission, SubmissionHistory, SubmissionId,
+    SubmissionParts, SubmissionStatus, TeachingCourseId, User, UserId,
 };
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const STATUS: &str = "submissions.status";
+const RAW_SCORE: &str = "submissions.raw_score";
+const LATE_PERIODS: &str = "submissions.late_periods";
+const PENALTY: &str = "submissions.penalty";
+const FINAL_SCORE: &str = "submissions.final_score";
+const MAX_SCORE: &str = "assignments.max_score";
+
+/// Оценка идет четырьмя колонками, но пишется и читается только целиком.
+struct GradeColumns {
+    raw_score: Option<i16>,
+    late_periods: Option<i16>,
+    penalty: Option<i16>,
+    final_score: Option<i16>,
+}
+
+impl GradeColumns {
+    fn of(submission: &Submission) -> DbResult<Self> {
+        let Some(grade) = submission.grade() else {
+            return Ok(Self {
+                raw_score: None,
+                late_periods: None,
+                penalty: None,
+                final_score: None,
+            });
+        };
+
+        Ok(Self {
+            raw_score: Some(checked_num_cast(RAW_SCORE, grade.raw_score())?),
+            late_periods: Some(checked_num_cast(LATE_PERIODS, grade.late_periods())?),
+            penalty: Some(checked_num_cast(PENALTY, grade.penalty())?),
+            final_score: Some(checked_num_cast(FINAL_SCORE, grade.final_score())?),
+        })
+    }
+}
 
 pub async fn find_by_id<'e, E>(executor: E, id: SubmissionId) -> DbResult<Option<Submission>>
 where
@@ -23,7 +56,7 @@ where
         r#"
         select
             id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment
+            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score
         from submissions
         where id = $1
         "#,
@@ -39,13 +72,15 @@ pub async fn insert<'e, E>(executor: E, submission: &Submission) -> DbResult<()>
 where
     E: PgExecutor<'e>,
 {
+    let grade = GradeColumns::of(submission)?;
+
     sqlx::query!(
         r#"
         insert into submissions (
             id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment
+            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         "#,
         submission.id().as_uuid(),
         submission.assignment_id().as_uuid(),
@@ -57,6 +92,10 @@ where
         submission.reviewed_by().map(UserId::as_uuid),
         submission.reviewed_at(),
         submission.review_comment().map(|comment| comment.as_str()),
+        grade.raw_score,
+        grade.late_periods,
+        grade.penalty,
+        grade.final_score,
     )
     .execute(executor)
     .await?;
@@ -74,6 +113,8 @@ where
         });
     }
 
+    let grade = GradeColumns::of(submission)?;
+
     let result = sqlx::query!(
         r#"
         update submissions
@@ -81,7 +122,11 @@ where
             status = $2,
             reviewed_by = $3,
             reviewed_at = $4,
-            review_comment = $5
+            review_comment = $5,
+            raw_score = $6,
+            late_periods = $7,
+            penalty = $8,
+            final_score = $9
         where id = $1
           and status = 'pending_review'
         "#,
@@ -90,6 +135,10 @@ where
         submission.reviewed_by().map(UserId::as_uuid),
         submission.reviewed_at(),
         submission.review_comment().map(|comment| comment.as_str()),
+        grade.raw_score,
+        grade.late_periods,
+        grade.penalty,
+        grade.final_score,
     )
     .execute(executor)
     .await?;
@@ -221,7 +270,7 @@ where
         r#"
         select
             id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment
+            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score
         from submissions
         where assignment_id = $1
           and student_id = $2
@@ -234,6 +283,80 @@ where
     .await?
     .into_iter()
     .map(Submission::try_from)
+    .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct CourseGradeRow {
+    pub student_id: UserId,
+    pub display_name: String,
+    pub assignment: Option<CourseAssignmentGrade>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CourseAssignmentGrade {
+    pub assignment_id: AssignmentId,
+    pub title: String,
+    pub max_score: u16,
+    pub final_score: Option<u16>,
+}
+
+/// Сводка одним стейтментом: студенты группы слева, оценочные задания курса и принятые сдачи
+/// справа. left joins обязательны - студент без единой сдачи должен вернуться нулевой
+/// строкой, а не пропасть из ведомости.
+pub async fn course_grades<'e, E>(
+    executor: E,
+    teaching_course_id: TeachingCourseId,
+    student_group_id: StudentGroupId,
+) -> DbResult<Vec<CourseGradeRow>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        select
+            students.id as "student_id!",
+            students.display_name as "display_name!",
+            assignments.id as "assignment_id?",
+            assignments.title as "assignment_title?",
+            assignments.max_score as "max_score?",
+            submissions.final_score as "final_score?"
+        from users students
+        left join assignments
+          on assignments.teaching_course_id = $1
+         and assignments.max_score is not null
+         and assignments.status <> 'draft'
+        left join submissions
+          on submissions.assignment_id = assignments.id
+         and submissions.student_id = students.id
+         and submissions.status = 'accepted'
+        where students.role = 'student'
+          and students.student_group_id = $2
+        order by students.display_name, students.id, assignments.deadline_at, assignments.id
+        "#,
+        teaching_course_id.as_uuid(),
+        student_group_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(|row| {
+        let assignment = match (row.assignment_id, row.assignment_title, row.max_score) {
+            (Some(id), Some(title), Some(max_score)) => Some(CourseAssignmentGrade {
+                assignment_id: AssignmentId::from_uuid(id),
+                title,
+                max_score: checked_num_cast(MAX_SCORE, max_score)?,
+                final_score: cast_score(FINAL_SCORE, row.final_score)?,
+            }),
+            _ => None,
+        };
+
+        Ok(CourseGradeRow {
+            student_id: UserId::from_uuid(row.student_id),
+            display_name: row.display_name,
+            assignment,
+        })
+    })
     .collect()
 }
 
@@ -396,6 +519,16 @@ struct SubmissionRow {
     reviewed_by: Option<Uuid>,
     reviewed_at: Option<DateTime<Utc>>,
     review_comment: Option<String>,
+    raw_score: Option<i16>,
+    late_periods: Option<i16>,
+    penalty: Option<i16>,
+    final_score: Option<i16>,
+}
+
+fn cast_score(column: &'static str, value: Option<i16>) -> DbResult<Option<u16>> {
+    value
+        .map(|value| checked_num_cast(column, value))
+        .transpose()
 }
 
 impl TryFrom<SubmissionRow> for Submission {
@@ -417,6 +550,10 @@ impl TryFrom<SubmissionRow> for Submission {
             reviewed_by: row.reviewed_by.map(UserId::from_uuid),
             reviewed_at: row.reviewed_at,
             review_comment: row.review_comment,
+            raw_score: cast_score(RAW_SCORE, row.raw_score)?,
+            late_periods: cast_score(LATE_PERIODS, row.late_periods)?,
+            penalty: cast_score(PENALTY, row.penalty)?,
+            final_score: cast_score(FINAL_SCORE, row.final_score)?,
         })?)
     }
 }

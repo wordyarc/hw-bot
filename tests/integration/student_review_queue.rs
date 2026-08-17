@@ -56,6 +56,7 @@ async fn a_reviewed_submission_leaves_the_queue() {
             &app.fixture.assignment,
             &app.fixture.course,
             &app.fixture.teacher,
+            None,
             "Принято",
             Utc::now(),
         )

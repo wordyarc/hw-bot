@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update assignments\n        set\n            status = $2,\n            deadline_at = $3,\n            published_at = $4,\n            max_score = $5,\n            late_period_days = $6,\n            late_penalty = $7,\n            late_max_periods = $8,\n            revision = revision + 1\n        where id = $1\n          and revision = $9\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3104bec3d34c6ca2f77ebd49ef7d52ac5e9bab04af790ce62ed86a2d23964bbc"
+}

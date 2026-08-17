@@ -5,9 +5,9 @@ use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, StoredFileMetadata,
-    StudentAssignmentProgress, Subject, Submission, SubmissionHistory, TeachingCourse,
-    TeachingCourseId, User, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
+    StoredFileMetadata, StudentAssignmentProgress, Subject, Submission, SubmissionHistory,
+    TeachingCourse, TeachingCourseId, User, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -17,6 +17,8 @@ pub struct CreateAssignment {
     pub title: String,
     pub body: String,
     pub max_attempts: u16,
+    pub grading: Grading,
+    pub late_policy: Option<LatePolicy>,
     pub created_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
 }
@@ -26,6 +28,14 @@ pub struct ChangeDeadline {
     pub assignment_id: AssignmentId,
     pub actor: Actor,
     pub deadline_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChangeGrading {
+    pub assignment_id: AssignmentId,
+    pub actor: Actor,
+    pub grading: Grading,
+    pub late_policy: Option<LatePolicy>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +103,8 @@ impl AssignmentService {
             command.title,
             command.body,
             command.max_attempts,
+            command.grading,
+            command.late_policy,
             command.created_at,
             command.deadline_at,
         )?;
@@ -130,6 +142,17 @@ impl AssignmentService {
             command.actor,
             |assignment, course, actor| {
                 assignment.change_deadline(course, actor, command.deadline_at)
+            },
+        )
+        .await
+    }
+
+    pub async fn change_grading(&self, command: ChangeGrading) -> AppResult<Assignment> {
+        self.change(
+            command.assignment_id,
+            command.actor,
+            |assignment, course, actor| {
+                assignment.change_grading(course, actor, command.grading, command.late_policy)
             },
         )
         .await

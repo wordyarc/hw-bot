@@ -79,6 +79,7 @@ impl NotificationWorker {
             notification.outcome,
             &notification.subject_name,
             &notification.assignment_title,
+            notification.final_score.zip(notification.max_score),
             &notification.review_comment,
         );
 
@@ -214,6 +215,7 @@ fn render_review_notification(
     outcome: SubmissionStatus,
     subject_name: &str,
     assignment_title: &str,
+    score: Option<(u16, u16)>,
     review_comment: &str,
 ) -> String {
     let verdict = match outcome {
@@ -221,8 +223,11 @@ fn render_review_notification(
         SubmissionStatus::Rejected => "❌ Работа отклонена.",
         SubmissionStatus::PendingReview => unreachable!("outbox contains only completed reviews"),
     };
+    let score = score
+        .map(|(final_score, max_score)| format!("\n🏅 Балл: {final_score} из {max_score}"))
+        .unwrap_or_default();
     let text = format!(
-        "{verdict}\n📘 Предмет: {subject_name}\n📚 Задание: {assignment_title}\n\n\
+        "{verdict}\n📘 Предмет: {subject_name}\n📚 Задание: {assignment_title}{score}\n\n\
          💬 Комментарий преподавателя:\n{review_comment}"
     );
 
@@ -281,6 +286,7 @@ mod tests {
             SubmissionStatus::Rejected,
             "Backend development",
             "Ownership",
+            None,
             &"x".repeat(TELEGRAM_MESSAGE_LIMIT * 2),
         );
 
@@ -294,6 +300,7 @@ mod tests {
             SubmissionStatus::Accepted,
             "Backend development",
             "Ownership",
+            None,
             "95/100",
         );
 
@@ -302,6 +309,32 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("Задание: Ownership"), "{message}");
+    }
+
+    #[test]
+    fn an_accepted_scored_review_names_the_score() {
+        let message = render_review_notification(
+            SubmissionStatus::Accepted,
+            "Backend development",
+            "Ownership",
+            Some((4, 5)),
+            "Хорошо",
+        );
+
+        assert!(message.contains("Балл: 4 из 5"), "{message}");
+    }
+
+    #[test]
+    fn a_pass_fail_review_names_no_score() {
+        let message = render_review_notification(
+            SubmissionStatus::Accepted,
+            "Backend development",
+            "Ownership",
+            None,
+            "Зачтено",
+        );
+
+        assert!(!message.contains("Балл"), "{message}");
     }
 
     #[test]

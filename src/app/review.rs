@@ -28,6 +28,7 @@ pub struct ReviewSubmission {
     pub submission_id: SubmissionId,
     pub actor: Actor,
     pub decision: ReviewDecision,
+    pub score: Option<u16>,
     pub comment: String,
     pub reviewed_at: DateTime<Utc>,
 }
@@ -113,6 +114,7 @@ impl ReviewService {
                 &assignment,
                 &teaching_course,
                 &reviewer,
+                command.score,
                 command.comment,
                 command.reviewed_at,
             )?,

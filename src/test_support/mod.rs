@@ -1,9 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainResult, EducationLevel, Role, StudentGroup, StudentGroupId,
-    StudyProgram, Subject, SubjectId, Submission, SubmissionHistory, SubmissionId, TeachingCourse,
-    TeachingCourseId, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, DomainResult, EducationLevel, Grading, LatePolicy, Role,
+    StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission, SubmissionHistory,
+    SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
 };
 
 pub const GROUP_CODE: &str = "B9122-02.03.21";
@@ -98,6 +98,8 @@ pub fn assignment<'a>(course: &'a TeachingCourse, author: &'a User) -> Assignmen
         title: ASSIGNMENT_TITLE.to_owned(),
         body: ASSIGNMENT_BODY.to_owned(),
         max_attempts: 2,
+        grading: Grading::PassFail,
+        late_policy: None,
         created_at: t0(),
         deadline_at: None,
         deadline_offset: Duration::days(7),
@@ -111,6 +113,8 @@ pub struct AssignmentBuilder<'a> {
     title: String,
     body: String,
     max_attempts: u16,
+    grading: Grading,
+    late_policy: Option<LatePolicy>,
     created_at: DateTime<Utc>,
     deadline_at: Option<DateTime<Utc>>,
     deadline_offset: Duration,
@@ -135,6 +139,24 @@ impl<'a> AssignmentBuilder<'a> {
 
     pub fn created_at(mut self, value: DateTime<Utc>) -> Self {
         self.created_at = value;
+        self
+    }
+
+    #[track_caller]
+    pub fn scored(mut self, max_score: u16) -> Self {
+        self.grading = Grading::scored(max_score).expect("valid max score");
+        self
+    }
+
+    pub fn grading(mut self, value: Grading) -> Self {
+        self.grading = value;
+        self
+    }
+
+    #[track_caller]
+    pub fn late_policy(mut self, period_days: u16, penalty: u16, max_periods: u16) -> Self {
+        self.late_policy =
+            Some(LatePolicy::new(period_days, penalty, max_periods).expect("valid late policy"));
         self
     }
 
@@ -173,6 +195,8 @@ impl<'a> AssignmentBuilder<'a> {
             self.title,
             self.body,
             self.max_attempts,
+            self.grading,
+            self.late_policy,
             self.created_at,
             deadline_at,
         )?;

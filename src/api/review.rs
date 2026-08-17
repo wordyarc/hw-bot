@@ -15,6 +15,8 @@ use crate::domain::{Assignment, ReviewDecision, SubmissionId, User};
 #[serde(deny_unknown_fields)]
 pub struct ReviewSubmissionRequest {
     decision: ReviewDecision,
+    #[serde(default)]
+    score: Option<u16>,
     comment: String,
 }
 
@@ -31,6 +33,7 @@ struct QueuedAssignmentResponse {
     title: String,
     body: String,
     max_attempts: u16,
+    max_score: Option<u16>,
     deadline_at: DateTime<Utc>,
 }
 
@@ -58,6 +61,7 @@ impl From<&Assignment> for QueuedAssignmentResponse {
             title: assignment.title().as_str().to_owned(),
             body: assignment.body().as_str().to_owned(),
             max_attempts: assignment.max_attempts(),
+            max_score: assignment.grading().max_score(),
             deadline_at: assignment.deadline_at(),
         }
     }
@@ -113,6 +117,7 @@ pub async fn review_submission(
         submission_id: SubmissionId::from_uuid(submission_id),
         actor: reviewer,
         decision: request.decision,
+        score: request.score,
         comment: request.comment,
         reviewed_at: Utc::now(),
     };

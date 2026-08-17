@@ -8,12 +8,12 @@ use uuid::Uuid;
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{
-    ChangeDeadline, CreateAssignment, GrantExtraAttempts, StudentAssignment,
+    ChangeDeadline, ChangeGrading, CreateAssignment, GrantExtraAttempts, StudentAssignment,
     StudentAssignmentDetails,
 };
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, FilePresentation, StoredFileMetadata,
-    StudentAssignmentProgress, TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentStatus, FilePresentation, Grading, LatePolicy,
+    StoredFileMetadata, StudentAssignmentProgress, TeachingCourseId, UserId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -22,13 +22,66 @@ pub struct CreateAssignmentRequest {
     title: String,
     body: String,
     max_attempts: u16,
+    #[serde(default)]
+    max_score: Option<u16>,
+    #[serde(flatten)]
+    late_policy: LatePolicyRequest,
     deadline_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct LatePolicyRequest {
+    #[serde(default)]
+    late_period_days: Option<u16>,
+    #[serde(default)]
+    late_penalty: Option<u16>,
+    #[serde(default)]
+    late_max_periods: Option<u16>,
+}
+
+impl LatePolicyRequest {
+    fn parse(self) -> Result<Option<LatePolicy>, ApiError> {
+        match (
+            self.late_period_days,
+            self.late_penalty,
+            self.late_max_periods,
+        ) {
+            (None, None, None) => Ok(None),
+            (Some(period_days), Some(penalty), Some(max_periods)) => {
+                Ok(Some(LatePolicy::new(period_days, penalty, max_periods)?))
+            }
+            _ => Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_input",
+                "late policy needs late_period_days, late_penalty and late_max_periods together",
+            )),
+        }
+    }
+
+    fn of(assignment: &Assignment) -> Self {
+        assignment
+            .late_policy()
+            .map_or_else(Self::default, |policy| Self {
+                late_period_days: Some(policy.period_days()),
+                late_penalty: Some(policy.penalty()),
+                late_max_periods: Some(policy.max_periods()),
+            })
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChangeDeadlineRequest {
     deadline_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeGradingRequest {
+    #[serde(default)]
+    max_score: Option<u16>,
+    #[serde(flatten)]
+    late_policy: LatePolicyRequest,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +116,10 @@ pub struct AssignmentResponse {
     title: String,
     body: String,
     max_attempts: u16,
+    max_score: Option<u16>,
+    #[serde(flatten)]
+    late_policy: LatePolicyRequest,
+    closes_at: DateTime<Utc>,
     status: AssignmentStatus,
     created_by: Uuid,
     created_at: DateTime<Utc>,
@@ -80,6 +137,9 @@ impl From<&Assignment> for AssignmentResponse {
             title: assignment.title().as_str().to_owned(),
             body: assignment.body().as_str().to_owned(),
             max_attempts: assignment.max_attempts(),
+            max_score: assignment.grading().max_score(),
+            late_policy: LatePolicyRequest::of(assignment),
+            closes_at: assignment.closes_at(),
             status: assignment.status(),
             created_by: assignment.created_by().as_uuid(),
             created_at: assignment.created_at(),
@@ -240,6 +300,8 @@ pub async fn create_assignment(
         title: request.title,
         body: request.body,
         max_attempts: request.max_attempts,
+        grading: Grading::from_max_score(request.max_score)?,
+        late_policy: request.late_policy.parse()?,
         created_at: Utc::now(),
         deadline_at: request.deadline_at,
     };
@@ -296,6 +358,28 @@ pub async fn change_deadline(
         .application
         .assignments
         .change_deadline(command)
+        .await?;
+
+    Ok(Json(AssignmentResponse::from(&assignment)))
+}
+
+pub async fn change_grading(
+    State(state): State<AppState>,
+    actor: Actor,
+    Path(assignment_id): Path<Uuid>,
+    JsonBody(request): JsonBody<ChangeGradingRequest>,
+) -> Result<Json<AssignmentResponse>, ApiError> {
+    let command = ChangeGrading {
+        assignment_id: AssignmentId::from_uuid(assignment_id),
+        actor,
+        grading: Grading::from_max_score(request.max_score)?,
+        late_policy: request.late_policy.parse()?,
+    };
+
+    let assignment = state
+        .application
+        .assignments
+        .change_grading(command)
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))

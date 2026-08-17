@@ -14,7 +14,7 @@ use uuid::Uuid;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::harness::{TestApp, test_file_policy};
+use crate::harness::{TestApp, submission_id, test_file_policy};
 
 const BOT_MESSAGE_ID: i32 = 900;
 const ATTEMPTS_CALLBACK: &str = "maxattempts:3";
@@ -52,8 +52,10 @@ async fn teacher_creates_a_draft_through_telegram() {
             "Solve the task and send a pull request.",
         ),
         message_update(7, app.teacher(), 4, "3"),
-        message_update(8, app.teacher(), 5, &deadline_input),
-        callback_update(9, app.teacher(), "file:finish", BOT_MESSAGE_ID),
+        callback_update(8, app.teacher(), "grading:5", BOT_MESSAGE_ID),
+        callback_update(9, app.teacher(), "late:none", BOT_MESSAGE_ID),
+        message_update(10, app.teacher(), 5, &deadline_input),
+        callback_update(11, app.teacher(), "file:finish", BOT_MESSAGE_ID),
     ];
     let telegram = telegram_server(updates).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
@@ -64,11 +66,19 @@ async fn teacher_creates_a_draft_through_telegram() {
     let callbacks = sent_callbacks(&telegram).await;
     telegram.verify().await;
 
-    let (id, status, body, max_attempts, stored_deadline) =
-        created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    let created = created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    let CreatedAssignment {
+        id,
+        status,
+        body,
+        max_attempts,
+        max_score,
+        deadline_at: stored_deadline,
+    } = created;
     assert_eq!(status, "draft");
     assert_eq!(body, "Solve the task and send a pull request.");
     assert_eq!(max_attempts, 3);
+    assert_eq!(max_score, Some(5), "the scale came from a button");
     assert_eq!(stored_deadline, expected_deadline);
     assert!(callbacks.contains(&format!("course:{}", app.course())));
     assert!(callbacks.contains(&format!("create:{}", app.course())));
@@ -247,7 +257,8 @@ async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
         message_update(5, app.teacher(), 2, "Deadline in a week"),
         message_update(6, app.teacher(), 3, "Send a pull request."),
         callback_update(7, app.teacher(), ATTEMPTS_CALLBACK, BOT_MESSAGE_ID),
-        callback_update(8, app.teacher(), "dl:days:7", BOT_MESSAGE_ID),
+        callback_update(8, app.teacher(), "grading:passfail", BOT_MESSAGE_ID),
+        callback_update(9, app.teacher(), "dl:days:7", BOT_MESSAGE_ID),
     ];
     let telegram = telegram_server(updates).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
@@ -261,13 +272,15 @@ async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
         requests.contains(&format!(r#""callback_data":"{ATTEMPTS_CALLBACK}""#)),
         "the keyboard must send exactly what the handler matches; requests:\n{requests}"
     );
-    let (_, status, _, max_attempts, deadline) =
-        created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    let created = created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    let (status, max_attempts, deadline) =
+        (created.status, created.max_attempts, created.deadline_at);
     assert_eq!(status, "draft");
     assert_eq!(
         max_attempts, 3,
         "attempts came from a button, not from text"
     );
+    assert_eq!(created.max_score, None, "the skipped scale means pass/fail");
     let local = deadline.with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap());
     assert_eq!(
         local.date_naive(),
@@ -307,9 +320,10 @@ async fn teacher_picks_a_deadline_from_the_calendar() {
         message_update(5, app.teacher(), 2, "Calendar draft"),
         message_update(6, app.teacher(), 3, "Send a pull request."),
         callback_update(7, app.teacher(), "maxattempts:1", BOT_MESSAGE_ID),
-        callback_update(8, app.teacher(), "dl:calendar", BOT_MESSAGE_ID),
+        callback_update(8, app.teacher(), "grading:passfail", BOT_MESSAGE_ID),
+        callback_update(9, app.teacher(), "dl:calendar", BOT_MESSAGE_ID),
         callback_update(
-            9,
+            10,
             app.teacher(),
             &format!("cal:pick:{}", picked.format("%Y-%m-%d")),
             BOT_MESSAGE_ID,
@@ -323,8 +337,9 @@ async fn teacher_picks_a_deadline_from_the_calendar() {
     let requests = recorded_requests(&telegram).await;
     telegram.verify().await;
 
-    let (_, _, _, _, deadline) =
-        created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    let deadline = created
+        .unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"))
+        .deadline_at;
     assert_eq!(
         deadline
             .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
@@ -359,17 +374,18 @@ async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
         message_update(5, app.teacher(), 2, "Draft with attachment"),
         message_update(6, app.teacher(), 3, "Read the attached notes."),
         message_update(7, app.teacher(), 4, "2"),
-        message_update(8, app.teacher(), 5, &deadline),
-        callback_update(9, app.teacher(), "file:add", BOT_MESSAGE_ID),
+        callback_update(8, app.teacher(), "grading:passfail", BOT_MESSAGE_ID),
+        message_update(9, app.teacher(), 5, &deadline),
+        callback_update(10, app.teacher(), "file:add", BOT_MESSAGE_ID),
         document_update(
-            10,
+            11,
             app.teacher(),
             6,
             "fixture-document",
             "assignment-note.txt",
             DOCUMENT_FIXTURE.len(),
         ),
-        callback_update(11, app.teacher(), "file:open:0", BOT_MESSAGE_ID),
+        callback_update(12, app.teacher(), "file:open:0", BOT_MESSAGE_ID),
     ];
     let telegram = telegram_server(updates).await;
     mock_file_download(
@@ -999,6 +1015,280 @@ async fn teacher_changes_an_assignment_and_grants_attempts_through_telegram() {
         assert!(callbacks.contains(&expected), "missing callback {expected}");
     }
     assert!(callbacks.iter().all(|callback| callback.len() <= 64));
+}
+
+#[tokio::test]
+async fn teacher_types_a_scale_that_has_no_preset_button() {
+    let app = TestApp::start().await;
+    let deadline_input = deadline_input(Utc::now() + chrono::Duration::days(7));
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("create:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(5, app.teacher(), 2, "Custom scale draft"),
+        message_update(6, app.teacher(), 3, "Send a pull request."),
+        message_update(7, app.teacher(), 4, "2"),
+        callback_update(8, app.teacher(), "grading:manual", BOT_MESSAGE_ID),
+        message_update(9, app.teacher(), 5, "7"),
+        callback_update(10, app.teacher(), "late:none", BOT_MESSAGE_ID),
+        message_update(11, app.teacher(), 6, &deadline_input),
+        callback_update(12, app.teacher(), "file:finish", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let created = wait_for_created_assignment(&app.pool, "Custom scale draft").await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    let created = created.unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"));
+    assert_eq!(created.max_score, Some(7));
+}
+
+#[tokio::test]
+async fn reviewer_enters_a_score_before_the_comment() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "review:next", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("review:accept:{submission}"),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(4, app.teacher(), "score:4", BOT_MESSAGE_ID),
+        message_update(5, app.teacher(), 2, "Хорошо"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    let (status, raw_score, final_score) =
+        reviewed.unwrap_or_else(|| panic!("submission was not reviewed; requests:\n{requests}"));
+    assert_eq!(status, "accepted");
+    assert_eq!(raw_score, Some(4));
+    assert_eq!(final_score, Some(4));
+}
+
+#[tokio::test]
+async fn a_pass_fail_review_never_asks_for_a_score() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "review:next", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("review:accept:{submission}"),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(4, app.teacher(), 2, "Зачтено"),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    let (status, raw_score, _) =
+        reviewed.unwrap_or_else(|| panic!("submission was not reviewed; requests:\n{requests}"));
+    assert_eq!(status, "accepted");
+    assert_eq!(
+        raw_score, None,
+        "the comment followed the decision directly"
+    );
+}
+
+#[tokio::test]
+async fn teacher_picks_a_late_policy_preset_during_creation() {
+    let app = TestApp::start().await;
+    let deadline_input = deadline_input(Utc::now() + chrono::Duration::days(7));
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("create:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(5, app.teacher(), 2, "Late policy draft"),
+        message_update(6, app.teacher(), 3, "Send a pull request."),
+        message_update(7, app.teacher(), 4, "2"),
+        callback_update(8, app.teacher(), "grading:5", BOT_MESSAGE_ID),
+        callback_update(9, app.teacher(), "late:7:1:4", BOT_MESSAGE_ID),
+        message_update(10, app.teacher(), 5, &deadline_input),
+        callback_update(11, app.teacher(), "file:finish", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let created = wait_for_created_assignment(&app.pool, "Late policy draft").await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    let id = created
+        .unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"))
+        .id;
+    let policy = sqlx::query_as::<_, (Option<i16>, Option<i16>, Option<i16>)>(
+        "select late_period_days, late_penalty, late_max_periods from assignments where id = $1",
+    )
+    .bind(id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(policy, (Some(7), Some(1), Some(4)));
+}
+
+#[tokio::test]
+async fn a_pass_fail_draft_is_never_asked_about_late_penalties() {
+    let app = TestApp::start().await;
+    let deadline_input = deadline_input(Utc::now() + chrono::Duration::days(7));
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), "menu:courses", BOT_MESSAGE_ID),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("course:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            4,
+            app.teacher(),
+            &format!("create:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        message_update(5, app.teacher(), 2, "No penalties draft"),
+        message_update(6, app.teacher(), 3, "Send a pull request."),
+        message_update(7, app.teacher(), 4, "2"),
+        callback_update(8, app.teacher(), "grading:passfail", BOT_MESSAGE_ID),
+        message_update(9, app.teacher(), 5, &deadline_input),
+        callback_update(10, app.teacher(), "file:finish", BOT_MESSAGE_ID),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let created = wait_for_created_assignment(&app.pool, "No penalties draft").await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    telegram.verify().await;
+
+    assert!(
+        created.is_some(),
+        "the deadline followed the scale directly; requests:\n{requests}"
+    );
+    assert!(
+        !requests.contains("Штраф за опоздание?"),
+        "requests:\n{requests}"
+    );
+}
+
+#[tokio::test]
+async fn a_student_sees_what_a_late_submission_costs_right_now() {
+    let app = TestApp::start().await;
+    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
+    let updates = vec![
+        message_update(1, app.student(), 1, "/menu"),
+        callback_update(
+            2,
+            app.student(),
+            &format!("assignment:{}", assignment.id().as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_sent_message_count(&telegram, 5).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+
+    assert!(
+        requests.contains("Штраф за опоздание сейчас: −1"),
+        "requests:\n{requests}"
+    );
+    assert!(
+        requests.contains("Приём закрыт после:"),
+        "requests:\n{requests}"
+    );
+}
+
+#[tokio::test]
+async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    app.review_with_score(submission, app.teacher(), "accept", 4, "Ок")
+        .await
+        .ok();
+    let updates = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(
+            2,
+            app.teacher(),
+            &format!("grades:{}", app.course()),
+            BOT_MESSAGE_ID,
+        ),
+        callback_update(
+            3,
+            app.teacher(),
+            &format!("student:{}", app.fixture.student.id().as_uuid()),
+            BOT_MESSAGE_ID,
+        ),
+    ];
+    let telegram = telegram_server(updates).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_sent_message_count(&telegram, 4).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+
+    assert!(
+        requests.contains("👤 Student · 4 из 5"),
+        "the list carries the total; requests:\n{requests}"
+    );
+    assert!(
+        requests.contains("Rust traits · 4 из 5"),
+        "the drill-down carries the per-assignment score; requests:\n{requests}"
+    );
 }
 
 #[tokio::test]
@@ -1939,16 +2229,47 @@ fn callback_update(update_id: u32, user_id: i64, data: &str, message_id: i32) ->
     })
 }
 
-async fn wait_for_created_assignment(
-    pool: &PgPool,
-    title: &str,
-) -> Option<(Uuid, String, String, i16, DateTime<Utc>)> {
+#[derive(sqlx::FromRow)]
+struct CreatedAssignment {
+    id: Uuid,
+    status: String,
+    body: String,
+    max_attempts: i16,
+    max_score: Option<i16>,
+    deadline_at: DateTime<Utc>,
+}
+
+async fn wait_for_created_assignment(pool: &PgPool, title: &str) -> Option<CreatedAssignment> {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let row = sqlx::query_as::<_, (Uuid, String, String, i16, DateTime<Utc>)>(
-                "select id, status, body, max_attempts, deadline_at from assignments where title = $1",
+            let row = sqlx::query_as::<_, CreatedAssignment>(
+                "select id, status, body, max_attempts, max_score, deadline_at from assignments where title = $1",
             )
             .bind(title)
+            .fetch_optional(pool)
+            .await
+            .unwrap();
+            if row.is_some() {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn wait_for_review_result(
+    pool: &PgPool,
+    submission: Uuid,
+) -> Option<(String, Option<i16>, Option<i16>)> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = sqlx::query_as::<_, (String, Option<i16>, Option<i16>)>(
+                "select status, raw_score, final_score from submissions where id = $1 and status <> 'pending_review'",
+            )
+            .bind(submission)
             .fetch_optional(pool)
             .await
             .unwrap();

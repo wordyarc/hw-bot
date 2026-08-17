@@ -318,10 +318,54 @@ impl TestApp {
         decision: &str,
         comment: &str,
     ) -> TestResponse {
+        self.review_raw(
+            submission,
+            telegram_id,
+            json!({ "decision": decision, "comment": comment }),
+        )
+        .await
+    }
+
+    pub async fn review_with_score(
+        &self,
+        submission: Uuid,
+        telegram_id: i64,
+        decision: &str,
+        score: u16,
+        comment: &str,
+    ) -> TestResponse {
+        self.review_raw(
+            submission,
+            telegram_id,
+            json!({ "decision": decision, "score": score, "comment": comment }),
+        )
+        .await
+    }
+
+    pub async fn review_raw(
+        &self,
+        submission: Uuid,
+        telegram_id: i64,
+        body: Value,
+    ) -> TestResponse {
         self.post_as(
             &format!("/submissions/{submission}/review"),
             telegram_id,
-            json!({ "decision": decision, "comment": comment }),
+            body,
+        )
+        .await
+    }
+
+    pub async fn change_grading(
+        &self,
+        assignment: Uuid,
+        telegram_id: i64,
+        max_score: Option<u16>,
+    ) -> TestResponse {
+        self.post_as(
+            &format!("/assignments/{assignment}/grading"),
+            telegram_id,
+            json!({ "max_score": max_score }),
         )
         .await
     }
@@ -446,6 +490,46 @@ impl TestApp {
             .expect("insert draft assignment");
 
         draft
+    }
+
+    /// Опубликованное оценочное задание того же курса.
+    pub async fn add_scored_assignment(&self, max_score: u16) -> Assignment {
+        let assignment = wall_clock_assignment(&self.fixture.course, &self.fixture.teacher)
+            .title("Rust traits")
+            .scored(max_score)
+            .published()
+            .build();
+
+        db::assignments::insert(&self.pool, &assignment)
+            .await
+            .expect("insert scored assignment");
+
+        assignment
+    }
+
+    /// Просроченное задание
+    pub async fn add_overdue_assignment(
+        &self,
+        days_since_deadline: i64,
+        late_policy: Option<(u16, u16, u16)>,
+    ) -> Assignment {
+        let mut builder = wall_clock_assignment(&self.fixture.course, &self.fixture.teacher)
+            .title("Overdue assignment")
+            .created_at(Utc::now() - Duration::days(days_since_deadline + 1))
+            .deadline_at(Utc::now() - Duration::days(days_since_deadline));
+
+        if let Some((period_days, penalty, max_periods)) = late_policy {
+            builder = builder
+                .scored(5)
+                .late_policy(period_days, penalty, max_periods);
+        }
+
+        let assignment = builder.published().build();
+        db::assignments::insert(&self.pool, &assignment)
+            .await
+            .expect("insert overdue assignment");
+
+        assignment
     }
 
     pub async fn add_foreign_course(&self) -> CourseFixture {

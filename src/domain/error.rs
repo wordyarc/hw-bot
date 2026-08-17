@@ -36,6 +36,19 @@ pub enum DomainError {
     #[error("total attempt limit must not exceed {max}, got {value}")]
     AttemptLimitExceeded { value: u32, max: u16 },
 
+    #[error("assignment max score must be in 1..={max}, got {value}")]
+    InvalidMaxScore { value: u16, max: u16 },
+
+    #[error("late policy {field} must be in 1..={max}, got {value}")]
+    InvalidLatePolicy {
+        field: &'static str,
+        value: u16,
+        max: u16,
+    },
+
+    #[error("late policy requires a scored assignment")]
+    LatePolicyRequiresScoredGrading,
+
     #[error("assignment deadline must be after created_at")]
     AssignmentDeadlineMustBeAfterCreatedAt,
 
@@ -66,6 +79,12 @@ pub enum DomainError {
         submitted_at: DateTime<Utc>,
     },
 
+    #[error("submissions are closed: closes_at {closes_at}, submitted_at {submitted_at}")]
+    SubmissionWindowClosed {
+        closes_at: DateTime<Utc>,
+        submitted_at: DateTime<Utc>,
+    },
+
     #[error("attempts exhausted: allowed {allowed}, used {used}")]
     AttemptsExhausted { allowed: u16, used: u16 },
 
@@ -74,6 +93,18 @@ pub enum DomainError {
 
     #[error("submission review fields do not match submission status")]
     InvalidSubmissionReviewState,
+
+    #[error("submission grade fields do not match submission status")]
+    InvalidSubmissionGradeState,
+
+    #[error("score must be in 0..={max}, got {value}")]
+    ScoreOutOfRange { value: u16, max: u16 },
+
+    #[error("scored assignment requires a score")]
+    ScoreRequired,
+
+    #[error("pass/fail assignment does not accept a score")]
+    ScoreNotAllowed,
 
     #[error("assignment already has an accepted submission")]
     SubmissionAlreadyAccepted,

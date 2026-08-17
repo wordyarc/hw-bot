@@ -90,6 +90,7 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         ErrorCode::InvalidInput => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::AssignmentUnavailable
         | ErrorCode::DeadlineExceeded
+        | ErrorCode::SubmissionClosed
         | ErrorCode::AttemptsExhausted
         | ErrorCode::SubmissionAlreadyAccepted
         | ErrorCode::SubmissionPendingReview

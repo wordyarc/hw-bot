@@ -70,6 +70,7 @@ async fn accepted_review_is_persisted_and_spends_an_attempt() -> anyhow::Result<
         &app.fixture.assignment,
         &app.fixture.course,
         &app.fixture.teacher,
+        None,
         "95/100",
         reviewed_at(&app.fixture.assignment),
     )?;
@@ -165,6 +166,7 @@ async fn the_loser_of_a_review_race_is_rejected_by_the_conditional_update() -> a
         &app.fixture.assignment,
         &app.fixture.course,
         &app.fixture.teacher,
+        None,
         "95/100",
         reviewed_at(&app.fixture.assignment),
     )?;

@@ -11,6 +11,7 @@ mod assignments_api;
 mod attempts_api;
 mod bootstrap;
 mod db_schema;
+mod grading_api;
 mod group_invites;
 mod health_api;
 mod notification_outbox;

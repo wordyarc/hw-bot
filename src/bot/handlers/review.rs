@@ -34,6 +34,8 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     dialogue
         .update(BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id: item.submission.id(),
+            grading: item.assignment.grading(),
+            penalty: item.assignment.penalty_at(item.submission.submitted_at()),
         }))
         .await?;
     let summary = format!(

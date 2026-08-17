@@ -1,9 +1,9 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, Role, StaffRole,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, Grading, LatePolicy, Role, StaffRole,
     StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId, SubmissionStatus,
-    TelegramUserId, User, UserId,
+    TeachingCourse, TelegramUserId, User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
@@ -28,6 +28,8 @@ fn only_teacher_or_admin_can_create_assignment() {
         ASSIGNMENT_TITLE,
         ASSIGNMENT_BODY,
         2,
+        Grading::PassFail,
+        None,
         t0(),
         t0() + Duration::days(7),
     );
@@ -170,7 +172,14 @@ fn added_course_teacher_can_review_and_manage_assignment() {
     let mut submission = submission(&assignment, &student).build();
 
     submission
-        .accept(&assignment, &course, &reviewer, "95/100", reviewed_at())
+        .accept(
+            &assignment,
+            &course,
+            &reviewer,
+            None,
+            "95/100",
+            reviewed_at(),
+        )
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -404,7 +413,7 @@ fn accepted_review_requires_comment_and_stores_it() {
     let assignment = assignment(&course, &teacher).published().build();
     let mut submission = submission(&assignment, &student).build();
 
-    let empty_comment = submission.accept(&assignment, &course, &teacher, " ", reviewed_at());
+    let empty_comment = submission.accept(&assignment, &course, &teacher, None, " ", reviewed_at());
 
     assert_eq!(
         empty_comment.unwrap_err(),
@@ -415,7 +424,14 @@ fn accepted_review_requires_comment_and_stores_it() {
     assert_eq!(submission.status(), SubmissionStatus::PendingReview);
 
     submission
-        .accept(&assignment, &course, &teacher, "95/100", reviewed_at())
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            None,
+            "95/100",
+            reviewed_at(),
+        )
         .unwrap();
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
@@ -448,11 +464,304 @@ fn teacher_can_review_pending_submission_once() {
         "Add tests for parser errors."
     );
 
-    let second_review = submission.accept(&assignment, &course, &teacher, "95/100", reviewed_at());
+    let second_review = submission.accept(
+        &assignment,
+        &course,
+        &teacher,
+        None,
+        "95/100",
+        reviewed_at(),
+    );
     assert_eq!(
         second_review.unwrap_err(),
         DomainError::SubmissionIsNotPendingReview
     );
+}
+
+fn weekly_penalty_assignment(
+    course: &TeachingCourse,
+    teacher: &User,
+) -> (Assignment, DateTime<Utc>) {
+    let deadline_at = Utc.with_ymd_and_hms(2026, 8, 24, 23, 59, 0).unwrap();
+    let assignment = assignment(course, teacher)
+        .created_at(Utc.with_ymd_and_hms(2026, 8, 17, 13, 30, 0).unwrap())
+        .deadline_at(deadline_at)
+        .scored(5)
+        .late_policy(7, 1, 4)
+        .published()
+        .build();
+
+    (assignment, deadline_at)
+}
+
+#[test]
+fn a_submission_at_the_deadline_is_not_late() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+
+    assert_eq!(assignment.late_periods_at(deadline_at), 0);
+    assert_eq!(assignment.penalty_at(deadline_at), 0);
+}
+
+#[test]
+fn any_lateness_costs_the_first_period_at_once() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (assignment, _) = weekly_penalty_assignment(&course, &teacher);
+
+    let at = Utc.with_ymd_and_hms(2026, 8, 25, 0, 0, 0).unwrap();
+
+    assert_eq!(assignment.late_periods_at(at), 1);
+    assert_eq!(assignment.penalty_at(at), 1);
+}
+
+#[test]
+fn the_second_period_starts_exactly_one_week_after_the_first() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (assignment, _) = weekly_penalty_assignment(&course, &teacher);
+
+    let last_of_the_first = Utc.with_ymd_and_hms(2026, 8, 31, 23, 59, 0).unwrap();
+
+    assert_eq!(assignment.late_periods_at(last_of_the_first), 1);
+    assert_eq!(
+        assignment.late_periods_at(last_of_the_first + Duration::seconds(1)),
+        2
+    );
+}
+
+#[test]
+fn the_horizon_is_open_at_its_own_moment_and_closed_after_it() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (assignment, _) = weekly_penalty_assignment(&course, &teacher);
+
+    let closes_at = Utc.with_ymd_and_hms(2026, 9, 21, 23, 59, 0).unwrap();
+    assert_eq!(assignment.closes_at(), closes_at);
+
+    assignment.ensure_open_for_submission(closes_at).unwrap();
+    assert_eq!(assignment.late_periods_at(closes_at), 4);
+    assert_eq!(
+        assignment
+            .ensure_open_for_submission(closes_at + Duration::seconds(1))
+            .unwrap_err(),
+        DomainError::SubmissionWindowClosed {
+            closes_at,
+            submitted_at: closes_at + Duration::seconds(1),
+        }
+    );
+}
+
+#[test]
+fn a_late_submission_before_the_horizon_is_accepted() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+
+    let submission = submission(&assignment, &student)
+        .submitted_at(deadline_at + Duration::days(1))
+        .try_build();
+
+    assert!(submission.is_ok());
+}
+
+#[test]
+fn a_review_freezes_the_lateness_of_the_submission_not_of_the_review() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+    let mut submission = submission(&assignment, &student)
+        .submitted_at(deadline_at + Duration::days(1))
+        .build();
+
+    submission
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            Some(5),
+            "Ок",
+            deadline_at + Duration::days(30),
+        )
+        .unwrap();
+
+    let grade = submission.grade().unwrap();
+    assert_eq!(
+        grade.late_periods(),
+        1,
+        "проверка через месяц ничего не меняет"
+    );
+    assert_eq!(grade.penalty(), 1);
+    assert_eq!(grade.final_score(), 4);
+}
+
+#[test]
+fn a_penalty_larger_than_the_score_leaves_an_accepted_submission_with_zero() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+    let mut submission = submission(&assignment, &student)
+        .submitted_at(deadline_at + Duration::days(28))
+        .build();
+
+    submission
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            Some(4),
+            "Ок",
+            deadline_at + Duration::days(29),
+        )
+        .unwrap();
+
+    let grade = submission.grade().unwrap();
+    assert_eq!(grade.raw_score(), 4);
+    assert_eq!(grade.penalty(), 4);
+    assert_eq!(grade.final_score(), 0);
+    assert_eq!(submission.status(), SubmissionStatus::Accepted);
+}
+
+#[test]
+fn moving_the_deadline_moves_the_horizon_with_it() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (mut assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+    let closes_at = assignment.closes_at();
+
+    assignment
+        .change_deadline(&course, &teacher, deadline_at + Duration::days(7))
+        .unwrap();
+
+    assert_eq!(assignment.closes_at(), closes_at + Duration::days(7));
+}
+
+#[test]
+fn a_late_policy_needs_a_scored_scale() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+
+    let result = assignment(&course, &teacher)
+        .late_policy(7, 1, 4)
+        .try_build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        DomainError::LatePolicyRequiresScoredGrading
+    );
+}
+
+#[test]
+fn dropping_the_scale_of_an_assignment_with_a_late_policy_is_rejected() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (mut assignment, _) = weekly_penalty_assignment(&course, &teacher);
+
+    let result = assignment.change_grading(
+        &course,
+        &teacher,
+        Grading::PassFail,
+        Some(LatePolicy::new(7, 1, 4).unwrap()),
+    );
+
+    assert_eq!(
+        result.unwrap_err(),
+        DomainError::LatePolicyRequiresScoredGrading
+    );
+}
+
+#[test]
+fn accepting_scored_assignment_without_score_is_rejected() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    let result = submission.accept(&assignment, &course, &teacher, None, "Ок", reviewed_at());
+
+    assert_eq!(result.unwrap_err(), DomainError::ScoreRequired);
+    assert_eq!(submission.status(), SubmissionStatus::PendingReview);
+}
+
+#[test]
+fn score_above_the_scale_is_rejected() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    let result = submission.accept(&assignment, &course, &teacher, Some(6), "Ок", reviewed_at());
+
+    assert_eq!(
+        result.unwrap_err(),
+        DomainError::ScoreOutOfRange { value: 6, max: 5 }
+    );
+}
+
+#[test]
+fn score_on_pass_fail_assignment_is_rejected() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    let result = submission.accept(&assignment, &course, &teacher, Some(1), "Ок", reviewed_at());
+
+    assert_eq!(result.unwrap_err(), DomainError::ScoreNotAllowed);
+}
+
+#[test]
+fn accepted_scored_submission_keeps_the_score_of_the_reviewer() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    submission
+        .accept(&assignment, &course, &teacher, Some(4), "Ок", reviewed_at())
+        .unwrap();
+
+    let grade = submission.grade().unwrap();
+    assert_eq!(grade.raw_score(), 4);
+    assert_eq!(grade.final_score(), 4);
+}
+
+#[test]
+fn rejected_submission_of_scored_assignment_has_no_grade() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    submission
+        .reject(&assignment, &course, &teacher, "Нет тестов", reviewed_at())
+        .unwrap();
+
+    assert_eq!(submission.grade(), None);
 }
 
 #[test]
@@ -470,6 +779,7 @@ fn only_course_teacher_or_admin_can_review_submission() {
         &assignment,
         &course,
         &other_teacher,
+        None,
         "Accepted, 95/100",
         reviewed_at(),
     );
@@ -495,7 +805,14 @@ fn student_cannot_review_submission() {
     let assignment = assignment(&course, &teacher).published().build();
     let mut submission = submission(&assignment, &student).build();
 
-    let result = submission.accept(&assignment, &course, &student, "95/100", reviewed_at());
+    let result = submission.accept(
+        &assignment,
+        &course,
+        &student,
+        None,
+        "95/100",
+        reviewed_at(),
+    );
 
     assert_eq!(
         result.unwrap_err(),
@@ -517,7 +834,7 @@ fn submission_of_another_assignment_cannot_be_reviewed() {
     );
     let mut submission = submission(&own, &student).build();
 
-    let result = submission.accept(&other, &course, &teacher, "95/100", reviewed_at());
+    let result = submission.accept(&other, &course, &teacher, None, "95/100", reviewed_at());
 
     assert_eq!(
         result.unwrap_err(),

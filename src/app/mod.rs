@@ -10,11 +10,13 @@ mod users;
 
 pub use actor::Actor;
 pub use assignments::{
-    AssignmentService, AssignmentStudentSummary, ChangeDeadline, CreateAssignment,
+    AssignmentService, AssignmentStudentSummary, ChangeDeadline, ChangeGrading, CreateAssignment,
     GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
-pub use courses::{CourseService, GroupInviteState, TeachingCourseSummary};
+pub use courses::{
+    CourseGradebook, CourseService, GroupInviteState, StudentGrades, TeachingCourseSummary,
+};
 pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,

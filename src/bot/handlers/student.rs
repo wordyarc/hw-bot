@@ -8,7 +8,8 @@ use crate::domain::{AssignmentId, AssignmentStatus};
 use super::Screen;
 use crate::bot::errors::send_app_error;
 use crate::bot::views::{
-    button_label, deadline_left, send_message_chunks, student_menu, submission_status,
+    button_label, deadline_left, grade_line, grading_lines, send_message_chunks, student_menu,
+    submission_status,
 };
 use crate::bot::{FileTransfers, HandlerResult};
 
@@ -200,11 +201,12 @@ pub(super) async fn show_assignment(
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
     let mut summary = format!(
-        "📘 {}\n{}\n\n⏰ Дедлайн: {} ({})\n🔁 Попытки: использовано {}, доступно {}, осталось {}",
+        "📘 {}\n{}\n\n⏰ Дедлайн: {} ({}){}\n🔁 Попытки: использовано {}, доступно {}, осталось {}",
         details.assignment.subject.name().as_str(),
         assignment.title().as_str(),
         timezone.format(assignment.deadline_at()),
         deadline_left(assignment.deadline_at(), Utc::now()),
+        grading_lines(assignment, Utc::now(), timezone),
         history.used_attempts(),
         history.allowed_attempts_for(assignment),
         history.remaining_attempts_for(assignment),
@@ -263,9 +265,14 @@ pub(super) async fn show_assignment(
         bot.send_message(
             chat_id,
             format!(
-                "Попытка {}: {}",
+                "Попытка {}: {}{}",
                 submission.attempt_number(),
                 submission_status(submission.status()),
+                submission
+                    .grade()
+                    .zip(assignment.grading().max_score())
+                    .map(|(grade, max_score)| format!("\n{}", grade_line(grade, max_score)))
+                    .unwrap_or_default(),
             ),
         )
         .await?;

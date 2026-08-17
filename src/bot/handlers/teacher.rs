@@ -6,23 +6,28 @@ use teloxide::types::MessageId;
 use crate::app::{
     ChangeDeadline, CreateAssignment, ErrorCode, GrantExtraAttempts, GroupInviteState,
 };
-use crate::domain::{AssignmentId, MAX_ATTEMPTS, TeachingCourseId, UserId};
+use crate::domain::{
+    AssignmentId, Grading, LatePolicy, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId, UserId,
+};
 
 use super::{Screen, current_assignment_screen, reset_dialogue};
 use crate::bot::HandlerResult;
 use crate::bot::assignment_files;
 use crate::bot::callbacks::{
-    AmountChoice, DeadlineAction, EXTRA_ATTEMPTS_PREFIX, FlowAction, MAX_ATTEMPTS_PREFIX,
-    ScreenAction,
+    AmountChoice, DeadlineAction, EXTRA_ATTEMPTS_PREFIX, FlowAction, GradingChoice,
+    LatePolicyChoice, MAX_ATTEMPTS_PREFIX, ScreenAction,
 };
 use crate::bot::errors::send_app_error;
-use crate::bot::state::{BotDialogue, BotState, DeadlineTarget, FlowState, ScreenState};
+use crate::bot::state::{
+    BotDialogue, BotState, DeadlineTarget, DraftAssignment, FlowState, ScreenState,
+};
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
     ask_input, assignment_actions_keyboard, assignment_status, assignment_students_keyboard,
     attempts_keyboard, calendar_keyboard, confirm_invite_rotation_keyboard,
     course_assignments_keyboard, courses_keyboard, deadline_left, deadline_options_keyboard,
-    group_invite_keyboard, send_message_chunks, send_stale_button, teacher_keyboard, teacher_menu,
+    gradebook_students_keyboard, grading_keyboard, grading_lines, group_invite_keyboard,
+    late_policy_keyboard, send_message_chunks, send_stale_button, teacher_keyboard, teacher_menu,
 };
 
 pub(super) async fn show_courses(screen: Screen<'_>) -> HandlerResult {
@@ -127,11 +132,12 @@ pub(super) async fn show_assignment(
         .map(|published_at| format!("\n🚀 Опубликовано: {}", timezone.format(published_at)))
         .unwrap_or_default();
     let text = format!(
-        "{}\n\nСтатус: {}\n⏰ Дедлайн: {} ({})\n🔁 Попыток: {}{}\n\n📄 Текст задания:\n{}",
+        "{}\n\nСтатус: {}\n⏰ Дедлайн: {} ({}){}\n🔁 Попыток: {}{}\n\n📄 Текст задания:\n{}",
         assignment.title().as_str(),
         assignment_status(assignment.status()),
         timezone.format(assignment.deadline_at()),
         deadline_left(assignment.deadline_at(), Utc::now()),
+        grading_lines(&assignment, Utc::now(), timezone),
         assignment.max_attempts(),
         published,
         assignment.body().as_str(),
@@ -214,6 +220,95 @@ pub(super) async fn show_students(
         }))
         .await?;
     Ok(())
+}
+
+pub(super) async fn show_gradebook(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+) -> HandlerResult {
+    let gradebook = match screen
+        .services
+        .courses
+        .gradebook(screen.actor, course_id)
+        .await
+    {
+        Ok(gradebook) => gradebook,
+        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
+    };
+
+    if gradebook.students.is_empty() {
+        screen
+            .bot
+            .send_message(screen.chat_id, "В группе пока нет студентов.")
+            .await?;
+        return Ok(());
+    }
+
+    let message = screen
+        .bot
+        .send_message(screen.chat_id, "📊 Оценки курса. Выберите студента:")
+        .reply_markup(gradebook_students_keyboard(course_id, &gradebook.students))
+        .await?;
+    screen
+        .dialogue
+        .update(BotState::Flow(FlowState::ChoosingGradebookStudent {
+            message_id: message.id,
+            course_id,
+            student_ids: gradebook
+                .students
+                .iter()
+                .map(|student| student.student_id)
+                .collect(),
+        }))
+        .await?;
+    Ok(())
+}
+
+async fn show_student_grades(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    student_id: UserId,
+) -> HandlerResult {
+    let gradebook = match screen
+        .services
+        .courses
+        .gradebook(screen.actor, course_id)
+        .await
+    {
+        Ok(gradebook) => gradebook,
+        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
+    };
+
+    let Some(student) = gradebook
+        .students
+        .iter()
+        .find(|student| student.student_id == student_id)
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+
+    let mut text = format!(
+        "👤 {}\n🏅 Итого: {} из {}\n",
+        student.display_name,
+        student.total(),
+        student.max_total(),
+    );
+    if student.grades.is_empty() {
+        text.push_str("\nВ курсе пока нет оценочных заданий.");
+    }
+    for grade in &student.grades {
+        // Непроверенная сдача и выставленный ноль - разные вещи, поэтому прочерк, а не «0».
+        let score = grade
+            .final_score
+            .map_or_else(|| "—".to_owned(), |score| score.to_string());
+        text.push_str(&format!(
+            "\n{} · {} из {}",
+            grade.title, score, grade.max_score
+        ));
+    }
+
+    send_message_chunks(screen.bot, screen.chat_id, text, None).await?;
+    show_gradebook(screen, course_id).await
 }
 
 pub(super) async fn show_group_invite(
@@ -468,17 +563,187 @@ pub(super) async fn handle_max_attempts(
         )
         .await;
     };
-    ask_deadline(
+    ask_grading(
         screen.bot,
         screen.chat_id,
-        DeadlineTarget::Create {
-            course_id,
-            title,
-            body,
-            max_attempts,
+        DraftAssignment::new(course_id, title, body, max_attempts),
+        screen.dialogue,
+    )
+    .await
+}
+
+pub(super) async fn ask_grading(
+    bot: &teloxide::Bot,
+    chat_id: teloxide::types::ChatId,
+    draft: DraftAssignment,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    let sent = bot
+        .send_message(chat_id, "4/5. Как оцениваете задание?")
+        .reply_markup(grading_keyboard())
+        .await?;
+    dialogue
+        .update(BotState::Flow(FlowState::ChoosingGrading {
+            message_id: sent.id,
+            draft,
+        }))
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn handle_grading(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    choice: GradingChoice,
+    state: BotState,
+) -> HandlerResult {
+    let BotState::Flow(FlowState::ChoosingGrading {
+        message_id: current_message_id,
+        draft,
+    }) = state
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    if current_message_id != message_id {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    }
+
+    let grading = match choice {
+        GradingChoice::PassFail => Grading::PassFail,
+        GradingChoice::Preset(max_score) => match Grading::scored(max_score) {
+            Ok(grading) => grading,
+            Err(_) => return send_stale_button(screen.bot, screen.chat_id).await,
         },
+        GradingChoice::Manual => {
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::AwaitingGradingText { draft }))
+                .await?;
+            return ask_input(
+                screen.bot,
+                screen.chat_id,
+                &format!("Введите максимальный балл от 1 до {MAX_SCORE}:"),
+            )
+            .await;
+        }
+    };
+
+    apply_grading(
+        screen.bot,
+        screen.chat_id,
+        draft,
+        grading,
         screen.dialogue,
         screen.timezone,
+    )
+    .await
+}
+
+/// Штраф за опоздание выражен в баллах, поэтому шаг политики есть только у оценочного задания.
+pub(super) async fn apply_grading(
+    bot: &teloxide::Bot,
+    chat_id: teloxide::types::ChatId,
+    draft: DraftAssignment,
+    grading: Grading,
+    dialogue: &BotDialogue,
+    timezone: &BotTimezone,
+) -> HandlerResult {
+    let draft = DraftAssignment { grading, ..draft };
+
+    if !grading.is_scored() {
+        return ask_deadline(
+            bot,
+            chat_id,
+            DeadlineTarget::Create(draft),
+            dialogue,
+            timezone,
+        )
+        .await;
+    }
+
+    let sent = bot
+        .send_message(chat_id, "Штраф за опоздание?")
+        .reply_markup(late_policy_keyboard())
+        .await?;
+    dialogue
+        .update(BotState::Flow(FlowState::ChoosingLatePolicy {
+            message_id: sent.id,
+            draft,
+        }))
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn handle_late_policy(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    choice: LatePolicyChoice,
+    state: BotState,
+) -> HandlerResult {
+    let BotState::Flow(FlowState::ChoosingLatePolicy {
+        message_id: current_message_id,
+        draft,
+    }) = state
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    if current_message_id != message_id {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    }
+
+    let late_policy = match choice {
+        LatePolicyChoice::None => None,
+        LatePolicyChoice::Preset {
+            period_days,
+            penalty,
+            max_periods,
+        } => match LatePolicy::new(period_days, penalty, max_periods) {
+            Ok(policy) => Some(policy),
+            Err(_) => return send_stale_button(screen.bot, screen.chat_id).await,
+        },
+        LatePolicyChoice::Manual => {
+            screen
+                .dialogue
+                .update(BotState::Flow(FlowState::AwaitingLatePolicyText { draft }))
+                .await?;
+            return ask_input(
+                screen.bot,
+                screen.chat_id,
+                "Введите три числа через пробел: шаг в днях, штраф за шаг и число шагов до \
+                 закрытия приёма. Например «7 1 4»:",
+            )
+            .await;
+        }
+    };
+
+    apply_late_policy(
+        screen.bot,
+        screen.chat_id,
+        draft,
+        late_policy,
+        screen.dialogue,
+        screen.timezone,
+    )
+    .await
+}
+
+pub(super) async fn apply_late_policy(
+    bot: &teloxide::Bot,
+    chat_id: teloxide::types::ChatId,
+    draft: DraftAssignment,
+    late_policy: Option<LatePolicy>,
+    dialogue: &BotDialogue,
+    timezone: &BotTimezone,
+) -> HandlerResult {
+    ask_deadline(
+        bot,
+        chat_id,
+        DeadlineTarget::Create(DraftAssignment {
+            late_policy,
+            ..draft
+        }),
+        dialogue,
+        timezone,
     )
     .await
 }
@@ -489,6 +754,21 @@ pub(super) async fn select_student(
     student_id: UserId,
     state: BotState,
 ) -> HandlerResult {
+    // Кнопка студента одна на два экрана, различает их состояние диалога.
+    if let BotState::Flow(FlowState::ChoosingGradebookStudent {
+        message_id: current_message_id,
+        course_id,
+        student_ids,
+    }) = &state
+    {
+        if *current_message_id != message_id || !student_ids.contains(&student_id) {
+            return send_stale_button(screen.bot, screen.chat_id).await;
+        }
+        let course_id = *course_id;
+
+        return show_student_grades(screen, course_id, student_id).await;
+    }
+
     let BotState::Flow(FlowState::ChoosingAttemptStudent {
         message_id: current_message_id,
         assignment_id,
@@ -643,7 +923,7 @@ pub(super) async fn handle_deadline(
 
 fn deadline_prompt(target: &DeadlineTarget, timezone: &BotTimezone) -> String {
     let question = match target {
-        DeadlineTarget::Create { .. } => "4/4. Когда истекает дедлайн?",
+        DeadlineTarget::Create(_) => "5/5. Когда истекает дедлайн?",
         DeadlineTarget::Change { .. } => "Новый дедлайн.",
     };
     format!(
@@ -662,7 +942,7 @@ pub(super) async fn ask_max_attempts(
     dialogue: &BotDialogue,
 ) -> HandlerResult {
     let sent = bot
-        .send_message(chat_id, "3/4. Сколько попыток даёте студенту?")
+        .send_message(chat_id, "3/5. Сколько попыток даёте студенту?")
         .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
         .await?;
     dialogue
@@ -702,21 +982,18 @@ pub(super) async fn apply_deadline(
     deadline_at: DateTime<Utc>,
 ) -> HandlerResult {
     match target {
-        DeadlineTarget::Create {
-            course_id,
-            title,
-            body,
-            max_attempts,
-        } => {
+        DeadlineTarget::Create(draft) => {
             let result = screen
                 .services
                 .assignments
                 .create(CreateAssignment {
-                    teaching_course_id: course_id,
+                    teaching_course_id: draft.course_id,
                     actor: screen.actor,
-                    title,
-                    body,
-                    max_attempts,
+                    title: draft.title,
+                    body: draft.body,
+                    max_attempts: draft.max_attempts,
+                    grading: draft.grading,
+                    late_policy: draft.late_policy,
                     created_at: Utc::now(),
                     deadline_at,
                 })

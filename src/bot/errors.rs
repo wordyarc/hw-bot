@@ -28,6 +28,7 @@ fn app_error_message(code: ErrorCode) -> &'static str {
         ErrorCode::PermissionDenied => "Это действие вам недоступно.",
         ErrorCode::AssignmentUnavailable => "Это действие сейчас недоступно.",
         ErrorCode::DeadlineExceeded => "Дедлайн задания уже прошёл.",
+        ErrorCode::SubmissionClosed => "Приём работ по этому заданию закрыт.",
         ErrorCode::AttemptsExhausted => "Доступные попытки закончились.",
         ErrorCode::SubmissionAlreadyAccepted => "Работа уже принята.",
         ErrorCode::SubmissionPendingReview => "Предыдущая работа ещё на проверке.",

@@ -49,6 +49,10 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             post(assignments::change_deadline),
         )
         .route(
+            "/assignments/{assignment_id}/grading",
+            post(assignments::change_grading),
+        )
+        .route(
             "/assignments/{assignment_id}/students/{student_id}/extra-attempts",
             post(assignments::grant_extra_attempts),
         )
@@ -72,6 +76,10 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             get(assignments::find_student_assignment),
         )
         .route("/me/courses", get(courses::list_my_courses))
+        .route(
+            "/me/courses/{teaching_course_id}/gradebook",
+            get(courses::course_gradebook),
+        )
         .route("/me/review-queue", get(review::queue_size))
         .route("/submissions/next", post(review::take_next_from_queue))
         .route(

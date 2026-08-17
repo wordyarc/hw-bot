@@ -15,6 +15,7 @@ str_enum! {
         PermissionDenied => "permission_denied",
         AssignmentUnavailable => "assignment_unavailable",
         DeadlineExceeded => "deadline_exceeded",
+        SubmissionClosed => "submission_closed",
         AttemptsExhausted => "attempts_exhausted",
         SubmissionAlreadyAccepted => "submission_already_accepted",
         SubmissionPendingReview => "submission_pending_review",
@@ -68,11 +69,18 @@ impl AppError {
                 | DomainError::InvalidAttemptLimit { .. }
                 | DomainError::InvalidAttemptGrant { .. }
                 | DomainError::AttemptLimitExceeded { .. }
+                | DomainError::InvalidMaxScore { .. }
+                | DomainError::InvalidLatePolicy { .. }
+                | DomainError::LatePolicyRequiresScoredGrading
+                | DomainError::ScoreOutOfRange { .. }
+                | DomainError::ScoreRequired
+                | DomainError::ScoreNotAllowed
                 | DomainError::AssignmentDeadlineMustBeAfterCreatedAt => ErrorCode::InvalidInput,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }
                 | DomainError::AssignmentIsArchived => ErrorCode::AssignmentUnavailable,
                 DomainError::AssignmentDeadlineExceeded { .. } => ErrorCode::DeadlineExceeded,
+                DomainError::SubmissionWindowClosed { .. } => ErrorCode::SubmissionClosed,
                 DomainError::AttemptsExhausted { .. } => ErrorCode::AttemptsExhausted,
                 DomainError::SubmissionAlreadyAccepted => ErrorCode::SubmissionAlreadyAccepted,
                 DomainError::SubmissionAlreadyPendingReview => ErrorCode::SubmissionPendingReview,
@@ -87,6 +95,7 @@ impl AppError {
                 | DomainError::InvalidAssignmentPublishedState
                 | DomainError::InvalidSubmissionAttemptNumber { .. }
                 | DomainError::InvalidSubmissionReviewState
+                | DomainError::InvalidSubmissionGradeState
                 | DomainError::SubmissionDoesNotBelongToAssignment
                 | DomainError::StudentProgressDoesNotBelongToAssignment => ErrorCode::InternalError,
             },

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n            status, created_by, created_at, deadline_at, published_at\n        from assignments\n        where teaching_course_id = $1\n        order by created_at desc, id\n        ",
+  "query": "\n        select\n            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n            max_score, late_period_days, late_penalty, late_max_periods, status, created_by,\n            created_at, deadline_at, published_at\n        from assignments\n        where id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,50 @@
       },
       {
         "ordinal": 7,
+        "name": "max_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "late_period_days",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_period_days"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "late_penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "late_max_periods",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_max_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -92,7 +136,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 12,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -103,7 +147,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 13,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -114,7 +158,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 14,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -125,7 +169,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 15,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -149,6 +193,10 @@
       false,
       false,
       false,
+      true,
+      true,
+      true,
+      true,
       false,
       false,
       false,
@@ -156,5 +204,5 @@
       true
     ]
   },
-  "hash": "b86c7e414293828ec42207248f83f76b464487da57a4e8311bc92cb71f68ce4a"
+  "hash": "322a59619542a3e4fcc1474e7e2ec963adf817343f29bc5053f2a6a8642909cf"
 }

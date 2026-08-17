@@ -4,6 +4,9 @@ use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId
 
 pub(super) const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
 pub(super) const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
+pub(super) const GRADING_PREFIX: &str = "grading:";
+pub(super) const REVIEW_SCORE_PREFIX: &str = "score:";
+pub(super) const LATE_POLICY_PREFIX: &str = "late:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CallbackAction {
@@ -29,6 +32,7 @@ pub(super) enum ReplayableAction {
     AssignmentFiles(AssignmentId),
     GrantAttempts(AssignmentId),
     GroupInvite(TeachingCourseId),
+    Gradebook(TeachingCourseId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,6 +54,9 @@ pub(super) enum FlowAction {
         submission_id: SubmissionId,
     },
     MaxAttempts(AmountChoice),
+    Grading(GradingChoice),
+    LatePolicy(LatePolicyChoice),
+    ReviewScore(AmountChoice),
     Deadline(DeadlineAction),
     SelectStudent(UserId),
     ExtraAttempts(AmountChoice),
@@ -62,6 +69,24 @@ pub(super) enum FlowAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AmountChoice {
     Preset(u16),
+    Manual,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GradingChoice {
+    PassFail,
+    Preset(u16),
+    Manual,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LatePolicyChoice {
+    None,
+    Preset {
+        period_days: u16,
+        penalty: u16,
+        max_periods: u16,
+    },
     Manual,
 }
 
@@ -121,6 +146,11 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
                 parse_uuid(data, "invite:")
                     .map(TeachingCourseId::from_uuid)
                     .map(ReplayableAction::GroupInvite)
+            })
+            .or_else(|| {
+                parse_uuid(data, "grades:")
+                    .map(TeachingCourseId::from_uuid)
+                    .map(ReplayableAction::Gradebook)
             }),
     };
     if let Some(action) = replayable {
@@ -160,6 +190,9 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
 
     let flow = parse_review(data)
         .or_else(|| parse_amount(data, MAX_ATTEMPTS_PREFIX).map(FlowAction::MaxAttempts))
+        .or_else(|| parse_grading(data).map(FlowAction::Grading))
+        .or_else(|| parse_late_policy(data).map(FlowAction::LatePolicy))
+        .or_else(|| parse_amount(data, REVIEW_SCORE_PREFIX).map(FlowAction::ReviewScore))
         .or_else(|| parse_deadline(data).map(FlowAction::Deadline))
         .or_else(|| {
             parse_uuid(data, "student:")
@@ -198,6 +231,36 @@ fn parse_review(data: &str) -> Option<FlowAction> {
         decision,
         submission_id: SubmissionId::from_uuid(id.parse().ok()?),
     })
+}
+
+fn parse_grading(data: &str) -> Option<GradingChoice> {
+    match data.strip_prefix(GRADING_PREFIX)? {
+        "passfail" => Some(GradingChoice::PassFail),
+        "manual" => Some(GradingChoice::Manual),
+        value => match parse_amount(data, GRADING_PREFIX)? {
+            AmountChoice::Preset(max_score) => Some(GradingChoice::Preset(max_score)),
+            AmountChoice::Manual => unreachable!("{value} is not the manual marker"),
+        },
+    }
+}
+
+fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
+    let value = data.strip_prefix(LATE_POLICY_PREFIX)?;
+    match value {
+        "none" => Some(LatePolicyChoice::None),
+        "manual" => Some(LatePolicyChoice::Manual),
+        _ => {
+            let mut parts = value.split(':');
+            let mut next = || parts.next()?.parse().ok();
+            let (period_days, penalty, max_periods) = (next()?, next()?, next()?);
+
+            parts.next().is_none().then_some(LatePolicyChoice::Preset {
+                period_days,
+                penalty,
+                max_periods,
+            })
+        }
+    }
 }
 
 fn parse_amount(data: &str, prefix: &str) -> Option<AmountChoice> {
@@ -288,6 +351,7 @@ mod tests {
             (format!("files:{assignment}"), "replayable"),
             (format!("attempts:{assignment}"), "replayable"),
             (format!("invite:{course}"), "replayable"),
+            (format!("grades:{course}"), "replayable"),
             (format!("publish:{assignment}"), "screen"),
             (format!("archive:{assignment}"), "screen"),
             (format!("deadline:{assignment}"), "screen"),
@@ -298,6 +362,13 @@ mod tests {
             ("invite:rotate".to_owned(), "screen"),
             (format!("review:accept:{submission}"), "flow"),
             ("maxattempts:3".to_owned(), "flow"),
+            ("grading:passfail".to_owned(), "flow"),
+            ("grading:5".to_owned(), "flow"),
+            ("grading:manual".to_owned(), "flow"),
+            ("score:0".to_owned(), "flow"),
+            ("late:none".to_owned(), "flow"),
+            ("late:7:1:4".to_owned(), "flow"),
+            ("late:manual".to_owned(), "flow"),
             ("dl:calendar".to_owned(), "flow"),
             (format!("student:{student}"), "flow"),
             ("attempt:3".to_owned(), "flow"),
@@ -323,6 +394,9 @@ mod tests {
         assert_eq!(parse("archive:not-a-uuid"), None);
         assert_eq!(parse("file:open:nope"), None);
         assert_eq!(parse("maxattempts:+1"), None);
+        assert_eq!(parse("grading:none"), None);
+        assert_eq!(parse("late:7:1"), None);
+        assert_eq!(parse("late:7:1:4:9"), None);
         assert_eq!(parse("dl:days:nope"), None);
         assert_eq!(parse("cal:2026-13"), None);
     }

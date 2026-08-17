@@ -1,7 +1,7 @@
 use crate::app::{Actor, ErrorCode, RegisterStudent, ReviewSubmission, SubmitHomework};
 use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DISPLAY_NAME_MAX_LEN, MAX_ATTEMPTS, Role,
-    TelegramUserId, USER_TEXT_MAX_LEN,
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DISPLAY_NAME_MAX_LEN, Grading, LatePolicy,
+    MAX_ATTEMPTS, MAX_SCORE, ReviewDecision, Role, SubmissionId, TelegramUserId, USER_TEXT_MAX_LEN,
 };
 use anyhow::{Context, anyhow};
 use chrono::Utc;
@@ -14,15 +14,17 @@ use teloxide::types::{
 use teloxide::utils::command::BotCommands;
 
 use super::assignment_files;
-use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
+use super::callbacks::{
+    self, AmountChoice, CallbackAction, FlowAction, ReplayableAction, ScreenAction,
+};
 use super::errors::{send_app_error, send_error_code};
 use super::invites::BotInvites;
-use super::state::{BotDialogue, BotState, DeadlineTarget, FlowState, ScreenState};
+use super::state::{BotDialogue, BotState, DraftAssignment, FlowState, ScreenState};
 use super::timezone::BotTimezone;
 use super::views::{
     BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW, MenuAction,
-    ask_input, main_keyboard, menu_action, role_name, send_message_chunks, send_stale_button,
-    student_keyboard, student_menu, teacher_keyboard, teacher_menu,
+    ask_input, main_keyboard, menu_action, review_score_keyboard, role_name, send_message_chunks,
+    send_stale_button, student_keyboard, student_menu, teacher_keyboard, teacher_menu,
 };
 use super::{BotServices, HandlerResult};
 
@@ -397,9 +399,37 @@ pub(super) async fn handle_message(
             bot.send_message(message.chat.id, "Выберите решение кнопкой под сдачей.")
                 .await?;
         }
+        BotState::Flow(FlowState::AwaitingReviewScore {
+            submission_id,
+            max_score,
+            penalty,
+        }) => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
+            let Some(score) = parse_score(text, max_score) else {
+                bot.send_message(
+                    message.chat.id,
+                    format!("Введите целое число от 0 до {max_score}."),
+                )
+                .await?;
+                return Ok(());
+            };
+            confirm_score(&bot, message.chat.id, score, penalty, max_score).await?;
+            ask_review_comment(
+                &bot,
+                message.chat.id,
+                submission_id,
+                ReviewDecision::Accept,
+                Some(score),
+                &dialogue,
+            )
+            .await?;
+        }
         BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id,
             decision,
+            score,
         }) => {
             let Some(text) = require_text(&bot, &message).await? else {
                 return Ok(());
@@ -425,6 +455,7 @@ pub(super) async fn handle_message(
                     submission_id,
                     actor: reviewer,
                     decision,
+                    score,
                     comment: text.to_owned(),
                     reviewed_at: Utc::now(),
                 })
@@ -489,7 +520,7 @@ pub(super) async fn handle_message(
             ask_input(
                 &bot,
                 message.chat.id,
-                "2/4. Пришлите текст задания одним сообщением:",
+                "2/5. Пришлите текст задания одним сообщением:",
             )
             .await?;
         }
@@ -540,15 +571,48 @@ pub(super) async fn handle_message(
                 .await?;
                 return Ok(());
             };
-            teacher::ask_deadline(
+            teacher::ask_grading(
                 &bot,
                 message.chat.id,
-                DeadlineTarget::Create {
-                    course_id,
-                    title,
-                    body,
-                    max_attempts,
-                },
+                DraftAssignment::new(course_id, title, body, max_attempts),
+                &dialogue,
+            )
+            .await?;
+        }
+        BotState::Flow(FlowState::ChoosingGrading { draft, .. })
+        | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
+            let Some(grading) = parse_max_score(text) else {
+                bot.send_message(
+                    message.chat.id,
+                    format!("Введите целое число от 1 до {MAX_SCORE}."),
+                )
+                .await?;
+                return Ok(());
+            };
+            teacher::apply_grading(&bot, message.chat.id, draft, grading, &dialogue, &timezone)
+                .await?;
+        }
+        BotState::Flow(FlowState::ChoosingLatePolicy { draft, .. })
+        | BotState::Flow(FlowState::AwaitingLatePolicyText { draft }) => {
+            let Some(text) = require_text(&bot, &message).await? else {
+                return Ok(());
+            };
+            let Some(late_policy) = parse_late_policy(text) else {
+                bot.send_message(
+                    message.chat.id,
+                    "Введите три числа через пробел, например «7 1 4».",
+                )
+                .await?;
+                return Ok(());
+            };
+            teacher::apply_late_policy(
+                &bot,
+                message.chat.id,
+                draft,
+                Some(late_policy),
                 &dialogue,
                 &timezone,
             )
@@ -582,7 +646,8 @@ pub(super) async fn handle_message(
             )
             .await?;
         }
-        BotState::Flow(FlowState::ChoosingAttemptStudent { .. }) => {
+        BotState::Flow(FlowState::ChoosingGradebookStudent { .. })
+        | BotState::Flow(FlowState::ChoosingAttemptStudent { .. }) => {
             bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
                 .await?;
         }
@@ -811,6 +876,7 @@ async fn handle_replayable_action(
         ReplayableAction::GroupInvite(course_id) => {
             teacher::show_group_invite(screen, course_id).await
         }
+        ReplayableAction::Gradebook(course_id) => teacher::show_gradebook(screen, course_id).await,
     }
 }
 
@@ -876,25 +942,52 @@ async fn handle_flow_action(
             decision,
             submission_id: callback_submission_id,
         } => {
-            let BotState::Flow(FlowState::AwaitingReviewDecision { submission_id }) = state else {
+            let BotState::Flow(FlowState::AwaitingReviewDecision {
+                submission_id,
+                grading,
+                penalty,
+            }) = state
+            else {
                 return send_stale_button(screen.bot, screen.chat_id).await;
             };
             if submission_id != callback_submission_id {
                 return send_stale_button(screen.bot, screen.chat_id).await;
             }
-            screen
-                .dialogue
-                .update(BotState::Flow(FlowState::AwaitingReviewComment {
-                    submission_id,
-                    decision,
-                }))
-                .await?;
-            ask_input(
-                screen.bot,
-                screen.chat_id,
-                "Напишите обязательный комментарий к решению:",
-            )
-            .await?;
+
+            // Балл несёт только принятие: отклонение спрашивает сразу комментарий.
+            match (decision, grading.max_score()) {
+                (ReviewDecision::Accept, Some(max_score)) => {
+                    ask_review_score(
+                        screen.bot,
+                        screen.chat_id,
+                        submission_id,
+                        max_score,
+                        penalty,
+                        screen.dialogue,
+                    )
+                    .await?;
+                }
+                _ => {
+                    ask_review_comment(
+                        screen.bot,
+                        screen.chat_id,
+                        submission_id,
+                        decision,
+                        None,
+                        screen.dialogue,
+                    )
+                    .await?;
+                }
+            }
+        }
+        FlowAction::Grading(choice) => {
+            teacher::handle_grading(screen, message_id, choice, state).await?;
+        }
+        FlowAction::LatePolicy(choice) => {
+            teacher::handle_late_policy(screen, message_id, choice, state).await?;
+        }
+        FlowAction::ReviewScore(choice) => {
+            handle_review_score(screen, choice, state).await?;
         }
         FlowAction::MaxAttempts(choice) => {
             teacher::handle_max_attempts(screen, message_id, choice, state).await?;
@@ -1126,6 +1219,156 @@ async fn require_text<'a>(bot: &Bot, message: &'a Message) -> HandlerResult<Opti
     Ok(Some(text))
 }
 
+const SCORE_BUTTONS_LIMIT: u16 = 10;
+
+async fn ask_review_score(
+    bot: &Bot,
+    chat_id: ChatId,
+    submission_id: SubmissionId,
+    max_score: u16,
+    penalty: u16,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    dialogue
+        .update(BotState::Flow(FlowState::AwaitingReviewScore {
+            submission_id,
+            max_score,
+            penalty,
+        }))
+        .await?;
+
+    if penalty > 0 {
+        bot.send_message(
+            chat_id,
+            format!("⏳ Работа сдана с опозданием, штраф — {penalty}."),
+        )
+        .await?;
+    }
+
+    if max_score <= SCORE_BUTTONS_LIMIT {
+        bot.send_message(chat_id, format!("Какой балл ставите из {max_score}?"))
+            .reply_markup(review_score_keyboard(max_score))
+            .await?;
+        return Ok(());
+    }
+
+    ask_input(
+        bot,
+        chat_id,
+        &format!("Какой балл ставите? Введите число от 0 до {max_score}:"),
+    )
+    .await
+}
+
+async fn ask_review_comment(
+    bot: &Bot,
+    chat_id: ChatId,
+    submission_id: SubmissionId,
+    decision: ReviewDecision,
+    score: Option<u16>,
+    dialogue: &BotDialogue,
+) -> HandlerResult {
+    dialogue
+        .update(BotState::Flow(FlowState::AwaitingReviewComment {
+            submission_id,
+            decision,
+            score,
+        }))
+        .await?;
+    ask_input(bot, chat_id, "Напишите обязательный комментарий к решению:").await
+}
+
+async fn confirm_score(
+    bot: &Bot,
+    chat_id: ChatId,
+    score: u16,
+    penalty: u16,
+    max_score: u16,
+) -> HandlerResult {
+    if penalty == 0 {
+        return Ok(());
+    }
+
+    bot.send_message(
+        chat_id,
+        format!(
+            "🏅 Итог: {score} − {penalty} = {} из {max_score}.",
+            score.saturating_sub(penalty)
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn handle_review_score(
+    screen: Screen<'_>,
+    choice: AmountChoice,
+    state: BotState,
+) -> HandlerResult {
+    let BotState::Flow(FlowState::AwaitingReviewScore {
+        submission_id,
+        max_score,
+        penalty,
+    }) = state
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+
+    let score = match choice {
+        AmountChoice::Preset(score) if score <= max_score => score,
+        AmountChoice::Preset(_) | AmountChoice::Manual => {
+            return ask_input(
+                screen.bot,
+                screen.chat_id,
+                &format!("Введите целое число от 0 до {max_score}:"),
+            )
+            .await;
+        }
+    };
+
+    confirm_score(screen.bot, screen.chat_id, score, penalty, max_score).await?;
+    ask_review_comment(
+        screen.bot,
+        screen.chat_id,
+        submission_id,
+        ReviewDecision::Accept,
+        Some(score),
+        screen.dialogue,
+    )
+    .await
+}
+
+fn parse_late_policy(text: &str) -> Option<LatePolicy> {
+    let mut parts = text.split_whitespace();
+    let mut next = || parse_number(parts.next()?);
+    let (period_days, penalty, max_periods) = (next()?, next()?, next()?);
+
+    parts
+        .next()
+        .is_none()
+        .then(|| LatePolicy::new(period_days, penalty, max_periods).ok())
+        .flatten()
+}
+
+fn parse_max_score(text: &str) -> Option<Grading> {
+    Grading::scored(parse_number(text)?).ok()
+}
+
+fn parse_score(text: &str, max_score: u16) -> Option<u16> {
+    let score = parse_number(text)?;
+
+    (score <= max_score).then_some(score)
+}
+
+fn parse_number(text: &str) -> Option<u16> {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    text.parse().ok()
+}
+
 fn parse_positive_attempts(text: &str) -> Option<u16> {
     let text = text.trim();
     if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -1288,7 +1531,8 @@ mod tests {
         use crate::bot::views::{
             assignment_files_keyboard, assignment_students_keyboard, attempts_keyboard,
             calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
-            course_assignments_keyboard, deadline_options_keyboard, group_invite_keyboard,
+            course_assignments_keyboard, deadline_options_keyboard, gradebook_students_keyboard,
+            grading_keyboard, group_invite_keyboard, late_policy_keyboard, review_score_keyboard,
         };
         use crate::domain::{
             FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
@@ -1322,12 +1566,16 @@ mod tests {
             assignment_actions_keyboard(&assignment),
             attempts_keyboard(MAX_ATTEMPTS_PREFIX),
             attempts_keyboard(EXTRA_ATTEMPTS_PREFIX),
+            grading_keyboard(),
+            late_policy_keyboard(),
+            review_score_keyboard(10),
             deadline_options_keyboard(&timezone),
             calendar_keyboard(today, today),
             assignment_files_keyboard(&assignment, &[file], true, true),
             assignment_files_keyboard(&assignment, &[], true, false),
             confirm_file_deletion_keyboard(),
             assignment_students_keyboard(assignment.id(), &[]),
+            gradebook_students_keyboard(course.id(), &[]),
             group_invite_keyboard(course.id()),
             confirm_invite_rotation_keyboard(),
         ];
