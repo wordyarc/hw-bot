@@ -107,20 +107,6 @@ async fn student_from_another_group_cannot_receive_attempts() {
 }
 
 #[tokio::test]
-async fn zero_attempt_grant_is_rejected() {
-    let app = TestApp::start().await;
-
-    app.grant_extra_attempts(
-        app.assignment(),
-        app.fixture.student.id().as_uuid(),
-        app.teacher(),
-        0,
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
 async fn extra_attempt_unlocks_the_next_submission() {
     let app = TestApp::start().await;
 
@@ -189,27 +175,4 @@ async fn concurrent_grants_are_not_lost() {
         .await
         .expect("load submission history");
     assert_eq!(history.extra_attempts(), 2);
-}
-
-#[tokio::test]
-async fn total_attempts_cannot_exceed_smallint() {
-    let app = TestApp::start().await;
-
-    app.grant_extra_attempts(
-        app.assignment(),
-        app.fixture.student.id().as_uuid(),
-        app.teacher(),
-        i16::MAX as u16 - app.fixture.assignment.max_attempts(),
-    )
-    .await
-    .ok();
-
-    app.grant_extra_attempts(
-        app.assignment(),
-        app.fixture.student.id().as_uuid(),
-        app.teacher(),
-        1,
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }

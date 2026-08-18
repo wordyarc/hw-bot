@@ -931,6 +931,59 @@ fn remaining_attempts_stop_at_zero() {
 }
 
 #[test]
+fn extra_attempts_of_another_assignment_are_refused() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let another = assignment(&course, &teacher).build();
+    let assignment = assignment(&course, &teacher).build();
+    let mut progress = StudentAssignmentProgress::new(&another, &student, 0).unwrap();
+
+    assert_eq!(
+        progress
+            .grant_extra_attempts(&assignment, &course, &teacher, 1)
+            .unwrap_err(),
+        DomainError::StudentProgressDoesNotBelongToAssignment
+    );
+}
+
+#[test]
+fn extra_attempts_are_refused_through_a_foreign_course() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let foreign_course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).build();
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+
+    assert_eq!(
+        progress
+            .grant_extra_attempts(&assignment, &foreign_course, &teacher, 1)
+            .unwrap_err(),
+        DomainError::AssignmentDoesNotBelongToTeachingCourse
+    );
+}
+
+#[test]
+fn granting_zero_extra_attempts_is_rejected() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).build();
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+
+    assert_eq!(
+        progress
+            .grant_extra_attempts(&assignment, &course, &teacher, 0)
+            .unwrap_err(),
+        DomainError::InvalidAttemptGrant { value: 0 }
+    );
+}
+
+#[test]
 fn extra_attempts_cannot_exceed_the_storage_limit() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);

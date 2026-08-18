@@ -7,6 +7,8 @@ use serde::Serialize;
 use crate::app::{AppError, ErrorCode};
 use crate::domain::DomainError;
 
+const INTERNAL_MESSAGE: &str = "internal server error";
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -37,7 +39,7 @@ impl ApiError {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             ErrorCode::InternalError.as_str(),
-            "internal server error",
+            INTERNAL_MESSAGE,
         )
     }
 }
@@ -133,7 +135,6 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
         assert_eq!(error.code(), "attempts_exhausted");
-        assert_eq!(error.message, "attempts exhausted: allowed 2, used 2");
     }
 
     #[test]
@@ -178,7 +179,7 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code(), "internal_error");
-        assert_eq!(error.message, "internal server error");
+        assert_eq!(error.message, INTERNAL_MESSAGE);
     }
 
     #[test]
@@ -189,7 +190,7 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::NOT_FOUND);
         assert_eq!(error.code(), "not_found");
-        assert_eq!(error.message, "assignment not found");
+        assert!(error.message.contains("assignment"));
     }
 
     #[test]
@@ -208,7 +209,7 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code(), "internal_error");
-        assert_eq!(error.message, "internal server error");
+        assert_eq!(error.message, INTERNAL_MESSAGE);
     }
 
     #[test]

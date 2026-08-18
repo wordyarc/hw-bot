@@ -22,6 +22,7 @@ pub use bootstrap::{BootstrapError, run_bootstrap};
 pub use error::{DbError, DbResult};
 
 pub(crate) use convert::checked_num_cast;
+pub(crate) use error::ensure_updated;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 

@@ -1,3 +1,8 @@
+use super::{Deps, TextStep, ensure_text_limit, require_text, reset_dialogue, resolve_actor};
+use crate::app::SubmitHomework;
+use crate::bot::texts;
+use crate::bot::views::student_keyboard;
+use crate::domain::USER_TEXT_MAX_LEN;
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::Requester;
@@ -31,7 +36,7 @@ pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
     };
 
     if places.is_empty() {
-        bot.send_message(chat_id, "⏳ Сейчас ни одна ваша работа не ждёт проверки.")
+        bot.send_message(chat_id, crate::bot::texts::STUDENT_QUEUE_EMPTY)
             .reply_markup(student_menu())
             .await?;
         return Ok(());
@@ -123,7 +128,11 @@ pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
         ));
         rows.push(vec![InlineKeyboardButton::callback(
             button_label(&format!("{subject} · {}", assignment.title().as_str())),
-            format!("assignment:{}", assignment.id().as_uuid()),
+            format!(
+                "{}{}",
+                crate::bot::callbacks::ASSIGNMENT_PREFIX,
+                assignment.id().as_uuid()
+            ),
         )]);
     }
 
@@ -167,7 +176,11 @@ pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
         ));
         rows.push(vec![InlineKeyboardButton::callback(
             button_label(&format!("{subject} · {}", assignment.title().as_str())),
-            format!("assignment:{}", assignment.id().as_uuid()),
+            format!(
+                "{}{}",
+                crate::bot::callbacks::ASSIGNMENT_PREFIX,
+                assignment.id().as_uuid()
+            ),
         )]);
     }
 
@@ -227,7 +240,11 @@ pub(super) async fn show_assignment(
     if assignment.status() == AssignmentStatus::Published {
         rows.push(vec![InlineKeyboardButton::callback(
             "📤 Сдать работу",
-            format!("submit:{}", assignment.id().as_uuid()),
+            format!(
+                "{}{}",
+                crate::bot::callbacks::SUBMIT_PREFIX,
+                assignment.id().as_uuid()
+            ),
         )]);
     }
     let (back_label, back_callback) = if assignment.status() == AssignmentStatus::Archived {
@@ -287,5 +304,62 @@ pub(super) async fn show_assignment(
     bot.send_message(chat_id, "Выберите действие:")
         .reply_markup(InlineKeyboardMarkup::new(rows))
         .await?;
+    Ok(())
+}
+
+pub(super) async fn submit_homework_text(
+    step: TextStep<'_>,
+    assignment_id: AssignmentId,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id,
+        deps,
+    } = step;
+    let Deps {
+        services,
+        dialogue,
+        timezone: _,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    if !ensure_text_limit(
+        bot,
+        message.chat.id,
+        text,
+        USER_TEXT_MAX_LEN,
+        "Текст работы",
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    let Some(actor) = resolve_actor(bot, message.chat.id, telegram_user_id, services).await? else {
+        return Ok(());
+    };
+    let result = services
+        .submissions
+        .submit_homework(SubmitHomework {
+            assignment_id,
+            actor,
+            content: text.to_owned(),
+            submitted_at: Utc::now(),
+        })
+        .await;
+
+    match result {
+        Ok(_) => {
+            reset_dialogue(dialogue).await?;
+            bot.send_message(message.chat.id, texts::submission_queued())
+                .reply_markup(student_keyboard())
+                .await?;
+        }
+        Err(error) => send_app_error(bot, message.chat.id, error).await?,
+    }
+
     Ok(())
 }

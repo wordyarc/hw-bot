@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use crate::app::access::load_student;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
-use crate::domain::{AssignmentId, DomainError, Submission, SubmissionId};
+use crate::domain::{AssignmentId, Submission, SubmissionId};
 
 #[derive(Clone, Debug)]
 pub struct SubmitHomework {
@@ -76,14 +77,7 @@ impl SubmissionService {
     }
 
     pub async fn pending_queue(&self, actor: Actor) -> AppResult<Vec<QueuePlace>> {
-        let student = load_actor(&self.pool, actor, "student").await?;
-
-        if !student.role().can_submit_homework() {
-            return Err(DomainError::PermissionDenied {
-                action: "read own review queue",
-            }
-            .into());
-        }
+        let student = load_student(&self.pool, actor, "read own review queue").await?;
 
         Ok(
             db::submissions::pending_queue_places(&self.pool, student.id())

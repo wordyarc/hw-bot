@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n            max_score, late_period_days, late_penalty, late_max_periods, status, created_by,\n            created_at, deadline_at, published_at\n        from assignments\n        where teaching_course_id = $1\n        order by created_at desc, id\n        ",
+  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty, late_max_periods, status, created_by,\n                created_at, deadline_at, published_at\n            , revision  from assignments where id = $1",
   "describe": {
     "columns": [
       {
@@ -178,6 +178,17 @@
             "name": "published_at"
           }
         }
+      },
+      {
+        "ordinal": 16,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "revision"
+          }
+        }
       }
     ],
     "parameters": {
@@ -201,8 +212,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "70ff94a225d945a52ec46ba4f4fc396066c5e998548906b83235a2d2f38492d4"
+  "hash": "852b794bbf38dc1d9dda67df90339a49b5e3e32de8aa17b62058bb9e0faafaec"
 }

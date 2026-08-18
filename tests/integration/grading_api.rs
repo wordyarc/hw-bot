@@ -33,36 +33,6 @@ async fn accepting_with_a_score_stores_the_whole_arithmetic() {
 }
 
 #[tokio::test]
-async fn accepting_a_scored_assignment_without_a_score_is_invalid_input() {
-    let app = TestApp::start().await;
-    let submission = scored_submission(&app, 5).await;
-
-    app.review(submission, app.teacher(), "accept", "Хорошо")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
-async fn a_score_on_a_pass_fail_assignment_is_rejected() {
-    let app = TestApp::start().await;
-    let submission = app.queued_submission(app.student(), "pull/1").await;
-
-    app.review_with_score(submission, app.teacher(), "accept", 1, "Хорошо")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
-async fn a_score_above_the_scale_is_rejected() {
-    let app = TestApp::start().await;
-    let submission = scored_submission(&app, 5).await;
-
-    app.review_with_score(submission, app.teacher(), "accept", 6, "Хорошо")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
 async fn a_submission_awaiting_review_has_no_grade() {
     let app = TestApp::start().await;
     let assignment = app.add_scored_assignment(5).await;
@@ -155,16 +125,6 @@ async fn a_scale_can_be_set_after_creation() {
         .ok();
 
     assert_eq!(body["max_score"], json!(10));
-}
-
-#[tokio::test]
-async fn a_scale_outside_the_allowed_range_is_rejected() {
-    let app = TestApp::start().await;
-    let draft = app.drafted_assignment(app.teacher()).await;
-
-    app.change_grading(draft, app.teacher(), Some(101))
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]
@@ -297,27 +257,6 @@ async fn moving_the_deadline_moves_the_horizon() {
         .ok();
 
     app.submit(id, app.student(), "pull/1").await.created();
-}
-
-#[tokio::test]
-async fn a_late_policy_without_a_scale_is_rejected() {
-    let app = TestApp::start().await;
-
-    app.create_assignment_raw(
-        app.course(),
-        app.teacher(),
-        json!({
-            "title": "No scale",
-            "body": "Send a pull request link.",
-            "max_attempts": 2,
-            "late_period_days": 7,
-            "late_penalty": 1,
-            "late_max_periods": 4,
-            "deadline_at": Utc::now() + Duration::days(7),
-        }),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]

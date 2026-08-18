@@ -5,6 +5,7 @@ use sqlx::postgres::PgExecutor;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     AssignmentId, DomainError, Role, StudentGroupId, Submission, SubmissionHistory, SubmissionId,
@@ -47,23 +48,29 @@ impl GradeColumns {
     }
 }
 
+macro_rules! select_submissions {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            SubmissionRow,
+            r#"
+            select
+                id, assignment_id, student_id, attempt_number, content, status, submitted_at,
+                reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty,
+                final_score
+            from submissions
+            "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
 pub async fn find_by_id<'e, E>(executor: E, id: SubmissionId) -> DbResult<Option<Submission>>
 where
     E: PgExecutor<'e>,
 {
-    let row = sqlx::query_as!(
-        SubmissionRow,
-        r#"
-        select
-            id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score
-        from submissions
-        where id = $1
-        "#,
-        id.as_uuid(),
-    )
-    .fetch_optional(executor)
-    .await?;
+    let row = select_submissions!("where id = $1", id.as_uuid())
+        .fetch_optional(executor)
+        .await?;
 
     row.map(Submission::try_from).transpose()
 }
@@ -143,13 +150,10 @@ where
     .execute(executor)
     .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(DbError::RuleViolation(
-            DomainError::SubmissionIsNotPendingReview,
-        ));
-    }
-
-    Ok(())
+    ensure_updated(
+        result,
+        DbError::RuleViolation(DomainError::SubmissionIsNotPendingReview),
+    )
 }
 
 pub async fn load_history<'e, E>(
@@ -265,17 +269,8 @@ pub async fn list_for_student<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    sqlx::query_as!(
-        SubmissionRow,
-        r#"
-        select
-            id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score
-        from submissions
-        where assignment_id = $1
-          and student_id = $2
-        order by attempt_number
-        "#,
+    select_submissions!(
+        "where assignment_id = $1 and student_id = $2 order by attempt_number",
         assignment_id.as_uuid(),
         student_id.as_uuid(),
     )

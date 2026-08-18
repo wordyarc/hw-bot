@@ -1,3 +1,4 @@
+use sqlx::postgres::PgQueryResult;
 use thiserror::Error;
 
 use crate::domain::DomainError;
@@ -6,6 +7,17 @@ pub type DbResult<T> = Result<T, DbError>;
 
 /// Postgres class 23505: `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
+
+/// Условный `update ... where <прежнее состояние>`: 0 затронутых строк означает, что состояние
+/// уже изменил конкурент. Какой именно ошибкой это назвать, решает вызывающий - у правок задания
+/// это конфликт записи, у проверки сдачи доменное правило.
+pub(crate) fn ensure_updated(result: PgQueryResult, lost: DbError) -> DbResult<()> {
+    if result.rows_affected() == 0 {
+        return Err(lost);
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum DbError {

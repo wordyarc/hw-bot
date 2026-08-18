@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            id, assignment_id, submission_id, position, presentation, filename, mime_type,\n            size_bytes, sha256, created_at\n        from stored_files\n        where assignment_id = $1\n        order by position\n        ",
+  "query": "\n            select\n                id, assignment_id, submission_id, position, presentation, filename, mime_type,\n                size_bytes, sha256, created_at\n             from stored_files where assignment_id = $1 order by position",
   "describe": {
     "columns": [
       {
@@ -132,5 +132,5 @@
       false
     ]
   },
-  "hash": "fb986af2329129fb93d3115b87e18ab8e3c650908605d338c6b89d95dbf9b8aa"
+  "hash": "3d48419a3e8bb94656a10d3e2168ff66050a052195d202cfd2d1d901655ba321"
 }

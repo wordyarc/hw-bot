@@ -551,6 +551,28 @@ mod tests {
     }
 
     #[test]
+    fn late_policy_rejects_each_field_outside_its_range() {
+        for (field, max) in [
+            ("period_days", MAX_LATE_PERIOD_DAYS),
+            ("penalty", MAX_LATE_PENALTY),
+            ("max_periods", MAX_LATE_PERIODS),
+        ] {
+            for value in [0, max + 1] {
+                let policy = match field {
+                    "period_days" => LatePolicy::new(value, 1, 1),
+                    "penalty" => LatePolicy::new(1, value, 1),
+                    _ => LatePolicy::new(1, 1, value),
+                };
+
+                assert_eq!(
+                    policy.unwrap_err(),
+                    DomainError::InvalidLatePolicy { field, value, max }
+                );
+            }
+        }
+    }
+
+    #[test]
     fn missing_max_score_means_pass_fail() {
         assert_eq!(Grading::from_max_score(None).unwrap(), Grading::PassFail);
         assert_eq!(

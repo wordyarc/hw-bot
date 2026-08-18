@@ -1,5 +1,6 @@
 use sqlx::{Postgres, Transaction};
 
+use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{AssignmentId, StudentAssignmentProgress, UserId};
 
@@ -45,11 +46,10 @@ pub async fn update(
     .execute(&mut **tx)
     .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(DbError::Conflict {
+    ensure_updated(
+        result,
+        DbError::Conflict {
             message: "student assignment progress was removed by a concurrent request",
-        });
-    }
-
-    Ok(())
+        },
+    )
 }

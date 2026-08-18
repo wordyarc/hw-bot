@@ -79,11 +79,8 @@ pub(super) async fn handle_message(
                 Ok(content) => content,
                 Err(error) => {
                     tracing::warn!(error = ?error, "Telegram file download failed");
-                    bot.send_message(
-                        message.chat.id,
-                        "Не удалось скачать файл. Попробуйте ещё раз.",
-                    )
-                    .await?;
+                    bot.send_message(message.chat.id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
+                        .await?;
                     return Ok(());
                 }
             };
@@ -98,12 +95,15 @@ pub(super) async fn handle_message(
                 .await?;
                 return Ok(());
             }
-            let actor = match services.users.resolve_actor(telegram_user_id).await {
-                Ok(actor) => actor,
-                Err(error) => {
-                    send_app_error(bot, message.chat.id, error).await?;
-                    return Ok(());
-                }
+            let Some(actor) = crate::bot::handlers::resolve_actor(
+                bot,
+                message.chat.id,
+                telegram_user_id,
+                services,
+            )
+            .await?
+            else {
+                return Ok(());
             };
             match services
                 .files
@@ -241,7 +241,7 @@ pub(super) async fn handle_screen_action(
             };
             if *deletion_requires_confirmation {
                 let confirmation = bot
-                    .send_message(chat_id, "Удалить вложение из уже выданного задания?")
+                    .send_message(chat_id, crate::bot::texts::FILE_DELETE_CONFIRM)
                     .reply_markup(confirm_file_deletion_keyboard())
                     .await?;
                 dialogue

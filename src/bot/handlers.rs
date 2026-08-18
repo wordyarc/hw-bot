@@ -1,10 +1,9 @@
-use crate::app::{Actor, ErrorCode, RegisterStudent, ReviewSubmission, SubmitHomework};
+use crate::app::{Actor, ErrorCode};
 use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DISPLAY_NAME_MAX_LEN, Grading, LatePolicy,
-    MAX_ATTEMPTS, MAX_SCORE, ReviewDecision, Role, SubmissionId, TelegramUserId, USER_TEXT_MAX_LEN,
+    AssignmentId, Grading, LatePolicy, MAX_ATTEMPTS, ReviewDecision, Role, SubmissionId,
+    TelegramUserId,
 };
 use anyhow::{Context, anyhow};
-use chrono::Utc;
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::{AnswerCallbackQuerySetters, SendMessageSetters, SetMyCommandsSetters};
 use teloxide::prelude::{Bot, Requester};
@@ -19,15 +18,17 @@ use super::callbacks::{
 };
 use super::errors::{send_app_error, send_error_code};
 use super::invites::BotInvites;
-use super::state::{BotDialogue, BotState, DraftAssignment, FlowState, ScreenState};
+use super::state::{BotDialogue, BotState, FlowState, ScreenState};
+use super::texts;
 use super::timezone::BotTimezone;
 use super::views::{
     BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW, MenuAction,
     ask_input, main_keyboard, menu_action, review_score_keyboard, role_name, send_message_chunks,
-    send_stale_button, student_keyboard, student_menu, teacher_keyboard, teacher_menu,
+    send_stale_button, student_menu, teacher_menu,
 };
 use super::{BotServices, HandlerResult};
 
+mod registration;
 mod review;
 mod student;
 mod teacher;
@@ -56,9 +57,6 @@ pub(super) enum Command {
     #[command(description = "❓ помощь")]
     Help,
 }
-
-const GUEST_NEEDS_INVITE: &str = "Регистрация только по ссылке-приглашению группы. Попросите её у преподавателя и откройте \
-     присланную ссылку.";
 
 const STUDENT_COMMANDS: [&str; 7] = [
     "menu", "tasks", "queue", "archive", "profile", "cancel", "help",
@@ -97,11 +95,11 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Role) {
 
 /// Зависимости dispatcher-а, которые нужны ещё до разрешения актора.
 #[derive(Clone, Copy)]
-struct Deps<'a> {
-    services: &'a BotServices,
-    dialogue: &'a BotDialogue,
-    timezone: &'a BotTimezone,
-    invites: &'a BotInvites,
+pub(super) struct Deps<'a> {
+    pub services: &'a BotServices,
+    pub dialogue: &'a BotDialogue,
+    pub timezone: &'a BotTimezone,
+    pub invites: &'a BotInvites,
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +111,29 @@ pub(super) struct Screen<'a> {
     dialogue: &'a BotDialogue,
     timezone: &'a BotTimezone,
     invites: &'a BotInvites,
+}
+
+/// Контекст текстового шага диалога: сам апдейт и зависимости dispatcher-а.
+#[derive(Clone, Copy)]
+pub(super) struct TextStep<'a> {
+    pub bot: &'a Bot,
+    pub message: &'a Message,
+    pub telegram_user_id: TelegramUserId,
+    pub deps: Deps<'a>,
+}
+
+impl<'a> Screen<'a> {
+    fn new(bot: &'a Bot, chat_id: ChatId, actor: Actor, deps: Deps<'a>) -> Self {
+        Self {
+            bot,
+            chat_id,
+            actor,
+            services: deps.services,
+            dialogue: deps.dialogue,
+            timezone: deps.timezone,
+            invites: deps.invites,
+        }
+    }
 }
 
 pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
@@ -281,22 +302,22 @@ pub(super) async fn handle_message(
 
     let actor = actor_from_message(&message)?;
     let state = dialogue.get().await?.unwrap_or_default();
+    let deps = Deps {
+        services: &services,
+        dialogue: &dialogue,
+        timezone: &timezone,
+        invites: &invites,
+    };
+    let step = TextStep {
+        bot: &bot,
+        message: &message,
+        telegram_user_id: actor,
+        deps,
+    };
 
     if let Some(action) = message.text().and_then(menu_action) {
         reset_dialogue(&dialogue).await?;
-        return run_menu_action(
-            &bot,
-            message.chat.id,
-            actor,
-            action,
-            Deps {
-                services: &services,
-                dialogue: &dialogue,
-                timezone: &timezone,
-                invites: &invites,
-            },
-        )
-        .await;
+        return run_menu_action(&bot, message.chat.id, actor, action, deps).await;
     }
 
     if matches!(
@@ -313,87 +334,14 @@ pub(super) async fn handle_message(
 
     match state {
         BotState::Idle => {
-            bot.send_message(
-                message.chat.id,
-                "Используйте меню под полем ввода или команду /menu.",
-            )
-            .await?;
+            bot.send_message(message.chat.id, texts::USE_THE_MENU)
+                .await?;
         }
         BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            if text.trim().is_empty() {
-                bot.send_message(message.chat.id, "Имя не должно быть пустым.")
-                    .await?;
-                return Ok(());
-            }
-            if !ensure_text_limit(&bot, message.chat.id, text, DISPLAY_NAME_MAX_LEN, "Имя").await?
-            {
-                return Ok(());
-            }
-
-            match services
-                .users
-                .register_student(RegisterStudent {
-                    telegram_user_id: actor,
-                    display_name: text.trim().to_owned(),
-                    invite,
-                    registered_at: Utc::now(),
-                })
-                .await
-            {
-                Ok(_) => {
-                    reset_dialogue(&dialogue).await?;
-                    bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
-                        .await?;
-                    show_home(&bot, message.chat.id, actor, &services).await?;
-                }
-                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
-            }
+            registration::submit_name(step, invite).await?;
         }
         BotState::Flow(FlowState::AwaitingSubmission { assignment_id }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            if !ensure_text_limit(
-                &bot,
-                message.chat.id,
-                text,
-                USER_TEXT_MAX_LEN,
-                "Текст работы",
-            )
-            .await?
-            {
-                return Ok(());
-            }
-            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
-                return Ok(());
-            };
-            let result = services
-                .submissions
-                .submit_homework(SubmitHomework {
-                    assignment_id,
-                    actor,
-                    content: text.to_owned(),
-                    submitted_at: Utc::now(),
-                })
-                .await;
-
-            match result {
-                Ok(_) => {
-                    reset_dialogue(&dialogue).await?;
-                    bot.send_message(
-                        message.chat.id,
-                        format!(
-                            "✅ Работа отправлена на проверку. Место в очереди видно в «{BUTTON_QUEUE}»."
-                        ),
-                    )
-                    .reply_markup(student_keyboard())
-                    .await?;
-                }
-                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
-            }
+            student::submit_homework_text(step, assignment_id).await?;
         }
         BotState::Flow(FlowState::AwaitingReviewDecision { .. }) => {
             bot.send_message(message.chat.id, "Выберите решение кнопкой под сдачей.")
@@ -404,80 +352,14 @@ pub(super) async fn handle_message(
             max_score,
             penalty,
         }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            let Some(score) = parse_score(text, max_score) else {
-                bot.send_message(
-                    message.chat.id,
-                    format!("Введите целое число от 0 до {max_score}."),
-                )
-                .await?;
-                return Ok(());
-            };
-            confirm_score(&bot, message.chat.id, score, penalty, max_score).await?;
-            ask_review_comment(
-                &bot,
-                message.chat.id,
-                submission_id,
-                ReviewDecision::Accept,
-                Some(score),
-                &dialogue,
-            )
-            .await?;
+            review::submit_score_text(step, submission_id, max_score, penalty).await?;
         }
         BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id,
             decision,
             score,
         }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            if !ensure_text_limit(
-                &bot,
-                message.chat.id,
-                text,
-                USER_TEXT_MAX_LEN,
-                "Комментарий",
-            )
-            .await?
-            {
-                return Ok(());
-            }
-            let Some(reviewer) = resolve_actor(&bot, message.chat.id, actor, &services).await?
-            else {
-                return Ok(());
-            };
-            let result = services
-                .reviews
-                .review_submission(ReviewSubmission {
-                    submission_id,
-                    actor: reviewer,
-                    decision,
-                    score,
-                    comment: text.to_owned(),
-                    reviewed_at: Utc::now(),
-                })
-                .await;
-
-            match result {
-                Ok(_) => {
-                    reset_dialogue(&dialogue).await?;
-                    bot.send_message(
-                        message.chat.id,
-                        "✅ Решение сохранено, студент получит уведомление.",
-                    )
-                    .reply_markup(teacher_keyboard())
-                    .await?;
-                }
-                Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
-                    reset_dialogue(&dialogue).await?;
-                    send_app_error(&bot, message.chat.id, error).await?;
-                    show_home(&bot, message.chat.id, actor, &services).await?;
-                }
-                Err(error) => send_app_error(&bot, message.chat.id, error).await?,
-            }
+            review::submit_comment(step, submission_id, decision, score).await?;
         }
         BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
             bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
@@ -492,67 +374,10 @@ pub(super) async fn handle_message(
         | BotState::Flow(FlowState::AwaitingAssignmentFile { .. })
         | BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => unreachable!(),
         BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            if text.trim().is_empty() {
-                bot.send_message(message.chat.id, "Название не должно быть пустым.")
-                    .await?;
-                return Ok(());
-            }
-            if !ensure_text_limit(
-                &bot,
-                message.chat.id,
-                text,
-                ASSIGNMENT_TITLE_MAX_LEN,
-                "Название",
-            )
-            .await?
-            {
-                return Ok(());
-            }
-            dialogue
-                .update(BotState::Flow(FlowState::AwaitingAssignmentBody {
-                    course_id,
-                    title: text.to_owned(),
-                }))
-                .await?;
-            ask_input(
-                &bot,
-                message.chat.id,
-                "2/5. Пришлите текст задания одним сообщением:",
-            )
-            .await?;
+            teacher::submit_title(step, course_id).await?;
         }
         BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            if text.trim().is_empty() {
-                bot.send_message(message.chat.id, "Текст задания не должен быть пустым.")
-                    .await?;
-                return Ok(());
-            }
-            if !ensure_text_limit(
-                &bot,
-                message.chat.id,
-                text,
-                USER_TEXT_MAX_LEN,
-                "Текст задания",
-            )
-            .await?
-            {
-                return Ok(());
-            }
-            teacher::ask_max_attempts(
-                &bot,
-                message.chat.id,
-                course_id,
-                title,
-                text.to_owned(),
-                &dialogue,
-            )
-            .await?;
+            teacher::submit_body(step, course_id, title).await?;
         }
         BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
             course_id,
@@ -560,91 +385,20 @@ pub(super) async fn handle_message(
             body,
             ..
         }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            let Some(max_attempts) = parse_positive_attempts(text) else {
-                bot.send_message(
-                    message.chat.id,
-                    format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
-                )
-                .await?;
-                return Ok(());
-            };
-            teacher::ask_grading(
-                &bot,
-                message.chat.id,
-                DraftAssignment::new(course_id, title, body, max_attempts),
-                &dialogue,
-            )
-            .await?;
+            teacher::submit_max_attempts(step, course_id, title, body).await?;
         }
         BotState::Flow(FlowState::ChoosingGrading { draft, .. })
         | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            let Some(grading) = parse_max_score(text) else {
-                bot.send_message(
-                    message.chat.id,
-                    format!("Введите целое число от 1 до {MAX_SCORE}."),
-                )
-                .await?;
-                return Ok(());
-            };
-            teacher::apply_grading(&bot, message.chat.id, draft, grading, &dialogue, &timezone)
-                .await?;
+            teacher::submit_grading_text(step, draft).await?;
         }
         BotState::Flow(FlowState::ChoosingLatePolicy { draft, .. })
         | BotState::Flow(FlowState::AwaitingLatePolicyText { draft }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            let Some(late_policy) = parse_late_policy(text) else {
-                bot.send_message(
-                    message.chat.id,
-                    "Введите три числа через пробел, например «7 1 4».",
-                )
-                .await?;
-                return Ok(());
-            };
-            teacher::apply_late_policy(
-                &bot,
-                message.chat.id,
-                draft,
-                Some(late_policy),
-                &dialogue,
-                &timezone,
-            )
-            .await?;
+            teacher::submit_late_policy_text(step, draft).await?;
         }
         BotState::Flow(FlowState::ChoosingDeadline { target, .. })
         | BotState::Flow(FlowState::PickingDeadlineDate { target, .. })
         | BotState::Flow(FlowState::AwaitingDeadlineText { target }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            let Some(deadline_at) = timezone.parse_deadline(text) else {
-                send_deadline_format_error(&bot, message.chat.id, &timezone).await?;
-                return Ok(());
-            };
-            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
-                return Ok(());
-            };
-            teacher::apply_deadline(
-                Screen {
-                    bot: &bot,
-                    chat_id: message.chat.id,
-                    actor,
-                    services: &services,
-                    dialogue: &dialogue,
-                    timezone: &timezone,
-                    invites: &invites,
-                },
-                target,
-                deadline_at,
-            )
-            .await?;
+            teacher::submit_deadline_text(step, target).await?;
         }
         BotState::Flow(FlowState::ChoosingGradebookStudent { .. })
         | BotState::Flow(FlowState::ChoosingAttemptStudent { .. }) => {
@@ -656,35 +410,7 @@ pub(super) async fn handle_message(
             student_id,
             ..
         }) => {
-            let Some(text) = require_text(&bot, &message).await? else {
-                return Ok(());
-            };
-            let Some(amount) = parse_positive_attempts(text) else {
-                bot.send_message(
-                    message.chat.id,
-                    format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
-                )
-                .await?;
-                return Ok(());
-            };
-            let Some(actor) = resolve_actor(&bot, message.chat.id, actor, &services).await? else {
-                return Ok(());
-            };
-            teacher::grant_attempts(
-                Screen {
-                    bot: &bot,
-                    chat_id: message.chat.id,
-                    actor,
-                    services: &services,
-                    dialogue: &dialogue,
-                    timezone: &timezone,
-                    invites: &invites,
-                },
-                assignment_id,
-                student_id,
-                amount,
-            )
-            .await?;
+            teacher::submit_attempt_amount(step, assignment_id, student_id).await?;
         }
     }
 
@@ -698,28 +424,14 @@ async fn run_menu_action(
     action: MenuAction,
     deps: Deps<'_>,
 ) -> HandlerResult {
-    let Deps {
-        services,
-        dialogue,
-        timezone,
-        invites,
-    } = deps;
     if action == MenuAction::Help {
-        return send_help(bot, chat_id, telegram_user_id, services, timezone).await;
+        return send_help(bot, chat_id, telegram_user_id, deps.services, deps.timezone).await;
     }
 
-    let Some(actor) = resolve_actor(bot, chat_id, telegram_user_id, services).await? else {
+    let Some(actor) = resolve_actor(bot, chat_id, telegram_user_id, deps.services).await? else {
         return Ok(());
     };
-    let screen = Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        dialogue,
-        timezone,
-        invites,
-    };
+    let screen = Screen::new(bot, chat_id, actor, deps);
 
     match action {
         MenuAction::Assignments => student::show_assignments(screen).await,
@@ -732,7 +444,7 @@ async fn run_menu_action(
     }
 }
 
-async fn ensure_text_limit(
+pub(super) async fn ensure_text_limit(
     bot: &Bot,
     chat_id: ChatId,
     text: &str,
@@ -787,18 +499,16 @@ pub(super) async fn handle_callback(
         reset_dialogue(&dialogue).await?;
     }
 
-    let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services).await? else {
-        return Ok(());
-    };
-    let screen = Screen {
-        bot: &bot,
-        chat_id,
-        actor,
+    let deps = Deps {
         services: &services,
         dialogue: &dialogue,
         timezone: &timezone,
         invites: &invites,
     };
+    let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services).await? else {
+        return Ok(());
+    };
+    let screen = Screen::new(&bot, chat_id, actor, deps);
 
     match action {
         CallbackAction::Replayable(action) => {
@@ -851,12 +561,7 @@ async fn handle_replayable_action(
                     assignment_id,
                 }))
                 .await?;
-            ask_input(
-                screen.bot,
-                screen.chat_id,
-                "Пришлите ссылку или текст сдачи одним сообщением:",
-            )
-            .await
+            ask_input(screen.bot, screen.chat_id, texts::SUBMISSION_PROMPT).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(
@@ -1009,7 +714,7 @@ async fn handle_flow_action(
     Ok(())
 }
 
-async fn show_home(
+pub(super) async fn show_home(
     bot: &Bot,
     chat_id: ChatId,
     actor: TelegramUserId,
@@ -1058,7 +763,7 @@ async fn show_home(
                 .await?;
         }
         Err(error) if error.code() == ErrorCode::NotFound => {
-            bot.send_message(chat_id, GUEST_NEEDS_INVITE).await?;
+            bot.send_message(chat_id, texts::GUEST_NEEDS_INVITE).await?;
         }
         Err(error) => send_app_error(bot, chat_id, error).await?,
     }
@@ -1086,7 +791,7 @@ async fn start_registration(
     }
 
     if payload.is_empty() {
-        bot.send_message(chat_id, GUEST_NEEDS_INVITE).await?;
+        bot.send_message(chat_id, texts::GUEST_NEEDS_INVITE).await?;
         return Ok(());
     }
 
@@ -1210,7 +915,10 @@ fn current_assignment_screen(
         .then_some(assignment_id)
 }
 
-async fn require_text<'a>(bot: &Bot, message: &'a Message) -> HandlerResult<Option<&'a str>> {
+pub(super) async fn require_text<'a>(
+    bot: &Bot,
+    message: &'a Message,
+) -> HandlerResult<Option<&'a str>> {
     let Some(text) = message.text() else {
         bot.send_message(message.chat.id, "Пришлите текстовое сообщение.")
             .await?;
@@ -1260,7 +968,7 @@ async fn ask_review_score(
     .await
 }
 
-async fn ask_review_comment(
+pub(super) async fn ask_review_comment(
     bot: &Bot,
     chat_id: ChatId,
     submission_id: SubmissionId,
@@ -1278,7 +986,7 @@ async fn ask_review_comment(
     ask_input(bot, chat_id, "Напишите обязательный комментарий к решению:").await
 }
 
-async fn confirm_score(
+pub(super) async fn confirm_score(
     bot: &Bot,
     chat_id: ChatId,
     score: u16,
@@ -1338,7 +1046,7 @@ async fn handle_review_score(
     .await
 }
 
-fn parse_late_policy(text: &str) -> Option<LatePolicy> {
+pub(super) fn parse_late_policy(text: &str) -> Option<LatePolicy> {
     let mut parts = text.split_whitespace();
     let mut next = || parse_number(parts.next()?);
     let (period_days, penalty, max_periods) = (next()?, next()?, next()?);
@@ -1350,11 +1058,11 @@ fn parse_late_policy(text: &str) -> Option<LatePolicy> {
         .flatten()
 }
 
-fn parse_max_score(text: &str) -> Option<Grading> {
+pub(super) fn parse_max_score(text: &str) -> Option<Grading> {
     Grading::scored(parse_number(text)?).ok()
 }
 
-fn parse_score(text: &str, max_score: u16) -> Option<u16> {
+pub(super) fn parse_score(text: &str, max_score: u16) -> Option<u16> {
     let score = parse_number(text)?;
 
     (score <= max_score).then_some(score)
@@ -1369,7 +1077,7 @@ fn parse_number(text: &str) -> Option<u16> {
     text.parse().ok()
 }
 
-fn parse_positive_attempts(text: &str) -> Option<u16> {
+pub(super) fn parse_positive_attempts(text: &str) -> Option<u16> {
     let text = text.trim();
     if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -1379,7 +1087,7 @@ fn parse_positive_attempts(text: &str) -> Option<u16> {
     (value > 0 && value <= MAX_ATTEMPTS).then_some(value)
 }
 
-async fn send_deadline_format_error(
+pub(super) async fn send_deadline_format_error(
     bot: &Bot,
     chat_id: ChatId,
     timezone: &BotTimezone,
@@ -1395,7 +1103,7 @@ async fn send_deadline_format_error(
     Ok(())
 }
 
-async fn resolve_actor(
+pub(super) async fn resolve_actor(
     bot: &Bot,
     chat_id: ChatId,
     telegram_user_id: TelegramUserId,
@@ -1412,7 +1120,7 @@ async fn resolve_actor(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, FixedOffset, NaiveTime};
+    use chrono::{DateTime, FixedOffset, NaiveTime, Utc};
     use serde_json::json;
     use sqlx::postgres::PgPoolOptions;
     use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};

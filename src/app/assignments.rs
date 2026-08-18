@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use crate::app::access::{load_managing_teacher, load_student};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -295,34 +296,19 @@ impl AssignmentService {
         actor: Actor,
         teaching_course_id: TeachingCourseId,
     ) -> AppResult<Vec<Assignment>> {
-        let actor = load_actor(&self.pool, actor, "teacher").await?;
-
-        let teaching_course =
-            db::academic::find_teaching_course_by_id(&self.pool, teaching_course_id)
-                .await?
-                .required("teaching course")?;
-
-        if !teaching_course.can_be_managed_by(&actor) {
-            return Err(DomainError::PermissionDenied {
-                action: "list course assignments",
-            }
-            .into());
-        }
+        load_managing_teacher(
+            &self.pool,
+            actor,
+            teaching_course_id,
+            "list course assignments",
+        )
+        .await?;
 
         Ok(db::assignments::list_for_course(&self.pool, teaching_course_id).await?)
     }
 
     async fn student(&self, actor: Actor) -> AppResult<User> {
-        let student = load_actor(&self.pool, actor, "student").await?;
-
-        if !student.role().can_submit_homework() {
-            return Err(DomainError::PermissionDenied {
-                action: "list student assignments",
-            }
-            .into());
-        }
-
-        Ok(student)
+        load_student(&self.pool, actor, "list student assignments").await
     }
 
     async fn load_managed_assignment(
@@ -331,18 +317,14 @@ impl AssignmentService {
         assignment_id: AssignmentId,
         action: &'static str,
     ) -> AppResult<Assignment> {
-        let actor = load_actor(&self.pool, actor, "teacher").await?;
         let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
             .await?
             .required("assignment")?;
-        let teaching_course =
-            db::academic::find_teaching_course_by_id(&self.pool, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
+        let (actor, teaching_course) =
+            load_managing_teacher(&self.pool, actor, assignment.teaching_course_id(), action)
+                .await?;
 
-        if !teaching_course.can_be_managed_by(&actor) {
-            return Err(DomainError::PermissionDenied { action }.into());
-        }
+        assignment.ensure_managed_by(&teaching_course, &actor, action)?;
 
         Ok(assignment)
     }
@@ -393,13 +375,7 @@ pub(crate) async fn load_visible_assignment_for_student(
     actor: Actor,
     assignment_id: AssignmentId,
 ) -> AppResult<(User, Assignment)> {
-    let student = load_actor(pool, actor, "student").await?;
-    if !student.role().can_submit_homework() {
-        return Err(DomainError::PermissionDenied {
-            action: "view student assignment",
-        }
-        .into());
-    }
+    let student = load_student(pool, actor, "view student assignment").await?;
 
     let assignment = db::assignments::find_by_id(pool, assignment_id)
         .await?

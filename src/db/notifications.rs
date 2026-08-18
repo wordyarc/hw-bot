@@ -13,6 +13,7 @@ const FINAL_SCORE: &str = "review_notification_outbox.final_score";
 const MAX_SCORE: &str = "review_notification_outbox.max_score";
 
 #[derive(Clone, Debug)]
+
 pub struct ClaimedReviewNotification {
     pub id: Uuid,
     pub submission_id: SubmissionId,
@@ -25,6 +26,24 @@ pub struct ClaimedReviewNotification {
     pub max_score: Option<u16>,
     pub attempt_count: u32,
     pub lease_token: Uuid,
+}
+
+macro_rules! release_lease {
+    ($set:literal, $guard:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query!(
+            r#"
+            update review_notification_outbox
+            set "# + $set + r#",
+                lease_token = null,
+                lease_expires_at = null
+            where id = $1
+              and lease_token = $2 "# + $guard + r#"
+              and delivered_at is null
+              and failed_at is null
+            "#
+            $(, $arg)*
+        )
+    };
 }
 
 pub async fn enqueue_review_result<'e, E>(
@@ -145,19 +164,9 @@ pub async fn mark_delivered<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let result = sqlx::query!(
-        r#"
-        update review_notification_outbox
-        set
-            delivered_at = $3,
-            lease_token = null,
-            lease_expires_at = null,
-            last_error = null
-        where id = $1
-          and lease_token = $2
-          and delivered_at is null
-          and failed_at is null
-        "#,
+    let result = release_lease!(
+        "delivered_at = $3, last_error = null",
+        "",
         id,
         lease_token,
         delivered_at,
@@ -178,19 +187,9 @@ pub async fn reschedule<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let result = sqlx::query!(
-        r#"
-        update review_notification_outbox
-        set
-            available_at = $3,
-            lease_token = null,
-            lease_expires_at = null,
-            last_error = $4
-        where id = $1
-          and lease_token = $2
-          and delivered_at is null
-          and failed_at is null
-        "#,
+    let result = release_lease!(
+        "available_at = $3, last_error = $4",
+        "",
         id,
         lease_token,
         available_at,
@@ -211,20 +210,9 @@ pub async fn release_after_credentials_failure<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let result = sqlx::query!(
-        r#"
-        update review_notification_outbox
-        set
-            attempt_count = attempt_count - 1,
-            lease_token = null,
-            lease_expires_at = null,
-            last_error = $3
-        where id = $1
-          and lease_token = $2
-          and attempt_count > 0
-          and delivered_at is null
-          and failed_at is null
-        "#,
+    let result = release_lease!(
+        "attempt_count = attempt_count - 1, last_error = $3",
+        "and attempt_count > 0",
         id,
         lease_token,
         last_error,
@@ -245,19 +233,9 @@ pub async fn mark_failed<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let result = sqlx::query!(
-        r#"
-        update review_notification_outbox
-        set
-            failed_at = $3,
-            lease_token = null,
-            lease_expires_at = null,
-            last_error = $4
-        where id = $1
-          and lease_token = $2
-          and delivered_at is null
-          and failed_at is null
-        "#,
+    let result = release_lease!(
+        "failed_at = $3, last_error = $4",
+        "",
         id,
         lease_token,
         failed_at,

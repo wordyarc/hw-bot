@@ -2,6 +2,7 @@ use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
 
 use crate::db::academic::StudentGroupRow;
+use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{InviteGeneration, StudentGroup, StudentGroupId};
 
@@ -68,11 +69,12 @@ where
     .execute(executor)
     .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(DbError::Conflict {
+    ensure_updated(
+        result,
+        DbError::Conflict {
             message: "group invite was rotated by a concurrent request",
-        });
-    }
+        },
+    )?;
 
     Ok(rotated)
 }

@@ -1,3 +1,8 @@
+use super::{
+    Deps, TextStep, ensure_text_limit, parse_late_policy, parse_max_score, parse_positive_attempts,
+    require_text, resolve_actor, send_deadline_format_error,
+};
+use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, USER_TEXT_MAX_LEN};
 use chrono::{DateTime, Utc};
 use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
 use teloxide::prelude::Requester;
@@ -662,7 +667,7 @@ pub(super) async fn apply_grading(
     }
 
     let sent = bot
-        .send_message(chat_id, "Штраф за опоздание?")
+        .send_message(chat_id, crate::bot::texts::LATE_POLICY_QUESTION)
         .reply_markup(late_policy_keyboard())
         .await?;
     dialogue
@@ -1089,4 +1094,362 @@ pub(super) async fn grant_attempts(
         Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
     }
     Ok(())
+}
+
+pub(super) async fn submit_title(step: TextStep<'_>, course_id: TeachingCourseId) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id: _,
+        deps,
+    } = step;
+    let Deps {
+        services: _,
+        dialogue,
+        timezone: _,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    if text.trim().is_empty() {
+        bot.send_message(message.chat.id, "Название не должно быть пустым.")
+            .await?;
+        return Ok(());
+    }
+    if !ensure_text_limit(
+        bot,
+        message.chat.id,
+        text,
+        ASSIGNMENT_TITLE_MAX_LEN,
+        "Название",
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    dialogue
+        .update(BotState::Flow(FlowState::AwaitingAssignmentBody {
+            course_id,
+            title: text.to_owned(),
+        }))
+        .await?;
+    ask_input(
+        bot,
+        message.chat.id,
+        "2/5. Пришлите текст задания одним сообщением:",
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub(super) async fn submit_body(
+    step: TextStep<'_>,
+    course_id: TeachingCourseId,
+    title: String,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id: _,
+        deps,
+    } = step;
+    let Deps {
+        services: _,
+        dialogue,
+        timezone: _,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    if text.trim().is_empty() {
+        bot.send_message(message.chat.id, "Текст задания не должен быть пустым.")
+            .await?;
+        return Ok(());
+    }
+    if !ensure_text_limit(
+        bot,
+        message.chat.id,
+        text,
+        USER_TEXT_MAX_LEN,
+        "Текст задания",
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    ask_max_attempts(
+        bot,
+        message.chat.id,
+        course_id,
+        title,
+        text.to_owned(),
+        dialogue,
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub(super) async fn submit_max_attempts(
+    step: TextStep<'_>,
+    course_id: TeachingCourseId,
+    title: String,
+    body: String,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id: _,
+        deps,
+    } = step;
+    let Deps {
+        services: _,
+        dialogue,
+        timezone: _,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    let Some(max_attempts) = parse_positive_attempts(text) else {
+        bot.send_message(
+            message.chat.id,
+            format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
+        )
+        .await?;
+        return Ok(());
+    };
+    ask_grading(
+        bot,
+        message.chat.id,
+        DraftAssignment::new(course_id, title, body, max_attempts),
+        dialogue,
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub(super) async fn submit_grading_text(
+    step: TextStep<'_>,
+    draft: DraftAssignment,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id: _,
+        deps,
+    } = step;
+    let Deps {
+        services: _,
+        dialogue,
+        timezone,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    let Some(grading) = parse_max_score(text) else {
+        bot.send_message(
+            message.chat.id,
+            format!("Введите целое число от 1 до {MAX_SCORE}."),
+        )
+        .await?;
+        return Ok(());
+    };
+    apply_grading(bot, message.chat.id, draft, grading, dialogue, timezone).await?;
+
+    Ok(())
+}
+
+pub(super) async fn submit_late_policy_text(
+    step: TextStep<'_>,
+    draft: DraftAssignment,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id: _,
+        deps,
+    } = step;
+    let Deps {
+        services: _,
+        dialogue,
+        timezone,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    let Some(late_policy) = parse_late_policy(text) else {
+        bot.send_message(
+            message.chat.id,
+            "Введите три числа через пробел, например «7 1 4».",
+        )
+        .await?;
+        return Ok(());
+    };
+    apply_late_policy(
+        bot,
+        message.chat.id,
+        draft,
+        Some(late_policy),
+        dialogue,
+        timezone,
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub(super) async fn submit_deadline_text(
+    step: TextStep<'_>,
+    target: DeadlineTarget,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id,
+        deps,
+    } = step;
+    let Deps {
+        services,
+        dialogue: _,
+        timezone,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    let Some(deadline_at) = timezone.parse_deadline(text) else {
+        send_deadline_format_error(bot, message.chat.id, timezone).await?;
+        return Ok(());
+    };
+    let Some(actor) = resolve_actor(bot, message.chat.id, telegram_user_id, services).await? else {
+        return Ok(());
+    };
+    apply_deadline(
+        Screen::new(bot, message.chat.id, actor, deps),
+        target,
+        deadline_at,
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub(super) async fn submit_attempt_amount(
+    step: TextStep<'_>,
+    assignment_id: AssignmentId,
+    student_id: UserId,
+) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id,
+        deps,
+    } = step;
+    let Deps {
+        services,
+        dialogue: _,
+        timezone: _,
+        invites: _,
+    } = deps;
+
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(());
+    };
+    let Some(amount) = parse_positive_attempts(text) else {
+        bot.send_message(
+            message.chat.id,
+            format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
+        )
+        .await?;
+        return Ok(());
+    };
+    let Some(actor) = resolve_actor(bot, message.chat.id, telegram_user_id, services).await? else {
+        return Ok(());
+    };
+    grant_attempts(
+        Screen::new(bot, message.chat.id, actor, deps),
+        assignment_id,
+        student_id,
+        amount,
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{FixedOffset, NaiveTime};
+
+    use super::*;
+
+    fn timezone() -> BotTimezone {
+        BotTimezone::new(
+            FixedOffset::east_opt(10 * 3600).unwrap(),
+            NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
+        )
+    }
+
+    #[test]
+    fn only_a_preset_within_the_attempt_limit_is_accepted() {
+        assert_eq!(chosen_amount(AmountChoice::Preset(1)), Some(1));
+        assert_eq!(
+            chosen_amount(AmountChoice::Preset(MAX_ATTEMPTS)),
+            Some(MAX_ATTEMPTS)
+        );
+    }
+
+    #[test]
+    fn a_preset_outside_the_attempt_limit_falls_back_to_manual_input() {
+        assert_eq!(chosen_amount(AmountChoice::Preset(0)), None);
+        assert_eq!(chosen_amount(AmountChoice::Preset(MAX_ATTEMPTS + 1)), None);
+        assert_eq!(chosen_amount(AmountChoice::Manual), None);
+    }
+
+    #[test]
+    fn the_deadline_prompt_is_numbered_only_while_creating() {
+        let draft = DraftAssignment::new(
+            TeachingCourseId::new(),
+            "Rust".to_owned(),
+            "Body".to_owned(),
+            2,
+        );
+
+        let creating = deadline_prompt(&DeadlineTarget::Create(draft), &timezone());
+        let changing = deadline_prompt(
+            &DeadlineTarget::Change {
+                assignment_id: AssignmentId::new(),
+            },
+            &timezone(),
+        );
+
+        assert!(creating.starts_with("5/5."));
+        assert!(!changing.contains("5/5"));
+    }
+
+    #[test]
+    fn the_deadline_prompt_names_the_default_time_and_the_offset() {
+        let prompt = deadline_prompt(
+            &DeadlineTarget::Change {
+                assignment_id: AssignmentId::new(),
+            },
+            &timezone(),
+        );
+
+        assert!(prompt.contains("23:59"), "{prompt}");
+        assert!(prompt.contains("UTC+10"), "{prompt}");
+    }
 }

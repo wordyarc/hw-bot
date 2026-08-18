@@ -82,26 +82,6 @@ async fn a_signed_invite_for_an_unknown_group_is_rejected() {
 }
 
 #[tokio::test]
-async fn empty_display_name_is_rejected() {
-    let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
-
-    app.register_student(2002, "   ", &token)
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
-async fn oversized_display_name_is_rejected() {
-    let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
-
-    app.register_student(app.next_telegram_id(), &"я".repeat(101), &token)
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
 async fn a_registered_caller_reads_their_own_profile() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();

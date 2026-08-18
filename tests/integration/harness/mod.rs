@@ -25,6 +25,7 @@ use uuid::Uuid;
 mod database;
 mod fixture;
 mod response;
+pub mod telegram;
 
 pub use database::{fresh_database, migrated_database};
 pub use fixture::{CourseFixture, Fixture};

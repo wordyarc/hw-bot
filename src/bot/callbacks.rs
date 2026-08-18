@@ -2,11 +2,55 @@ use chrono::NaiveDate;
 
 use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId, UserId};
 
-pub(super) const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
-pub(super) const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
-pub(super) const GRADING_PREFIX: &str = "grading:";
-pub(super) const REVIEW_SCORE_PREFIX: &str = "score:";
-pub(super) const LATE_POLICY_PREFIX: &str = "late:";
+pub const MENU_ASSIGNMENTS: &str = "menu:assignments";
+pub const MENU_ARCHIVE: &str = "menu:archive";
+pub const MENU_QUEUE: &str = "menu:queue";
+pub const MENU_PROFILE: &str = "menu:profile";
+pub const MENU_COURSES: &str = "menu:courses";
+pub const NEXT_REVIEW: &str = "review:next";
+
+pub const COURSE_PREFIX: &str = "course:";
+pub const ASSIGNMENT_PREFIX: &str = "assignment:";
+pub const MANAGE_PREFIX: &str = "manage:";
+pub const CREATE_PREFIX: &str = "create:";
+pub const SUBMIT_PREFIX: &str = "submit:";
+pub const FILES_PREFIX: &str = "files:";
+pub const ATTEMPTS_PREFIX: &str = "attempts:";
+pub const INVITE_PREFIX: &str = "invite:";
+pub const GRADES_PREFIX: &str = "grades:";
+pub const PUBLISH_PREFIX: &str = "publish:";
+pub const ARCHIVE_PREFIX: &str = "archive:";
+pub const DEADLINE_PREFIX: &str = "deadline:";
+pub const STUDENT_PREFIX: &str = "student:";
+pub const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
+pub const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
+pub const GRADING_PREFIX: &str = "grading:";
+pub const REVIEW_SCORE_PREFIX: &str = "score:";
+pub const LATE_POLICY_PREFIX: &str = "late:";
+
+pub const FILE_ADD: &str = "file:add";
+pub const FILE_FINISH: &str = "file:finish";
+pub const FILE_CONFIRM_DELETE: &str = "file:confirm-delete";
+pub const FILE_CANCEL_DELETE: &str = "file:cancel-delete";
+pub const FILE_OPEN_PREFIX: &str = "file:open:";
+pub const FILE_DELETE_PREFIX: &str = "file:delete:";
+
+pub const INVITE_ROTATE: &str = "invite:rotate";
+pub const INVITE_CONFIRM_ROTATE: &str = "invite:confirm-rotate";
+pub const INVITE_CANCEL_ROTATE: &str = "invite:cancel-rotate";
+
+pub const REVIEW_ACCEPT_PREFIX: &str = "review:accept:";
+pub const REVIEW_REJECT_PREFIX: &str = "review:reject:";
+
+pub const DEADLINE_CALENDAR: &str = "dl:calendar";
+pub const DEADLINE_MANUAL: &str = "dl:manual";
+pub const DEADLINE_OPTIONS: &str = "dl:options";
+pub const DEADLINE_DAYS_PREFIX: &str = "dl:days:";
+pub const DEADLINE_MONTHS_PREFIX: &str = "dl:months:";
+pub const CALENDAR_PICK_PREFIX: &str = "cal:pick:";
+/// Разбирается последним из семейства `cal:`, иначе съел бы `cal:pick:` и `cal:noop`
+pub const CALENDAR_MONTH_PREFIX: &str = "cal:";
+pub const CALENDAR_NOOP: &str = "cal:noop";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CallbackAction {
@@ -103,52 +147,52 @@ pub(super) enum DeadlineAction {
 
 pub(super) fn parse(data: &str) -> Option<CallbackAction> {
     let replayable = match data {
-        "menu:assignments" => Some(ReplayableAction::StudentAssignments),
-        "menu:archive" => Some(ReplayableAction::StudentArchive),
-        "menu:queue" => Some(ReplayableAction::StudentQueue),
-        "menu:profile" => Some(ReplayableAction::Profile),
-        "menu:courses" => Some(ReplayableAction::Courses),
-        "review:next" => Some(ReplayableAction::NextReview),
-        _ => parse_uuid(data, "course:")
+        MENU_ASSIGNMENTS => Some(ReplayableAction::StudentAssignments),
+        MENU_ARCHIVE => Some(ReplayableAction::StudentArchive),
+        MENU_QUEUE => Some(ReplayableAction::StudentQueue),
+        MENU_PROFILE => Some(ReplayableAction::Profile),
+        MENU_COURSES => Some(ReplayableAction::Courses),
+        NEXT_REVIEW => Some(ReplayableAction::NextReview),
+        _ => parse_uuid(data, COURSE_PREFIX)
             .map(TeachingCourseId::from_uuid)
             .map(ReplayableAction::Course)
             .or_else(|| {
-                parse_uuid(data, "assignment:")
+                parse_uuid(data, ASSIGNMENT_PREFIX)
                     .map(AssignmentId::from_uuid)
                     .map(ReplayableAction::Assignment)
             })
             .or_else(|| {
-                parse_uuid(data, "manage:")
+                parse_uuid(data, MANAGE_PREFIX)
                     .map(AssignmentId::from_uuid)
                     .map(ReplayableAction::ManageAssignment)
             })
             .or_else(|| {
-                parse_uuid(data, "create:")
+                parse_uuid(data, CREATE_PREFIX)
                     .map(TeachingCourseId::from_uuid)
                     .map(ReplayableAction::StartAssignmentCreation)
             })
             .or_else(|| {
-                parse_uuid(data, "submit:")
+                parse_uuid(data, SUBMIT_PREFIX)
                     .map(AssignmentId::from_uuid)
                     .map(ReplayableAction::StartSubmission)
             })
             .or_else(|| {
-                parse_uuid(data, "files:")
+                parse_uuid(data, FILES_PREFIX)
                     .map(AssignmentId::from_uuid)
                     .map(ReplayableAction::AssignmentFiles)
             })
             .or_else(|| {
-                parse_uuid(data, "attempts:")
+                parse_uuid(data, ATTEMPTS_PREFIX)
                     .map(AssignmentId::from_uuid)
                     .map(ReplayableAction::GrantAttempts)
             })
             .or_else(|| {
-                parse_uuid(data, "invite:")
+                parse_uuid(data, INVITE_PREFIX)
                     .map(TeachingCourseId::from_uuid)
                     .map(ReplayableAction::GroupInvite)
             })
             .or_else(|| {
-                parse_uuid(data, "grades:")
+                parse_uuid(data, GRADES_PREFIX)
                     .map(TeachingCourseId::from_uuid)
                     .map(ReplayableAction::Gradebook)
             }),
@@ -157,29 +201,29 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         return Some(CallbackAction::Replayable(action));
     }
 
-    let screen = parse_uuid(data, "publish:")
+    let screen = parse_uuid(data, PUBLISH_PREFIX)
         .map(AssignmentId::from_uuid)
         .map(ScreenAction::Publish)
         .or_else(|| {
-            parse_uuid(data, "archive:")
+            parse_uuid(data, ARCHIVE_PREFIX)
                 .map(AssignmentId::from_uuid)
                 .map(ScreenAction::Archive)
         })
         .or_else(|| {
-            parse_uuid(data, "deadline:")
+            parse_uuid(data, DEADLINE_PREFIX)
                 .map(AssignmentId::from_uuid)
                 .map(ScreenAction::ChangeDeadline)
         })
         .or_else(|| match data {
-            "file:add" => Some(ScreenAction::AddFile),
-            "file:finish" => Some(ScreenAction::FinishFileCreation),
-            "invite:rotate" => Some(ScreenAction::RotateGroupInvite),
+            FILE_ADD => Some(ScreenAction::AddFile),
+            FILE_FINISH => Some(ScreenAction::FinishFileCreation),
+            INVITE_ROTATE => Some(ScreenAction::RotateGroupInvite),
             _ => data
-                .strip_prefix("file:open:")
+                .strip_prefix(FILE_OPEN_PREFIX)
                 .and_then(|index| index.parse().ok())
                 .map(ScreenAction::OpenFile)
                 .or_else(|| {
-                    data.strip_prefix("file:delete:")
+                    data.strip_prefix(FILE_DELETE_PREFIX)
                         .and_then(|index| index.parse().ok())
                         .map(ScreenAction::DeleteFile)
                 }),
@@ -195,23 +239,23 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         .or_else(|| parse_amount(data, REVIEW_SCORE_PREFIX).map(FlowAction::ReviewScore))
         .or_else(|| parse_deadline(data).map(FlowAction::Deadline))
         .or_else(|| {
-            parse_uuid(data, "student:")
+            parse_uuid(data, STUDENT_PREFIX)
                 .map(UserId::from_uuid)
                 .map(FlowAction::SelectStudent)
         })
         .or_else(|| parse_amount(data, EXTRA_ATTEMPTS_PREFIX).map(FlowAction::ExtraAttempts))
         .or(match data {
-            "file:confirm-delete" => Some(FlowAction::ConfirmFileDeletion),
-            "file:cancel-delete" => Some(FlowAction::CancelFileDeletion),
-            "invite:confirm-rotate" => Some(FlowAction::ConfirmInviteRotation),
-            "invite:cancel-rotate" => Some(FlowAction::CancelInviteRotation),
+            FILE_CONFIRM_DELETE => Some(FlowAction::ConfirmFileDeletion),
+            FILE_CANCEL_DELETE => Some(FlowAction::CancelFileDeletion),
+            INVITE_CONFIRM_ROTATE => Some(FlowAction::ConfirmInviteRotation),
+            INVITE_CANCEL_ROTATE => Some(FlowAction::CancelInviteRotation),
             _ => None,
         });
     if let Some(action) = flow {
         return Some(CallbackAction::Flow(action));
     }
 
-    (data == "cal:noop").then_some(CallbackAction::Noop)
+    (data == CALENDAR_NOOP).then_some(CallbackAction::Noop)
 }
 
 fn parse_uuid(data: &str, prefix: &str) -> Option<uuid::Uuid> {
@@ -220,10 +264,10 @@ fn parse_uuid(data: &str, prefix: &str) -> Option<uuid::Uuid> {
 
 fn parse_review(data: &str) -> Option<FlowAction> {
     let (decision, id) = data
-        .strip_prefix("review:accept:")
+        .strip_prefix(REVIEW_ACCEPT_PREFIX)
         .map(|id| (ReviewDecision::Accept, id))
         .or_else(|| {
-            data.strip_prefix("review:reject:")
+            data.strip_prefix(REVIEW_REJECT_PREFIX)
                 .map(|id| (ReviewDecision::Reject, id))
         })?;
 
@@ -277,25 +321,25 @@ fn parse_amount(data: &str, prefix: &str) -> Option<AmountChoice> {
 
 fn parse_deadline(data: &str) -> Option<DeadlineAction> {
     match data {
-        "dl:calendar" => Some(DeadlineAction::Calendar),
-        "dl:manual" => Some(DeadlineAction::Manual),
-        "dl:options" => Some(DeadlineAction::Options),
+        DEADLINE_CALENDAR => Some(DeadlineAction::Calendar),
+        DEADLINE_MANUAL => Some(DeadlineAction::Manual),
+        DEADLINE_OPTIONS => Some(DeadlineAction::Options),
         _ => data
-            .strip_prefix("dl:days:")
+            .strip_prefix(DEADLINE_DAYS_PREFIX)
             .and_then(|days| days.parse().ok())
             .map(DeadlineAction::Days)
             .or_else(|| {
-                data.strip_prefix("dl:months:")
+                data.strip_prefix(DEADLINE_MONTHS_PREFIX)
                     .and_then(|months| months.parse().ok())
                     .map(DeadlineAction::Months)
             })
             .or_else(|| {
-                data.strip_prefix("cal:pick:")
+                data.strip_prefix(CALENDAR_PICK_PREFIX)
                     .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
                     .map(DeadlineAction::Pick)
             })
             .or_else(|| {
-                data.strip_prefix("cal:")
+                data.strip_prefix(CALENDAR_MONTH_PREFIX)
                     .and_then(parse_month)
                     .map(DeadlineAction::Month)
             }),

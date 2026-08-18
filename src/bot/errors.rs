@@ -18,7 +18,8 @@ pub(super) async fn send_error_code(bot: &Bot, chat_id: ChatId, code: ErrorCode)
     Ok(())
 }
 
-fn app_error_message(code: ErrorCode) -> &'static str {
+/// Единственный источник текста ошибки
+pub fn app_error_message(code: ErrorCode) -> &'static str {
     match code {
         ErrorCode::InternalError => "Произошла внутренняя ошибка. Попробуйте позже.",
         ErrorCode::NotFound => "Запрошенные данные не найдены.",

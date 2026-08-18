@@ -23,5 +23,5 @@ mod student_review_queue;
 mod submission_repository;
 mod submit_homework_api;
 mod teacher_read_api;
-mod telegram_bot;
+mod telegram;
 mod users_api;

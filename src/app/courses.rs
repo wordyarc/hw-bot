@@ -1,5 +1,6 @@
 use sqlx::PgPool;
 
+use crate::app::access::load_managing_teacher;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -128,17 +129,8 @@ impl CourseService {
         actor: Actor,
         course_id: TeachingCourseId,
     ) -> AppResult<CourseGradebook> {
-        let actor = load_actor(&self.pool, actor, "teacher").await?;
-        let course = db::academic::find_teaching_course_by_id(&self.pool, course_id)
-            .await?
-            .required("teaching course")?;
-
-        if !course.can_be_managed_by(&actor) {
-            return Err(DomainError::PermissionDenied {
-                action: "read course gradebook",
-            }
-            .into());
-        }
+        let (_, course) =
+            load_managing_teacher(&self.pool, actor, course_id, "read course gradebook").await?;
 
         let rows = db::submissions::course_grades(&self.pool, course_id, course.student_group_id())
             .await?;
@@ -166,14 +158,7 @@ impl CourseService {
         course_id: TeachingCourseId,
         action: &'static str,
     ) -> AppResult<StudentGroup> {
-        let actor = load_actor(&self.pool, actor, "teacher").await?;
-        let course = db::academic::find_teaching_course_by_id(&self.pool, course_id)
-            .await?
-            .required("teaching course")?;
-
-        if !course.can_be_managed_by(&actor) {
-            return Err(DomainError::PermissionDenied { action }.into());
-        }
+        let (_, course) = load_managing_teacher(&self.pool, actor, course_id, action).await?;
 
         db::academic::find_student_group_by_id(&self.pool, course.student_group_id())
             .await?

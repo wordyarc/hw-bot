@@ -94,7 +94,7 @@ impl ReviewService {
     pub async fn review_submission(&self, command: ReviewSubmission) -> AppResult<Submission> {
         let mut tx = self.pool.begin().await?;
 
-        let reviewer = load_actor(&mut *tx, command.actor, "reviewer").await?;
+        let reviewer = load_reviewer(&mut *tx, command.actor).await?;
 
         let mut submission = db::submissions::find_by_id(&mut *tx, command.submission_id)
             .await?

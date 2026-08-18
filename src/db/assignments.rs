@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
+use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     Assignment, AssignmentId, AssignmentParts, AssignmentStatus, Grading, LatePolicy,
@@ -62,6 +63,66 @@ fn late_policy_from_row(
         checked_num_cast(LATE_PENALTY, penalty)?,
         checked_num_cast(LATE_MAX_PERIODS, max_periods)?,
     )?))
+}
+
+macro_rules! assignment_row {
+    ($row:expr) => {
+        AssignmentRow {
+            id: $row.id,
+            teaching_course_id: $row.teaching_course_id,
+            subject_id: $row.subject_id,
+            student_group_id: $row.student_group_id,
+            title: $row.title,
+            body: $row.body,
+            max_attempts: $row.max_attempts,
+            max_score: $row.max_score,
+            late_period_days: $row.late_period_days,
+            late_penalty: $row.late_penalty,
+            late_max_periods: $row.late_max_periods,
+            status: $row.status,
+            created_by: $row.created_by,
+            created_at: $row.created_at,
+            deadline_at: $row.deadline_at,
+            published_at: $row.published_at,
+        }
+    };
+}
+
+macro_rules! select_assignments {
+    ($row:ty, $extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            $row,
+            r#"
+            select
+                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
+                max_score, late_period_days, late_penalty, late_max_periods, status, created_by,
+                created_at, deadline_at, published_at
+            "# + $extra + $tail
+            $(, $arg)*
+        )
+    };
+}
+
+macro_rules! select_assignment_cards {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            StudentAssignmentCardRow,
+            r#"
+            select
+                assignments.id, assignments.teaching_course_id, assignments.subject_id,
+                assignments.student_group_id, assignments.title, assignments.body,
+                assignments.max_attempts, assignments.max_score, assignments.late_period_days,
+                assignments.late_penalty, assignments.late_max_periods, assignments.status,
+                assignments.created_by,
+                assignments.created_at, assignments.deadline_at, assignments.published_at,
+                subjects.name as subject_name
+            from assignments
+            join subjects
+              on subjects.id = assignments.subject_id
+            "# + $tail
+            $(, $arg)*
+        )
+    };
 }
 
 pub async fn insert<'e, E>(executor: E, assignment: &Assignment) -> DbResult<()>
@@ -140,13 +201,12 @@ where
     .execute(executor)
     .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(DbError::Conflict {
+    ensure_updated(
+        result,
+        DbError::Conflict {
             message: "assignment was changed by a concurrent request",
-        });
-    }
-
-    Ok(())
+        },
+    )
 }
 
 pub async fn advance_revision<'e, E>(
@@ -198,16 +258,10 @@ pub async fn find_versioned_by_id<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let row = sqlx::query_as!(
+    let row = select_assignments!(
         VersionedAssignmentRow,
-        r#"
-        select
-            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            max_score, late_period_days, late_penalty, late_max_periods, status, created_by,
-            created_at, deadline_at, published_at, revision
-        from assignments
-        where id = $1
-        "#,
+        ", revision ",
+        " from assignments where id = $1",
         id.as_uuid(),
     )
     .fetch_optional(executor)
@@ -220,16 +274,10 @@ pub async fn find_by_id<'e, E>(executor: E, id: AssignmentId) -> DbResult<Option
 where
     E: PgExecutor<'e>,
 {
-    let row = sqlx::query_as!(
+    let row = select_assignments!(
         AssignmentRow,
-        r#"
-        select
-            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            max_score, late_period_days, late_penalty, late_max_periods, status, created_by,
-            created_at, deadline_at, published_at
-        from assignments
-        where id = $1
-        "#,
+        "",
+        " from assignments where id = $1",
         id.as_uuid(),
     )
     .fetch_optional(executor)
@@ -247,24 +295,10 @@ pub async fn list_published_for_group<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    sqlx::query_as!(
-        StudentAssignmentCardRow,
-        r#"
-        select
-            assignments.id, assignments.teaching_course_id, assignments.subject_id,
-            assignments.student_group_id, assignments.title, assignments.body,
-            assignments.max_attempts, assignments.max_score, assignments.late_period_days,
-            assignments.late_penalty, assignments.late_max_periods, assignments.status,
-            assignments.created_by,
-            assignments.created_at, assignments.deadline_at, assignments.published_at,
-            subjects.name as subject_name
-        from assignments
-        join subjects
-          on subjects.id = assignments.subject_id
-        where assignments.student_group_id = $1
-          and assignments.status = 'published'
-        order by subjects.name, assignments.deadline_at, assignments.id
-        "#,
+    select_assignment_cards!(
+        " where assignments.student_group_id = $1
+           and assignments.status = 'published'
+         order by subjects.name, assignments.deadline_at, assignments.id",
         student_group_id.as_uuid(),
     )
     .fetch_all(executor)
@@ -281,25 +315,11 @@ pub async fn list_archived_for_group<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    sqlx::query_as!(
-        StudentAssignmentCardRow,
-        r#"
-        select
-            assignments.id, assignments.teaching_course_id, assignments.subject_id,
-            assignments.student_group_id, assignments.title, assignments.body,
-            assignments.max_attempts, assignments.max_score, assignments.late_period_days,
-            assignments.late_penalty, assignments.late_max_periods, assignments.status,
-            assignments.created_by,
-            assignments.created_at, assignments.deadline_at, assignments.published_at,
-            subjects.name as subject_name
-        from assignments
-        join subjects
-          on subjects.id = assignments.subject_id
-        where assignments.student_group_id = $1
-          and assignments.status = 'archived'
-          and assignments.published_at is not null
-        order by subjects.name, assignments.published_at desc, assignments.id
-        "#,
+    select_assignment_cards!(
+        " where assignments.student_group_id = $1
+           and assignments.status = 'archived'
+           and assignments.published_at is not null
+         order by subjects.name, assignments.published_at desc, assignments.id",
         student_group_id.as_uuid(),
     )
     .fetch_all(executor)
@@ -317,17 +337,10 @@ pub async fn list_for_course<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    sqlx::query_as!(
+    select_assignments!(
         AssignmentRow,
-        r#"
-        select
-            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            max_score, late_period_days, late_penalty, late_max_periods, status, created_by,
-            created_at, deadline_at, published_at
-        from assignments
-        where teaching_course_id = $1
-        order by created_at desc, id
-        "#,
+        "",
+        " from assignments where teaching_course_id = $1 order by created_at desc, id",
         teaching_course_id.as_uuid(),
     )
     .fetch_all(executor)
@@ -383,24 +396,7 @@ impl TryFrom<VersionedAssignmentRow> for VersionedAssignment {
 
     fn try_from(row: VersionedAssignmentRow) -> Result<Self, Self::Error> {
         let revision = row.revision;
-        let assignment = Assignment::try_from(AssignmentRow {
-            id: row.id,
-            teaching_course_id: row.teaching_course_id,
-            subject_id: row.subject_id,
-            student_group_id: row.student_group_id,
-            title: row.title,
-            body: row.body,
-            max_attempts: row.max_attempts,
-            max_score: row.max_score,
-            late_period_days: row.late_period_days,
-            late_penalty: row.late_penalty,
-            late_max_periods: row.late_max_periods,
-            status: row.status,
-            created_by: row.created_by,
-            created_at: row.created_at,
-            deadline_at: row.deadline_at,
-            published_at: row.published_at,
-        })?;
+        let assignment = Assignment::try_from(assignment_row!(row))?;
 
         Ok(Self {
             assignment,
@@ -441,24 +437,7 @@ impl TryFrom<StudentAssignmentCardRow> for StudentAssignmentCard {
 
     fn try_from(row: StudentAssignmentCardRow) -> Result<Self, Self::Error> {
         let subject = Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?;
-        let assignment = Assignment::try_from(AssignmentRow {
-            id: row.id,
-            teaching_course_id: row.teaching_course_id,
-            subject_id: row.subject_id,
-            student_group_id: row.student_group_id,
-            title: row.title,
-            body: row.body,
-            max_attempts: row.max_attempts,
-            max_score: row.max_score,
-            late_period_days: row.late_period_days,
-            late_penalty: row.late_penalty,
-            late_max_periods: row.late_max_periods,
-            status: row.status,
-            created_by: row.created_by,
-            created_at: row.created_at,
-            deadline_at: row.deadline_at,
-            published_at: row.published_at,
-        })?;
+        let assignment = Assignment::try_from(assignment_row!(row))?;
 
         Ok(Self {
             assignment,

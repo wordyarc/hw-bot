@@ -13,6 +13,21 @@ const PRESENTATION: &str = "stored_files.presentation";
 const SIZE_BYTES: &str = "stored_files.size_bytes";
 const SHA256: &str = "stored_files.sha256";
 
+/// Метаданные вложения одним списком; `content` подключается через `$extra`.
+macro_rules! select_stored_files {
+    ($row:ty, $extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            $row,
+            r#"
+            select
+                id, assignment_id, submission_id, position, presentation, filename, mime_type,
+                size_bytes, sha256, created_at
+            "# + $extra + $tail
+            $(, $arg)*
+        )
+    };
+}
+
 pub struct StoredFile {
     pub metadata: StoredFileMetadata,
     pub content: Vec<u8>,
@@ -65,16 +80,10 @@ pub async fn list_for_assignment<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    sqlx::query_as!(
+    select_stored_files!(
         StoredFileRow,
-        r#"
-        select
-            id, assignment_id, submission_id, position, presentation, filename, mime_type,
-            size_bytes, sha256, created_at
-        from stored_files
-        where assignment_id = $1
-        order by position
-        "#,
+        "",
+        " from stored_files where assignment_id = $1 order by position",
         assignment_id.as_uuid(),
     )
     .fetch_all(executor)
@@ -92,16 +101,10 @@ pub async fn find_assignment_file<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let row = sqlx::query_as!(
+    let row = select_stored_files!(
         StoredFileWithContentRow,
-        r#"
-        select
-            id, assignment_id, submission_id, position, presentation, filename, mime_type,
-            size_bytes, sha256, created_at, content
-        from stored_files
-        where assignment_id = $1
-          and id = $2
-        "#,
+        ", content ",
+        " from stored_files where assignment_id = $1 and id = $2",
         assignment_id.as_uuid(),
         file_id.as_uuid(),
     )
