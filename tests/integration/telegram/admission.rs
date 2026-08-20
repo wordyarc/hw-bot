@@ -258,3 +258,117 @@ async fn cancellation_during_the_dispatcher_startup_request_stops_the_bot() {
 
     result.expect("startup cancellation is not a failure");
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupStage {
+    GetMe,
+    GetWebhookInfo,
+    DeleteWebhook,
+    SetMyCommands,
+    SetChatMenuButton,
+}
+
+impl StartupStage {
+    fn path(self) -> &'static str {
+        match self {
+            Self::GetMe => "/bottest-token/GetMe",
+            Self::GetWebhookInfo => "/bottest-token/GetWebhookInfo",
+            Self::DeleteWebhook => "/bottest-token/DeleteWebhook",
+            Self::SetMyCommands => "/bottest-token/SetMyCommands",
+            Self::SetChatMenuButton => "/bottest-token/SetChatMenuButton",
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_stops_every_network_stage_of_startup() {
+    let app = TestApp::start().await;
+
+    for stage in [
+        StartupStage::GetMe,
+        StartupStage::GetWebhookInfo,
+        StartupStage::DeleteWebhook,
+        StartupStage::SetMyCommands,
+        StartupStage::SetChatMenuButton,
+    ] {
+        let telegram = MockServer::start().await;
+        let webhook_url = (stage == StartupStage::DeleteWebhook).then_some("https://example.test");
+        mount_startup_response(&telegram, StartupStage::GetMe, stage, telegram_me_body()).await;
+        mount_startup_response(
+            &telegram,
+            StartupStage::GetWebhookInfo,
+            stage,
+            json!({
+                "ok": true,
+                "result": {
+                    "url": webhook_url.unwrap_or(""),
+                    "has_custom_certificate": false,
+                    "pending_update_count": 0
+                }
+            }),
+        )
+        .await;
+        for endpoint in [
+            StartupStage::DeleteWebhook,
+            StartupStage::SetMyCommands,
+            StartupStage::SetChatMenuButton,
+        ] {
+            mount_startup_response(
+                &telegram,
+                endpoint,
+                stage,
+                json!({ "ok": true, "result": true }),
+            )
+            .await;
+        }
+
+        let (cancellation, task) = start_bot(&app, &telegram);
+        wait_for_request_count(&telegram, stage.path(), 1).await;
+        cancellation.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap_or_else(|_| panic!("cancellation at {stage:?} exceeded the grace"))
+            .expect("Telegram task does not panic");
+        result.unwrap_or_else(|error| panic!("cancellation at {stage:?} failed: {error}"));
+
+        let requests = telegram.received_requests().await.unwrap();
+        let paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+        match stage {
+            StartupStage::GetMe => assert!(!paths.contains(&StartupStage::GetWebhookInfo.path())),
+            StartupStage::GetWebhookInfo | StartupStage::DeleteWebhook => {
+                assert!(!paths.contains(&StartupStage::SetMyCommands.path()))
+            }
+            StartupStage::SetMyCommands => {
+                assert!(!paths.contains(&StartupStage::SetChatMenuButton.path()))
+            }
+            StartupStage::SetChatMenuButton => assert_eq!(
+                paths
+                    .iter()
+                    .filter(|path| **path == StartupStage::GetMe.path())
+                    .count(),
+                1,
+                "dispatcher startup must not begin after cancellation"
+            ),
+        }
+    }
+}
+
+async fn mount_startup_response(
+    telegram: &MockServer,
+    endpoint: StartupStage,
+    delayed: StartupStage,
+    body: serde_json::Value,
+) {
+    let response = ResponseTemplate::new(200).set_body_json(body);
+    let response = if endpoint == delayed {
+        response.set_delay(Duration::from_secs(5))
+    } else {
+        response
+    };
+    Mock::given(method("POST"))
+        .and(path(endpoint.path()))
+        .respond_with(response)
+        .mount(telegram)
+        .await;
+}

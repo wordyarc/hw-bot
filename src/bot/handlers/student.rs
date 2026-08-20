@@ -287,8 +287,7 @@ pub(super) async fn show_assignment(
                 submission_status(submission.status()),
                 submission
                     .grade()
-                    .zip(assignment.grading().max_score())
-                    .map(|(grade, max_score)| format!("\n{}", grade_line(grade, max_score)))
+                    .map(|grade| format!("\n{}", grade_line(grade)))
                     .unwrap_or_default(),
             ),
         )

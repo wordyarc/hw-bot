@@ -10,6 +10,7 @@ alter table submissions
     drop column if exists final_score,
     drop column if exists penalty,
     drop column if exists late_periods,
+    drop column if exists grade_max_score,
     drop column if exists raw_score;
 
 alter table assignments

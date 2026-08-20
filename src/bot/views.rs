@@ -429,9 +429,15 @@ pub(super) fn late_policy_keyboard() -> InlineKeyboardMarkup {
 }
 
 /// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
-pub(super) fn review_score_keyboard(max_score: u16) -> InlineKeyboardMarkup {
+pub(super) fn review_score_keyboard(
+    submission_id: SubmissionId,
+    max_score: u16,
+) -> InlineKeyboardMarkup {
     let button = |score: u16| {
-        InlineKeyboardButton::callback(score.to_string(), format!("{REVIEW_SCORE_PREFIX}{score}"))
+        InlineKeyboardButton::callback(
+            score.to_string(),
+            format!("{REVIEW_SCORE_PREFIX}{}:{score}", submission_id.as_uuid()),
+        )
     };
 
     let mut rows: Vec<Vec<_>> = (0..=max_score)
@@ -441,7 +447,7 @@ pub(super) fn review_score_keyboard(max_score: u16) -> InlineKeyboardMarkup {
         .collect();
     rows.push(vec![InlineKeyboardButton::callback(
         "✍️ Другое число",
-        format!("{REVIEW_SCORE_PREFIX}manual"),
+        format!("{REVIEW_SCORE_PREFIX}{}:manual", submission_id.as_uuid()),
     )]);
 
     InlineKeyboardMarkup::new(rows)
@@ -618,16 +624,17 @@ pub(super) fn grading_lines(
 }
 
 // Студенту показывается вся арифметика
-pub(super) fn grade_line(grade: Grade, max_score: u16) -> String {
+pub(super) fn grade_line(grade: Grade) -> String {
     if grade.penalty() == 0 {
-        return format!("🏅 Балл: {} из {max_score}", grade.final_score());
+        return format!("🏅 Балл: {} из {}", grade.final_score(), grade.max_score());
     }
 
     format!(
-        "🏅 Балл: {} − {} = {} из {max_score} (штраф за опоздание)",
+        "🏅 Балл: {} − {} = {} из {} (штраф за опоздание)",
         grade.raw_score(),
         grade.penalty(),
         grade.final_score(),
+        grade.max_score(),
     )
 }
 

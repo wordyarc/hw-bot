@@ -203,6 +203,7 @@ impl TelegramBot {
         health: ComponentHealth,
     ) -> Result<(), TelegramBotError> {
         let bot_username = tokio::select! {
+            biased;
             () = cancellation.cancelled() => return Ok(()),
             result = self.bot.get_me().send() => {
                 result
@@ -213,20 +214,25 @@ impl TelegramBot {
             }
         };
         let invites = BotInvites::new(self.codec, bot_username);
-        let webhook = self
-            .polling_bot
-            .get_webhook_info()
-            .send()
-            .await
-            .map_err(map_startup_error)?;
+        let webhook = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Ok(()),
+            result = self.polling_bot.get_webhook_info().send() => {
+                result.map_err(map_startup_error)?
+            }
+        };
         if webhook.url.is_some() {
-            self.polling_bot
-                .delete_webhook()
-                .send()
-                .await
-                .map_err(map_startup_error)?;
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return Ok(()),
+                result = self.polling_bot.delete_webhook().send() => {
+                    result.map_err(map_startup_error)?;
+                }
+            }
         }
-        announce_commands(&self.bot).await;
+        if !announce_commands(&self.bot, &cancellation).await {
+            return Ok(());
+        }
         let _ready = health.ready();
         let storage = InMemStorage::<BotState>::new();
         let mut dispatcher = Dispatcher::builder(self.bot, schema())
@@ -290,18 +296,29 @@ impl TelegramBot {
     }
 }
 
-async fn announce_commands(bot: &Bot) {
-    if let Err(error) = bot.set_my_commands(default_commands()).send().await {
+async fn announce_commands(bot: &Bot, cancellation: &CancellationToken) -> bool {
+    let commands = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => return false,
+        result = bot.set_my_commands(default_commands()).send() => result,
+    };
+    if let Err(error) = commands {
         tracing::warn!(error = ?error, "failed to publish Telegram command hints");
     }
-    if let Err(error) = bot
-        .set_chat_menu_button()
-        .menu_button(teloxide::types::MenuButton::Commands)
-        .send()
-        .await
-    {
+
+    let menu = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => return false,
+        result = bot
+            .set_chat_menu_button()
+            .menu_button(teloxide::types::MenuButton::Commands)
+            .send() => result,
+    };
+    if let Err(error) = menu {
         tracing::warn!(error = ?error, "failed to set the Telegram menu button");
     }
+
+    true
 }
 
 fn map_startup_error(error: teloxide::RequestError) -> TelegramBotError {

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update submissions\n        set\n            status = $2,\n            reviewed_by = $3,\n            reviewed_at = $4,\n            review_comment = $5,\n            raw_score = $6,\n            grade_max_score = $7,\n            late_periods = $8,\n            penalty = $9,\n            final_score = $10\n        where id = $1\n          and status = 'pending_review'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bcf6f8ed45ab640908de5a5c3a459b921df4a49504b03aa6823e50f096a4720d"
+}

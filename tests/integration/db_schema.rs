@@ -190,6 +190,47 @@ async fn completed_review_requires_a_comment() {
 }
 
 #[tokio::test]
+async fn stored_grade_requires_the_frozen_scale_and_raw_score_within_it() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let update = |max_score: Option<i16>| {
+        sqlx::query(
+            r#"
+            update submissions
+            set status = 'accepted',
+                reviewed_by = $2,
+                reviewed_at = now(),
+                review_comment = 'ok',
+                raw_score = 4,
+                grade_max_score = $3,
+                late_periods = 0,
+                penalty = 0,
+                final_score = 4
+            where id = $1
+            "#,
+        )
+        .bind(submission)
+        .bind(app.fixture.teacher.id().as_uuid())
+        .bind(max_score)
+        .execute(&app.pool)
+    };
+
+    for max_score in [None, Some(3)] {
+        let error = update(max_score)
+            .await
+            .expect_err("an incomplete or too small frozen scale must be rejected");
+        assert_eq!(
+            error.as_database_error().and_then(|error| error.code()),
+            Some("23514".into())
+        );
+    }
+
+    update(Some(5))
+        .await
+        .expect("a complete grade within its frozen scale is valid");
+}
+
+#[tokio::test]
 async fn stored_file_requires_exactly_one_owner() -> anyhow::Result<()> {
     let app = TestApp::start().await;
     let valid = |assignment: Option<uuid::Uuid>, submission: Option<uuid::Uuid>, position: i64| {

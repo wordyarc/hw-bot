@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, NonEmptyString, SubmissionId,
+    Assignment, AssignmentId, DomainError, DomainResult, MAX_SCORE, NonEmptyString, SubmissionId,
     TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
@@ -78,15 +78,17 @@ str_enum! {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Grade {
     raw_score: u16,
+    max_score: u16,
     late_periods: u16,
     penalty: u16,
     final_score: u16,
 }
 
 impl Grade {
-    pub(crate) fn new(raw_score: u16, late_periods: u16, penalty: u16) -> Self {
+    pub(crate) fn new(raw_score: u16, max_score: u16, late_periods: u16, penalty: u16) -> Self {
         Self {
             raw_score,
+            max_score,
             late_periods,
             penalty,
             // Штраф может превышать балл: итог зажимается в ноль, а не уходит в минус.
@@ -96,16 +98,22 @@ impl Grade {
 
     fn restore(
         raw_score: u16,
+        max_score: u16,
         late_periods: u16,
         penalty: u16,
         final_score: u16,
     ) -> DomainResult<Self> {
-        if final_score > raw_score {
+        if max_score == 0
+            || max_score > MAX_SCORE
+            || raw_score > max_score
+            || final_score > raw_score
+        {
             return Err(DomainError::InvalidSubmissionGradeState);
         }
 
         Ok(Self {
             raw_score,
+            max_score,
             late_periods,
             penalty,
             final_score,
@@ -114,6 +122,10 @@ impl Grade {
 
     pub fn raw_score(self) -> u16 {
         self.raw_score
+    }
+
+    pub fn max_score(self) -> u16 {
+        self.max_score
     }
 
     pub fn late_periods(self) -> u16 {
@@ -158,6 +170,7 @@ pub(crate) struct SubmissionParts {
     pub reviewed_at: Option<DateTime<Utc>>,
     pub review_comment: Option<String>,
     pub raw_score: Option<u16>,
+    pub grade_max_score: Option<u16>,
     pub late_periods: Option<u16>,
     pub penalty: Option<u16>,
     pub final_score: Option<u16>,
@@ -191,18 +204,26 @@ impl Submission {
 
         let grade = match (
             parts.raw_score,
+            parts.grade_max_score,
             parts.late_periods,
             parts.penalty,
             parts.final_score,
         ) {
-            (None, None, None, None) => None,
-            (Some(raw_score), Some(late_periods), Some(penalty), Some(final_score)) => {
+            (None, None, None, None, None) => None,
+            (
+                Some(raw_score),
+                Some(max_score),
+                Some(late_periods),
+                Some(penalty),
+                Some(final_score),
+            ) => {
                 if parts.status != SubmissionStatus::Accepted {
                     return Err(DomainError::InvalidSubmissionGradeState);
                 }
 
                 Some(Grade::restore(
                     raw_score,
+                    max_score,
                     late_periods,
                     penalty,
                     final_score,
@@ -291,6 +312,7 @@ impl Submission {
             reviewed_at: None,
             review_comment: None,
             raw_score: None,
+            grade_max_score: None,
             late_periods: None,
             penalty: None,
             final_score: None,
@@ -369,11 +391,19 @@ impl Submission {
                 // менять оценку студента.
                 let late_periods = assignment.late_periods_at(self.submitted_at);
                 let penalty = assignment.penalty_at(self.submitted_at);
+                let max_score = assignment.grading().max_score();
 
                 assignment
                     .grading()
                     .validate_score(score)?
-                    .map(|raw_score| Grade::new(raw_score, late_periods, penalty))
+                    .map(|raw_score| {
+                        Grade::new(
+                            raw_score,
+                            max_score.expect("a validated score requires scored grading"),
+                            late_periods,
+                            penalty,
+                        )
+                    })
             }
             _ => None,
         };
@@ -457,6 +487,7 @@ mod tests {
             reviewed_at: None,
             review_comment: None,
             raw_score: None,
+            grade_max_score: None,
             late_periods: None,
             penalty: None,
             final_score: None,
@@ -523,6 +554,7 @@ mod tests {
             Submission::restore(SubmissionParts {
                 status: SubmissionStatus::Rejected,
                 raw_score: Some(4),
+                grade_max_score: Some(5),
                 late_periods: Some(0),
                 penalty: Some(0),
                 final_score: Some(4),
@@ -538,6 +570,7 @@ mod tests {
         assert_eq!(
             Submission::restore(SubmissionParts {
                 raw_score: Some(4),
+                grade_max_score: Some(5),
                 late_periods: Some(0),
                 penalty: Some(0),
                 final_score: Some(5),
@@ -549,9 +582,26 @@ mod tests {
     }
 
     #[test]
+    fn restore_rejects_raw_score_above_the_frozen_scale() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                raw_score: Some(4),
+                grade_max_score: Some(3),
+                late_periods: Some(0),
+                penalty: Some(0),
+                final_score: Some(4),
+                ..accepted_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionGradeState
+        );
+    }
+
+    #[test]
     fn restore_accepts_full_grade_of_accepted_submission() {
         let grade = Submission::restore(SubmissionParts {
             raw_score: Some(4),
+            grade_max_score: Some(5),
             late_periods: Some(2),
             penalty: Some(2),
             final_score: Some(2),
@@ -562,6 +612,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(grade.raw_score(), 4);
+        assert_eq!(grade.max_score(), 5);
         assert_eq!(grade.late_periods(), 2);
         assert_eq!(grade.penalty(), 2);
         assert_eq!(grade.final_score(), 2);
@@ -569,7 +620,7 @@ mod tests {
 
     #[test]
     fn grade_clamps_final_score_at_zero() {
-        let grade = Grade::new(4, 5, 5);
+        let grade = Grade::new(4, 5, 5, 5);
 
         assert_eq!(grade.final_score(), 0);
         assert_eq!(grade.raw_score(), 4);

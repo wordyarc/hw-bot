@@ -27,6 +27,7 @@ async fn accepting_with_a_score_stores_the_whole_arithmetic() {
 
     assert_eq!(body["status"], json!("accepted"));
     assert_eq!(body["raw_score"], json!(4));
+    assert_eq!(body["max_score"], json!(5));
     assert_eq!(body["late_periods"], json!(0));
     assert_eq!(body["penalty"], json!(0));
     assert_eq!(body["final_score"], json!(4));
@@ -43,6 +44,7 @@ async fn a_submission_awaiting_review_has_no_grade() {
         .created();
 
     assert_eq!(body["raw_score"], json!(null));
+    assert_eq!(body["max_score"], json!(null));
     assert_eq!(body["final_score"], json!(null));
 }
 
@@ -58,6 +60,7 @@ async fn rejecting_a_scored_submission_stores_no_grade() {
 
     assert_eq!(body["status"], json!("rejected"));
     assert_eq!(body["raw_score"], json!(null));
+    assert_eq!(body["max_score"], json!(null));
     assert_eq!(body["final_score"], json!(null));
 }
 
@@ -80,6 +83,40 @@ async fn the_notification_carries_the_score_of_the_review() {
 
     assert_eq!(notification.final_score, Some(4));
     assert_eq!(notification.max_score, Some(5));
+}
+
+#[tokio::test]
+async fn a_review_freezes_the_scale_after_the_assignment_becomes_pass_fail() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    app.review_with_score(submission, app.teacher(), "accept", 4, "Хорошо")
+        .await
+        .ok();
+
+    app.change_grading(assignment.id().as_uuid(), app.teacher(), None)
+        .await
+        .ok();
+
+    let details = app
+        .student_assignment(assignment.id().as_uuid(), app.student())
+        .await
+        .ok();
+    assert_eq!(details["submissions"][0]["max_score"], json!(5));
+
+    let gradebook = app
+        .get_as(
+            &format!("/me/courses/{}/gradebook", app.course()),
+            app.teacher(),
+        )
+        .await
+        .ok();
+    assert_eq!(gradebook["students"][0]["grades"][0]["max_score"], json!(5));
+    assert_eq!(gradebook["students"][0]["max_total"], json!(5));
 }
 
 #[tokio::test]

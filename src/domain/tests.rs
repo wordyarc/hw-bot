@@ -595,6 +595,7 @@ fn a_review_freezes_the_lateness_of_the_submission_not_of_the_review() {
         .unwrap();
 
     let grade = submission.grade().unwrap();
+    assert_eq!(grade.max_score(), 5);
     assert_eq!(
         grade.late_periods(),
         1,
@@ -628,7 +629,44 @@ fn a_penalty_larger_than_the_score_leaves_an_accepted_submission_with_zero() {
 
     let grade = submission.grade().unwrap();
     assert_eq!(grade.raw_score(), 4);
+    assert_eq!(grade.max_score(), 5);
     assert_eq!(grade.penalty(), 4);
+    assert_eq!(grade.final_score(), 0);
+    assert_eq!(submission.status(), SubmissionStatus::Accepted);
+}
+
+#[test]
+fn an_effective_penalty_is_capped_at_the_global_score_limit() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let deadline_at = t0() + Duration::days(7);
+    let assignment = assignment(&course, &teacher)
+        .deadline_at(deadline_at)
+        .scored(100)
+        .late_policy(1, 100, 2)
+        .published()
+        .build();
+    let mut submission = submission(&assignment, &student)
+        .submitted_at(deadline_at + Duration::days(2))
+        .build();
+
+    submission
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            Some(100),
+            "Ок",
+            deadline_at + Duration::days(3),
+        )
+        .unwrap();
+
+    let grade = submission.grade().unwrap();
+    assert_eq!(grade.max_score(), 100);
+    assert_eq!(grade.late_periods(), 2);
+    assert_eq!(grade.penalty(), 100);
     assert_eq!(grade.final_score(), 0);
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
 }

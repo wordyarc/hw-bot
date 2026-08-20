@@ -690,8 +690,11 @@ async fn handle_flow_action(
         FlowAction::LatePolicy(choice) => {
             teacher::handle_late_policy(screen, message_id, choice, state).await?;
         }
-        FlowAction::ReviewScore(choice) => {
-            handle_review_score(screen, choice, state).await?;
+        FlowAction::ReviewScore {
+            submission_id,
+            choice,
+        } => {
+            handle_review_score(screen, submission_id, choice, state).await?;
         }
         FlowAction::MaxAttempts(choice) => {
             teacher::handle_max_attempts(screen, message_id, choice, state).await?;
@@ -954,7 +957,7 @@ async fn ask_review_score(
 
     if max_score <= SCORE_BUTTONS_LIMIT {
         bot.send_message(chat_id, format!("Какой балл ставите из {max_score}?"))
-            .reply_markup(review_score_keyboard(max_score))
+            .reply_markup(review_score_keyboard(submission_id, max_score))
             .await?;
         return Ok(());
     }
@@ -1009,6 +1012,7 @@ pub(super) async fn confirm_score(
 
 async fn handle_review_score(
     screen: Screen<'_>,
+    callback_submission_id: SubmissionId,
     choice: AmountChoice,
     state: BotState,
 ) -> HandlerResult {
@@ -1020,6 +1024,9 @@ async fn handle_review_score(
     else {
         return send_stale_button(screen.bot, screen.chat_id).await;
     };
+    if submission_id != callback_submission_id {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    }
 
     let score = match choice {
         AmountChoice::Preset(score) if score <= max_score => score,
@@ -1275,7 +1282,7 @@ mod tests {
             attempts_keyboard(EXTRA_ATTEMPTS_PREFIX),
             grading_keyboard(),
             late_policy_keyboard(),
-            review_score_keyboard(10),
+            review_score_keyboard(SubmissionId::new(), 10),
             deadline_options_keyboard(&timezone),
             calendar_keyboard(today, today),
             assignment_files_keyboard(&assignment, &[file], true, true),

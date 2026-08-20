@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty,\n                final_score\n            from submissions\n            where id = $1",
+  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, final_score\n            from submissions\n            where id = $1",
   "describe": {
     "columns": [
       {
@@ -126,6 +126,17 @@
       },
       {
         "ordinal": 11,
+        "name": "grade_max_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "grade_max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "late_periods",
         "type_info": "Int2",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "penalty",
         "type_info": "Int2",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "final_score",
         "type_info": "Int2",
         "origin": {
@@ -177,8 +188,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "2dfd5f6ecda686dd0eeff294494b459d3e6d9b04e4d6f0d0b59b0cf195cd6004"
+  "hash": "a222046fb657d117d7fd24ea6084c09baae23a240e922dd80276ae9feb663dd9"
 }

@@ -15,14 +15,16 @@ use crate::domain::{
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const STATUS: &str = "submissions.status";
 const RAW_SCORE: &str = "submissions.raw_score";
+const GRADE_MAX_SCORE: &str = "submissions.grade_max_score";
 const LATE_PERIODS: &str = "submissions.late_periods";
 const PENALTY: &str = "submissions.penalty";
 const FINAL_SCORE: &str = "submissions.final_score";
 const MAX_SCORE: &str = "assignments.max_score";
 
-/// Оценка идет четырьмя колонками, но пишется и читается только целиком.
+/// Оценка пишется и читается только целиком.
 struct GradeColumns {
     raw_score: Option<i16>,
+    max_score: Option<i16>,
     late_periods: Option<i16>,
     penalty: Option<i16>,
     final_score: Option<i16>,
@@ -33,6 +35,7 @@ impl GradeColumns {
         let Some(grade) = submission.grade() else {
             return Ok(Self {
                 raw_score: None,
+                max_score: None,
                 late_periods: None,
                 penalty: None,
                 final_score: None,
@@ -41,6 +44,7 @@ impl GradeColumns {
 
         Ok(Self {
             raw_score: Some(checked_num_cast(RAW_SCORE, grade.raw_score())?),
+            max_score: Some(checked_num_cast(GRADE_MAX_SCORE, grade.max_score())?),
             late_periods: Some(checked_num_cast(LATE_PERIODS, grade.late_periods())?),
             penalty: Some(checked_num_cast(PENALTY, grade.penalty())?),
             final_score: Some(checked_num_cast(FINAL_SCORE, grade.final_score())?),
@@ -55,8 +59,8 @@ macro_rules! select_submissions {
             r#"
             select
                 id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-                reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty,
-                final_score
+                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
+                penalty, final_score
             from submissions
             "# + $tail
             $(, $arg)*
@@ -85,9 +89,10 @@ where
         r#"
         insert into submissions (
             id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment, raw_score, late_periods, penalty, final_score
+            reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
+            penalty, final_score
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         "#,
         submission.id().as_uuid(),
         submission.assignment_id().as_uuid(),
@@ -100,6 +105,7 @@ where
         submission.reviewed_at(),
         submission.review_comment().map(|comment| comment.as_str()),
         grade.raw_score,
+        grade.max_score,
         grade.late_periods,
         grade.penalty,
         grade.final_score,
@@ -131,9 +137,10 @@ where
             reviewed_at = $4,
             review_comment = $5,
             raw_score = $6,
-            late_periods = $7,
-            penalty = $8,
-            final_score = $9
+            grade_max_score = $7,
+            late_periods = $8,
+            penalty = $9,
+            final_score = $10
         where id = $1
           and status = 'pending_review'
         "#,
@@ -143,6 +150,7 @@ where
         submission.reviewed_at(),
         submission.review_comment().map(|comment| comment.as_str()),
         grade.raw_score,
+        grade.max_score,
         grade.late_periods,
         grade.penalty,
         grade.final_score,
@@ -314,12 +322,11 @@ where
             students.display_name as "display_name!",
             assignments.id as "assignment_id?",
             assignments.title as "assignment_title?",
-            assignments.max_score as "max_score?",
+            coalesce(submissions.grade_max_score, assignments.max_score) as "max_score?",
             submissions.final_score as "final_score?"
         from users students
         left join assignments
           on assignments.teaching_course_id = $1
-         and assignments.max_score is not null
          and assignments.status <> 'draft'
         left join submissions
           on submissions.assignment_id = assignments.id
@@ -515,6 +522,7 @@ struct SubmissionRow {
     reviewed_at: Option<DateTime<Utc>>,
     review_comment: Option<String>,
     raw_score: Option<i16>,
+    grade_max_score: Option<i16>,
     late_periods: Option<i16>,
     penalty: Option<i16>,
     final_score: Option<i16>,
@@ -546,6 +554,7 @@ impl TryFrom<SubmissionRow> for Submission {
             reviewed_at: row.reviewed_at,
             review_comment: row.review_comment,
             raw_score: cast_score(RAW_SCORE, row.raw_score)?,
+            grade_max_score: cast_score(GRADE_MAX_SCORE, row.grade_max_score)?,
             late_periods: cast_score(LATE_PERIODS, row.late_periods)?,
             penalty: cast_score(PENALTY, row.penalty)?,
             final_score: cast_score(FINAL_SCORE, row.final_score)?,

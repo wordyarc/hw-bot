@@ -316,7 +316,7 @@ pub(super) async fn handle_flow_action(
         | FlowAction::MaxAttempts(_)
         | FlowAction::Grading(_)
         | FlowAction::LatePolicy(_)
-        | FlowAction::ReviewScore(_)
+        | FlowAction::ReviewScore { .. }
         | FlowAction::Deadline(_)
         | FlowAction::SelectStudent(_)
         | FlowAction::ExtraAttempts(_) => unreachable!("not an assignment file action"),

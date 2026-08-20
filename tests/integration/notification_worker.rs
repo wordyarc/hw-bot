@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::telegram::{
     DeliveryOutcome, NotificationWorker, NotificationWorkerError, NotificationWorkerSettings,
     TelegramClient,
 };
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -176,7 +178,94 @@ async fn invalid_credentials_preserve_the_notification_for_a_fixed_deployment() 
     assert!(state.failed_at.is_none());
 }
 
+#[tokio::test]
+async fn run_becomes_ready_after_credentials_and_drops_readiness_on_exit() {
+    let app = TestApp::start().await;
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getMe"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(500))
+                .set_body_json(json!({ "ok": true })),
+        )
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let worker = worker_with_poll_interval(&app, &telegram, Duration::from_secs(60));
+    let health = HealthState::new(false, true);
+    let cancellation = CancellationToken::new();
+    let task = tokio::spawn(worker.run(
+        cancellation.clone(),
+        health.component(CriticalComponent::NotificationWorker),
+    ));
+
+    wait_for_worker_request(&telegram, "/bottest-token/getMe").await;
+    assert!(
+        !health.is_ready_without_database(),
+        "credentials must be validated before readiness"
+    );
+    wait_for_worker_readiness(&health).await;
+
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_millis(300), task)
+        .await
+        .expect("idle worker reacts to cancellation without waiting for poll interval")
+        .expect("worker task does not panic")
+        .expect("worker exits cleanly");
+    assert!(
+        !health.is_ready_without_database(),
+        "ready guard must be dropped when the worker exits"
+    );
+}
+
+async fn wait_for_worker_request(telegram: &MockServer, expected: &str) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let seen = telegram
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| request.url.path() == expected);
+            if seen {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker sent the expected Telegram request");
+}
+
+async fn wait_for_worker_readiness(health: &HealthState) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !health.is_ready_without_database() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker became ready");
+}
+
 fn worker(app: &TestApp, telegram: &MockServer, max_attempts: u32) -> NotificationWorker {
+    worker_with_settings(app, telegram, max_attempts, Duration::from_millis(10))
+}
+
+fn worker_with_poll_interval(
+    app: &TestApp,
+    telegram: &MockServer,
+    poll_interval: Duration,
+) -> NotificationWorker {
+    worker_with_settings(app, telegram, 3, poll_interval)
+}
+
+fn worker_with_settings(
+    app: &TestApp,
+    telegram: &MockServer,
+    max_attempts: u32,
+    poll_interval: Duration,
+) -> NotificationWorker {
     let telegram = TelegramClient::new(telegram.uri(), "test-token", Duration::from_secs(1))
         .expect("create Telegram client");
 
@@ -184,7 +273,7 @@ fn worker(app: &TestApp, telegram: &MockServer, max_attempts: u32) -> Notificati
         app.pool.clone(),
         telegram,
         NotificationWorkerSettings {
-            poll_interval: Duration::from_millis(10),
+            poll_interval,
             lease_duration: Duration::from_secs(2),
             max_attempts,
             retry_initial: Duration::from_secs(1),

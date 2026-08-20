@@ -70,11 +70,10 @@ where
     // шкалы задания.
     let score = submission
         .grade()
-        .zip(assignment.grading().max_score())
-        .map(|(grade, max_score)| {
+        .map(|grade| {
             Ok::<_, DbError>((
                 checked_num_cast::<_, i16>(FINAL_SCORE, grade.final_score())?,
-                checked_num_cast::<_, i16>(MAX_SCORE, max_score)?,
+                checked_num_cast::<_, i16>(MAX_SCORE, grade.max_score())?,
             ))
         })
         .transpose()?;

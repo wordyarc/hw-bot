@@ -25,7 +25,7 @@ pub const STUDENT_PREFIX: &str = "student:";
 pub const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
 pub const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
 pub const GRADING_PREFIX: &str = "grading:";
-pub const REVIEW_SCORE_PREFIX: &str = "score:";
+pub const REVIEW_SCORE_PREFIX: &str = "reviewscore:";
 pub const LATE_POLICY_PREFIX: &str = "late:";
 
 pub const FILE_ADD: &str = "file:add";
@@ -100,7 +100,10 @@ pub(super) enum FlowAction {
     MaxAttempts(AmountChoice),
     Grading(GradingChoice),
     LatePolicy(LatePolicyChoice),
-    ReviewScore(AmountChoice),
+    ReviewScore {
+        submission_id: SubmissionId,
+        choice: AmountChoice,
+    },
     Deadline(DeadlineAction),
     SelectStudent(UserId),
     ExtraAttempts(AmountChoice),
@@ -232,7 +235,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         .or_else(|| parse_amount(data, MAX_ATTEMPTS_PREFIX).map(FlowAction::MaxAttempts))
         .or_else(|| parse_grading(data).map(FlowAction::Grading))
         .or_else(|| parse_late_policy(data).map(FlowAction::LatePolicy))
-        .or_else(|| parse_amount(data, REVIEW_SCORE_PREFIX).map(FlowAction::ReviewScore))
+        .or_else(|| parse_review_score(data))
         .or_else(|| parse_deadline(data).map(FlowAction::Deadline))
         .or_else(|| {
             parse_uuid(data, STUDENT_PREFIX)
@@ -270,6 +273,18 @@ fn parse_review(data: &str) -> Option<FlowAction> {
     Some(FlowAction::Review {
         decision,
         submission_id: SubmissionId::from_uuid(id.parse().ok()?),
+    })
+}
+
+fn parse_review_score(data: &str) -> Option<FlowAction> {
+    let value = data.strip_prefix(REVIEW_SCORE_PREFIX)?;
+    let (submission_id, choice) = value.split_once(':')?;
+    let submission_id = SubmissionId::from_uuid(submission_id.parse().ok()?);
+    let choice = parse_amount(choice, "")?;
+
+    Some(FlowAction::ReviewScore {
+        submission_id,
+        choice,
     })
 }
 
@@ -373,6 +388,15 @@ mod tests {
                 submission_id,
             }))
         );
+        let score = format!("{REVIEW_SCORE_PREFIX}{}:5", submission_id.as_uuid());
+        assert_eq!(
+            parse(&score),
+            Some(CallbackAction::Flow(FlowAction::ReviewScore {
+                submission_id,
+                choice: AmountChoice::Preset(5),
+            }))
+        );
+        assert!(score.len() <= 64);
     }
 
     #[test]
@@ -405,7 +429,7 @@ mod tests {
             ("grading:passfail".to_owned(), "flow"),
             ("grading:5".to_owned(), "flow"),
             ("grading:manual".to_owned(), "flow"),
-            ("score:0".to_owned(), "flow"),
+            (format!("reviewscore:{submission}:0"), "flow"),
             ("late:none".to_owned(), "flow"),
             ("late:7:1:4".to_owned(), "flow"),
             ("late:manual".to_owned(), "flow"),
@@ -435,6 +459,9 @@ mod tests {
         assert_eq!(parse("file:open:nope"), None);
         assert_eq!(parse("maxattempts:+1"), None);
         assert_eq!(parse("grading:none"), None);
+        assert_eq!(parse("score:0"), None);
+        assert_eq!(parse("reviewscore:0"), None);
+        assert_eq!(parse("reviewscore:not-a-uuid:0"), None);
         assert_eq!(parse("late:7:1"), None);
         assert_eq!(parse("late:7:1:4:9"), None);
         assert_eq!(parse("dl:days:nope"), None);

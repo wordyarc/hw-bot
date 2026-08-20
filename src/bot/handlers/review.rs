@@ -151,11 +151,23 @@ pub(super) async fn submit_comment(
         .await;
 
     match result {
-        Ok(_) => {
+        Ok(submission) => {
             reset_dialogue(dialogue).await?;
+            let saved = submission.grade().map(|grade| {
+                format!(
+                    "\n🏅 Сохранено: {} − {} = {} из {}.",
+                    grade.raw_score(),
+                    grade.penalty(),
+                    grade.final_score(),
+                    grade.max_score(),
+                )
+            });
             bot.send_message(
                 message.chat.id,
-                "✅ Решение сохранено, студент получит уведомление.",
+                format!(
+                    "✅ Решение сохранено, студент получит уведомление.{}",
+                    saved.unwrap_or_default()
+                ),
             )
             .reply_markup(teacher_keyboard())
             .await?;

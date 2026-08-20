@@ -18,17 +18,19 @@ alter table assignments
 
 alter table submissions
     add column raw_score smallint,
+    add column grade_max_score smallint,
     add column late_periods smallint,
     add column penalty smallint,
     add column final_score smallint,
     add constraint submissions_grade_is_complete check (
-        num_nonnulls(raw_score, late_periods, penalty, final_score) in (0, 4)
+        num_nonnulls(raw_score, grade_max_score, late_periods, penalty, final_score) in (0, 5)
     ),
     add constraint submissions_grade_belongs_to_accepted_submission check (
         raw_score is null
         or (
             status = 'accepted'
-            and raw_score between 0 and 100
+            and grade_max_score between 1 and 100
+            and raw_score between 0 and grade_max_score
             and late_periods >= 0
             and penalty >= 0
             and final_score between 0 and raw_score
