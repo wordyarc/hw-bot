@@ -27,7 +27,7 @@ mod fixture;
 mod response;
 pub mod telegram;
 
-pub use database::{fresh_database, migrated_database};
+pub use database::{fresh_database, migrated_database, saturated_database};
 pub use fixture::{CourseFixture, Fixture};
 pub use response::TestResponse;
 
@@ -56,7 +56,16 @@ impl TestApp {
     }
 
     pub async fn start_with_http_timeout(request_timeout: StdDuration) -> Self {
-        let pool = migrated_database().await;
+        Self::over(migrated_database().await, request_timeout).await
+    }
+
+    /// Приложение поверх пула на одно соединение: удержав его, тест получает исчерпание пула
+    /// вместо ожидания.
+    pub async fn start_saturated() -> Self {
+        Self::over(saturated_database().await, StdDuration::from_secs(10)).await
+    }
+
+    async fn over(pool: PgPool, request_timeout: StdDuration) -> Self {
         let fixture = Fixture::insert(&pool).await;
         let application = ApplicationContainer::new(pool.clone(), test_file_policy());
         let invites = invite_codec();

@@ -1,10 +1,12 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use chrono::{FixedOffset, NaiveTime};
 use serde::{Deserialize, Deserializer};
 
+use crate::bot::MAX_CONCURRENT_UPDATES;
 use crate::invites::InviteSigningSecret;
 
 #[derive(Clone, Deserialize)]
@@ -157,6 +159,15 @@ pub enum LogRotation {
 }
 
 impl AppConfig {
+    pub fn shutdown_grace(&self) -> Duration {
+        Duration::from_millis(
+            self.server
+                .request_timeout_ms
+                .max(self.telegram.shutdown_grace_ms)
+                .max(self.notification_worker.shutdown_grace_ms),
+        )
+    }
+
     pub fn load() -> Result<Self, ::config::ConfigError> {
         ::config::Config::builder()
             .add_source(::config::File::with_name("config/default"))
@@ -201,7 +212,8 @@ impl AppConfig {
         validate_files(&self.files)?;
         validate_ui(&self.ui)?;
         validate_telegram(&self.telegram)?;
-        validate_worker(&self.notification_worker, &self.telegram)?;
+        validate_worker(&self.notification_worker)?;
+        validate_limit_coherence(&self)?;
 
         if self.telegram.enabled || self.notification_worker.enabled {
             validate(
@@ -319,16 +331,13 @@ fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationErro
         config.rate_limit_replenish_ms,
     )?;
     validate(
-        (1..=1024).contains(&config.max_concurrent_updates),
-        "telegram.max_concurrent_updates must be between 1 and 1024",
+        (1..=MAX_CONCURRENT_UPDATES).contains(&config.max_concurrent_updates),
+        format!("telegram.max_concurrent_updates must be between 1 and {MAX_CONCURRENT_UPDATES}"),
     )?;
     validate_positive("telegram.shutdown_grace_ms", config.shutdown_grace_ms)
 }
 
-fn validate_worker(
-    config: &NotificationWorkerConfig,
-    telegram: &TelegramConfig,
-) -> Result<(), ConfigValidationError> {
+fn validate_worker(config: &NotificationWorkerConfig) -> Result<(), ConfigValidationError> {
     validate_positive(
         "notification_worker.poll_interval_ms",
         config.poll_interval_ms,
@@ -336,10 +345,6 @@ fn validate_worker(
     validate_positive(
         "notification_worker.lease_duration_ms",
         config.lease_duration_ms,
-    )?;
-    validate(
-        config.lease_duration_ms > telegram.request_timeout_ms,
-        "notification_worker.lease_duration_ms must exceed telegram.request_timeout_ms",
     )?;
     validate(
         config.max_attempts > 0,
@@ -356,6 +361,29 @@ fn validate_worker(
     validate_positive(
         "notification_worker.shutdown_grace_ms",
         config.shutdown_grace_ms,
+    )
+}
+
+fn validate_limit_coherence(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    let database_round_trip = config
+        .database
+        .acquire_timeout_ms
+        .saturating_add(config.database.statement_timeout_ms);
+
+    validate(
+        config.server.request_timeout_ms >= database_round_trip,
+        "server.request_timeout_ms must cover database.acquire_timeout_ms + \
+         database.statement_timeout_ms",
+    )?;
+    validate(
+        config.notification_worker.lease_duration_ms
+            >= database_round_trip.saturating_add(config.telegram.request_timeout_ms),
+        "notification_worker.lease_duration_ms must cover database.acquire_timeout_ms + \
+         database.statement_timeout_ms + telegram.request_timeout_ms",
+    )?;
+    validate(
+        Duration::from_millis(config.files.transfer_timeout_ms) <= config.shutdown_grace(),
+        "files.transfer_timeout_ms must not exceed the effective shutdown grace",
     )
 }
 
@@ -420,7 +448,7 @@ mod tests {
                 max_file_size_bytes = 5242880
                 max_files_per_assignment = 5
                 max_files_per_submission = 1
-                transfer_timeout_ms = 60000
+                transfer_timeout_ms = 20000
                 max_concurrent_transfers = 4
 
                 [ui]
@@ -435,7 +463,7 @@ mod tests {
                 rate_limit_burst = 8
                 rate_limit_replenish_ms = 1000
                 max_concurrent_updates = 32
-                shutdown_grace_ms = 10000
+                shutdown_grace_ms = 20000
 
                 [group_invites]
                 invite_signing_secret = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
@@ -487,7 +515,7 @@ mod tests {
         assert_eq!(config.files.max_file_size_bytes, 5_242_880);
         assert_eq!(config.files.max_files_per_assignment, 5);
         assert_eq!(config.files.max_files_per_submission, 1);
-        assert_eq!(config.files.transfer_timeout_ms, 60_000);
+        assert_eq!(config.files.transfer_timeout_ms, 20_000);
         assert_eq!(config.files.max_concurrent_transfers, 4);
         assert_eq!(
             config.ui.resolved_utc_offset(),
@@ -504,7 +532,7 @@ mod tests {
         assert_eq!(config.telegram.rate_limit_burst, 8);
         assert_eq!(config.telegram.rate_limit_replenish_ms, 1000);
         assert_eq!(config.telegram.max_concurrent_updates, 32);
-        assert_eq!(config.telegram.shutdown_grace_ms, 10000);
+        assert_eq!(config.telegram.shutdown_grace_ms, 20000);
         assert!(!config.notification_worker.enabled);
         assert_eq!(config.notification_worker.max_attempts, 10);
         assert!(config.group_invites.resolved_signing_secret().is_some());
@@ -622,6 +650,66 @@ mod tests {
         let error = config.validate().err().expect("config must be rejected");
 
         assert!(error.to_string().contains("database.max_connections"));
+    }
+
+    #[test]
+    fn the_effective_shutdown_grace_is_the_largest_contribution() {
+        let mut config = app_config();
+        config.server.request_timeout_ms = 1000;
+        config.telegram.shutdown_grace_ms = 7000;
+        config.notification_worker.shutdown_grace_ms = 3000;
+
+        assert_eq!(config.shutdown_grace(), Duration::from_millis(7000));
+    }
+
+    #[test]
+    fn default_configuration_satisfies_every_limit_relation() {
+        app_config()
+            .validate()
+            .unwrap_or_else(|error| panic!("default configuration must be coherent: {error}"));
+    }
+
+    #[test]
+    fn validation_rejects_a_request_timeout_shorter_than_one_database_round_trip() {
+        let mut config = app_config();
+        config.database.statement_timeout_ms = 10_000;
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(
+            error.to_string().contains("server.request_timeout_ms"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_a_lease_shorter_than_one_delivery() {
+        let mut config = app_config();
+        config.database.statement_timeout_ms = 10_000;
+        // Иначе первым сработает правило про HTTP-timeout, и тест проверит не то правило.
+        config.server.request_timeout_ms = 30_000;
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("notification_worker.lease_duration_ms"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_a_file_transfer_timeout_beyond_the_shutdown_grace() {
+        let mut config = app_config();
+        config.files.transfer_timeout_ms = config.shutdown_grace().as_millis() as u64 + 1;
+
+        let error = config.validate().err().expect("config must be rejected");
+
+        assert!(
+            error.to_string().contains("files.transfer_timeout_ms"),
+            "{error}"
+        );
     }
 
     #[test]

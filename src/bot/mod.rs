@@ -23,7 +23,9 @@ use crate::domain::TelegramUserId;
 use crate::health::ComponentHealth;
 use crate::invites::GroupInviteCodec;
 
-const MAX_CONCURRENT_UPDATES: usize = 1024;
+/// Верхняя граница одновременно обрабатываемых updates. Проверяется дважды - валидацией конфига
+/// и конструктором бота
+pub const MAX_CONCURRENT_UPDATES: usize = 1024;
 
 mod assignment_files;
 pub mod callbacks;

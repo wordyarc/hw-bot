@@ -54,9 +54,9 @@ services:
       database:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "2", "http://127.0.0.1:3000/health/ready"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:3000/health/ready"]
       interval: 10s
-      timeout: 3s
+      timeout: 6s
       start_period: 20s
       retries: 3
     networks:

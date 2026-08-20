@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use hw_bot::db;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool};
@@ -121,15 +123,11 @@ async fn lock_database_lifecycle(conn: &mut PgConnection) {
 
 /// Образ печатает ready ещё на этапе initdb, поэтому первый коннект иногда упирается в закрытый
 /// порт. Дешевле переподключиться, чем ловить редкий флак.
-async fn connect_with_retry(url: &str, max_connections: u32) -> PgPool {
+async fn connect_with_retry(options: PgPoolOptions, url: &str) -> PgPool {
     let mut last_error = None;
 
     for attempt in 0..10 {
-        match PgPoolOptions::new()
-            .max_connections(max_connections)
-            .connect(url)
-            .await
-        {
+        match options.clone().connect(url).await {
             Ok(pool) => return pool,
             Err(error) => {
                 last_error = Some(error);
@@ -142,6 +140,22 @@ async fn connect_with_retry(url: &str, max_connections: u32) -> PgPool {
 }
 
 pub async fn fresh_database() -> PgPool {
+    connect_fresh(PgPoolOptions::new().max_connections(4)).await
+}
+
+pub async fn saturated_database() -> PgPool {
+    let pool = connect_fresh(
+        PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(250)),
+    )
+    .await;
+    db::run_migrations(&pool).await.expect("migrations apply");
+
+    pool
+}
+
+async fn connect_fresh(options: PgPoolOptions) -> PgPool {
     let postgres = postgres().await;
     let name = format!("test_{}", Uuid::now_v7().simple());
 
@@ -159,10 +173,9 @@ pub async fn fresh_database() -> PgPool {
         .await
         .expect("create a database for the test");
 
-    // Тесты идут параллельно: пул на тест держим узким, иначе десяток параллельных тестов
-    // выберет max_connections сервера. Lock держим до первого подключения: другой прогон уже не
-    // сможет удалить только что созданную базу в зазоре между `create database` и коннектом.
-    let pool = connect_with_retry(&postgres.url(&name), 4).await;
+    // Lock держим до первого подключения: другой прогон уже не сможет удалить только что
+    // созданную базу в зазоре между `create database` и коннектом.
+    let pool = connect_with_retry(options, &postgres.url(&name)).await;
     admin
         .close()
         .await

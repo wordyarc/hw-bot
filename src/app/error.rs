@@ -24,7 +24,8 @@ str_enum! {
         ConcurrentModification => "concurrent_modification",
         InviteInvalid => "invite_invalid",
         FileTooLarge => "file_too_large",
-        FileLimitReached => "file_limit_reached"
+        FileLimitReached => "file_limit_reached",
+        Overloaded => "overloaded"
     }
 }
 
@@ -53,6 +54,9 @@ pub enum AppError {
 
     #[error("assignment must have at most {max_files} files")]
     AssignmentFileLimitReached { max_files: usize },
+
+    #[error("service is temporarily overloaded")]
+    Overloaded,
 
     #[error(transparent)]
     Db(DbError),
@@ -106,6 +110,7 @@ impl AppError {
             Self::InviteInvalid => ErrorCode::InviteInvalid,
             Self::FileTooLarge { .. } => ErrorCode::FileTooLarge,
             Self::AssignmentFileLimitReached { .. } => ErrorCode::FileLimitReached,
+            Self::Overloaded => ErrorCode::Overloaded,
             Self::Db(_) => ErrorCode::InternalError,
         }
     }
@@ -115,6 +120,7 @@ impl From<DbError> for AppError {
     fn from(error: DbError) -> Self {
         match error {
             DbError::RuleViolation(domain_error) => Self::Domain(domain_error),
+            DbError::Overloaded => Self::Overloaded,
             other => Self::Db(other),
         }
     }
@@ -173,6 +179,13 @@ mod tests {
         });
 
         assert_eq!(error.code(), ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn saturation_is_distinguishable_from_a_broken_request() {
+        let error = AppError::from(DbError::Overloaded);
+
+        assert_eq!(error.code(), ErrorCode::Overloaded);
     }
 
     #[test]

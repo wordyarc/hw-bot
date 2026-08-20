@@ -400,8 +400,7 @@ pub(super) async fn handle_message(
         | BotState::Flow(FlowState::AwaitingDeadlineText { target }) => {
             teacher::submit_deadline_text(step, target).await?;
         }
-        BotState::Flow(FlowState::ChoosingGradebookStudent { .. })
-        | BotState::Flow(FlowState::ChoosingAttemptStudent { .. }) => {
+        BotState::Flow(FlowState::ChoosingStudent { .. }) => {
             bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
                 .await?;
         }

@@ -40,6 +40,16 @@ async fn http_request_timeout_bounds_waiting_for_the_database() {
 }
 
 #[tokio::test]
+async fn an_exhausted_pool_answers_overloaded() {
+    let app = TestApp::start_saturated().await;
+    let _held = app.pool.acquire().await.unwrap();
+
+    let response = app.get_as("/me", app.student()).await;
+
+    response.error(StatusCode::SERVICE_UNAVAILABLE, "overloaded");
+}
+
+#[tokio::test]
 async fn runtime_pool_bounds_connection_waiting() {
     let setup_pool = crate::harness::fresh_database().await;
     let database_url = setup_pool.connect_options().to_url_lossy().to_string();

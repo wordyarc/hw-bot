@@ -28,7 +28,7 @@ also_stdout = true
 max_file_size_bytes = 5242880
 max_files_per_assignment = 5
 max_files_per_submission = 1
-transfer_timeout_ms = 60000
+transfer_timeout_ms = 20000
 max_concurrent_transfers = 1
 
 [telegram]
@@ -39,7 +39,7 @@ polling_timeout_ms = 20000
 rate_limit_burst = 6
 rate_limit_replenish_ms = 1000
 max_concurrent_updates = 8
-shutdown_grace_ms = 10000
+shutdown_grace_ms = 20000
 
 [notification_worker]
 enabled = true

@@ -128,13 +128,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
 
     tracing::info!("listening on http://{addr}");
 
-    let shutdown_grace = Duration::from_millis(
-        config
-            .server
-            .request_timeout_ms
-            .max(config.telegram.shutdown_grace_ms)
-            .max(config.notification_worker.shutdown_grace_ms),
-    );
+    let shutdown_grace = config.shutdown_grace();
     let mut supervisor = Supervisor::new(cancellation.clone(), health.clone(), shutdown_grace);
 
     let http_cancellation = cancellation.clone();

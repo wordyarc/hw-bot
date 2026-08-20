@@ -8,6 +8,9 @@ pub type DbResult<T> = Result<T, DbError>;
 /// Postgres class 23505: `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
 
+/// Postgres class 57014: `query_canceled`, в том числе по `statement_timeout`.
+const STATEMENT_TIMEOUT: &str = "57014";
+
 /// Условный `update ... where <прежнее состояние>`: 0 затронутых строк означает, что состояние
 /// уже изменил конкурент. Какой именно ошибкой это назвать, решает вызывающий - у правок задания
 /// это конфликт записи, у проверки сдачи доменное правило.
@@ -38,6 +41,9 @@ pub enum DbError {
 
     #[error("{message}")]
     Conflict { message: &'static str },
+
+    #[error("database is saturated")]
+    Overloaded,
 }
 
 impl DbError {
@@ -51,7 +57,11 @@ impl DbError {
 
 impl From<sqlx::Error> for DbError {
     fn from(error: sqlx::Error) -> Self {
-        log_timeout(&error);
+        if let Some(saturation) = saturation(&error) {
+            log_saturation(saturation);
+            return Self::Overloaded;
+        }
+
         match unique_violation(&error) {
             Some(mapped) => mapped,
             None => Self::Database(error),
@@ -59,19 +69,40 @@ impl From<sqlx::Error> for DbError {
     }
 }
 
-pub(crate) fn log_timeout(error: &sqlx::Error) {
+#[derive(Clone, Copy)]
+enum Saturation {
+    PoolAcquire,
+    Statement,
+}
+
+fn saturation(error: &sqlx::Error) -> Option<Saturation> {
     if matches!(error, sqlx::Error::PoolTimedOut) {
-        tracing::warn!(
-            kind = "pool_acquire_timeout",
-            "database operation timed out"
-        );
-    } else if error
+        return Some(Saturation::PoolAcquire);
+    }
+    if error
         .as_database_error()
         .and_then(|error| error.code())
         .as_deref()
-        == Some("57014")
+        == Some(STATEMENT_TIMEOUT)
     {
-        tracing::warn!(kind = "statement_timeout", "database operation timed out");
+        return Some(Saturation::Statement);
+    }
+
+    None
+}
+
+fn log_saturation(saturation: Saturation) {
+    let kind = match saturation {
+        Saturation::PoolAcquire => "pool_acquire_timeout",
+        Saturation::Statement => "statement_timeout",
+    };
+
+    tracing::warn!(kind, "database operation timed out");
+}
+
+pub(crate) fn log_timeout(error: &sqlx::Error) {
+    if let Some(saturation) = saturation(error) {
+        log_saturation(saturation);
     }
 }
 
@@ -110,6 +141,14 @@ mod tests {
         assert!(matches!(
             DbError::from(sqlx::Error::RowNotFound),
             DbError::Database(_)
+        ));
+    }
+
+    #[test]
+    fn an_exhausted_pool_is_saturation_and_not_a_database_error() {
+        assert!(matches!(
+            DbError::from(sqlx::Error::PoolTimedOut),
+            DbError::Overloaded
         ));
     }
 }

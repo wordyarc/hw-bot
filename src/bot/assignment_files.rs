@@ -186,26 +186,16 @@ pub(super) async fn handle_screen_action(
     };
     match action {
         ScreenAction::AddFile => {
-            let BotState::Screen(ScreenState::ManagingAssignmentFiles {
-                message_id: current_message_id,
-                assignment_id,
-                revision,
-                creation_flow,
-                ..
-            }) = state
+            let Some((assignment_id, revision, creation_flow)) =
+                state.managing_assignment_files(message_id)
             else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
+                return send_stale_button(bot, chat_id).await;
             };
-            if *current_message_id != message_id {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
-            }
             dialogue
                 .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
-                    assignment_id: *assignment_id,
-                    expected_revision: *revision,
-                    creation_flow: *creation_flow,
+                    assignment_id,
+                    expected_revision: revision,
+                    creation_flow,
                 }))
                 .await?;
             ask_input(bot, chat_id, "Пришлите файл или фотографию.").await?;
@@ -294,46 +284,27 @@ pub(super) async fn handle_flow_action(
 
     match action {
         FlowAction::ConfirmFileDeletion => {
-            let BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion {
-                message_id: current_message_id,
-                assignment_id,
-                file_id,
-                expected_revision,
-                creation_flow,
-            }) = state
+            let Some((assignment_id, file_id, expected_revision, creation_flow)) =
+                state.confirming_file_deletion(message_id)
             else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
+                return send_stale_button(bot, chat_id).await;
             };
-            if *current_message_id != message_id {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
-            }
             workflow
-                .delete(*assignment_id, *file_id, *expected_revision, *creation_flow)
+                .delete(assignment_id, file_id, expected_revision, creation_flow)
                 .await?;
         }
         FlowAction::CancelFileDeletion => {
-            let BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion {
-                message_id: current_message_id,
-                assignment_id,
-                creation_flow,
-                ..
-            }) = state
+            let Some((assignment_id, _, _, creation_flow)) =
+                state.confirming_file_deletion(message_id)
             else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
+                return send_stale_button(bot, chat_id).await;
             };
-            if *current_message_id != message_id {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
-            }
             show(
                 bot,
                 chat_id,
                 actor,
-                *assignment_id,
-                *creation_flow,
+                assignment_id,
+                creation_flow,
                 services,
                 dialogue,
             )

@@ -41,6 +41,7 @@ pub fn app_error_message(code: ErrorCode) -> &'static str {
         }
         ErrorCode::FileTooLarge => "Файл превышает допустимый размер.",
         ErrorCode::FileLimitReached => "Достигнут лимит вложений для задания.",
+        ErrorCode::Overloaded => "Сервис сейчас занят. Повторите через минуту.",
     }
 }
 

@@ -29,7 +29,7 @@ also_stdout = true
 max_file_size_bytes = 5242880
 max_files_per_assignment = 5
 max_files_per_submission = 1
-transfer_timeout_ms = 60000
+transfer_timeout_ms = 20000
 max_concurrent_transfers = 4
 
 [ui]
@@ -44,7 +44,7 @@ polling_timeout_ms = 10000
 rate_limit_burst = 8
 rate_limit_replenish_ms = 1000
 max_concurrent_updates = 32
-shutdown_grace_ms = 10000
+shutdown_grace_ms = 20000
 
 [group_invites]
 # 32 случайных байта в base64url без padding. Задаётся окружением или config/local.toml.

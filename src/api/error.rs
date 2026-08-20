@@ -102,6 +102,7 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         | ErrorCode::FileLimitReached => StatusCode::CONFLICT,
         ErrorCode::FileTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::PermissionDenied | ErrorCode::InviteInvalid => StatusCode::FORBIDDEN,
+        ErrorCode::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -146,6 +147,14 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
         assert_eq!(error.code(), "deadline_exceeded");
+    }
+
+    #[test]
+    fn maps_saturation_to_service_unavailable() {
+        let error = ApiError::from(AppError::from(DbError::Overloaded));
+
+        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code(), "overloaded");
     }
 
     #[test]

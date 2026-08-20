@@ -145,6 +145,42 @@ pub(super) enum DeadlineAction {
     Pick(NaiveDate),
 }
 
+/// Девять семейств разбираются одинаково: uuid после префикса заворачивается в свой тип ID.
+/// добавление семейства - строка
+/// Порядок значим, выигрывает первый подошедший префикс.
+/// Строка таблицы: префикс семейства и конструктор действия из разобранного uuid.
+type ReplayableFamily = (&'static str, fn(uuid::Uuid) -> ReplayableAction);
+
+const REPLAYABLE_FAMILIES: [ReplayableFamily; 9] = [
+    (COURSE_PREFIX, |id| {
+        ReplayableAction::Course(TeachingCourseId::from_uuid(id))
+    }),
+    (ASSIGNMENT_PREFIX, |id| {
+        ReplayableAction::Assignment(AssignmentId::from_uuid(id))
+    }),
+    (MANAGE_PREFIX, |id| {
+        ReplayableAction::ManageAssignment(AssignmentId::from_uuid(id))
+    }),
+    (CREATE_PREFIX, |id| {
+        ReplayableAction::StartAssignmentCreation(TeachingCourseId::from_uuid(id))
+    }),
+    (SUBMIT_PREFIX, |id| {
+        ReplayableAction::StartSubmission(AssignmentId::from_uuid(id))
+    }),
+    (FILES_PREFIX, |id| {
+        ReplayableAction::AssignmentFiles(AssignmentId::from_uuid(id))
+    }),
+    (ATTEMPTS_PREFIX, |id| {
+        ReplayableAction::GrantAttempts(AssignmentId::from_uuid(id))
+    }),
+    (INVITE_PREFIX, |id| {
+        ReplayableAction::GroupInvite(TeachingCourseId::from_uuid(id))
+    }),
+    (GRADES_PREFIX, |id| {
+        ReplayableAction::Gradebook(TeachingCourseId::from_uuid(id))
+    }),
+];
+
 pub(super) fn parse(data: &str) -> Option<CallbackAction> {
     let replayable = match data {
         MENU_ASSIGNMENTS => Some(ReplayableAction::StudentAssignments),
@@ -153,49 +189,9 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         MENU_PROFILE => Some(ReplayableAction::Profile),
         MENU_COURSES => Some(ReplayableAction::Courses),
         NEXT_REVIEW => Some(ReplayableAction::NextReview),
-        _ => parse_uuid(data, COURSE_PREFIX)
-            .map(TeachingCourseId::from_uuid)
-            .map(ReplayableAction::Course)
-            .or_else(|| {
-                parse_uuid(data, ASSIGNMENT_PREFIX)
-                    .map(AssignmentId::from_uuid)
-                    .map(ReplayableAction::Assignment)
-            })
-            .or_else(|| {
-                parse_uuid(data, MANAGE_PREFIX)
-                    .map(AssignmentId::from_uuid)
-                    .map(ReplayableAction::ManageAssignment)
-            })
-            .or_else(|| {
-                parse_uuid(data, CREATE_PREFIX)
-                    .map(TeachingCourseId::from_uuid)
-                    .map(ReplayableAction::StartAssignmentCreation)
-            })
-            .or_else(|| {
-                parse_uuid(data, SUBMIT_PREFIX)
-                    .map(AssignmentId::from_uuid)
-                    .map(ReplayableAction::StartSubmission)
-            })
-            .or_else(|| {
-                parse_uuid(data, FILES_PREFIX)
-                    .map(AssignmentId::from_uuid)
-                    .map(ReplayableAction::AssignmentFiles)
-            })
-            .or_else(|| {
-                parse_uuid(data, ATTEMPTS_PREFIX)
-                    .map(AssignmentId::from_uuid)
-                    .map(ReplayableAction::GrantAttempts)
-            })
-            .or_else(|| {
-                parse_uuid(data, INVITE_PREFIX)
-                    .map(TeachingCourseId::from_uuid)
-                    .map(ReplayableAction::GroupInvite)
-            })
-            .or_else(|| {
-                parse_uuid(data, GRADES_PREFIX)
-                    .map(TeachingCourseId::from_uuid)
-                    .map(ReplayableAction::Gradebook)
-            }),
+        _ => REPLAYABLE_FAMILIES
+            .iter()
+            .find_map(|(prefix, action)| parse_uuid(data, prefix).map(action)),
     };
     if let Some(action) = replayable {
         return Some(CallbackAction::Replayable(action));
