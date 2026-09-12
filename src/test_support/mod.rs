@@ -1,9 +1,10 @@
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainResult, EducationLevel, Grading, LatePolicy, Role,
-    StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission, SubmissionHistory,
-    SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, DomainResult, EducationLevel, Grading, LatePolicy, NewAssignment,
+    Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission,
+    SubmissionHistory, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User,
+    UserId,
 };
 
 pub const GROUP_CODE: &str = "B9122-02.03.21";
@@ -191,13 +192,15 @@ impl<'a> AssignmentBuilder<'a> {
             AssignmentId::new(),
             self.course,
             self.author,
-            self.title,
-            self.body,
-            self.max_attempts,
-            self.grading,
-            self.late_policy,
-            self.created_at,
-            deadline_at,
+            NewAssignment {
+                title: self.title,
+                body: self.body,
+                max_attempts: self.max_attempts,
+                grading: self.grading,
+                late_policy: self.late_policy,
+                created_at: self.created_at,
+                deadline_at,
+            },
         )?;
 
         if self.publish {

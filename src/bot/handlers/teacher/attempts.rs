@@ -1,4 +1,6 @@
-use crate::bot::handlers::{Deps, TextStep, parse_positive_attempts, require_text, resolve_actor};
+use crate::bot::context::{Deps, Screen, TextStep};
+use crate::bot::handlers::input::{parse_positive_attempts, require_text};
+use crate::bot::handlers::resolve_actor;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
@@ -9,7 +11,6 @@ use crate::domain::{AssignmentId, MAX_ATTEMPTS, UserId};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX};
 use crate::bot::errors::send_app_error;
-use crate::bot::handlers::Screen;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::views::{
     ask_input, assignment_students_keyboard, attempts_keyboard, send_message_chunks,

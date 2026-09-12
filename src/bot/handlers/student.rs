@@ -1,5 +1,7 @@
-use super::{Deps, TextStep, ensure_text_limit, require_text, reset_dialogue, resolve_actor};
+use super::input::{ensure_text_limit, require_text};
+use super::{reset_dialogue, resolve_actor};
 use crate::app::SubmitHomework;
+use crate::bot::context::{Deps, Screen, TextStep};
 use crate::bot::texts;
 use crate::bot::views::student_keyboard;
 use crate::domain::USER_TEXT_MAX_LEN;
@@ -10,7 +12,6 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::domain::{AssignmentId, AssignmentStatus};
 
-use super::Screen;
 use crate::bot::errors::send_app_error;
 use crate::bot::views::{
     button_label, deadline_left, grade_line, grading_lines, send_message_chunks, student_menu,
@@ -56,7 +57,7 @@ pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
     send_message_chunks(bot, chat_id, text, Some(student_menu())).await
 }
 
-pub(super) fn queue_place(position: u32, total: u32) -> String {
+fn queue_place(position: u32, total: u32) -> String {
     if position == 0 {
         "преподаватель ещё не назначен на курс".to_owned()
     } else {
@@ -361,4 +362,15 @@ pub(super) async fn submit_homework_text(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_queue_without_reviewers_does_not_show_a_made_up_position() {
+        assert_eq!(queue_place(2, 5), "ваш номер в очереди: 2 из 5");
+        assert_eq!(queue_place(0, 0), "преподаватель ещё не назначен на курс");
+    }
 }

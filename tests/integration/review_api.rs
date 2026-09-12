@@ -5,6 +5,45 @@ use uuid::Uuid;
 use crate::harness::{TestApp, submission_id};
 
 #[tokio::test]
+async fn reloading_a_review_checks_access_to_its_course() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let outsider = app.add_outsider_teacher("Outsider").await;
+    let error = app
+        .application
+        .reviews
+        .find_for_review(
+            hw_bot::app::Actor::new(outsider.id()),
+            hw_bot::domain::SubmissionId::from_uuid(submission),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), hw_bot::app::ErrorCode::PermissionDenied);
+}
+
+#[tokio::test]
+async fn reloading_a_completed_review_does_not_restart_it() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    app.review(submission, app.teacher(), "accept", "Принято")
+        .await
+        .ok();
+    let error = app
+        .application
+        .reviews
+        .find_for_review(
+            hw_bot::app::Actor::new(app.fixture.teacher.id()),
+            hw_bot::domain::SubmissionId::from_uuid(submission),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        hw_bot::app::ErrorCode::SubmissionAlreadyReviewed
+    );
+}
+
+#[tokio::test]
 async fn empty_queue_returns_no_content() {
     let app = TestApp::start().await;
 

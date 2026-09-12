@@ -7,8 +7,8 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    StoredFileMetadata, StudentAssignmentProgress, Subject, Submission, SubmissionHistory,
-    TeachingCourse, TeachingCourseId, User, UserId,
+    NewAssignment, StoredFileMetadata, StudentAssignmentProgress, Subject, Submission,
+    SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -100,13 +100,15 @@ impl AssignmentService {
             AssignmentId::new(),
             &teaching_course,
             &author,
-            command.title,
-            command.body,
-            command.max_attempts,
-            command.grading,
-            command.late_policy,
-            command.created_at,
-            command.deadline_at,
+            NewAssignment {
+                title: command.title,
+                body: command.body,
+                max_attempts: command.max_attempts,
+                grading: command.grading,
+                late_policy: command.late_policy,
+                created_at: command.created_at,
+                deadline_at: command.deadline_at,
+            },
         )?;
 
         db::assignments::insert(&mut *tx, &assignment).await?;

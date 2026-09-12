@@ -16,7 +16,8 @@ pub use assignments::{
 };
 pub use container::ApplicationContainer;
 pub use courses::{
-    CourseGradebook, CourseService, GroupInviteState, StudentGrades, TeachingCourseSummary,
+    AssignmentGrade, CourseGradebook, CourseService, GroupInviteState, StudentGrades,
+    TeachingCourseSummary,
 };
 pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{

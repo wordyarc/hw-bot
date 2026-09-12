@@ -102,12 +102,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let cancellation = CancellationToken::new();
     let health = HealthState::new(config.telegram.enabled, config.notification_worker.enabled);
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
-    let invites = GroupInviteCodec::new(
-        config
-            .group_invites
-            .resolved_signing_secret()
-            .context("validated config must resolve group_invites.invite_signing_secret")?,
-    );
+    let invites = GroupInviteCodec::new(config.invite_signing_secret().clone());
     let telegram_bot = build_telegram_bot(&config, application.clone(), invites.clone())?;
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
@@ -166,7 +161,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
 }
 
 fn build_telegram_bot(
-    config: &AppConfig,
+    config: &ValidatedAppConfig,
     application: ApplicationContainer,
     invites: GroupInviteCodec,
 ) -> anyhow::Result<Option<TelegramBot>> {
@@ -175,14 +170,8 @@ fn build_telegram_bot(
         return Ok(None);
     }
 
-    let utc_offset = config
-        .ui
-        .resolved_utc_offset()
-        .context("validated config must resolve ui.utc_offset")?;
-    let deadline_time = config
-        .ui
-        .resolved_deadline_time()
-        .context("validated config must resolve ui.deadline_time")?;
+    let utc_offset = config.utc_offset();
+    let deadline_time = config.deadline_time();
 
     let bot = TelegramBot::new(
         application,

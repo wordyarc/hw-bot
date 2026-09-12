@@ -7,8 +7,9 @@ use crate::domain::{AssignmentId, TeachingCourseId};
 
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::ScreenAction;
+use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
-use crate::bot::handlers::{Screen, current_assignment_screen, reset_dialogue};
+use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, DeadlineTarget, FlowState, ScreenState};
 use crate::bot::views::{
     assignment_actions_keyboard, assignment_status, confirm_invite_rotation_keyboard,
@@ -190,7 +191,10 @@ pub(in crate::bot::handlers) async fn handle_screen_action(
         ScreenAction::Publish(assignment_id)
         | ScreenAction::Archive(assignment_id)
         | ScreenAction::ChangeDeadline(assignment_id) => {
-            if current_assignment_screen(assignment_id, message_id, &state).is_none() {
+            if state
+                .managing_assignment(message_id, assignment_id)
+                .is_none()
+            {
                 return send_stale_button(screen.bot, screen.chat_id).await;
             }
         }

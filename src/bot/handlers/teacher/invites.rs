@@ -7,8 +7,8 @@ use crate::domain::TeachingCourseId;
 
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::FlowAction;
+use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
-use crate::bot::handlers::Screen;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::views::group_invite_keyboard;
 use crate::bot::views::send_stale_button;

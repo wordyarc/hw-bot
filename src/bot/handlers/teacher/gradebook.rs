@@ -4,8 +4,8 @@ use teloxide::prelude::Requester;
 use crate::domain::{TeachingCourseId, UserId};
 
 use crate::bot::HandlerResult;
+use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
-use crate::bot::handlers::Screen;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::views::{gradebook_students_keyboard, send_message_chunks, send_stale_button};
 

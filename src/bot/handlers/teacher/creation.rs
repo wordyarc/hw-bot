@@ -1,6 +1,6 @@
-use crate::bot::handlers::{
-    Deps, TextStep, ensure_text_limit, parse_late_policy, parse_max_score, parse_positive_attempts,
-    require_text,
+use crate::bot::context::{Deps, Screen, TextStep};
+use crate::bot::handlers::input::{
+    ensure_text_limit, parse_late_policy, parse_max_score, parse_positive_attempts, require_text,
 };
 use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, USER_TEXT_MAX_LEN};
 use teloxide::payloads::SendMessageSetters;
@@ -11,7 +11,6 @@ use crate::domain::{Grading, LatePolicy, MAX_ATTEMPTS, MAX_SCORE, TeachingCourse
 
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, GradingChoice, LatePolicyChoice, MAX_ATTEMPTS_PREFIX};
-use crate::bot::handlers::Screen;
 use crate::bot::state::{BotDialogue, BotState, DeadlineTarget, DraftAssignment, FlowState};
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{

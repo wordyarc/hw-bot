@@ -1,13 +1,150 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use hw_bot::bot::{callbacks, texts};
-use serde_json::json;
-use wiremock::Mock;
+use serde_json::{Value, json};
 use wiremock::matchers::{body_json, body_partial_json, method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
 use crate::harness::{TestApp, submission_id};
+
+#[tokio::test]
+async fn review_restarts_when_the_selected_score_exceeds_the_new_scale() {
+    assert_review_recovers_from_grading_change(Some(5), Some(3)).await;
+}
+
+#[tokio::test]
+async fn review_restarts_when_scored_grading_becomes_pass_fail() {
+    assert_review_recovers_from_grading_change(Some(5), None).await;
+}
+
+#[tokio::test]
+async fn review_restarts_when_pass_fail_grading_starts_requiring_a_score() {
+    assert_review_recovers_from_grading_change(None, Some(5)).await;
+}
+
+async fn assert_review_recovers_from_grading_change(
+    initial_max: Option<u16>,
+    new_max: Option<u16>,
+) {
+    let app = TestApp::start().await;
+    let assignment = match initial_max {
+        Some(max) => app.add_scored_assignment(max).await.id().as_uuid(),
+        None => app.assignment(),
+    };
+    let submission = submission_id(
+        &app.submit(assignment, app.student(), "pull/recovery")
+            .await
+            .created(),
+    );
+    let accept = format!("{}{submission}", callbacks::REVIEW_ACCEPT_PREFIX);
+    let mut initial = vec![
+        message_update(1, app.teacher(), 1, "/menu"),
+        callback_update(2, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
+        callback_update(3, app.teacher(), &accept, BOT_MESSAGE_ID),
+    ];
+    if initial_max.is_some() {
+        initial.push(callback_update(
+            4,
+            app.teacher(),
+            &format!("{}{submission}:4", callbacks::REVIEW_SCORE_PREFIX),
+            BOT_MESSAGE_ID,
+        ));
+    }
+    let updates = Arc::new(Mutex::new(initial));
+    let polled_updates = updates.clone();
+    let telegram = telegram_server(Vec::new()).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetUpdates"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = request.body_json().unwrap();
+            let offset = body["offset"].as_i64().unwrap_or(0);
+            let result: Vec<_> = polled_updates
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|update| update["update_id"].as_i64().unwrap() >= offset)
+                .cloned()
+                .collect();
+            let empty = result.is_empty();
+            let response =
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": result}));
+            if empty && body["timeout"].as_u64().unwrap_or(0) > 0 {
+                response.set_delay(Duration::from_millis(20))
+            } else {
+                response
+            }
+        })
+        .with_priority(1)
+        .mount(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+    assert!(
+        wait_until(Duration::from_secs(5), || async {
+            telegram
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| {
+                    request.body_json::<Value>().ok().is_some_and(|body| {
+                        body["text"] == texts::input_prompt(texts::REVIEW_COMMENT_PROMPT)
+                    })
+                })
+        })
+        .await,
+        "the review did not reach the comment step"
+    );
+
+    app.change_grading(assignment, app.teacher(), new_max)
+        .await
+        .ok();
+    let mut remaining = vec![
+        message_update(5, app.teacher(), 2, "Старый комментарий"),
+        callback_update(6, app.teacher(), &accept, BOT_MESSAGE_ID),
+    ];
+    let new_score = new_max.map(|max| max.min(4));
+    if let Some(score) = new_score {
+        remaining.push(callback_update(
+            7,
+            app.teacher(),
+            &format!("{}{submission}:{score}", callbacks::REVIEW_SCORE_PREFIX),
+            BOT_MESSAGE_ID,
+        ));
+    }
+    remaining.push(message_update(
+        8,
+        app.teacher(),
+        3,
+        "Обновлённый комментарий",
+    ));
+    updates.lock().unwrap().extend(remaining);
+
+    let result = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = recorded_requests(&telegram).await;
+    let (status, raw_score, _) =
+        result.unwrap_or_else(|| panic!("review did not recover; requests:\n{requests}"));
+    assert_eq!(status, "accepted");
+    assert_eq!(raw_score, new_score.map(i16::try_from).transpose().unwrap());
+    assert!(
+        requests.contains(texts::REVIEW_GRADING_CHANGED),
+        "{requests}"
+    );
+    let saved = hw_bot::db::submissions::find_by_id(
+        &app.pool,
+        hw_bot::domain::SubmissionId::from_uuid(submission),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        saved.review_comment().unwrap().as_str(),
+        "Обновлённый комментарий"
+    );
+}
 
 #[tokio::test]
 async fn reviewer_enters_a_score_before_the_comment() {

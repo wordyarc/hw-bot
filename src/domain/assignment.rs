@@ -26,12 +26,15 @@ pub enum Grading {
     #[default]
     PassFail,
     Score {
-        max_score: u16,
+        max_score: MaxScore,
     },
 }
 
-impl Grading {
-    pub fn scored(max_score: u16) -> DomainResult<Self> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaxScore(u16);
+
+impl MaxScore {
+    pub fn new(max_score: u16) -> DomainResult<Self> {
         if max_score == 0 || max_score > MAX_SCORE {
             return Err(DomainError::InvalidMaxScore {
                 value: max_score,
@@ -39,7 +42,19 @@ impl Grading {
             });
         }
 
-        Ok(Self::Score { max_score })
+        Ok(Self(max_score))
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl Grading {
+    pub fn scored(max_score: u16) -> DomainResult<Self> {
+        Ok(Self::Score {
+            max_score: MaxScore::new(max_score)?,
+        })
     }
 
     /// Отсутствие максимума - это «зачёт/незачёт», поэтому колонка в БД одна и nullable.
@@ -50,7 +65,7 @@ impl Grading {
     pub fn max_score(self) -> Option<u16> {
         match self {
             Self::PassFail => None,
-            Self::Score { max_score } => Some(max_score),
+            Self::Score { max_score } => Some(max_score.get()),
         }
     }
 
@@ -63,10 +78,10 @@ impl Grading {
             (Self::PassFail, None) => Ok(None),
             (Self::PassFail, Some(_)) => Err(DomainError::ScoreNotAllowed),
             (Self::Score { .. }, None) => Err(DomainError::ScoreRequired),
-            (Self::Score { max_score }, Some(value)) if value > max_score => {
+            (Self::Score { max_score }, Some(value)) if value > max_score.get() => {
                 Err(DomainError::ScoreOutOfRange {
                     value,
-                    max: max_score,
+                    max: max_score.get(),
                 })
             }
             (Self::Score { .. }, Some(value)) => Ok(Some(value)),
@@ -129,9 +144,11 @@ impl LatePolicy {
             return 0;
         }
 
-        let lateness = (at - deadline_at).num_seconds();
+        let lateness = at - deadline_at;
         let period = i64::from(self.period_days) * 24 * 60 * 60;
-        let periods = (lateness + period - 1) / period;
+        let whole_periods = lateness.num_seconds() / period;
+        let periods =
+            whole_periods + i64::from(lateness > Duration::seconds(whole_periods * period));
 
         u16::try_from(periods).unwrap_or(u16::MAX)
     }
@@ -169,6 +186,17 @@ pub(crate) struct AssignmentParts {
     pub created_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
     pub published_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssignment {
+    pub title: String,
+    pub body: String,
+    pub max_attempts: u16,
+    pub grading: Grading,
+    pub late_policy: Option<LatePolicy>,
+    pub created_at: DateTime<Utc>,
+    pub deadline_at: DateTime<Utc>,
 }
 
 impl Assignment {
@@ -221,18 +249,11 @@ impl Assignment {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: AssignmentId,
         teaching_course: &TeachingCourse,
         created_by: &User,
-        title: impl Into<String>,
-        body: impl Into<String>,
-        max_attempts: u16,
-        grading: Grading,
-        late_policy: Option<LatePolicy>,
-        created_at: DateTime<Utc>,
-        deadline_at: DateTime<Utc>,
+        input: NewAssignment,
     ) -> DomainResult<Self> {
         if !teaching_course.can_be_managed_by(created_by) {
             return Err(DomainError::PermissionDenied {
@@ -245,15 +266,15 @@ impl Assignment {
             teaching_course_id: teaching_course.id(),
             subject_id: teaching_course.subject_id(),
             student_group_id: teaching_course.student_group_id(),
-            title: title.into(),
-            body: body.into(),
-            max_attempts,
-            grading,
-            late_policy,
+            title: input.title,
+            body: input.body,
+            max_attempts: input.max_attempts,
+            grading: input.grading,
+            late_policy: input.late_policy,
             status: AssignmentStatus::Draft,
             created_by: created_by.id(),
-            created_at,
-            deadline_at,
+            created_at: input.created_at,
+            deadline_at: input.deadline_at,
             published_at: None,
         })
     }
@@ -570,7 +591,9 @@ mod tests {
         assert_eq!(Grading::from_max_score(None).unwrap(), Grading::PassFail);
         assert_eq!(
             Grading::from_max_score(Some(5)).unwrap(),
-            Grading::Score { max_score: 5 }
+            Grading::Score {
+                max_score: MaxScore::new(5).unwrap()
+            }
         );
     }
 

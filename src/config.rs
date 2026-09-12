@@ -210,7 +210,7 @@ impl AppConfig {
         }
 
         validate_files(&self.files)?;
-        validate_ui(&self.ui)?;
+        let (utc_offset, deadline_time) = validate_ui(&self.ui)?;
         validate_telegram(&self.telegram)?;
         validate_worker(&self.notification_worker)?;
         validate_limit_coherence(&self)?;
@@ -226,22 +226,45 @@ impl AppConfig {
         }
 
         // Секрет нужен всегда: HTTP-регистрация проверяет инвайт и при выключенном Telegram.
-        validate(
-            self.group_invites.resolved_signing_secret().is_some(),
-            "group_invites.invite_signing_secret must be 32 random bytes in base64url without padding",
-        )?;
+        let invite_signing_secret = self.group_invites.resolved_signing_secret().ok_or_else(|| {
+            invalid("group_invites.invite_signing_secret must be 32 random bytes in base64url without padding")
+        })?;
 
-        Ok(ValidatedAppConfig(self))
+        Ok(ValidatedAppConfig {
+            raw: self,
+            utc_offset,
+            deadline_time,
+            invite_signing_secret,
+        })
     }
 }
 
-pub struct ValidatedAppConfig(AppConfig);
+pub struct ValidatedAppConfig {
+    raw: AppConfig,
+    utc_offset: FixedOffset,
+    deadline_time: NaiveTime,
+    invite_signing_secret: InviteSigningSecret,
+}
+
+impl ValidatedAppConfig {
+    pub fn utc_offset(&self) -> FixedOffset {
+        self.utc_offset
+    }
+
+    pub fn deadline_time(&self) -> NaiveTime {
+        self.deadline_time
+    }
+
+    pub fn invite_signing_secret(&self) -> &InviteSigningSecret {
+        &self.invite_signing_secret
+    }
+}
 
 impl std::ops::Deref for ValidatedAppConfig {
     type Target = AppConfig;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.raw
     }
 }
 
@@ -289,21 +312,20 @@ fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
     Ok(())
 }
 
-fn validate_ui(config: &UiConfig) -> Result<(), ConfigValidationError> {
-    validate(
-        config.resolved_utc_offset().is_some(),
-        format!(
+fn validate_ui(config: &UiConfig) -> Result<(FixedOffset, NaiveTime), ConfigValidationError> {
+    let utc_offset = config.resolved_utc_offset().ok_or_else(|| {
+        invalid(format!(
             "ui.utc_offset must look like +10:00, got {}",
             config.utc_offset
-        ),
-    )?;
-    validate(
-        config.resolved_deadline_time().is_some(),
-        format!(
+        ))
+    })?;
+    let deadline_time = config.resolved_deadline_time().ok_or_else(|| {
+        invalid(format!(
             "ui.deadline_time must use HH:MM, got {}",
             config.deadline_time
-        ),
-    )
+        ))
+    })?;
+    Ok((utc_offset, deadline_time))
 }
 
 fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationError> {

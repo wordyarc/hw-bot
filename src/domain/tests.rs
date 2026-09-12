@@ -1,9 +1,9 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, Grading, LatePolicy, Role, StaffRole,
-    StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId, SubmissionStatus,
-    TeachingCourse, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, Grading, LatePolicy, NewAssignment,
+    Role, StaffRole, StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId,
+    SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
@@ -25,13 +25,15 @@ fn only_teacher_or_admin_can_create_assignment() {
         AssignmentId::new(),
         &course,
         &student,
-        ASSIGNMENT_TITLE,
-        ASSIGNMENT_BODY,
-        2,
-        Grading::PassFail,
-        None,
-        t0(),
-        t0() + Duration::days(7),
+        NewAssignment {
+            title: ASSIGNMENT_TITLE.to_owned(),
+            body: ASSIGNMENT_BODY.to_owned(),
+            max_attempts: 2,
+            grading: Grading::PassFail,
+            late_policy: None,
+            created_at: t0(),
+            deadline_at: t0() + Duration::days(7),
+        },
     );
 
     assert_eq!(
@@ -532,6 +534,25 @@ fn the_second_period_starts_exactly_one_week_after_the_first() {
         assignment.late_periods_at(last_of_the_first + Duration::seconds(1)),
         2
     );
+}
+
+#[test]
+fn fractional_seconds_after_each_period_boundary_count_as_the_next_period() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+
+    for period in 0..4 {
+        let boundary = deadline_at + Duration::weeks(period);
+        assert_eq!(assignment.late_periods_at(boundary), period as u16);
+        for fraction in [Duration::nanoseconds(1), Duration::milliseconds(500)] {
+            assert_eq!(
+                assignment.late_periods_at(boundary + fraction),
+                period as u16 + 1
+            );
+        }
+    }
 }
 
 #[test]

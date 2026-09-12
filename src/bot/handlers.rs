@@ -1,37 +1,32 @@
-use crate::app::{Actor, ErrorCode};
-use crate::domain::{
-    AssignmentId, Grading, LatePolicy, MAX_ATTEMPTS, ReviewDecision, Role, SubmissionId,
-    TelegramUserId,
-};
+use crate::app::Actor;
+use crate::domain::TelegramUserId;
 use anyhow::{Context, anyhow};
 use teloxide::dispatching::dialogue::InMemStorageError;
-use teloxide::payloads::{AnswerCallbackQuerySetters, SendMessageSetters, SetMyCommandsSetters};
+use teloxide::payloads::AnswerCallbackQuerySetters;
 use teloxide::prelude::{Bot, Requester};
-use teloxide::types::{
-    BotCommand, BotCommandScope, CallbackQuery, ChatId, Message, MessageId, Recipient, User,
-};
+use teloxide::types::{CallbackQuery, ChatId, Message, MessageId, User};
 use teloxide::utils::command::BotCommands;
 
 use super::assignment_files;
-use super::callbacks::{
-    self, AmountChoice, CallbackAction, FlowAction, ReplayableAction, ScreenAction,
-};
-use super::errors::{send_app_error, send_error_code};
+use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
+use super::context::{Deps, Screen, TextStep};
+use super::errors::send_app_error;
 use super::invites::BotInvites;
 use super::state::{BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
 use super::timezone::BotTimezone;
-use super::views::{
-    BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW, MenuAction,
-    ask_input, main_keyboard, menu_action, review_score_keyboard, role_name, send_message_chunks,
-    send_stale_button, student_menu, teacher_menu,
-};
+use super::views::{MenuAction, ask_input, menu_action, send_stale_button};
 use super::{BotServices, HandlerResult};
 
+pub(super) mod home;
+mod input;
 mod registration;
 mod review;
 mod student;
 mod teacher;
+
+use home::{send_help, show_home, show_profile};
+use registration::start_registration;
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
@@ -56,83 +51,6 @@ pub(super) enum Command {
     Cancel,
     #[command(description = "❓ помощь")]
     Help,
-}
-
-const STUDENT_COMMANDS: [&str; 7] = [
-    "menu", "tasks", "queue", "archive", "profile", "cancel", "help",
-];
-const TEACHER_COMMANDS: [&str; 6] = ["menu", "review", "courses", "profile", "cancel", "help"];
-const GUEST_COMMANDS: [&str; 3] = ["start", "menu", "help"];
-
-pub(super) fn default_commands() -> Vec<BotCommand> {
-    scoped_commands(None)
-}
-
-fn scoped_commands(role: Option<Role>) -> Vec<BotCommand> {
-    let allowed: &[&str] = match role {
-        Some(Role::Student { .. }) => &STUDENT_COMMANDS,
-        Some(Role::Teacher | Role::Admin) => &TEACHER_COMMANDS,
-        None => &GUEST_COMMANDS,
-    };
-
-    Command::bot_commands()
-        .into_iter()
-        .filter(|command| allowed.contains(&command.command.trim_start_matches('/')))
-        .collect()
-}
-
-async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Role) {
-    if let Err(error) = bot
-        .set_my_commands(scoped_commands(Some(role)))
-        .scope(BotCommandScope::Chat {
-            chat_id: Recipient::Id(chat_id),
-        })
-        .await
-    {
-        tracing::warn!(error = ?error, "failed to publish role command hints");
-    }
-}
-
-/// Зависимости dispatcher-а, которые нужны ещё до разрешения актора.
-#[derive(Clone, Copy)]
-pub(super) struct Deps<'a> {
-    pub services: &'a BotServices,
-    pub dialogue: &'a BotDialogue,
-    pub timezone: &'a BotTimezone,
-    pub invites: &'a BotInvites,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct Screen<'a> {
-    bot: &'a Bot,
-    chat_id: ChatId,
-    actor: Actor,
-    services: &'a BotServices,
-    dialogue: &'a BotDialogue,
-    timezone: &'a BotTimezone,
-    invites: &'a BotInvites,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct TextStep<'a> {
-    pub bot: &'a Bot,
-    pub message: &'a Message,
-    pub telegram_user_id: TelegramUserId,
-    pub deps: Deps<'a>,
-}
-
-impl<'a> Screen<'a> {
-    fn new(bot: &'a Bot, chat_id: ChatId, actor: Actor, deps: Deps<'a>) -> Self {
-        Self {
-            bot,
-            chat_id,
-            actor,
-            services: deps.services,
-            dialogue: deps.dialogue,
-            timezone: deps.timezone,
-            invites: deps.invites,
-        }
-    }
 }
 
 pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
@@ -211,80 +129,6 @@ pub(super) async fn handle_command(
     .await
 }
 
-async fn send_help(
-    bot: &Bot,
-    chat_id: ChatId,
-    telegram_user_id: TelegramUserId,
-    services: &BotServices,
-    timezone: &BotTimezone,
-) -> HandlerResult {
-    let role = match services
-        .users
-        .find_by_telegram_user_id(telegram_user_id)
-        .await
-    {
-        Ok(registered) => Some(registered.user.role()),
-        Err(error) => {
-            if error.code() != ErrorCode::NotFound {
-                tracing::warn!(error = ?error, "failed to resolve the role for help");
-            }
-            None
-        }
-    };
-    let text = format!(
-        "{}\n\n🕒 Даты показываются и вводятся в поясе {}.\n\n{}",
-        help_for(role),
-        timezone.suffix(),
-        help_commands(role),
-    );
-
-    send_message_chunks(bot, chat_id, text, None).await
-}
-
-fn help_for(role: Option<Role>) -> String {
-    match role {
-        Some(Role::Student { .. }) => format!(
-            "❓ Как сдавать работы\n\n\
-             1. «{BUTTON_ASSIGNMENTS}» — список заданий с дедлайнами и остатком попыток.\n\
-             2. Откройте задание, нажмите «📤 Сдать работу» и пришлите ссылку или текст одним \
-             сообщением.\n\
-             3. «{BUTTON_QUEUE}» — ваш номер в очереди проверки, чтобы видеть, что работа не \
-             потерялась.\n\
-             4. Решение придёт отдельным сообщением с комментарием преподавателя. Отклонённую \
-             работу можно сдать заново, пока есть попытки и не прошёл дедлайн.\n\
-             5. «{BUTTON_ARCHIVE}» — закрытые задания вместе с их историей.",
-        ),
-        Some(Role::Teacher | Role::Admin) => format!(
-            "❓ Как вести курс\n\n\
-             1. «{BUTTON_COURSES}» — ваши курсы и задания в них.\n\
-             2. «➕ Создать задание» проведёт по шагам: название, текст, попытки, дедлайн, \
-             вложения. Черновик виден только вам, студенты получат задание после «🚀 \
-             Опубликовать».\n\
-             3. «{BUTTON_REVIEW}» выдаёт следующую сдачу из очереди. Решение требует \
-             комментария — студент увидит его в уведомлении.\n\
-             4. В карточке задания меняется дедлайн, выдаются дополнительные попытки студенту и \
-             добавляются вложения.",
-        ),
-        None => "❓ Бот собирает домашние работы: преподаватель выдаёт задания с дедлайном, \
-                 студент сдаёт их одним сообщением.\n\n\
-                 Отправьте /start, чтобы зарегистрироваться."
-            .to_owned(),
-    }
-}
-
-fn help_commands(role: Option<Role>) -> String {
-    scoped_commands(role)
-        .into_iter()
-        .map(|command| {
-            format!(
-                "/{} — {}\n",
-                command.command.trim_start_matches('/'),
-                command.description,
-            )
-        })
-        .collect()
-}
-
 pub(super) async fn handle_message(
     bot: Bot,
     message: Message,
@@ -324,10 +168,7 @@ pub(super) async fn handle_message(
             | BotState::Flow(FlowState::AwaitingAssignmentFile { .. })
             | BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. })
     ) {
-        return assignment_files::handle_message(
-            &bot, &message, &state, &dialogue, &services, &transfers, actor,
-        )
-        .await;
+        return assignment_files::handle_message(step, &state, &transfers).await;
     }
 
     match state {
@@ -441,25 +282,6 @@ async fn run_menu_action(
     }
 }
 
-pub(super) async fn ensure_text_limit(
-    bot: &Bot,
-    chat_id: ChatId,
-    text: &str,
-    max_len: usize,
-    field: &str,
-) -> HandlerResult<bool> {
-    if text.trim().chars().count() <= max_len {
-        return Ok(true);
-    }
-
-    bot.send_message(
-        chat_id,
-        format!("{field} не должно быть длиннее {max_len} символов."),
-    )
-    .await?;
-    Ok(false)
-}
-
 pub(super) async fn handle_callback(
     bot: Bot,
     query: CallbackQuery,
@@ -514,9 +336,7 @@ pub(super) async fn handle_callback(
         CallbackAction::Screen(action) => {
             handle_screen_action(screen, message.id, action, state, &transfers).await
         }
-        CallbackAction::Flow(action) => {
-            handle_flow_action(screen, message.id, action, state, &transfers).await
-        }
+        CallbackAction::Flow(action) => handle_flow_action(screen, message.id, action, state).await,
         CallbackAction::Noop => Ok(()),
     }
 }
@@ -561,16 +381,7 @@ async fn handle_replayable_action(
             ask_input(screen.bot, screen.chat_id, texts::SUBMISSION_PROMPT).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
-            assignment_files::show(
-                screen.bot,
-                screen.chat_id,
-                screen.actor,
-                assignment_id,
-                false,
-                screen.services,
-                screen.dialogue,
-            )
-            .await
+            assignment_files::show(screen, assignment_id, false).await
         }
         ReplayableAction::GrantAttempts(assignment_id) => {
             teacher::show_students(screen, assignment_id).await
@@ -590,21 +401,12 @@ async fn handle_screen_action(
     transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
-        ScreenAction::AddFile | ScreenAction::OpenFile(_) | ScreenAction::DeleteFile(_) => {
-            assignment_files::handle_screen_action(
-                assignment_files::CallbackContext {
-                    bot: screen.bot,
-                    chat_id: screen.chat_id,
-                    message_id,
-                    state: &state,
-                    actor: screen.actor,
-                    dialogue: screen.dialogue,
-                    services: screen.services,
-                    transfers,
-                },
-                action,
-            )
-            .await
+        ScreenAction::AddFile => assignment_files::ask_upload(screen, message_id, &state).await,
+        ScreenAction::OpenFile(index) => {
+            assignment_files::open(screen, message_id, &state, index, transfers).await
+        }
+        ScreenAction::DeleteFile(index) => {
+            assignment_files::request_deletion(screen, message_id, &state, index).await
         }
         ScreenAction::FinishFileCreation
         | ScreenAction::Publish(_)
@@ -621,66 +423,19 @@ async fn handle_flow_action(
     message_id: MessageId,
     action: FlowAction,
     state: BotState,
-    transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
-        FlowAction::ConfirmFileDeletion | FlowAction::CancelFileDeletion => {
-            assignment_files::handle_flow_action(
-                assignment_files::CallbackContext {
-                    bot: screen.bot,
-                    chat_id: screen.chat_id,
-                    message_id,
-                    state: &state,
-                    actor: screen.actor,
-                    dialogue: screen.dialogue,
-                    services: screen.services,
-                    transfers,
-                },
-                action,
-            )
-            .await?;
+        FlowAction::ConfirmFileDeletion => {
+            assignment_files::confirm_deletion(screen, message_id, &state).await?;
+        }
+        FlowAction::CancelFileDeletion => {
+            assignment_files::cancel_deletion(screen, message_id, &state).await?;
         }
         FlowAction::Review {
             decision,
-            submission_id: callback_submission_id,
+            submission_id,
         } => {
-            let BotState::Flow(FlowState::AwaitingReviewDecision {
-                submission_id,
-                grading,
-                penalty,
-            }) = state
-            else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            if submission_id != callback_submission_id {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            }
-
-            // Балл несёт только принятие: отклонение спрашивает сразу комментарий.
-            match (decision, grading.max_score()) {
-                (ReviewDecision::Accept, Some(max_score)) => {
-                    ask_review_score(
-                        screen.bot,
-                        screen.chat_id,
-                        submission_id,
-                        max_score,
-                        penalty,
-                        screen.dialogue,
-                    )
-                    .await?;
-                }
-                _ => {
-                    ask_review_comment(
-                        screen.bot,
-                        screen.chat_id,
-                        submission_id,
-                        decision,
-                        None,
-                        screen.dialogue,
-                    )
-                    .await?;
-                }
-            }
+            review::handle_decision(screen, submission_id, decision, state).await?;
         }
         FlowAction::Grading(choice) => {
             teacher::handle_grading(screen, message_id, choice, state).await?;
@@ -692,7 +447,7 @@ async fn handle_flow_action(
             submission_id,
             choice,
         } => {
-            handle_review_score(screen, submission_id, choice, state).await?;
+            review::handle_review_score(screen, submission_id, choice, state).await?;
         }
         FlowAction::MaxAttempts(choice) => {
             teacher::handle_max_attempts(screen, message_id, choice, state).await?;
@@ -712,165 +467,6 @@ async fn handle_flow_action(
     }
 
     Ok(())
-}
-
-pub(super) async fn show_home(
-    bot: &Bot,
-    chat_id: ChatId,
-    actor: TelegramUserId,
-    services: &BotServices,
-) -> HandlerResult {
-    match services.users.find_by_telegram_user_id(actor).await {
-        Ok(registered) => {
-            let role = registered.user.role();
-            sync_commands(bot, chat_id, role).await;
-            let name = registered.user.display_name().as_str();
-            let text = match role {
-                Role::Student { .. } => {
-                    let pending = services
-                        .submissions
-                        .pending_queue(Actor::new(registered.user.id()))
-                        .await
-                        .map(|places| places.len())
-                        .unwrap_or_default();
-                    if pending == 0 {
-                        format!("👋 Здравствуйте, {name}!\nВыберите пункт меню ниже 👇")
-                    } else {
-                        format!(
-                            "👋 Здравствуйте, {name}!\n⏳ На проверке ваших работ: {pending}\nВыберите пункт меню ниже 👇"
-                        )
-                    }
-                }
-                Role::Teacher | Role::Admin => {
-                    let pending = match services
-                        .reviews
-                        .queue_size(Actor::new(registered.user.id()))
-                        .await
-                    {
-                        Ok(pending) => pending,
-                        Err(error) => {
-                            send_app_error(bot, chat_id, error).await?;
-                            return Ok(());
-                        }
-                    };
-                    format!(
-                        "👋 Здравствуйте, {name}!\n⏳ Ждут проверки: {pending}\nВыберите пункт меню ниже 👇"
-                    )
-                }
-            };
-            bot.send_message(chat_id, text)
-                .reply_markup(main_keyboard(role))
-                .await?;
-        }
-        Err(error) if error.code() == ErrorCode::NotFound => {
-            bot.send_message(chat_id, texts::GUEST_NEEDS_INVITE).await?;
-        }
-        Err(error) => send_app_error(bot, chat_id, error).await?,
-    }
-
-    Ok(())
-}
-
-async fn start_registration(
-    bot: &Bot,
-    chat_id: ChatId,
-    telegram_user_id: TelegramUserId,
-    payload: &str,
-    services: &BotServices,
-    dialogue: &BotDialogue,
-    invites: &BotInvites,
-) -> HandlerResult {
-    match services
-        .users
-        .find_by_telegram_user_id(telegram_user_id)
-        .await
-    {
-        Ok(_) => return show_home(bot, chat_id, telegram_user_id, services).await,
-        Err(error) if error.code() == ErrorCode::NotFound => {}
-        Err(error) => return send_app_error(bot, chat_id, error).await,
-    }
-
-    if payload.is_empty() {
-        bot.send_message(chat_id, texts::GUEST_NEEDS_INVITE).await?;
-        return Ok(());
-    }
-
-    // Битая подпись и отозванная ссылка обязаны выглядеть для гостя одинаково.
-    let Ok(invite) = invites.decode(payload) else {
-        return send_error_code(bot, chat_id, ErrorCode::InviteInvalid).await;
-    };
-    let group = match services.users.resolve_group_invite(invite).await {
-        Ok(group) => group,
-        Err(error) => return send_app_error(bot, chat_id, error).await,
-    };
-
-    dialogue
-        .update(BotState::Flow(FlowState::AwaitingRegistrationName {
-            invite,
-        }))
-        .await?;
-    ask_input(
-        bot,
-        chat_id,
-        &format!(
-            "Регистрация в группу {}.\n\nКак вас называть?",
-            group.code().as_str()
-        ),
-    )
-    .await
-}
-
-async fn show_profile(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        services,
-        timezone,
-        ..
-    } = screen;
-    let registered = match services.users.find_by_actor(actor).await {
-        Ok(registered) => registered,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
-    let role = registered.user.role();
-    let mut text = format!(
-        "👤 Профиль\n\nИмя: {}\nРоль: {}\n",
-        registered.user.display_name().as_str(),
-        role_name(role),
-    );
-    if let Some(group) = &registered.student_group {
-        text.push_str(&format!("Группа: {}\n", group.code().as_str()));
-    }
-    text.push_str(&format!("🕒 Часовой пояс: {}\n", timezone.suffix()));
-
-    match role {
-        Role::Student { .. } => {
-            if let Ok(assignments) = services.assignments.list_for_student(actor).await {
-                text.push_str(&format!("\n📚 Активных заданий: {}\n", assignments.len()));
-            }
-            if let Ok(places) = services.submissions.pending_queue(actor).await {
-                text.push_str(&format!("⏳ Работ на проверке: {}\n", places.len()));
-            }
-        }
-        Role::Teacher | Role::Admin => {
-            if let Ok(courses) = services.courses.list_for_teacher(actor).await {
-                text.push_str(&format!("\n📘 Курсов: {}\n", courses.len()));
-            }
-            if let Ok(pending) = services.reviews.queue_size(actor).await {
-                text.push_str(&format!("⏳ Ждут проверки: {pending}\n"));
-            }
-        }
-    }
-
-    let keyboard = match role {
-        Role::Student { .. } => student_menu(),
-        Role::Teacher | Role::Admin => teacher_menu(None),
-    };
-    send_message_chunks(bot, chat_id, text, Some(keyboard)).await
 }
 
 async fn ensure_private_message(bot: &Bot, message: &Message) -> HandlerResult<bool> {
@@ -897,216 +493,6 @@ fn actor_from_user(user: &User) -> HandlerResult<TelegramUserId> {
     TelegramUserId::new(value).map_err(|error| anyhow!(error))
 }
 
-fn current_assignment_screen(
-    assignment_id: AssignmentId,
-    message_id: MessageId,
-    state: &BotState,
-) -> Option<AssignmentId> {
-    let BotState::Screen(ScreenState::ManagingAssignment {
-        message_id: current_message_id,
-        assignment_id: current_assignment_id,
-        ..
-    }) = state
-    else {
-        return None;
-    };
-
-    (*current_message_id == message_id && *current_assignment_id == assignment_id)
-        .then_some(assignment_id)
-}
-
-pub(super) async fn require_text<'a>(
-    bot: &Bot,
-    message: &'a Message,
-) -> HandlerResult<Option<&'a str>> {
-    let Some(text) = message.text() else {
-        bot.send_message(message.chat.id, "Пришлите текстовое сообщение.")
-            .await?;
-        return Ok(None);
-    };
-    Ok(Some(text))
-}
-
-const SCORE_BUTTONS_LIMIT: u16 = 10;
-
-async fn ask_review_score(
-    bot: &Bot,
-    chat_id: ChatId,
-    submission_id: SubmissionId,
-    max_score: u16,
-    penalty: u16,
-    dialogue: &BotDialogue,
-) -> HandlerResult {
-    dialogue
-        .update(BotState::Flow(FlowState::AwaitingReviewScore {
-            submission_id,
-            max_score,
-            penalty,
-        }))
-        .await?;
-
-    if penalty > 0 {
-        bot.send_message(
-            chat_id,
-            format!("⏳ Работа сдана с опозданием, штраф — {penalty}."),
-        )
-        .await?;
-    }
-
-    if max_score <= SCORE_BUTTONS_LIMIT {
-        bot.send_message(chat_id, format!("Какой балл ставите из {max_score}?"))
-            .reply_markup(review_score_keyboard(submission_id, max_score))
-            .await?;
-        return Ok(());
-    }
-
-    ask_input(
-        bot,
-        chat_id,
-        &format!("Какой балл ставите? Введите число от 0 до {max_score}:"),
-    )
-    .await
-}
-
-pub(super) async fn ask_review_comment(
-    bot: &Bot,
-    chat_id: ChatId,
-    submission_id: SubmissionId,
-    decision: ReviewDecision,
-    score: Option<u16>,
-    dialogue: &BotDialogue,
-) -> HandlerResult {
-    dialogue
-        .update(BotState::Flow(FlowState::AwaitingReviewComment {
-            submission_id,
-            decision,
-            score,
-        }))
-        .await?;
-    ask_input(bot, chat_id, "Напишите обязательный комментарий к решению:").await
-}
-
-pub(super) async fn confirm_score(
-    bot: &Bot,
-    chat_id: ChatId,
-    score: u16,
-    penalty: u16,
-    max_score: u16,
-) -> HandlerResult {
-    if penalty == 0 {
-        return Ok(());
-    }
-
-    bot.send_message(
-        chat_id,
-        format!(
-            "🏅 Итог: {score} − {penalty} = {} из {max_score}.",
-            score.saturating_sub(penalty)
-        ),
-    )
-    .await?;
-    Ok(())
-}
-
-async fn handle_review_score(
-    screen: Screen<'_>,
-    callback_submission_id: SubmissionId,
-    choice: AmountChoice,
-    state: BotState,
-) -> HandlerResult {
-    let BotState::Flow(FlowState::AwaitingReviewScore {
-        submission_id,
-        max_score,
-        penalty,
-    }) = state
-    else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
-    };
-    if submission_id != callback_submission_id {
-        return send_stale_button(screen.bot, screen.chat_id).await;
-    }
-
-    let score = match choice {
-        AmountChoice::Preset(score) if score <= max_score => score,
-        AmountChoice::Preset(_) | AmountChoice::Manual => {
-            return ask_input(
-                screen.bot,
-                screen.chat_id,
-                &format!("Введите целое число от 0 до {max_score}:"),
-            )
-            .await;
-        }
-    };
-
-    confirm_score(screen.bot, screen.chat_id, score, penalty, max_score).await?;
-    ask_review_comment(
-        screen.bot,
-        screen.chat_id,
-        submission_id,
-        ReviewDecision::Accept,
-        Some(score),
-        screen.dialogue,
-    )
-    .await
-}
-
-pub(super) fn parse_late_policy(text: &str) -> Option<LatePolicy> {
-    let mut parts = text.split_whitespace();
-    let mut next = || parse_number(parts.next()?);
-    let (period_days, penalty, max_periods) = (next()?, next()?, next()?);
-
-    parts
-        .next()
-        .is_none()
-        .then(|| LatePolicy::new(period_days, penalty, max_periods).ok())
-        .flatten()
-}
-
-pub(super) fn parse_max_score(text: &str) -> Option<Grading> {
-    Grading::scored(parse_number(text)?).ok()
-}
-
-pub(super) fn parse_score(text: &str, max_score: u16) -> Option<u16> {
-    let score = parse_number(text)?;
-
-    (score <= max_score).then_some(score)
-}
-
-fn parse_number(text: &str) -> Option<u16> {
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-
-    text.parse().ok()
-}
-
-pub(super) fn parse_positive_attempts(text: &str) -> Option<u16> {
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let value: u16 = text.parse().ok()?;
-
-    (value > 0 && value <= MAX_ATTEMPTS).then_some(value)
-}
-
-pub(super) async fn send_deadline_format_error(
-    bot: &Bot,
-    chat_id: ChatId,
-    timezone: &BotTimezone,
-) -> HandlerResult {
-    bot.send_message(
-        chat_id,
-        format!(
-            "Не удалось разобрать дату. Используйте ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ в поясе {}.",
-            timezone.suffix()
-        ),
-    )
-    .await?;
-    Ok(())
-}
-
 pub(super) async fn resolve_actor(
     bot: &Bot,
     chat_id: ChatId,
@@ -1124,17 +510,13 @@ pub(super) async fn resolve_actor(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, FixedOffset, NaiveTime, Utc};
-    use serde_json::json;
-    use sqlx::postgres::PgPoolOptions;
-    use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    use crate::app::{ApplicationContainer, FilePolicy};
+    use super::input::parse_positive_attempts;
     use crate::bot::callbacks::{EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX};
-    use crate::bot::views::{assignment_actions_keyboard, attempts_keyboard, review_keyboard};
-    use crate::domain::{StudentGroupId, SubmissionId};
+    use crate::bot::views::{
+        assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
+    };
+    use crate::domain::SubmissionId;
+    use chrono::{FixedOffset, NaiveTime, Utc};
 
     use super::*;
 
@@ -1175,67 +557,6 @@ mod tests {
 
             assert_eq!(action, expected, "{input}");
         }
-    }
-
-    #[test]
-    fn command_hints_are_scoped_to_the_role() {
-        let student = names(scoped_commands(Some(Role::Student {
-            student_group_id: StudentGroupId::new(),
-        })));
-        let teacher = names(scoped_commands(Some(Role::Teacher)));
-
-        assert!(student.contains(&"queue".to_owned()));
-        assert!(!student.contains(&"review".to_owned()));
-        assert!(teacher.contains(&"review".to_owned()));
-        assert!(!teacher.contains(&"queue".to_owned()));
-        assert!(names(default_commands()).contains(&"start".to_owned()));
-    }
-
-    #[test]
-    fn help_tells_each_role_only_about_its_own_half_of_the_bot() {
-        let student_role = Some(Role::Student {
-            student_group_id: StudentGroupId::new(),
-        });
-        let student = format!("{}{}", help_for(student_role), help_commands(student_role));
-        let teacher = format!(
-            "{}{}",
-            help_for(Some(Role::Teacher)),
-            help_commands(Some(Role::Teacher))
-        );
-        let guest = format!("{}{}", help_for(None), help_commands(None));
-
-        assert!(student.contains("/queue"), "{student}");
-        assert!(!student.contains("/review"), "{student}");
-        assert!(!student.contains("/courses"), "{student}");
-        assert!(teacher.contains("/review"), "{teacher}");
-        assert!(!teacher.contains("/tasks"), "{teacher}");
-        assert!(!teacher.contains("/queue"), "{teacher}");
-        assert!(guest.contains("/start"), "{guest}");
-    }
-
-    #[test]
-    fn every_declared_command_is_offered_to_someone() {
-        let offered: Vec<_> = [
-            scoped_commands(None),
-            scoped_commands(Some(Role::Teacher)),
-            scoped_commands(Some(Role::Student {
-                student_group_id: StudentGroupId::new(),
-            })),
-        ]
-        .into_iter()
-        .flat_map(names)
-        .collect();
-
-        for command in names(Command::bot_commands()) {
-            assert!(offered.contains(&command), "{command} is unreachable");
-        }
-    }
-
-    fn names(commands: Vec<BotCommand>) -> Vec<String> {
-        commands
-            .into_iter()
-            .map(|command| command.command.trim_start_matches('/').to_owned())
-            .collect()
     }
 
     #[test]
@@ -1374,113 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn teacher_inputs_use_strict_formats() {
-        let timezone = timezone();
-
-        assert_eq!(
-            timezone.parse_deadline("31.12.2030 23:59").unwrap(),
-            "2030-12-31T13:59:00Z".parse::<DateTime<Utc>>().unwrap()
-        );
-        assert!(timezone.parse_deadline("31.12.2030 23:59 UTC").is_none());
-        assert!(timezone.parse_deadline("31.02.2030 23:59").is_none());
-
-        assert_eq!(parse_positive_attempts("1"), Some(1));
-        assert_eq!(
-            parse_positive_attempts(&MAX_ATTEMPTS.to_string()),
-            Some(MAX_ATTEMPTS)
-        );
-        assert!(parse_positive_attempts("0").is_none());
-        assert!(parse_positive_attempts("+1").is_none());
-        assert!(parse_positive_attempts("32768").is_none());
-    }
-
-    #[test]
-    fn a_queue_without_reviewers_does_not_show_a_made_up_position() {
-        assert_eq!(student::queue_place(2, 5), "ваш номер в очереди: 2 из 5");
-        assert_eq!(
-            student::queue_place(0, 0),
-            "преподаватель ещё не назначен на курс"
-        );
-    }
-
-    #[test]
-    fn assignment_action_requires_current_keyboard_and_assignment() {
-        let current = AssignmentId::new();
-        let other = AssignmentId::new();
-        let state = BotState::Screen(ScreenState::ManagingAssignment {
-            message_id: MessageId(10),
-            assignment_id: current,
-        });
-
-        assert_eq!(
-            current_assignment_screen(current, MessageId(10), &state),
-            Some(current)
-        );
-        assert!(current_assignment_screen(current, MessageId(11), &state).is_none());
-        assert!(current_assignment_screen(other, MessageId(10), &state).is_none());
-    }
-
-    #[tokio::test]
-    async fn help_command_sends_message_through_teloxide() {
-        let telegram = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/bottest-token/SendMessage"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "ok": true,
-                "result": {
-                    "message_id": 2,
-                    "date": 0,
-                    "chat": { "id": 42, "type": "private" },
-                    "text": "help",
-                }
-            })))
-            .expect(1)
-            .mount(&telegram)
-            .await;
-        let bot = Bot::new("test-token").set_api_url(telegram.uri().parse().unwrap());
-        let message: Message = serde_json::from_value(json!({
-            "message_id": 1,
-            "date": 0,
-            "chat": { "id": 42, "type": "private" },
-            "from": { "id": 42, "is_bot": false, "first_name": "Student" },
-            "text": "/help"
-        }))
-        .unwrap();
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://postgres:postgres@localhost/hw-bot")
-            .unwrap();
-        let dialogue = Dialogue::new(InMemStorage::new(), ChatId(42));
-
-        handle_command(
-            bot,
-            message,
-            Command::Help,
-            dialogue,
-            ApplicationContainer::new(
-                pool,
-                FilePolicy {
-                    max_file_size_bytes: 1024,
-                    max_files_per_assignment: 5,
-                    max_files_per_submission: 1,
-                },
-            ),
-            timezone(),
-            BotInvites::new(test_codec(), "hw_test_bot".to_owned()),
-        )
-        .await
-        .unwrap();
-    }
-
-    fn test_codec() -> crate::invites::GroupInviteCodec {
-        crate::invites::GroupInviteCodec::new(
-            crate::invites::InviteSigningSecret::from_base64url(
-                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-            )
-            .unwrap(),
-        )
-    }
-
-    #[test]
     fn start_parses_with_and_without_an_invite_payload() {
         assert!(matches!(
             Command::parse("/start", "hw_test_bot"),
@@ -1490,17 +704,5 @@ mod tests {
             Command::parse("/start gi_payload", "hw_test_bot"),
             Ok(Command::Start(payload)) if payload == "gi_payload"
         ));
-    }
-
-    #[test]
-    fn the_invite_link_carries_the_bot_username_from_get_me() {
-        let invites = BotInvites::new(test_codec(), "hw_test_bot".to_owned());
-        let group = crate::domain::StudentGroupId::new();
-        let link = invites.link(group, crate::domain::InviteGeneration::FIRST);
-
-        let payload = link
-            .strip_prefix("https://t.me/hw_test_bot?start=")
-            .unwrap();
-        assert_eq!(invites.decode(payload).unwrap().group_id(), group);
     }
 }

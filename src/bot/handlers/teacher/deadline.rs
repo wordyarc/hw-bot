@@ -1,6 +1,6 @@
-use crate::bot::handlers::{
-    Deps, TextStep, require_text, resolve_actor, send_deadline_format_error,
-};
+use crate::bot::context::{Deps, Screen, TextStep};
+use crate::bot::handlers::input::{require_text, send_deadline_format_error};
+use crate::bot::handlers::resolve_actor;
 use chrono::{DateTime, Utc};
 use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
 use teloxide::prelude::Requester;
@@ -12,7 +12,6 @@ use crate::bot::HandlerResult;
 use crate::bot::assignment_files;
 use crate::bot::callbacks::DeadlineAction;
 use crate::bot::errors::send_app_error;
-use crate::bot::handlers::Screen;
 use crate::bot::state::{BotDialogue, BotState, DeadlineTarget, FlowState};
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
@@ -171,16 +170,7 @@ pub(super) async fn apply_deadline(
                         )
                         .reply_markup(teacher_keyboard())
                         .await?;
-                    assignment_files::show(
-                        screen.bot,
-                        screen.chat_id,
-                        screen.actor,
-                        assignment.id(),
-                        true,
-                        screen.services,
-                        screen.dialogue,
-                    )
-                    .await?;
+                    assignment_files::show(screen, assignment.id(), true).await?;
                 }
                 Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
             }

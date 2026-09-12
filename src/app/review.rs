@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 use sqlx::postgres::PgExecutor;
+use sqlx::{PgConnection, PgPool};
 
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
@@ -64,21 +64,9 @@ impl ReviewService {
             return Ok(None);
         };
 
-        let assignment = db::assignments::find_by_id(&mut *tx, submission.assignment_id())
-            .await?
-            .required("assignment")?;
-
-        let student = db::users::find_by_id(&mut *tx, submission.student_id())
-            .await?
-            .required("student")?;
-
+        let item = load_queue_item(&mut tx, submission).await?;
         tx.commit().await?;
-
-        Ok(Some(ReviewQueueItem {
-            submission,
-            assignment,
-            student,
-        }))
+        Ok(Some(item))
     }
 
     /// Сколько сдач ждёт этого ревьюера. Бот не решает, звать ли
@@ -146,4 +134,46 @@ impl ReviewService {
 
         Ok(submission)
     }
+
+    pub async fn find_for_review(
+        &self,
+        actor: Actor,
+        submission_id: SubmissionId,
+    ) -> AppResult<ReviewQueueItem> {
+        let mut connection = self.pool.acquire().await?;
+        let reviewer = load_reviewer(&mut *connection, actor).await?;
+        let submission = db::submissions::find_by_id(&mut *connection, submission_id)
+            .await?
+            .required("submission")?;
+        let item = load_queue_item(&mut connection, submission).await?;
+        let course = db::academic::find_teaching_course_by_id(
+            &mut *connection,
+            item.assignment.teaching_course_id(),
+        )
+        .await?
+        .required("teaching course")?;
+        item.assignment
+            .ensure_managed_by(&course, &reviewer, "review homework")?;
+        if !item.submission.is_pending_review() {
+            return Err(DomainError::SubmissionIsNotPendingReview.into());
+        }
+        Ok(item)
+    }
+}
+
+async fn load_queue_item(
+    connection: &mut PgConnection,
+    submission: Submission,
+) -> AppResult<ReviewQueueItem> {
+    let assignment = db::assignments::find_by_id(&mut *connection, submission.assignment_id())
+        .await?
+        .required("assignment")?;
+    let student = db::users::find_by_id(&mut *connection, submission.student_id())
+        .await?
+        .required("student")?;
+    Ok(ReviewQueueItem {
+        submission,
+        assignment,
+        student,
+    })
 }

@@ -9,6 +9,29 @@ use crate::harness::TestApp;
 use crate::harness::telegram::*;
 
 #[tokio::test]
+async fn help_command_resolves_the_registered_role_and_sends_its_commands() {
+    let app = TestApp::start().await;
+    let telegram = telegram_server(vec![message_update(1, app.teacher(), 1, "/help")]).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+    wait_for_sent_message_count(&telegram, 1).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = telegram.received_requests().await.unwrap();
+    let sent = requests
+        .iter()
+        .find(|request| request.url.path() == "/bottest-token/SendMessage")
+        .expect("help was sent");
+    let body: serde_json::Value = sent.body_json().unwrap();
+    let text = body["text"].as_str().unwrap();
+    assert_eq!(body["chat_id"], app.teacher());
+    assert!(text.contains("/review"), "{text}");
+    assert!(!text.contains("/tasks"), "{text}");
+    assert!(
+        !text.contains("/start"),
+        "help must not silently fall back to guest: {text}"
+    );
+}
+
+#[tokio::test]
 async fn the_bottom_menu_opens_a_screen_even_in_the_middle_of_a_dialogue() {
     let app = TestApp::start().await;
     let updates = vec![

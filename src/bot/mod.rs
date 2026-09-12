@@ -27,6 +27,7 @@ pub const MAX_CONCURRENT_UPDATES: usize = 1024;
 
 mod assignment_files;
 pub mod callbacks;
+mod context;
 mod errors;
 mod files;
 mod handlers;
@@ -38,7 +39,8 @@ mod views;
 
 pub use errors::app_error_message;
 use files::FileTransfers;
-use handlers::{Command, default_commands, handle_callback, handle_command, handle_message};
+use handlers::home::default_commands;
+use handlers::{Command, handle_callback, handle_command, handle_message};
 use invites::BotInvites;
 use state::BotState;
 pub use timezone::BotTimezone;

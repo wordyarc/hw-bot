@@ -27,3 +27,25 @@ impl BotInvites {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::invites::InviteSigningSecret;
+
+    #[test]
+    fn the_invite_link_carries_the_bot_username_from_get_me() {
+        let codec = GroupInviteCodec::new(
+            InviteSigningSecret::from_base64url("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+                .unwrap(),
+        );
+        let invites = BotInvites::new(codec, "hw_test_bot".to_owned());
+        let group = StudentGroupId::new();
+        let link = invites.link(group, InviteGeneration::FIRST);
+
+        let payload = link
+            .strip_prefix("https://t.me/hw_test_bot?start=")
+            .unwrap();
+        assert_eq!(invites.decode(payload).unwrap().group_id(), group);
+    }
+}

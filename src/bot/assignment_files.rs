@@ -1,49 +1,31 @@
-use crate::app::{Actor, AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
-use crate::domain::{
-    AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata, TelegramUserId,
-};
+use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
+use crate::domain::{AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata};
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::{Bot, Requester};
-use teloxide::types::{ChatId, Message, MessageId};
+use teloxide::prelude::Requester;
+use teloxide::types::MessageId;
 
-use super::callbacks::{FlowAction, ScreenAction};
+use super::HandlerResult;
+use super::context::{Screen, TextStep};
 use super::errors::send_app_error;
 use super::files::{FileTransfers, incoming_file};
-use super::state::{BotDialogue, BotState, FlowState, ScreenState};
+use super::state::{BotState, FlowState, ScreenState};
 use super::views::{
     ask_input, assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
     send_message_chunks, send_stale_button, teacher_keyboard,
 };
-use super::{BotServices, HandlerResult};
-
-pub(super) struct CallbackContext<'a> {
-    pub bot: &'a Bot,
-    pub chat_id: ChatId,
-    pub message_id: MessageId,
-    pub state: &'a BotState,
-    pub actor: Actor,
-    pub dialogue: &'a BotDialogue,
-    pub services: &'a BotServices,
-    pub transfers: &'a FileTransfers,
-}
-
-struct Workflow<'a> {
-    bot: &'a Bot,
-    chat_id: ChatId,
-    actor: Actor,
-    dialogue: &'a BotDialogue,
-    services: &'a BotServices,
-}
 
 pub(super) async fn handle_message(
-    bot: &Bot,
-    message: &Message,
+    step: TextStep<'_>,
     state: &BotState,
-    dialogue: &BotDialogue,
-    services: &BotServices,
     transfers: &FileTransfers,
-    telegram_user_id: TelegramUserId,
 ) -> HandlerResult {
+    let TextStep {
+        bot,
+        message,
+        telegram_user_id,
+        deps,
+    } = step;
+    let services = deps.services;
     match state {
         BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
             bot.send_message(
@@ -123,30 +105,12 @@ pub(super) async fn handle_message(
                     bot.send_message(message.chat.id, "Вложение добавлено.")
                         .reply_markup(teacher_keyboard())
                         .await?;
-                    show(
-                        bot,
-                        message.chat.id,
-                        actor,
-                        *assignment_id,
-                        *creation_flow,
-                        services,
-                        dialogue,
-                    )
-                    .await?;
+                    show(step.screen(actor), *assignment_id, *creation_flow).await?;
                 }
                 Err(error) if error.code() == ErrorCode::ConcurrentModification => {
                     drop(transfer_permit);
                     send_app_error(bot, message.chat.id, error).await?;
-                    show(
-                        bot,
-                        message.chat.id,
-                        actor,
-                        *assignment_id,
-                        *creation_flow,
-                        services,
-                        dialogue,
-                    )
-                    .await?;
+                    show(step.screen(actor), *assignment_id, *creation_flow).await?;
                 }
                 Err(error) => {
                     drop(transfer_permit);
@@ -163,176 +127,137 @@ pub(super) async fn handle_message(
     Ok(())
 }
 
-pub(super) async fn handle_screen_action(
-    context: CallbackContext<'_>,
-    action: ScreenAction,
+pub(super) async fn ask_upload(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
 ) -> HandlerResult {
-    let CallbackContext {
-        bot,
-        chat_id,
-        message_id,
-        state,
-        actor,
-        dialogue,
-        services,
-        transfers,
-    } = context;
-    let workflow = Workflow {
-        bot,
-        chat_id,
-        actor,
-        dialogue,
-        services,
+    let Some((assignment_id, revision, creation_flow)) =
+        state.managing_assignment_files(message_id)
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
     };
-    match action {
-        ScreenAction::AddFile => {
-            let Some((assignment_id, revision, creation_flow)) =
-                state.managing_assignment_files(message_id)
-            else {
-                return send_stale_button(bot, chat_id).await;
-            };
-            dialogue
-                .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
-                    assignment_id,
-                    expected_revision: revision,
-                    creation_flow,
-                }))
-                .await?;
-            ask_input(bot, chat_id, "Пришлите файл или фотографию.").await?;
-        }
-        ScreenAction::OpenFile(index) => {
-            let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
-            };
-            let _permit = transfers.acquire().await?;
-            match services
-                .files
-                .open_assignment_file_for_teacher(actor, assignment_id, file_id)
-                .await
-            {
-                Ok(file) => transfers.send(chat_id, file).await?,
-                Err(error) => send_app_error(bot, chat_id, error).await?,
-            }
-        }
-        ScreenAction::DeleteFile(index) => {
-            let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
-                send_stale_button(bot, chat_id).await?;
-                return Ok(());
-            };
-            let BotState::Screen(ScreenState::ManagingAssignmentFiles {
-                revision,
-                deletion_requires_confirmation,
-                creation_flow,
-                ..
-            }) = state
-            else {
-                unreachable!();
-            };
-            if *deletion_requires_confirmation {
-                let confirmation = bot
-                    .send_message(chat_id, crate::bot::texts::FILE_DELETE_CONFIRM)
-                    .reply_markup(confirm_file_deletion_keyboard())
-                    .await?;
-                dialogue
-                    .update(BotState::Flow(
-                        FlowState::ConfirmingAssignmentFileDeletion {
-                            message_id: confirmation.id,
-                            assignment_id,
-                            file_id,
-                            expected_revision: *revision,
-                            creation_flow: *creation_flow,
-                        },
-                    ))
-                    .await?;
-            } else {
-                workflow
-                    .delete(assignment_id, file_id, *revision, *creation_flow)
-                    .await?;
-            }
-        }
-        ScreenAction::FinishFileCreation
-        | ScreenAction::Publish(_)
-        | ScreenAction::Archive(_)
-        | ScreenAction::ChangeDeadline(_)
-        | ScreenAction::RotateGroupInvite => unreachable!("not an assignment file action"),
+    screen
+        .dialogue
+        .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
+            assignment_id,
+            expected_revision: revision,
+            creation_flow,
+        }))
+        .await?;
+    ask_input(screen.bot, screen.chat_id, "Пришлите файл или фотографию.").await
+}
+
+pub(super) async fn open(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
+    index: usize,
+    transfers: &FileTransfers,
+) -> HandlerResult {
+    let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    let _permit = transfers.acquire().await?;
+    match screen
+        .services
+        .files
+        .open_assignment_file_for_teacher(screen.actor, assignment_id, file_id)
+        .await
+    {
+        Ok(file) => transfers.send(screen.chat_id, file).await?,
+        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
     }
     Ok(())
 }
 
-pub(super) async fn handle_flow_action(
-    context: CallbackContext<'_>,
-    action: FlowAction,
+pub(super) async fn request_deletion(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
+    index: usize,
 ) -> HandlerResult {
-    let CallbackContext {
-        bot,
-        chat_id,
-        message_id,
-        state,
-        actor,
-        dialogue,
-        services,
-        transfers: _,
-    } = context;
-    let workflow = Workflow {
-        bot,
-        chat_id,
-        actor,
-        dialogue,
-        services,
+    let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
     };
-
-    match action {
-        FlowAction::ConfirmFileDeletion => {
-            let Some((assignment_id, file_id, expected_revision, creation_flow)) =
-                state.confirming_file_deletion(message_id)
-            else {
-                return send_stale_button(bot, chat_id).await;
-            };
-            workflow
-                .delete(assignment_id, file_id, expected_revision, creation_flow)
-                .await?;
-        }
-        FlowAction::CancelFileDeletion => {
-            let Some((assignment_id, _, _, creation_flow)) =
-                state.confirming_file_deletion(message_id)
-            else {
-                return send_stale_button(bot, chat_id).await;
-            };
-            show(
-                bot,
-                chat_id,
-                actor,
-                assignment_id,
-                creation_flow,
-                services,
-                dialogue,
-            )
+    let BotState::Screen(ScreenState::ManagingAssignmentFiles {
+        revision,
+        deletion_requires_confirmation,
+        creation_flow,
+        ..
+    }) = state
+    else {
+        unreachable!();
+    };
+    if *deletion_requires_confirmation {
+        let confirmation = screen
+            .bot
+            .send_message(screen.chat_id, crate::bot::texts::FILE_DELETE_CONFIRM)
+            .reply_markup(confirm_file_deletion_keyboard())
             .await?;
-        }
-        FlowAction::ConfirmInviteRotation
-        | FlowAction::CancelInviteRotation
-        | FlowAction::Review { .. }
-        | FlowAction::MaxAttempts(_)
-        | FlowAction::Grading(_)
-        | FlowAction::LatePolicy(_)
-        | FlowAction::ReviewScore { .. }
-        | FlowAction::Deadline(_)
-        | FlowAction::SelectStudent(_)
-        | FlowAction::ExtraAttempts(_) => unreachable!("not an assignment file action"),
+        screen
+            .dialogue
+            .update(BotState::Flow(
+                FlowState::ConfirmingAssignmentFileDeletion {
+                    message_id: confirmation.id,
+                    assignment_id,
+                    file_id,
+                    expected_revision: *revision,
+                    creation_flow: *creation_flow,
+                },
+            ))
+            .await?;
+    } else {
+        delete(screen, assignment_id, file_id, *revision, *creation_flow).await?;
     }
     Ok(())
+}
+
+pub(super) async fn confirm_deletion(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
+) -> HandlerResult {
+    let Some((assignment_id, file_id, expected_revision, creation_flow)) =
+        state.confirming_file_deletion(message_id)
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    delete(
+        screen,
+        assignment_id,
+        file_id,
+        expected_revision,
+        creation_flow,
+    )
+    .await
+}
+
+pub(super) async fn cancel_deletion(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
+) -> HandlerResult {
+    let Some((assignment_id, _, _, creation_flow)) = state.confirming_file_deletion(message_id)
+    else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    show(screen, assignment_id, creation_flow).await
 }
 
 pub(super) async fn show(
-    bot: &Bot,
-    chat_id: ChatId,
-    actor: Actor,
+    screen: Screen<'_>,
     assignment_id: AssignmentId,
     creation_flow: bool,
-    services: &BotServices,
-    dialogue: &BotDialogue,
 ) -> HandlerResult {
+    let Screen {
+        bot,
+        chat_id,
+        actor,
+        services,
+        dialogue,
+        ..
+    } = screen;
     let card = match services
         .files
         .list_assignment_files_for_teacher(actor, assignment_id)
@@ -387,43 +312,33 @@ pub(super) async fn show(
     Ok(())
 }
 
-impl Workflow<'_> {
-    async fn delete(
-        &self,
-        assignment_id: AssignmentId,
-        file_id: StoredFileId,
-        expected_revision: i64,
-        creation_flow: bool,
-    ) -> HandlerResult {
-        match self
-            .services
-            .files
-            .delete_assignment_file(DeleteAssignmentFile {
-                assignment_id,
-                file_id,
-                actor: self.actor,
-                expected_revision,
-            })
-            .await
-        {
-            Ok(_) => {
-                self.bot
-                    .send_message(self.chat_id, "Вложение удалено.")
-                    .await?;
-            }
-            Err(error) => send_app_error(self.bot, self.chat_id, error).await?,
-        }
-        show(
-            self.bot,
-            self.chat_id,
-            self.actor,
+async fn delete(
+    screen: Screen<'_>,
+    assignment_id: AssignmentId,
+    file_id: StoredFileId,
+    expected_revision: i64,
+    creation_flow: bool,
+) -> HandlerResult {
+    match screen
+        .services
+        .files
+        .delete_assignment_file(DeleteAssignmentFile {
             assignment_id,
-            creation_flow,
-            self.services,
-            self.dialogue,
-        )
+            file_id,
+            actor: screen.actor,
+            expected_revision,
+        })
         .await
+    {
+        Ok(_) => {
+            screen
+                .bot
+                .send_message(screen.chat_id, "Вложение удалено.")
+                .await?;
+        }
+        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
     }
+    show(screen, assignment_id, creation_flow).await
 }
 
 fn current_file(

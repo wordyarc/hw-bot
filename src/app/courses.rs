@@ -6,7 +6,8 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::db::academic::TeachingCourseCard;
 use crate::domain::{
-    DomainError, InviteGeneration, StudentGroup, Subject, TeachingCourse, TeachingCourseId, UserId,
+    AssignmentId, DomainError, InviteGeneration, StudentGroup, Subject, TeachingCourse,
+    TeachingCourseId, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -41,7 +42,26 @@ pub struct CourseGradebook {
 pub struct StudentGrades {
     pub student_id: UserId,
     pub display_name: String,
-    pub grades: Vec<db::submissions::CourseAssignmentGrade>,
+    pub grades: Vec<AssignmentGrade>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssignmentGrade {
+    pub assignment_id: AssignmentId,
+    pub title: String,
+    pub max_score: u16,
+    pub final_score: Option<u16>,
+}
+
+impl From<db::submissions::CourseAssignmentGrade> for AssignmentGrade {
+    fn from(grade: db::submissions::CourseAssignmentGrade) -> Self {
+        Self {
+            assignment_id: grade.assignment_id,
+            title: grade.title,
+            max_score: grade.max_score,
+            final_score: grade.final_score,
+        }
+    }
 }
 
 impl StudentGrades {
@@ -138,12 +158,17 @@ impl CourseService {
         for row in rows {
             match students.last_mut() {
                 Some(last) if last.student_id == row.student_id => {
-                    last.grades.extend(row.assignment);
+                    last.grades
+                        .extend(row.assignment.map(AssignmentGrade::from));
                 }
                 _ => students.push(StudentGrades {
                     student_id: row.student_id,
                     display_name: row.display_name,
-                    grades: row.assignment.into_iter().collect(),
+                    grades: row
+                        .assignment
+                        .into_iter()
+                        .map(AssignmentGrade::from)
+                        .collect(),
                 }),
             }
         }

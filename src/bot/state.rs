@@ -12,6 +12,22 @@ pub(super) type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
 /// Разбор состояния под нажатую кнопку. У каждого метода один и тот же инвариант: диалог обязан
 /// быть в ожидаемом состоянии, а нажатие - прийти из того самого сообщения.
 impl BotState {
+    pub(super) fn managing_assignment(
+        &self,
+        message_id: MessageId,
+        assignment_id: AssignmentId,
+    ) -> Option<AssignmentId> {
+        match self {
+            Self::Screen(ScreenState::ManagingAssignment {
+                message_id: current_message,
+                assignment_id: current_assignment,
+            }) if *current_message == message_id && *current_assignment == assignment_id => {
+                Some(assignment_id)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn group_invite(
         &self,
         message_id: MessageId,
@@ -312,4 +328,26 @@ pub(super) enum FlowState {
         assignment_id: AssignmentId,
         student_id: UserId,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assignment_action_requires_current_keyboard_and_assignment() {
+        let current = AssignmentId::new();
+        let other = AssignmentId::new();
+        let state = BotState::Screen(ScreenState::ManagingAssignment {
+            message_id: MessageId(10),
+            assignment_id: current,
+        });
+
+        assert_eq!(
+            state.managing_assignment(MessageId(10), current),
+            Some(current)
+        );
+        assert!(state.managing_assignment(MessageId(11), current).is_none());
+        assert!(state.managing_assignment(MessageId(10), other).is_none());
+    }
 }

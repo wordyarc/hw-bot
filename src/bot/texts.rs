@@ -6,6 +6,8 @@ pub const USE_THE_MENU: &str = "Используйте меню под поле�
 pub const SUBMISSION_PROMPT: &str = "Пришлите ссылку или текст сдачи одним сообщением:";
 pub const STUDENT_QUEUE_EMPTY: &str = "⏳ Сейчас ни одна ваша работа не ждёт проверки.";
 pub const REVIEW_QUEUE_EMPTY: &str = "🎉 Очередь проверки пуста.";
+pub const REVIEW_COMMENT_PROMPT: &str = "Напишите обязательный комментарий к решению:";
+pub const REVIEW_GRADING_CHANGED: &str = "Шкала задания изменилась. Прежнее решение не сохранено. Повторите проверку по обновлённой карточке.";
 pub const FILE_DOWNLOAD_FAILED: &str = "Не удалось скачать файл. Попробуйте ещё раз.";
 pub const STALE_BUTTON: &str =
     "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu.";
