@@ -21,8 +21,6 @@ str_enum! {
     }
 }
 
-/// Шкала оценивания задания. Пятибалльная и десятибалльная - частные случаи одного числа: от вида
-/// шкалы не зависит ничего, кроме формы ввода балла.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Grading {
     #[default]
@@ -94,8 +92,6 @@ pub struct Assignment {
     published_at: Option<DateTime<Utc>>,
 }
 
-/// Политика опозданий: шаг, штраф за шаг и число шагов до закрытия приёма. Три значения задаются
-/// вместе, поэтому их отсутствие выражено `Option<LatePolicy>`
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LatePolicy {
     period_days: u16,
@@ -158,8 +154,6 @@ fn check_range(field: &'static str, value: u16, max: u16) -> DomainResult<()> {
     Ok(())
 }
 
-/// Поля задания россыпью: `restore` собирает сущность из них по именам, чтобы соседние
-/// `DateTime<Utc>` нельзя было переставить местами незаметно для компилятора.
 pub(crate) struct AssignmentParts {
     pub id: AssignmentId,
     pub teaching_course_id: TeachingCourseId,
@@ -194,8 +188,7 @@ impl Assignment {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
 
-        // An archived assignment may or may not have been published before, so it is the only
-        // status that accepts both shapes.
+        // В архив можно убрать и черновик, поэтому published_at у архива необязателен.
         match parts.status {
             AssignmentStatus::Draft if parts.published_at.is_some() => {
                 return Err(DomainError::InvalidAssignmentPublishedState);

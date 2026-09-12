@@ -286,8 +286,6 @@ where
     row.map(Assignment::try_from).transpose()
 }
 
-/// Список студента идёт по предметам: у группы их несколько, и без названия предмета задания
-/// сливаются в одну кучу. Внутри предмета порядок прежний - по сроку.
 pub async fn list_published_for_group<'e, E>(
     executor: E,
     student_group_id: StudentGroupId,
@@ -329,7 +327,6 @@ where
     .collect()
 }
 
-/// Всё, что есть у курса, включая черновики и архив - экран преподавателя.
 pub async fn list_for_course<'e, E>(
     executor: E,
     teaching_course_id: TeachingCourseId,

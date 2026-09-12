@@ -46,8 +46,6 @@ async fn a_non_positive_actor_header_is_rejected() {
         .error(StatusCode::BAD_REQUEST, "invalid_actor");
 }
 
-/// подсунуть чужого актора телом больше нельзя - `deny_unknown_fields`
-/// ловит поле раньше
 #[tokio::test]
 async fn the_actor_is_no_longer_accepted_in_the_body() {
     let app = TestApp::start().await;

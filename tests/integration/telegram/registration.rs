@@ -99,7 +99,6 @@ async fn a_valid_link_names_the_group_and_registers_the_student() {
     assert_eq!(registered, Some(app.fixture.group.id().as_uuid()));
 }
 
-/// Битая подпись и уже отозванная ссылка обязаны выглядеть для гостя одинаково.
 #[tokio::test]
 async fn a_forged_and_a_rotated_link_answer_the_same() {
     let app = TestApp::start().await;

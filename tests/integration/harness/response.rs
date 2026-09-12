@@ -2,8 +2,6 @@ use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
-/// Ответ вместе с телом. Смысл в том, что тело переживает провалившийся ассерт по статусу:
-/// раньше неожиданный 500 выглядел как голый `left: 500, right: 403` без единого намёка на причину.
 pub struct TestResponse {
     pub status: StatusCode,
     headers: HeaderMap,

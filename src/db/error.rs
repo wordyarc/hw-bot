@@ -5,7 +5,6 @@ use crate::domain::DomainError;
 
 pub type DbResult<T> = Result<T, DbError>;
 
-/// Postgres class 23505: `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
 
 /// Postgres class 57014: `query_canceled`, в том числе по `statement_timeout`.

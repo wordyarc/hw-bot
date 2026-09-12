@@ -94,7 +94,6 @@ async fn a_registered_caller_reads_their_own_profile() {
     assert_eq!(body["student_group"]["code"], json!(code));
 }
 
-/// 404 значит «предложи регистрацию».
 #[tokio::test]
 async fn an_unregistered_caller_is_not_found() {
     let app = TestApp::start().await;

@@ -259,7 +259,6 @@ async fn navigation_from_an_older_message_still_opens_the_screen() {
     );
 }
 
-/// А вот мутация со старой клавиатуры по-прежнему не проходит: один тап меняет задание.
 #[tokio::test]
 async fn a_mutation_from_an_older_message_is_still_refused() {
     let app = TestApp::start().await;

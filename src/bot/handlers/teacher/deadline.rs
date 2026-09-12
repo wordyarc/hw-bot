@@ -257,7 +257,6 @@ mod tests {
     use chrono::{FixedOffset, NaiveTime};
 
     use super::*;
-    // Нужны только тесту: `cargo fix` вычищает импорты, глядя на сборку без `cfg(test)`.
     use crate::bot::state::DraftAssignment;
     use crate::domain::{AssignmentId, TeachingCourseId};
 

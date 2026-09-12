@@ -86,7 +86,6 @@ pub fn teaching_course(subject: &Subject, group: &StudentGroup, teacher: &User) 
         .expect("valid teaching course")
 }
 
-/// Курс с одноразовым предметом
 pub fn course_for(group: &StudentGroup, teacher: &User) -> TeachingCourse {
     teaching_course(&subject(SUBJECT_NAME), group, teacher)
 }
@@ -248,7 +247,6 @@ impl<'a> SubmissionBuilder<'a> {
         self.try_build().expect("valid submission")
     }
 
-    /// Для тестов, которые проверяют саму ошибку сдачи.
     pub fn try_build(self) -> DomainResult<Submission> {
         Submission::submit(
             SubmissionId::new(),

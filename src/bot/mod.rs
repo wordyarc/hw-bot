@@ -23,8 +23,6 @@ use crate::domain::TelegramUserId;
 use crate::health::ComponentHealth;
 use crate::invites::GroupInviteCodec;
 
-/// Верхняя граница одновременно обрабатываемых updates. Проверяется дважды - валидацией конфига
-/// и конструктором бота
 pub const MAX_CONCURRENT_UPDATES: usize = 1024;
 
 mod assignment_files;
@@ -363,7 +361,7 @@ async fn admit_update(update: &Update, admission: &UpdateAdmission) -> bool {
         return false;
     }
 
-    // Ждём permit до извлечения следующего update
+    // Ждём, а не отбрасываем: следующий polling offset подтвердит Telegram весь batch.
     let permit = admission
         .semaphore
         .clone()

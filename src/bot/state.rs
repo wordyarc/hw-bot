@@ -154,8 +154,6 @@ impl BotState {
     }
 }
 
-//Шагов создания больше, чем полей у варианта состояния,
-// поэтому черновик едет одной структурой
 #[derive(Clone)]
 pub(super) struct DraftAssignment {
     pub course_id: TeachingCourseId,

@@ -179,7 +179,6 @@ async fn an_acceptance_is_visible_in_the_list() {
     );
 }
 
-/// Ради чего нужна карточка: комментарий ревьюера студенту больше негде прочитать.
 #[tokio::test]
 async fn the_card_carries_every_attempt_with_its_review() {
     let app = TestApp::start().await;
@@ -259,7 +258,6 @@ async fn the_card_carries_assignment_file_metadata_without_content() {
     assert!(body["files"][0].get("sha256").is_none());
 }
 
-/// Пересдача: задание сняли, но свои попытки и комментарии студент читать не перестаёт.
 #[tokio::test]
 async fn the_card_survives_archiving() {
     let app = TestApp::start().await;

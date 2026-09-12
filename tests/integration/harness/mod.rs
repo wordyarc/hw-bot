@@ -33,8 +33,6 @@ pub use response::TestResponse;
 
 use fixture::{insert_course, insert_group, insert_user, wall_clock_assignment};
 
-/// Фиксированный секрет: тесты должны выпускать ровно те же ссылки, что и приложение под
-/// этим же `AppState`.
 const INVITE_SIGNING_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
 pub fn invite_codec() -> GroupInviteCodec {
@@ -99,7 +97,6 @@ impl TestApp {
         self.fixture.course.id().as_uuid()
     }
 
-    /// Telegram id преподавателя курса из фикстуры.
     pub fn teacher(&self) -> i64 {
         self.fixture.teacher.telegram_user_id().as_i64()
     }
@@ -108,7 +105,6 @@ impl TestApp {
         Actor::new(self.fixture.teacher.id())
     }
 
-    /// Telegram id студента из фикстуры.
     pub fn student(&self) -> i64 {
         self.fixture.student.telegram_user_id().as_i64()
     }
@@ -121,7 +117,6 @@ impl TestApp {
         self.next_telegram_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Без актора: только health и справочники.
     pub async fn get(&self, path: &str) -> TestResponse {
         self.send(empty_request(Request::get(path))).await
     }
@@ -179,7 +174,6 @@ impl TestApp {
         .await
     }
 
-    /// Команда, у которой весь вход - это актор и путь.
     pub async fn post_empty_as(&self, path: &str, actor: i64) -> TestResponse {
         self.send(empty_request(
             Request::post(path).header(ACTOR_HEADER, actor),
@@ -187,7 +181,6 @@ impl TestApp {
         .await
     }
 
-    /// Для тестов, которые проверяют разбор самого заголовка актора.
     pub async fn post_with_actor_header(
         &self,
         path: &str,
@@ -221,7 +214,6 @@ impl TestApp {
             .await
     }
 
-    /// Для тестов, которые проверяют разбор самого тела запроса.
     pub async fn submit_raw(
         &self,
         assignment: Uuid,
@@ -236,7 +228,6 @@ impl TestApp {
         .await
     }
 
-    /// Сдача, уже лежащая в очереди: дальше почти всегда нужен её id.
     pub async fn queued_submission(&self, telegram_id: i64, content: &str) -> Uuid {
         let body = self.submit(self.assignment(), telegram_id, content).await;
 
@@ -257,7 +248,6 @@ impl TestApp {
         .await
     }
 
-    /// Для тестов, которые проверяют разбор и валидацию самого тела запроса.
     pub async fn create_assignment_raw(
         &self,
         course: Uuid,
@@ -443,8 +433,6 @@ impl TestApp {
         student
     }
 
-    /// Преподаватель без привязки к курсу фикстуры: нужен, чтобы проверять, что чужие сдачи ему
-    /// не видны и не подчиняются.
     pub async fn add_outsider_teacher(&self, display_name: &str) -> User {
         let teacher = named_teacher(self.next_telegram_id(), display_name);
         insert_user(&self.pool, &teacher).await;
@@ -476,7 +464,6 @@ impl TestApp {
         admin
     }
 
-    /// Студент чужой группы вместе с самой группой.
     pub async fn add_outsider_student(&self) -> User {
         let group = student_group_in(
             &format!("TEST-GROUP-{}", self.next_telegram_id()),
@@ -502,7 +489,6 @@ impl TestApp {
         draft
     }
 
-    /// Опубликованное оценочное задание того же курса.
     pub async fn add_scored_assignment(&self, max_score: u16) -> Assignment {
         let assignment = wall_clock_assignment(&self.fixture.course, &self.fixture.teacher)
             .title("Rust traits")
@@ -517,7 +503,6 @@ impl TestApp {
         assignment
     }
 
-    /// Просроченное задание
     pub async fn add_overdue_assignment(
         &self,
         days_since_deadline: i64,
@@ -563,7 +548,6 @@ impl TestApp {
         }
     }
 
-    /// Второй предмет той же группы: студент учится на нескольких курсах сразу.
     pub async fn add_subject_course(&self, subject_name: &str) -> TeachingCourse {
         let subject = subject(subject_name);
         db::academic::insert_subject(&self.pool, &subject)

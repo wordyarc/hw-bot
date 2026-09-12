@@ -5,7 +5,6 @@ use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{DomainError, TeachingCourse, TeachingCourseId, User};
 
-/// Преподаватель вместе с курсом, которым он вправе управлять.
 pub(crate) async fn load_managing_teacher<'e, E>(
     executor: E,
     actor: Actor,

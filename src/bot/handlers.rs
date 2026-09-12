@@ -113,7 +113,6 @@ pub(super) struct Screen<'a> {
     invites: &'a BotInvites,
 }
 
-/// Контекст текстового шага диалога: сам апдейт и зависимости dispatcher-а.
 #[derive(Clone, Copy)]
 pub(super) struct TextStep<'a> {
     pub bot: &'a Bot,
@@ -226,7 +225,6 @@ async fn send_help(
     {
         Ok(registered) => Some(registered.user.role()),
         Err(error) => {
-            // Незарегистрированный
             if error.code() != ErrorCode::NotFound {
                 tracing::warn!(error = ?error, "failed to resolve the role for help");
             }

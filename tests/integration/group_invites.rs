@@ -203,7 +203,6 @@ async fn two_courses_of_one_group_share_a_single_link() {
     assert_eq!(first_invite.generation, second_invite.generation);
 }
 
-/// Ротация из одного курса заменяет ссылку для всей группы, включая её другие курсы.
 #[tokio::test]
 async fn rotating_from_one_course_replaces_the_link_of_the_whole_group() {
     let app = TestApp::start().await;
@@ -302,7 +301,6 @@ async fn a_stale_expected_generation_is_a_concurrent_modification() {
     assert_eq!(error.code(), ErrorCode::ConcurrentModification);
 }
 
-/// Группа существует, но её invite-строки нет: fallback на открытую регистрацию недопустим.
 #[tokio::test]
 async fn a_group_without_an_invite_row_never_falls_back_to_open_registration() {
     let app = TestApp::start().await;

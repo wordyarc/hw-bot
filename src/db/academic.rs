@@ -100,8 +100,7 @@ where
         .map_err(DbError::from)
 }
 
-/// Connection, not executor: a course without teachers is invalid, so both statements have to
-/// land in the caller's transaction.
+/// Оба INSERT должны идти в транзакции вызывающего: курс без преподавателей невалиден.
 pub async fn insert_teaching_course(
     conn: &mut PgConnection,
     course: &TeachingCourse,

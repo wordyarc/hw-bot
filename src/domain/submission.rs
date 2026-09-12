@@ -67,7 +67,6 @@ str_enum! {
 }
 
 str_enum! {
-    /// Решение ревьюера, а не результат проверки: результат - это статус самой сдачи.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum ReviewDecision {
         Accept => "accept",
@@ -156,8 +155,6 @@ pub struct Submission {
     grade: Option<Grade>,
 }
 
-/// Поля сдачи россыпью: `restore` собирает сущность из них по именам, чтобы соседние
-/// `DateTime<Utc>` нельзя было переставить местами незаметно для компилятора.
 pub(crate) struct SubmissionParts {
     pub id: SubmissionId,
     pub assignment_id: AssignmentId,

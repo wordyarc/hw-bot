@@ -132,8 +132,6 @@ impl From<sqlx::Error> for AppError {
     }
 }
 
-/// Превращает "нашлось или нет" в доменную ошибку слоя приложения, чтобы каждый use case не
-/// повторял `.ok_or(AppError::NotFound { .. })`.
 pub trait Required<T> {
     fn required(self, resource: &'static str) -> AppResult<T>;
 }

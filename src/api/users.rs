@@ -107,8 +107,7 @@ pub async fn register_staff(
     Ok((StatusCode::CREATED, Json(UserResponse::from(&registered))))
 }
 
-/// Первый запрос бота на каждое сообщение: кто это и что ему показывать.
-/// 404 здесь - предложи регистрацию.
+/// 404 - предложи регистрацию.
 pub async fn me(
     State(state): State<AppState>,
     actor: Actor,

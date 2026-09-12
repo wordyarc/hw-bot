@@ -92,7 +92,6 @@ async fn an_archived_assignment_can_be_published_again() {
     assert_eq!(body["status"], json!("published"));
 }
 
-/// Полный сценарий пересдачи: задание сняли после семестра, а осенью вернули с новым дедлайном.
 #[tokio::test]
 async fn a_reopened_assignment_accepts_submissions_again() {
     let app = TestApp::start().await;

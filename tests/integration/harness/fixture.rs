@@ -18,8 +18,6 @@ pub fn wall_clock_assignment<'a>(
         .deadline_in(Duration::days(30))
 }
 
-/// Минимальный связный набор: группа, предмет, преподаватель курса, студент этой группы и
-/// опубликованное задание.
 pub struct Fixture {
     pub group: StudentGroup,
     pub subject: Subject,
@@ -82,7 +80,6 @@ pub async fn insert_group(pool: &PgPool, group: &StudentGroup) {
         .expect("insert student group");
 }
 
-/// Курс без преподавателей невалиден, поэтому оба стейтмента обязаны лечь в одну транзакцию.
 pub async fn insert_course(pool: &PgPool, course: &TeachingCourse) {
     let mut tx = pool.begin().await.expect("begin transaction");
     db::academic::insert_teaching_course(&mut tx, course)

@@ -192,7 +192,6 @@ async fn a_scale_change_advances_the_revision() {
     assert_eq!(revision, 1);
 }
 
-/// Гонка правок арбитрируется по `revision`
 #[tokio::test]
 async fn a_scale_change_on_a_stale_revision_loses() {
     let app = TestApp::start().await;

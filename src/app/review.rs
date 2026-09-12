@@ -33,8 +33,6 @@ pub struct ReviewSubmission {
     pub reviewed_at: DateTime<Utc>,
 }
 
-/// Сдача вместе с контекстом: по одной ссылке на pull request решение принять нельзя, нужны текст
-/// задания и имя студента.
 #[derive(Clone, Debug)]
 pub struct ReviewQueueItem {
     pub submission: Submission,

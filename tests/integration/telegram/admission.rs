@@ -157,8 +157,7 @@ async fn interactive_timeout_releases_the_permit_and_keeps_long_polling_alive() 
     assert!(polling, "long polling must still be running");
 }
 
-/// Отмена при ожидающем допуске: бот обязан завершиться, а не зависнуть на семафоре.
-/// фиксируем фактическое поведение teloxide - остаток буферизованного batch дренируется,
+/// Фиксируем фактическое поведение teloxide: остаток буферизованного batch дренируется,
 /// финальный polling-запрос уходит с новым offset, `limit = 1` и `timeout = 0`.
 #[tokio::test]
 async fn shutdown_finishes_while_an_update_waits_for_admission() {

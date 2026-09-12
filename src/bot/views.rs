@@ -623,7 +623,6 @@ pub(super) fn grading_lines(
     lines
 }
 
-// Студенту показывается вся арифметика
 pub(super) fn grade_line(grade: Grade) -> String {
     if grade.penalty() == 0 {
         return format!("🏅 Балл: {} из {}", grade.final_score(), grade.max_score());

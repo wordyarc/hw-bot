@@ -13,7 +13,6 @@ const PRESENTATION: &str = "stored_files.presentation";
 const SIZE_BYTES: &str = "stored_files.size_bytes";
 const SHA256: &str = "stored_files.sha256";
 
-/// Метаданные вложения одним списком; `content` подключается через `$extra`.
 macro_rules! select_stored_files {
     ($row:ty, $extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
         sqlx::query_as!(

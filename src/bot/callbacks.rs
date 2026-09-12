@@ -148,12 +148,9 @@ pub(super) enum DeadlineAction {
     Pick(NaiveDate),
 }
 
-/// Девять семейств разбираются одинаково: uuid после префикса заворачивается в свой тип ID.
-/// добавление семейства - строка
-/// Порядок значим, выигрывает первый подошедший префикс.
-/// Строка таблицы: префикс семейства и конструктор действия из разобранного uuid.
 type ReplayableFamily = (&'static str, fn(uuid::Uuid) -> ReplayableAction);
 
+// Порядок значим: выигрывает первый подошедший префикс.
 const REPLAYABLE_FAMILIES: [ReplayableFamily; 9] = [
     (COURSE_PREFIX, |id| {
         ReplayableAction::Course(TeachingCourseId::from_uuid(id))

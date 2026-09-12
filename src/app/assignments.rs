@@ -47,7 +47,6 @@ pub struct GrantExtraAttempts {
     pub amount: u16,
 }
 
-/// Задание глазами студента
 #[derive(Clone, Debug)]
 pub struct StudentAssignment {
     pub assignment: Assignment,
@@ -192,7 +191,6 @@ impl AssignmentService {
         Ok(progress)
     }
 
-    /// Главный экран студента.
     pub async fn list_for_student(&self, actor: Actor) -> AppResult<Vec<StudentAssignment>> {
         let student = self.student(actor).await?;
         let group_id = student.student_group_id().required("student group")?;
@@ -329,8 +327,6 @@ impl AssignmentService {
         Ok(assignment)
     }
 
-    /// Общая обвязка всех правок задания: у публикации, архивации и сдвига дедлайна отличается
-    /// только доменный вызов, а загрузка актора, задания и курса одна и та же.
     async fn change<F>(
         &self,
         assignment_id: AssignmentId,

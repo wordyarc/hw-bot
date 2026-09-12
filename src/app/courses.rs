@@ -32,7 +32,6 @@ impl From<TeachingCourseCard> for TeachingCourseSummary {
     }
 }
 
-/// Ведомость курса
 #[derive(Clone, Debug)]
 pub struct CourseGradebook {
     pub students: Vec<StudentGrades>,
