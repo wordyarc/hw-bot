@@ -1,4 +1,4 @@
-use crate::bot::context::{Deps, Screen, TextStep};
+use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::handlers::input::{
     ensure_text_limit, parse_max_score, parse_positive_attempts, require_text,
 };
@@ -13,7 +13,7 @@ use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::state::{
     AssignmentTerms, BotState, DraftAssignment, FlowState, TermsForm, TermsStep,
 };
-use crate::bot::views::{ask_input, attempts_keyboard, grading_keyboard, send_stale_button};
+use crate::bot::views::{attempts_keyboard, grading_keyboard};
 
 use super::attempts::chosen_amount;
 
@@ -24,31 +24,24 @@ pub(in crate::bot::handlers) async fn handle_max_attempts(
     state: BotState,
 ) -> HandlerResult {
     let Some((course_id, title, body)) = state.awaiting_max_attempts(message_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let Some(max_attempts) = chosen_amount(choice) else {
-        return ask_input(
-            screen.bot,
-            screen.chat_id,
-            &format!("Введите количество попыток от 1 до {MAX_ATTEMPTS}:"),
-        )
-        .await;
+        return screen
+            .ask(&format!(
+                "Введите количество попыток от 1 до {MAX_ATTEMPTS}:"
+            ))
+            .await;
     };
     ask_grading(
-        screen.bot,
-        screen.chat_id,
-        screen.deps(),
+        screen.chat(),
         DraftAssignment::new(course_id, title, body, max_attempts),
     )
     .await
 }
 
-pub(super) async fn ask_grading(
-    bot: &crate::bot::Bot,
-    chat_id: teloxide::types::ChatId,
-    deps: Deps<'_>,
-    draft: DraftAssignment,
-) -> HandlerResult {
+pub(super) async fn ask_grading(chat: Chat<'_>, draft: DraftAssignment) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
     let sent = bot
         .send_message(chat_id, crate::bot::texts::GRADING_QUESTION)
         .reply_markup(grading_keyboard())
@@ -69,26 +62,23 @@ pub(in crate::bot::handlers) async fn handle_grading(
     state: BotState,
 ) -> HandlerResult {
     let Some(draft) = state.choosing_grading(message_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
 
     let grading = match choice {
         GradingChoice::PassFail => Grading::PassFail,
         GradingChoice::Preset(max_score) => match Grading::scored(max_score) {
             Ok(grading) => grading,
-            Err(_) => return send_stale_button(screen.bot, screen.chat_id).await,
+            Err(_) => return screen.stale().await,
         },
         GradingChoice::Manual => {
             screen
                 .dialogue
                 .update(BotState::Flow(FlowState::AwaitingGradingText { draft }))
                 .await?;
-            return ask_input(
-                screen.bot,
-                screen.chat_id,
-                &format!("Введите максимальный балл от 1 до {MAX_SCORE}:"),
-            )
-            .await;
+            return screen
+                .ask(&format!("Введите максимальный балл от 1 до {MAX_SCORE}:"))
+                .await;
         }
     };
 
@@ -96,13 +86,11 @@ pub(in crate::bot::handlers) async fn handle_grading(
         .bot
         .edit_message_reply_markup(screen.chat_id, message_id)
         .await?;
-    apply_grading(screen.bot, screen.chat_id, screen.deps(), draft, grading).await
+    apply_grading(screen.chat(), draft, grading).await
 }
 
 pub(super) async fn apply_grading(
-    bot: &crate::bot::Bot,
-    chat_id: teloxide::types::ChatId,
-    deps: Deps<'_>,
+    chat: Chat<'_>,
     draft: DraftAssignment,
     grading: Grading,
 ) -> HandlerResult {
@@ -114,9 +102,7 @@ pub(super) async fn apply_grading(
         TermsStep::Deadline
     };
     super::terms::render(
-        bot,
-        chat_id,
-        deps,
+        chat,
         TermsForm::new(AssignmentTerms::creating(draft), step),
         None,
     )
@@ -124,13 +110,12 @@ pub(super) async fn apply_grading(
 }
 
 pub(super) async fn ask_max_attempts(
-    bot: &crate::bot::Bot,
-    chat_id: teloxide::types::ChatId,
-    deps: Deps<'_>,
+    chat: Chat<'_>,
     course_id: TeachingCourseId,
     title: String,
     body: String,
 ) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
     let sent = bot
         .send_message(chat_id, crate::bot::texts::ATTEMPTS_QUESTION)
         .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
@@ -180,12 +165,9 @@ pub(in crate::bot::handlers) async fn submit_title(
             title: text.to_owned(),
         }))
         .await?;
-    ask_input(
-        bot,
-        message.chat.id,
-        crate::bot::texts::ASSIGNMENT_BODY_PROMPT,
-    )
-    .await?;
+    step.chat()
+        .ask(crate::bot::texts::ASSIGNMENT_BODY_PROMPT)
+        .await?;
 
     Ok(())
 }
@@ -195,9 +177,7 @@ pub(in crate::bot::handlers) async fn submit_body(
     course_id: TeachingCourseId,
     title: String,
 ) -> HandlerResult {
-    let TextStep {
-        bot, message, deps, ..
-    } = step;
+    let TextStep { bot, message, .. } = step;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -218,15 +198,7 @@ pub(in crate::bot::handlers) async fn submit_body(
     {
         return Ok(());
     }
-    ask_max_attempts(
-        bot,
-        message.chat.id,
-        deps,
-        course_id,
-        title,
-        text.to_owned(),
-    )
-    .await?;
+    ask_max_attempts(step.chat(), course_id, title, text.to_owned()).await?;
 
     Ok(())
 }
@@ -237,9 +209,7 @@ pub(in crate::bot::handlers) async fn submit_max_attempts(
     title: String,
     body: String,
 ) -> HandlerResult {
-    let TextStep {
-        bot, message, deps, ..
-    } = step;
+    let TextStep { bot, message, .. } = step;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -253,9 +223,7 @@ pub(in crate::bot::handlers) async fn submit_max_attempts(
         return Ok(());
     };
     ask_grading(
-        bot,
-        message.chat.id,
-        deps,
+        step.chat(),
         DraftAssignment::new(course_id, title, body, max_attempts),
     )
     .await?;
@@ -267,9 +235,7 @@ pub(in crate::bot::handlers) async fn submit_grading_text(
     step: TextStep<'_>,
     draft: DraftAssignment,
 ) -> HandlerResult {
-    let TextStep {
-        bot, message, deps, ..
-    } = step;
+    let TextStep { bot, message, .. } = step;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -282,7 +248,7 @@ pub(in crate::bot::handlers) async fn submit_grading_text(
         .await?;
         return Ok(());
     };
-    apply_grading(bot, message.chat.id, deps, draft, grading).await?;
+    apply_grading(step.chat(), draft, grading).await?;
 
     Ok(())
 }

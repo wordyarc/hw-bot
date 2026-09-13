@@ -37,7 +37,10 @@ impl SubmissionService {
             .required("assignment")?;
 
         let history =
-            db::submissions::load_history(&mut *tx, assignment.id(), student.id()).await?;
+            db::submissions::load_histories(&mut *tx, &[assignment.id().as_uuid()], student.id())
+                .await?
+                .remove(&assignment.id())
+                .unwrap_or_default();
 
         let submission = Submission::submit(
             SubmissionId::new(),

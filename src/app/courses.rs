@@ -90,10 +90,10 @@ impl CourseService {
         let group = self
             .managed_group(actor, course_id, "rotate group invite")
             .await?;
-        let generation = match db::group_invites::rotate(&self.pool, group.id(), expected).await {
-            Err(db::DbError::Conflict { .. }) => Err(AppError::GroupInviteChangedConcurrently),
-            other => Ok(other?),
-        }?;
+        let generation = super::on_conflict(
+            db::group_invites::rotate(&self.pool, group.id(), expected).await,
+            AppError::GroupInviteChangedConcurrently,
+        )?;
 
         Ok(GroupInviteState { group, generation })
     }

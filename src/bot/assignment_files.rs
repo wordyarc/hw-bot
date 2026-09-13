@@ -5,12 +5,11 @@ use teloxide::types::MessageId;
 
 use super::HandlerResult;
 use super::context::{Screen, TextStep};
-use super::errors::send_app_error;
 use super::files::{FileTransfers, incoming_file};
 use super::state::{BotState, FlowState, ScreenState};
 use super::views::{
-    ask_input, assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
-    send_message_chunks, send_stale_button, teacher_keyboard,
+    assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
+    send_message_chunks, teacher_keyboard,
 };
 
 pub(super) async fn submit_file(
@@ -79,7 +78,7 @@ pub(super) async fn submit_file(
     else {
         return Ok(());
     };
-    match services
+    let result = services
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id,
@@ -90,22 +89,20 @@ pub(super) async fn submit_file(
             mime_type: incoming.mime_type,
             content,
         })
-        .await
-    {
+        .await;
+    drop(transfer_permit);
+    match result {
         Ok(_) => {
-            drop(transfer_permit);
             bot.send_message(message.chat.id, "Вложение добавлено.")
                 .reply_markup(teacher_keyboard())
                 .await?;
             show(step.screen(actor), assignment_id, creation_flow).await?;
         }
         Err(error) if error.code() == ErrorCode::ConcurrentModification => {
-            drop(transfer_permit);
-            send_app_error(bot, message.chat.id, error).await?;
+            step.chat().fail(error).await?;
             show(step.screen(actor), assignment_id, creation_flow).await?;
         }
         Err(error) => {
-            drop(transfer_permit);
             return Err(error.into());
         }
     }
@@ -120,7 +117,7 @@ pub(super) async fn ask_upload(
     let Some((assignment_id, revision, creation_flow)) =
         state.managing_assignment_files(message_id)
     else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     screen
         .dialogue
@@ -130,7 +127,7 @@ pub(super) async fn ask_upload(
             creation_flow,
         }))
         .await?;
-    ask_input(screen.bot, screen.chat_id, "Пришлите файл или фотографию.").await
+    screen.ask("Пришлите файл или фотографию.").await
 }
 
 pub(super) async fn open(
@@ -141,7 +138,7 @@ pub(super) async fn open(
     transfers: &FileTransfers,
 ) -> HandlerResult {
     let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let transfer = transfers.acquire().await?;
     transfer
@@ -165,7 +162,7 @@ pub(super) async fn request_deletion(
     index: usize,
 ) -> HandlerResult {
     let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let BotState::Screen(ScreenState::ManagingAssignmentFiles {
         revision,
@@ -208,7 +205,7 @@ pub(super) async fn confirm_deletion(
     let Some((assignment_id, file_id, expected_revision, creation_flow)) =
         state.confirming_file_deletion(message_id)
     else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     delete(
         screen,
@@ -227,7 +224,7 @@ pub(super) async fn cancel_deletion(
 ) -> HandlerResult {
     let Some((assignment_id, _, _, creation_flow)) = state.confirming_file_deletion(message_id)
     else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     show(screen, assignment_id, creation_flow).await
 }
@@ -318,7 +315,7 @@ async fn delete(
                 .send_message(screen.chat_id, "Вложение удалено.")
                 .await?;
         }
-        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
+        Err(error) => screen.fail(error).await?,
     }
     show(screen, assignment_id, creation_flow).await
 }

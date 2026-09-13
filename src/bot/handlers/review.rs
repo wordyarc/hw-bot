@@ -15,9 +15,7 @@ use crate::bot::callbacks::AmountChoice;
 use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::texts;
-use crate::bot::views::{
-    ask_input, review_keyboard, review_score_keyboard, send_stale_button, teacher_menu,
-};
+use crate::bot::views::{ask_input, review_keyboard, review_score_keyboard, teacher_menu};
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let Screen {
@@ -228,10 +226,10 @@ pub(super) async fn handle_decision(
         penalty,
     }) = state
     else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     if submission_id != callback_submission_id {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     match (decision, grading.max_score()) {
         (ReviewDecision::Accept, Some(max_score)) => {
@@ -347,20 +345,17 @@ pub(super) async fn handle_review_score(
         penalty,
     }) = state
     else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     if submission_id != callback_submission_id {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     let score = match choice {
         AmountChoice::Preset(score) if score <= max_score => score,
         AmountChoice::Preset(_) | AmountChoice::Manual => {
-            return ask_input(
-                screen.bot,
-                screen.chat_id,
-                &format!("Введите целое число от 0 до {max_score}:"),
-            )
-            .await;
+            return screen
+                .ask(&format!("Введите целое число от 0 до {max_score}:"))
+                .await;
         }
     };
     confirm_score(screen.bot, screen.chat_id, score, penalty, max_score).await?;

@@ -14,8 +14,7 @@ use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX};
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::views::{
-    ask_input, assignment_students_keyboard, attempts_keyboard, send_message_chunks,
-    send_stale_button, teacher_keyboard,
+    assignment_students_keyboard, attempts_keyboard, send_message_chunks, teacher_keyboard,
 };
 
 use super::gradebook::show_student_grades_page;
@@ -97,7 +96,7 @@ pub(in crate::bot::handlers) async fn select_student(
     state: BotState,
 ) -> HandlerResult {
     let Some(purpose) = state.choosing_student(message_id, student_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let assignment_id = match purpose {
         StudentChoice::Grades { course_id } => {
@@ -130,15 +129,12 @@ pub(in crate::bot::handlers) async fn handle_extra_attempts(
     state: BotState,
 ) -> HandlerResult {
     let Some((assignment_id, student_id)) = state.awaiting_attempt_amount(message_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let Some(amount) = chosen_amount(choice) else {
-        return ask_input(
-            screen.bot,
-            screen.chat_id,
-            &format!("Введите целое число от 1 до {MAX_ATTEMPTS}:"),
-        )
-        .await;
+        return screen
+            .ask(&format!("Введите целое число от 1 до {MAX_ATTEMPTS}:"))
+            .await;
     };
     grant_attempts(screen, assignment_id, student_id, amount).await
 }

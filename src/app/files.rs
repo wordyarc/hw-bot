@@ -180,14 +180,7 @@ impl FileService {
     ) -> AppResult<OpenedFile> {
         load_managed_versioned_assignment(&self.pool, actor, assignment_id, "open assignment file")
             .await?;
-        let file = db::files::find_assignment_file(&self.pool, assignment_id, file_id)
-            .await?
-            .required("file")?;
-
-        Ok(OpenedFile {
-            metadata: file.metadata,
-            content: file.content,
-        })
+        self.open_assignment_file(assignment_id, file_id).await
     }
 
     pub async fn open_assignment_file_for_student(
@@ -197,6 +190,14 @@ impl FileService {
         file_id: StoredFileId,
     ) -> AppResult<OpenedFile> {
         load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
+        self.open_assignment_file(assignment_id, file_id).await
+    }
+
+    async fn open_assignment_file(
+        &self,
+        assignment_id: AssignmentId,
+        file_id: StoredFileId,
+    ) -> AppResult<OpenedFile> {
         let file = db::files::find_assignment_file(&self.pool, assignment_id, file_id)
             .await?
             .required("file")?;
@@ -213,10 +214,10 @@ async fn advance_revision(
     assignment_id: AssignmentId,
     expected_revision: i64,
 ) -> AppResult<i64> {
-    match db::assignments::advance_revision(&mut **tx, assignment_id, expected_revision).await {
-        Err(db::DbError::Conflict { .. }) => Err(AppError::AssignmentChangedConcurrently),
-        result => Ok(result?),
-    }
+    super::on_conflict(
+        db::assignments::advance_revision(&mut **tx, assignment_id, expected_revision).await,
+        AppError::AssignmentChangedConcurrently,
+    )
 }
 
 fn first_free_position(files: &[StoredFileMetadata]) -> AppResult<u64> {

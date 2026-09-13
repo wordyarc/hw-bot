@@ -276,7 +276,10 @@ impl AssignmentService {
             load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
 
         let history =
-            db::submissions::load_history(&self.pool, assignment.id(), student.id()).await?;
+            db::submissions::load_histories(&self.pool, &[assignment.id().as_uuid()], student.id())
+                .await?
+                .remove(&assignment.id())
+                .unwrap_or_default();
         let submissions =
             db::submissions::latest_for_student(&self.pool, assignment.id(), student.id())
                 .await?
@@ -427,12 +430,10 @@ impl AssignmentService {
         }
         apply(&mut assignment, &teaching_course, &actor)?;
 
-        match db::assignments::update(&mut *tx, &assignment, revision).await {
-            Err(db::DbError::Conflict { .. }) => {
-                return Err(AppError::AssignmentChangedConcurrently);
-            }
-            result => result?,
-        }
+        super::on_conflict(
+            db::assignments::update(&mut *tx, &assignment, revision).await,
+            AppError::AssignmentChangedConcurrently,
+        )?;
 
         tx.commit().await?;
 

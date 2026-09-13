@@ -1,6 +1,6 @@
 use super::Bot;
 use crate::app::Actor;
-use crate::domain::TelegramUserId;
+use crate::domain::{Role, TelegramUserId};
 use crate::pagination::PageRequest;
 use anyhow::{Context, anyhow};
 use teloxide::dispatching::dialogue::InMemStorageError;
@@ -14,7 +14,7 @@ use super::context::{BotContext, Deps, Screen, TextStep};
 use super::errors::finish_handler;
 use super::state::{BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
-use super::views::{MenuAction, ask_input, menu_action, send_stale_button};
+use super::views::{MenuAction, menu_action, send_stale_button};
 use super::{BotServices, HandlerResult};
 
 pub(super) mod home;
@@ -52,6 +52,33 @@ pub(super) enum Command {
     Help,
 }
 
+impl Command {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::Start(_) => "start",
+            Self::Menu => "menu",
+            Self::Tasks => "tasks",
+            Self::Queue => "queue",
+            Self::Archive => "archive",
+            Self::Review => "review",
+            Self::Courses => "courses",
+            Self::Profile => "profile",
+            Self::Cancel => "cancel",
+            Self::Help => "help",
+        }
+    }
+
+    fn visible_to(&self, role: Option<Role>) -> bool {
+        match self {
+            Self::Start(_) => role.is_none(),
+            Self::Help => true,
+            Self::Menu | Self::Profile | Self::Cancel => role.is_some(),
+            Self::Tasks | Self::Queue | Self::Archive => matches!(role, Some(Role::Student { .. })),
+            Self::Review | Self::Courses => matches!(role, Some(Role::Teacher | Role::Admin)),
+        }
+    }
+}
+
 pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
     match dialogue.exit().await {
         Ok(()) | Err(InMemStorageError::DialogueNotFound) => Ok(()),
@@ -77,21 +104,7 @@ pub(super) async fn handle_command(
     };
     let chat_id = message.chat.id;
     let result = async {
-        tracing::Span::current().record(
-            "action",
-            match &command {
-                Command::Start(_) => "start",
-                Command::Menu => "menu",
-                Command::Tasks => "tasks",
-                Command::Queue => "queue",
-                Command::Archive => "archive",
-                Command::Review => "review",
-                Command::Courses => "courses",
-                Command::Profile => "profile",
-                Command::Cancel => "cancel",
-                Command::Help => "help",
-            },
-        );
+        tracing::Span::current().record("action", command.action());
         if !ensure_private_message(&bot, &message).await? {
             return Ok(());
         }
@@ -522,7 +535,7 @@ async fn handle_replayable_action(
                     course_id,
                 }))
                 .await?;
-            ask_input(screen.bot, screen.chat_id, texts::ASSIGNMENT_TITLE_PROMPT).await
+            screen.ask(texts::ASSIGNMENT_TITLE_PROMPT).await
         }
         ReplayableAction::StartSubmission(assignment_id) => {
             screen
@@ -531,7 +544,7 @@ async fn handle_replayable_action(
                     assignment_id,
                 }))
                 .await?;
-            ask_input(screen.bot, screen.chat_id, texts::SUBMISSION_PROMPT).await
+            screen.ask(texts::SUBMISSION_PROMPT).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await
@@ -565,7 +578,7 @@ async fn handle_screen_action(
         }
         ScreenAction::FinishFileCreation => {
             let Some((assignment_id, _, true)) = state.managing_assignment_files(message_id) else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
+                return screen.stale().await;
             };
             teacher::show_assignment(screen, assignment_id).await
         }

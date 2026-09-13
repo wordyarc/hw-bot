@@ -13,7 +13,7 @@ use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::views::{
     assignment_actions_keyboard, assignment_status, course_assignments_keyboard, courses_keyboard,
-    grading_lines, send_message_chunks, send_stale_button, teacher_menu,
+    grading_lines, send_message_chunks, teacher_menu,
 };
 
 pub(in crate::bot::handlers) async fn show_courses_page(
@@ -151,7 +151,7 @@ pub(in crate::bot::handlers) async fn publish_assignment(
         .managing_assignment(message_id, assignment_id)
         .is_none()
     {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     screen
         .context
@@ -176,7 +176,7 @@ pub(in crate::bot::handlers) async fn archive_assignment(
         .managing_assignment(message_id, assignment_id)
         .is_none()
     {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     screen
         .context

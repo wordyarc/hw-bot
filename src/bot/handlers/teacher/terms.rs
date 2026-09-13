@@ -4,14 +4,12 @@ use teloxide::types::{ChatId, MessageId};
 
 use crate::app::{ChangeTerms, CreateAssignment, ErrorCode};
 use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, TermsAction};
-use crate::bot::context::{Deps, Screen, TextStep};
-use crate::bot::errors::{send_app_error, send_error_code};
+use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::errors::send_error_code;
 use crate::bot::handlers::input::{parse_number, require_text};
 use crate::bot::handlers::{reset_dialogue, resolve_actor, run_menu_action};
 use crate::bot::state::{AssignmentTerms, BotState, FlowState, TermsForm, TermsStep, TermsTarget};
-use crate::bot::views::{
-    MenuAction, ask_input, send_stale_button, teacher_keyboard, terms_form_view,
-};
+use crate::bot::views::{MenuAction, teacher_keyboard, terms_form_view};
 use crate::bot::{Bot, HandlerResult, assignment_files, texts};
 use crate::domain::{AssignmentId, AssignmentStatus, DomainError, DomainResult, LatePolicy};
 
@@ -27,7 +25,7 @@ pub(in crate::bot::handlers) async fn begin_edit(
         .managing_assignment(message_id, assignment_id)
         .is_none()
     {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     let (assignment, revision) = match screen
         .context
@@ -37,7 +35,7 @@ pub(in crate::bot::handlers) async fn begin_edit(
         .await
     {
         Ok(value) => value,
-        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
+        Err(error) => return screen.fail(error).await,
     };
     if assignment.status() == AssignmentStatus::Archived {
         return send_error_code(screen.bot, screen.chat_id, ErrorCode::AssignmentUnavailable).await;
@@ -59,16 +57,15 @@ pub(in crate::bot::handlers) async fn begin_edit(
     };
     let mut form = TermsForm::new(terms, TermsStep::Summary);
     form.message_id = Some(message_id);
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(super) async fn render(
-    bot: &Bot,
-    chat_id: ChatId,
-    deps: Deps<'_>,
+    chat: Chat<'_>,
     mut form: TermsForm,
     error: Option<&str>,
 ) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
     if form.step == TermsStep::Summary {
         next(&mut form);
     }
@@ -78,7 +75,7 @@ pub(super) async fn render(
     }
     if form.manual {
         detach(bot, chat_id, &mut form).await?;
-        ask_input(bot, chat_id, &text).await?;
+        chat.ask(&text).await?;
     } else if let Some(id) = form.message_id {
         match bot
             .edit_message_text(chat_id, id, text)
@@ -166,14 +163,14 @@ pub(in crate::bot::handlers) async fn handle_late_policy(
     state: BotState,
 ) -> HandlerResult {
     let Some(mut form) = state.terms_form(message_id, TermsStep::Policy) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     if !form.terms.grading().is_scored() {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     form.terms.allow_late = choice == LatePolicyChoice::Penalty;
     next(&mut form);
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(in crate::bot::handlers) async fn handle_penalty(
@@ -202,13 +199,13 @@ async fn handle_amount(
     step: TermsStep,
 ) -> HandlerResult {
     let Some(mut form) = state.terms_form(message_id, step) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     match choice {
         AmountChoice::Preset(value) => apply_number(screen, form, value).await,
         AmountChoice::Manual => {
             form.manual = true;
-            render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+            render(screen.chat(), form, None).await
         }
     }
 }
@@ -219,10 +216,10 @@ pub(in crate::bot::handlers) async fn handle_period(
     state: BotState,
 ) -> HandlerResult {
     let Some(mut form) = state.terms_form(message_id, TermsStep::Penalty) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     go(&mut form, TermsStep::Period);
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> HandlerResult {
@@ -240,27 +237,13 @@ async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> Ha
             terms.max_periods = Some(value);
             crate::domain::MAX_LATE_PERIODS
         }
-        _ => return send_stale_button(screen.bot, screen.chat_id).await,
+        _ => return screen.stale().await,
     };
     if !(1..=max).contains(&value) {
-        return render(
-            screen.bot,
-            screen.chat_id,
-            screen.deps(),
-            form,
-            Some(&texts::number_prompt(max)),
-        )
-        .await;
+        return render(screen.chat(), form, Some(&texts::number_prompt(max))).await;
     }
     if let Err(error) = validate_partial(&terms) {
-        return render(
-            screen.bot,
-            screen.chat_id,
-            screen.deps(),
-            form,
-            Some(&validation_message(&error)),
-        )
-        .await;
+        return render(screen.chat(), form, Some(&validation_message(&error))).await;
     }
     form.terms = terms;
     if form.return_to_summary {
@@ -273,7 +256,7 @@ async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> Ha
         };
         go(&mut form, step);
     }
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(super) async fn apply_date(
@@ -287,14 +270,7 @@ pub(super) async fn apply_date(
             .map_err(crate::app::AppError::from)?;
         let periods = policy.periods_until(deadline, at);
         if periods == 0 || periods > u32::from(crate::domain::MAX_LATE_PERIODS) {
-            return render(
-                screen.bot,
-                screen.chat_id,
-                screen.deps(),
-                form,
-                Some(texts::INVALID_DURATION_DATE),
-            )
-            .await;
+            return render(screen.chat(), form, Some(texts::INVALID_DURATION_DATE)).await;
         }
         let periods = u16::try_from(periods).expect("bounded by MAX_LATE_PERIODS");
         let mut terms = form.terms.clone();
@@ -306,14 +282,7 @@ pub(super) async fn apply_date(
                 }
                 _ => validation_message(&error),
             };
-            return render(
-                screen.bot,
-                screen.chat_id,
-                screen.deps(),
-                form,
-                Some(&message),
-            )
-            .await;
+            return render(screen.chat(), form, Some(&message)).await;
         }
         go(
             &mut form,
@@ -324,26 +293,12 @@ pub(super) async fn apply_date(
         );
     } else {
         if matches!(form.terms.target, TermsTarget::Create(_)) && at <= Utc::now() {
-            return render(
-                screen.bot,
-                screen.chat_id,
-                screen.deps(),
-                form,
-                Some(texts::DEADLINE_IN_FUTURE),
-            )
-            .await;
+            return render(screen.chat(), form, Some(texts::DEADLINE_IN_FUTURE)).await;
         }
         let mut terms = form.terms.clone();
         terms.deadline_at = Some(at);
         if let Err(error) = validate_partial(&terms) {
-            return render(
-                screen.bot,
-                screen.chat_id,
-                screen.deps(),
-                form,
-                Some(&validation_message(&error)),
-            )
-            .await;
+            return render(screen.chat(), form, Some(&validation_message(&error))).await;
         }
         form.terms = terms;
         if form.return_to_summary || !form.terms.allow_late {
@@ -352,7 +307,7 @@ pub(super) async fn apply_date(
             go(&mut form, TermsStep::Penalty);
         }
     }
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(in crate::bot::handlers) async fn submit_terms(
@@ -373,7 +328,7 @@ pub(in crate::bot::handlers) async fn submit_terms(
     else {
         return Ok(());
     };
-    let screen = Screen::new(step.bot, step.message.chat.id, actor, step.deps);
+    let screen = step.screen(actor);
     if !matches!(
         form.step,
         TermsStep::Deadline
@@ -382,44 +337,19 @@ pub(in crate::bot::handlers) async fn submit_terms(
             | TermsStep::Period
             | TermsStep::Periods
     ) {
-        return render(
-            screen.bot,
-            screen.chat_id,
-            screen.deps(),
-            form,
-            Some(texts::CHOOSE_BUTTON),
-        )
-        .await;
+        return render(screen.chat(), form, Some(texts::CHOOSE_BUTTON)).await;
     }
     detach(screen.bot, screen.chat_id, &mut form).await?;
     match form.step {
         TermsStep::Deadline | TermsStep::DurationDate => {
             match screen.context.timezone.parse_deadline(text) {
                 Some(at) => apply_date(screen, form, at).await,
-                None => {
-                    render(
-                        screen.bot,
-                        screen.chat_id,
-                        screen.deps(),
-                        form,
-                        Some(texts::DATE_FORMAT),
-                    )
-                    .await
-                }
+                None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
             }
         }
         _ => match parse_number(text) {
             Some(value) => apply_number(screen, form, value).await,
-            None => {
-                render(
-                    screen.bot,
-                    screen.chat_id,
-                    screen.deps(),
-                    form,
-                    Some(texts::INTEGER_REQUIRED),
-                )
-                .await
-            }
+            None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
         },
     }
 }
@@ -456,7 +386,7 @@ pub(in crate::bot::handlers) async fn back(
         };
         go(&mut form, step);
     }
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(in crate::bot::handlers) async fn handle_terms(
@@ -473,12 +403,12 @@ pub(in crate::bot::handlers) async fn handle_terms(
     }) = state
     {
         if current != message_id {
-            return send_stale_button(screen.bot, screen.chat_id).await;
+            return screen.stale().await;
         }
         return match action {
             TermsAction::Stay => {
                 form.message_id = Some(current);
-                render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+                render(screen.chat(), form, None).await
             }
             TermsAction::Exit => {
                 abandon(screen.bot, screen.chat_id, &form).await?;
@@ -492,35 +422,35 @@ pub(in crate::bot::handlers) async fn handle_terms(
                 )
                 .await
             }
-            _ => send_stale_button(screen.bot, screen.chat_id).await,
+            _ => screen.stale().await,
         };
     }
     let Some(active) = state.active_terms() else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let expected_step = active.step;
     let Some(mut form) = state.terms_form(message_id, expected_step) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     if action == TermsAction::Back {
         if !form.can_go_back() {
-            return send_stale_button(screen.bot, screen.chat_id).await;
+            return screen.stale().await;
         }
         return back(screen, form).await;
     }
     if action == TermsAction::DurationDate && form.step == TermsStep::Periods {
         go(&mut form, TermsStep::DurationDate);
-        return render(screen.bot, screen.chat_id, screen.deps(), form, None).await;
+        return render(screen.chat(), form, None).await;
     }
     if let TermsStep::DurationConfirm { periods, .. } = form.step
         && action == TermsAction::DurationApply
     {
         form.terms.max_periods = Some(periods);
         next(&mut form);
-        return render(screen.bot, screen.chat_id, screen.deps(), form, None).await;
+        return render(screen.chat(), form, None).await;
     }
     if form.step != TermsStep::Summary {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     }
     if form.previous_closes_at.is_none() {
         form.previous_closes_at = form.terms.deadline_at.map(|deadline| {
@@ -540,10 +470,10 @@ pub(in crate::bot::handlers) async fn handle_terms(
         TermsAction::Penalty if form.terms.allow_late => go(&mut form, TermsStep::Penalty),
         TermsAction::Period if form.terms.allow_late => go(&mut form, TermsStep::Period),
         TermsAction::Periods if form.terms.allow_late => go(&mut form, TermsStep::Periods),
-        _ => return send_stale_button(screen.bot, screen.chat_id).await,
+        _ => return screen.stale().await,
     }
     form.return_to_summary = true;
-    render(screen.bot, screen.chat_id, screen.deps(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(in crate::bot::handlers) async fn confirm_exit(
@@ -601,32 +531,18 @@ async fn cancel(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
 async fn save(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
     let terms = &form.terms;
     let Some(deadline_at) = terms.deadline_at else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     if terms.next_step() != TermsStep::Summary {
-        return render(screen.bot, screen.chat_id, screen.deps(), form, None).await;
+        return render(screen.chat(), form, None).await;
     }
     if let Err(error) = validate_partial(terms) {
-        return render(
-            screen.bot,
-            screen.chat_id,
-            screen.deps(),
-            form,
-            Some(&validation_message(&error)),
-        )
-        .await;
+        return render(screen.chat(), form, Some(&validation_message(&error))).await;
     }
     let late_policy = match terms.late_policy() {
         Ok(policy) => policy,
         Err(error) => {
-            return render(
-                screen.bot,
-                screen.chat_id,
-                screen.deps(),
-                form,
-                Some(&validation_message(&error)),
-            )
-            .await;
+            return render(screen.chat(), form, Some(&validation_message(&error))).await;
         }
     };
     let creating = matches!(terms.target, TermsTarget::Create(_));
@@ -670,7 +586,7 @@ async fn save(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
     };
     let assignment = match result {
         Ok(value) => value,
-        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
+        Err(error) => return screen.fail(error).await,
     };
     reset_dialogue(screen.dialogue).await?;
     let mut form = form;

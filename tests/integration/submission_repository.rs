@@ -14,12 +14,14 @@ use crate::harness::TestApp;
 async fn history_is_empty_for_a_student_without_submissions() -> anyhow::Result<()> {
     let app = TestApp::start().await;
 
-    let history = submissions::load_history(
+    let history = submissions::load_histories(
         &app.pool,
-        app.fixture.assignment.id(),
+        &[app.fixture.assignment.id().as_uuid()],
         app.fixture.student.id(),
     )
-    .await?;
+    .await?
+    .remove(&app.fixture.assignment.id())
+    .expect("requested assignment has a history even without submissions");
 
     assert_eq!(history, SubmissionHistory::default());
 
@@ -49,12 +51,14 @@ async fn pending_submission_blocks_but_does_not_spend_an_attempt() -> anyhow::Re
     let submission = submission(&app.fixture.assignment, &app.fixture.student).build();
     submissions::insert(&app.pool, &submission).await?;
 
-    let stored = submissions::load_history(
+    let stored = submissions::load_histories(
         &app.pool,
-        app.fixture.assignment.id(),
+        &[app.fixture.assignment.id().as_uuid()],
         app.fixture.student.id(),
     )
-    .await?;
+    .await?
+    .remove(&app.fixture.assignment.id())
+    .expect("requested assignment history");
 
     assert_eq!(stored, history().pending().build());
 
@@ -84,12 +88,14 @@ async fn accepted_review_is_persisted_and_spends_an_attempt() -> anyhow::Result<
     assert_eq!(loaded.reviewed_by(), Some(app.fixture.teacher.id()));
     assert_eq!(loaded.review_comment().unwrap().as_str(), "95/100");
 
-    let stored = submissions::load_history(
+    let stored = submissions::load_histories(
         &app.pool,
-        app.fixture.assignment.id(),
+        &[app.fixture.assignment.id().as_uuid()],
         app.fixture.student.id(),
     )
-    .await?;
+    .await?
+    .remove(&app.fixture.assignment.id())
+    .expect("requested assignment history");
     assert_eq!(stored, history().used(1).accepted().build());
 
     Ok(())

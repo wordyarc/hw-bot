@@ -7,7 +7,6 @@ use crate::domain::TeachingCourseId;
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, ScreenState};
-use crate::bot::views::send_stale_button;
 use crate::bot::views::{confirm_invite_rotation_keyboard, group_invite_keyboard};
 
 pub(in crate::bot::handlers) async fn show_group_invite(
@@ -75,7 +74,7 @@ pub(in crate::bot::handlers) async fn ask_invite_rotation(
     state: &BotState,
 ) -> HandlerResult {
     let Some((course_id, generation)) = state.group_invite(message_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     let sent = screen
         .bot
@@ -104,7 +103,7 @@ pub(in crate::bot::handlers) async fn cancel_invite_rotation(
     state: &BotState,
 ) -> HandlerResult {
     let Some((course_id, _)) = state.confirming_invite_rotation(message_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
     screen
         .bot
@@ -119,7 +118,7 @@ pub(in crate::bot::handlers) async fn confirm_invite_rotation(
     state: &BotState,
 ) -> HandlerResult {
     let Some((course_id, generation)) = state.confirming_invite_rotation(message_id) else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
+        return screen.stale().await;
     };
 
     screen

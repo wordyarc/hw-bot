@@ -15,32 +15,29 @@ use crate::bot::views::{
 use crate::bot::{BotServices, HandlerResult};
 use crate::domain::{Role, TelegramUserId};
 
-const STUDENT_COMMANDS: [&str; 7] = [
-    "menu", "tasks", "queue", "archive", "profile", "cancel", "help",
-];
-const TEACHER_COMMANDS: [&str; 6] = ["menu", "review", "courses", "profile", "cancel", "help"];
-
 pub(in crate::bot) fn default_commands() -> Vec<BotCommand> {
     scoped_commands(None)
 }
 
 fn scoped_commands(role: Option<Role>) -> Vec<BotCommand> {
-    let allowed: &[&str] = match role {
-        Some(Role::Student { .. }) => &STUDENT_COMMANDS,
-        Some(Role::Teacher | Role::Admin) => &TEACHER_COMMANDS,
-        None => {
-            return vec![
-                BotCommand::new("start", texts::GUEST_START_DESCRIPTION),
-                BotCommand::new("help", texts::GUEST_HELP_DESCRIPTION),
-            ];
-        }
-    };
     Command::bot_commands()
         .into_iter()
-        .filter(|command| allowed.contains(&command.command.trim_start_matches('/')))
-        .map(|mut command| {
-            command.command = command.command.trim_start_matches('/').to_owned();
-            command
+        .filter_map(|mut command| {
+            let parsed =
+                Command::parse(&format!("/{}", command.command.trim_start_matches('/')), "")
+                    .expect("declared bot command must be parseable without arguments");
+            if !parsed.visible_to(role) {
+                return None;
+            }
+            command.command = parsed.action().to_owned();
+            if role.is_none() {
+                command.description = match parsed {
+                    Command::Start(_) => texts::GUEST_START_DESCRIPTION.to_owned(),
+                    Command::Help => texts::GUEST_HELP_DESCRIPTION.to_owned(),
+                    _ => command.description,
+                };
+            }
+            Some(command)
         })
         .collect()
 }
@@ -253,11 +250,18 @@ mod tests {
         })));
         let teacher = names(scoped_commands(Some(Role::Teacher)));
 
-        assert!(student.contains(&"queue".to_owned()));
-        assert!(!student.contains(&"review".to_owned()));
-        assert!(teacher.contains(&"review".to_owned()));
-        assert!(!teacher.contains(&"queue".to_owned()));
-        assert!(names(default_commands()).contains(&"start".to_owned()));
+        assert_eq!(
+            student,
+            [
+                "menu", "tasks", "queue", "archive", "profile", "cancel", "help"
+            ]
+        );
+        assert_eq!(
+            teacher,
+            ["menu", "review", "courses", "profile", "cancel", "help"]
+        );
+        assert_eq!(names(scoped_commands(Some(Role::Admin))), teacher);
+        assert_eq!(names(default_commands()), ["start", "help"]);
     }
 
     #[test]

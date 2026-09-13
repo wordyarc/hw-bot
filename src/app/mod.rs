@@ -27,3 +27,10 @@ pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService, Use
 pub use crate::read_models::{
     AssignmentGrade, AssignmentStudentSummary, CourseStudent, QueuePlace, TeachingCourseSummary,
 };
+
+fn on_conflict<T>(result: crate::db::DbResult<T>, conflict: AppError) -> AppResult<T> {
+    match result {
+        Err(crate::db::DbError::Conflict { .. }) => Err(conflict),
+        result => Ok(result?),
+    }
+}

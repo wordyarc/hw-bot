@@ -166,55 +166,6 @@ where
     )
 }
 
-pub async fn load_history<'e, E>(
-    executor: E,
-    assignment_id: AssignmentId,
-    student_id: UserId,
-) -> DbResult<SubmissionHistory>
-where
-    E: PgExecutor<'e>,
-{
-    let row = sqlx::query!(
-        r#"
-        with history as (
-            select
-                count(*) filter (
-                    where status in ('accepted', 'rejected')
-                )::bigint as used_attempts,
-                coalesce(bool_or(status = 'accepted'), false) as has_accepted_submission,
-                coalesce(bool_or(status = 'pending_review'), false) as has_pending_submission
-            from submissions
-            where assignment_id = $1
-              and student_id = $2
-        ),
-        progress as (
-            select coalesce(max(extra_attempts), 0)::smallint as extra_attempts
-            from student_assignment_progress
-            where assignment_id = $1
-              and student_id = $2
-        )
-        select
-            history.used_attempts as "used_attempts!",
-            progress.extra_attempts as "extra_attempts!",
-            history.has_accepted_submission as "has_accepted_submission!",
-            history.has_pending_submission as "has_pending_submission!"
-        from history
-        cross join progress
-        "#,
-        assignment_id.as_uuid(),
-        student_id.as_uuid(),
-    )
-    .fetch_one(executor)
-    .await?;
-
-    Ok(SubmissionHistory::new(
-        checked_num_cast("submission_history.used_attempts", row.used_attempts)?,
-        checked_num_cast("submission_history.extra_attempts", row.extra_attempts)?,
-        row.has_accepted_submission,
-        row.has_pending_submission,
-    ))
-}
-
 pub async fn load_histories<'e, E>(
     executor: E,
     assignment_ids: &[Uuid],
@@ -489,30 +440,33 @@ where
     .collect()
 }
 
-/// Видимость обязана совпадать с `lock_next_pending_for_reviewer`!!
-/// иначе бот может показать например очередь из трёх сдач, а `POST /submissions/next` вернёт 204.
+macro_rules! reviewer_scope {
+    ($query:ident $(, $row:ty)?; $select:literal, $tail:literal, $reviewer:expr) => {
+        sqlx::$query!(
+            $($row,)?
+            $select + r#"
+            from submissions
+            join assignments
+              on assignments.id = submissions.assignment_id
+            left join teaching_course_teachers
+              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
+             and teaching_course_teachers.teacher_id = $2
+            where submissions.status = 'pending_review'
+              and ($1 or teaching_course_teachers.teacher_id is not null)
+            "# + $tail,
+            matches!($reviewer.role(), Role::Admin),
+            $reviewer.id().as_uuid(),
+        )
+    };
+}
+
 pub async fn count_pending_for_reviewer<'e, E>(executor: E, reviewer: &User) -> DbResult<u32>
 where
     E: PgExecutor<'e>,
 {
-    let can_review_all = matches!(reviewer.role(), Role::Admin);
-    let pending = sqlx::query_scalar!(
-        r#"
-        select count(*) as "pending!"
-        from submissions
-        join assignments
-          on assignments.id = submissions.assignment_id
-        left join teaching_course_teachers
-          on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
-         and teaching_course_teachers.teacher_id = $2
-        where submissions.status = 'pending_review'
-          and ($1 or teaching_course_teachers.teacher_id is not null)
-        "#,
-        can_review_all,
-        reviewer.id().as_uuid(),
-    )
-    .fetch_one(executor)
-    .await?;
+    let pending = reviewer_scope!(query_scalar; r#"select count(*) as "pending!""#, "", reviewer)
+        .fetch_one(executor)
+        .await?;
 
     checked_num_cast("review_queue.pending", pending)
 }
@@ -521,9 +475,7 @@ pub async fn lock_next_pending_for_reviewer(
     tx: &mut Transaction<'_, Postgres>,
     reviewer: &User,
 ) -> DbResult<Option<Submission>> {
-    let can_review_all = matches!(reviewer.role(), Role::Admin);
-    let row = sqlx::query_as!(
-        SubmissionRow,
+    let row = reviewer_scope!(query_as, SubmissionRow;
         r#"
         select
             submissions.id, submissions.assignment_id, submissions.student_id,
@@ -531,20 +483,13 @@ pub async fn lock_next_pending_for_reviewer(
             submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
             submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
             submissions.late_periods, submissions.penalty, submissions.final_score
-        from submissions
-        join assignments
-          on assignments.id = submissions.assignment_id
-        left join teaching_course_teachers
-          on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
-         and teaching_course_teachers.teacher_id = $2
-        where submissions.status = 'pending_review'
-          and ($1 or teaching_course_teachers.teacher_id is not null)
+        "#,
+        r#"
         order by submissions.submitted_at, submissions.id
         for update of submissions skip locked
         limit 1
         "#,
-        can_review_all,
-        reviewer.id().as_uuid(),
+        reviewer
     )
     .fetch_optional(&mut **tx)
     .await?;

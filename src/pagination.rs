@@ -42,12 +42,4 @@ impl<T> Page<T> {
             next_page,
         }
     }
-
-    pub fn map<U>(self, map: impl FnMut(T) -> U) -> Page<U> {
-        Page {
-            items: self.items.into_iter().map(map).collect(),
-            page: self.page,
-            next_page: self.next_page,
-        }
-    }
 }

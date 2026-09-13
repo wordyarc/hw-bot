@@ -1,11 +1,10 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
 pub enum CriticalComponent {
-    TelegramBot = 1,
-    NotificationWorker = 2,
+    TelegramBot,
+    NotificationWorker,
 }
 
 #[derive(Clone, Debug)]
@@ -15,8 +14,10 @@ pub struct HealthState {
 
 #[derive(Debug)]
 struct HealthInner {
-    required: u8,
-    ready: AtomicU8,
+    telegram_required: bool,
+    notification_worker_required: bool,
+    telegram_ready: AtomicBool,
+    notification_worker_ready: AtomicBool,
     shutting_down: AtomicBool,
 }
 
@@ -33,18 +34,12 @@ pub struct ReadyGuard {
 
 impl HealthState {
     pub fn new(telegram_required: bool, notification_worker_required: bool) -> Self {
-        let mut required = 0;
-        if telegram_required {
-            required |= CriticalComponent::TelegramBot as u8;
-        }
-        if notification_worker_required {
-            required |= CriticalComponent::NotificationWorker as u8;
-        }
-
         Self {
             inner: Arc::new(HealthInner {
-                required,
-                ready: AtomicU8::new(0),
+                telegram_required,
+                notification_worker_required,
+                telegram_ready: AtomicBool::new(false),
+                notification_worker_ready: AtomicBool::new(false),
                 shutting_down: AtomicBool::new(false),
             }),
         }
@@ -59,7 +54,9 @@ impl HealthState {
 
     pub fn is_ready_without_database(&self) -> bool {
         !self.inner.shutting_down.load(Ordering::Acquire)
-            && self.inner.ready.load(Ordering::Acquire) & self.inner.required == self.inner.required
+            && (!self.inner.telegram_required || self.inner.telegram_ready.load(Ordering::Acquire))
+            && (!self.inner.notification_worker_required
+                || self.inner.notification_worker_ready.load(Ordering::Acquire))
     }
 
     pub fn begin_shutdown(&self) {
@@ -68,20 +65,22 @@ impl HealthState {
 }
 
 impl ComponentHealth {
+    fn readiness(&self) -> &AtomicBool {
+        match self.component {
+            CriticalComponent::TelegramBot => &self.inner.telegram_ready,
+            CriticalComponent::NotificationWorker => &self.inner.notification_worker_ready,
+        }
+    }
+
     pub fn ready(self) -> ReadyGuard {
-        self.inner
-            .ready
-            .fetch_or(self.component as u8, Ordering::AcqRel);
+        self.readiness().store(true, Ordering::Release);
         ReadyGuard { component: self }
     }
 }
 
 impl Drop for ReadyGuard {
     fn drop(&mut self) {
-        self.component
-            .inner
-            .ready
-            .fetch_and(!(self.component.component as u8), Ordering::AcqRel);
+        self.component.readiness().store(false, Ordering::Release);
     }
 }
 

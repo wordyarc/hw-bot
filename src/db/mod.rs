@@ -1,6 +1,5 @@
 use sqlx::PgPool;
-use sqlx::Row;
-use sqlx::migrate::{MigrateError, Migrator};
+use sqlx::migrate::{Migrate, MigrateError, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::str::FromStr;
 use std::time::Duration;
@@ -62,21 +61,16 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), MigrateError> {
 }
 
 pub async fn validate_migrations(pool: &PgPool) -> Result<(), MigrateError> {
-    let rows =
-        sqlx::query("select version, checksum, success from _sqlx_migrations order by version")
-            .fetch_all(pool)
-            .await?;
-    let mut applied = std::collections::HashMap::new();
-
-    for row in rows {
-        let version: i64 = row.try_get("version")?;
-        let checksum: Vec<u8> = row.try_get("checksum")?;
-        let success: bool = row.try_get("success")?;
-        if !success {
-            return Err(MigrateError::Dirty(version));
-        }
-        applied.insert(version, checksum);
+    let mut connection = pool.acquire().await?;
+    if let Some(version) = connection.dirty_version(&MIGRATOR.table_name).await? {
+        return Err(MigrateError::Dirty(version));
     }
+    let mut applied: std::collections::HashMap<_, _> = connection
+        .list_applied_migrations(&MIGRATOR.table_name)
+        .await?
+        .into_iter()
+        .map(|migration| (migration.version, migration.checksum))
+        .collect();
 
     for migration in MIGRATOR
         .iter()
@@ -85,7 +79,7 @@ pub async fn validate_migrations(pool: &PgPool) -> Result<(), MigrateError> {
         let Some(checksum) = applied.remove(&migration.version) else {
             return Err(MigrateError::VersionNotPresent(migration.version));
         };
-        if checksum != migration.checksum.as_ref() {
+        if checksum != migration.checksum {
             return Err(MigrateError::VersionMismatch(migration.version));
         }
     }
