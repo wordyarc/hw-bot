@@ -8,7 +8,7 @@ use teloxide::types::{
 
 use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
 use crate::domain::{
-    Assignment, AssignmentStatus, Grade, Grading, LatePolicy, Role, StoredFileMetadata,
+    Assignment, AssignmentStatus, Grade, Grading, LatePolicy, MaxScore, Role, StoredFileMetadata,
     SubmissionId, SubmissionStatus, TeachingCourseId,
 };
 
@@ -721,10 +721,7 @@ pub(super) fn terms_form_view(
             if let (Some(policy), Grading::Score { max_score }) = (policy, terms.grading()) {
                 text.push_str(&format!(
                     "\n{}",
-                    texts::score_preview(
-                        policy.possible_score(max_score, 1),
-                        policy.possible_score(max_score, u32::from(policy.max_periods()))
-                    )
+                    penalty_schedule(deadline, policy, max_score, timezone)
                 ));
             }
             let previous = match terms.target {
@@ -760,6 +757,57 @@ pub(super) fn terms_form_view(
             .push(vec![button(texts::BUTTON_BACK, TERMS_BACK)]);
     }
     (text, keyboard)
+}
+
+const SCHEDULE_ROWS: u16 = 5;
+
+fn schedule_periods(policy: LatePolicy, max_score: MaxScore) -> Vec<u16> {
+    let last = (1..=policy.max_periods())
+        .find(|&periods| policy.possible_score(max_score, u32::from(periods)) == 0)
+        .unwrap_or_else(|| policy.max_periods());
+    let head = last.min(SCHEDULE_ROWS);
+    let mut periods: Vec<_> = (1..=head).collect();
+    if last > head {
+        periods.push(last);
+    }
+    periods
+}
+
+fn penalty_schedule(
+    deadline_at: DateTime<Utc>,
+    policy: LatePolicy,
+    max_score: MaxScore,
+    timezone: &BotTimezone,
+) -> String {
+    let max = max_score.get();
+    let mut lines = vec![
+        texts::SCHEDULE_HEADER.to_owned(),
+        texts::schedule_free_row(&timezone.format_date_time(deadline_at), max),
+    ];
+
+    let mut previous = 0;
+    for periods in schedule_periods(policy, max_score) {
+        if periods > previous + 1 {
+            lines.push(texts::schedule_skipped(u32::from(periods - previous - 1)));
+        }
+        let score = policy.possible_score(max_score, u32::from(periods));
+        let until = policy
+            .period_end(deadline_at, periods)
+            .expect("validated horizon");
+        lines.push(texts::schedule_penalty_row(
+            &timezone.format_date_time(until),
+            max - score,
+            score,
+            max,
+        ));
+        previous = periods;
+    }
+
+    let closes_at = policy.closes_at(deadline_at).expect("validated horizon");
+    lines.push(texts::schedule_closed(
+        &timezone.format_date_time(closes_at),
+    ));
+    lines.join("\n")
 }
 
 /// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
@@ -1185,15 +1233,77 @@ mod tests {
     }
 
     #[test]
-    fn a_hundred_periods_still_produce_a_short_two_boundary_preview() {
+    fn a_hundred_periods_still_produce_a_short_schedule() {
         let form = TermsForm::new(scored_terms(), TermsStep::Summary);
         let (text, keyboard) = terms_form_view(&form, &timezone());
-        assert!(text.contains(&texts::score_preview(9, 0)));
-        assert!(text.chars().count() < 1000);
+        assert!(text.contains(texts::SCHEDULE_HEADER), "{text}");
+        assert!(text.chars().count() < 1000, "{text}");
         assert_eq!(keyboard.inline_keyboard.last().unwrap().len(), 1);
         assert_eq!(
             keyboard.inline_keyboard.last().unwrap()[0].text,
             texts::BUTTON_CANCEL_CREATION
+        );
+    }
+
+    #[test]
+    fn the_schedule_names_every_penalty_step_and_the_closing_date() {
+        let timezone = timezone();
+        let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
+        let policy = LatePolicy::new(7, 1, 3).unwrap();
+        let max_score = crate::domain::MaxScore::new(10).unwrap();
+
+        let schedule = penalty_schedule(deadline, policy, max_score, &timezone);
+
+        assert_eq!(
+            schedule.lines().collect::<Vec<_>>(),
+            [
+                texts::SCHEDULE_HEADER,
+                &texts::schedule_free_row("20.08.2026 23:59", 10),
+                &texts::schedule_penalty_row("27.08.2026 23:59", 1, 9, 10),
+                &texts::schedule_penalty_row("03.09.2026 23:59", 2, 8, 10),
+                &texts::schedule_penalty_row("10.09.2026 23:59", 3, 7, 10),
+                &texts::schedule_closed("10.09.2026 23:59"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_schedule_stops_at_the_period_that_zeroes_the_score() {
+        let timezone = timezone();
+        let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
+        let policy = LatePolicy::new(1, 5, 40).unwrap();
+        let max_score = MaxScore::new(10).unwrap();
+
+        let schedule = penalty_schedule(deadline, policy, max_score, &timezone);
+        let lines: Vec<_> = schedule.lines().collect();
+
+        assert_eq!(lines.len(), 5, "{schedule}");
+        assert_eq!(
+            lines[3],
+            texts::schedule_penalty_row("22.08.2026 23:59", 10, 0, 10)
+        );
+        assert_eq!(lines[4], texts::schedule_closed("29.09.2026 23:59"));
+    }
+
+    #[test]
+    fn a_long_schedule_collapses_its_middle_into_one_line() {
+        let timezone = timezone();
+        let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
+        let policy = LatePolicy::new(1, 1, 40).unwrap();
+        let max_score = MaxScore::new(100).unwrap();
+
+        let schedule = penalty_schedule(deadline, policy, max_score, &timezone);
+        let lines: Vec<_> = schedule.lines().collect();
+
+        assert_eq!(lines.len(), 10, "{schedule}");
+        assert_eq!(lines[7], texts::schedule_skipped(34));
+        assert_eq!(
+            lines[8],
+            texts::schedule_penalty_row("29.09.2026 23:59", 40, 60, 100)
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            &texts::schedule_closed("29.09.2026 23:59")
         );
     }
 

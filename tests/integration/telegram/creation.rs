@@ -684,11 +684,43 @@ async fn all_button_steps_reuse_one_message_and_wait_for_explicit_save() {
     assert!(
         summary_text(&app, &telegram)
             .await
-            .contains(&texts::score_preview(4, 1))
+            .contains(texts::SCHEDULE_HEADER)
     );
     telegram.click(app.teacher(), &save);
     telegram.flush(app.teacher()).await;
     assert_eq!(draft_count(&app, "One screen").await, 1);
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn the_summary_lists_one_penalty_step_per_chosen_period() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_scored_creation(&app, &telegram, "Schedule").await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 1))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 4))
+        .await;
+
+    let summary = summary_text(&app, &telegram).await;
+    let rows: Vec<_> = summary
+        .lines()
+        .skip_while(|line| *line != texts::SCHEDULE_HEADER)
+        .skip(1)
+        .take_while(|line| line.starts_with('•'))
+        .collect();
+
+    assert_eq!(rows.len(), 6, "{summary}");
+    assert!(rows[5].starts_with("• после"), "{summary}");
     stop_bot(cancellation, &mut task).await;
 }
 

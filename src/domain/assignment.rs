@@ -140,13 +140,21 @@ impl LatePolicy {
         self.max_periods
     }
 
-    pub fn closes_at(self, deadline_at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
+    pub fn period_end(
+        self,
+        deadline_at: DateTime<Utc>,
+        periods: u16,
+    ) -> DomainResult<DateTime<Utc>> {
         let days = u32::from(self.period_days)
-            .checked_mul(u32::from(self.max_periods))
+            .checked_mul(u32::from(periods))
             .ok_or(DomainError::AssignmentClosingOutOfRange)?;
         deadline_at
             .checked_add_signed(Duration::days(i64::from(days)))
             .ok_or(DomainError::AssignmentClosingOutOfRange)
+    }
+
+    pub fn closes_at(self, deadline_at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
+        self.period_end(deadline_at, self.max_periods)
     }
 
     pub fn validate_horizon(self, deadline_at: DateTime<Utc>) -> DomainResult<()> {

@@ -57,6 +57,13 @@ impl BotTimezone {
         )
     }
 
+    pub fn format_date_time(&self, instant: DateTime<Utc>) -> String {
+        instant
+            .with_timezone(&self.offset)
+            .format("%d.%m.%Y %H:%M")
+            .to_string()
+    }
+
     pub fn format_short(&self, instant: DateTime<Utc>) -> String {
         instant
             .with_timezone(&self.offset)

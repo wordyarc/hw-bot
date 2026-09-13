@@ -35,6 +35,7 @@ pub const ASSIGNMENT_BODY_PROMPT: &str = "Пришлите текст задан
 pub const PERIOD_PROMPT: &str =
     "Период штрафа в днях. Пришлите целое число от 1 до 365 сообщением:";
 pub const TERMS_CONFIRM: &str = "Проверьте условия приёма перед сохранением:";
+pub const SCHEDULE_HEADER: &str = "📅 Как будет снижаться балл:";
 pub const TERMS_SAVED: &str = "Условия приёма сохранены.";
 pub const DRAFT_CREATED: &str = "📝 Черновик создан. Проверьте условия перед публикацией:";
 pub const CHOOSE_BUTTON: &str = "Выберите действие кнопкой выше или отправьте /cancel для отмены.";
@@ -84,13 +85,19 @@ pub fn lateness_duration(days: u16, periods: u16) -> String {
     if days == 7 {
         format!("{periods} нед.")
     } else {
-        let unit = match (periods % 100, periods % 10) {
-            (11..=14, _) => "периодов",
-            (_, 1) => "период",
-            (_, 2..=4) => "периода",
-            _ => "периодов",
-        };
-        format!("{periods} {unit} по {days} дн.")
+        format!(
+            "{periods} {} по {days} дн.",
+            plural(u32::from(periods), "период", "периода", "периодов")
+        )
+    }
+}
+
+fn plural(value: u32, one: &'static str, few: &'static str, many: &'static str) -> &'static str {
+    match (value % 100, value % 10) {
+        (11..=14, _) => many,
+        (_, 1) => one,
+        (_, 2..=4) => few,
+        _ => many,
     }
 }
 
@@ -100,12 +107,23 @@ pub fn periods_question(days: u16) -> String {
     )
 }
 
-pub fn score_preview(first: u16, last: u16) -> String {
+pub fn schedule_free_row(until: &str, max_score: u16) -> String {
+    format!("• до {until} — без штрафа, {max_score} из {max_score}")
+}
+
+pub fn schedule_penalty_row(until: &str, penalty: u16, score: u16, max_score: u16) -> String {
+    format!("• до {until} — штраф −{penalty}, {score} из {max_score}")
+}
+
+pub fn schedule_skipped(periods: u32) -> String {
     format!(
-        "Первый штраф применяется сразу после срока.\nВ первый день опоздания максимум {}.\nВ последний день приёма максимум {}.",
-        points(first),
-        points(last)
+        "• … ещё {periods} {}",
+        plural(periods, "период", "периода", "периодов")
     )
+}
+
+pub fn schedule_closed(at: &str) -> String {
+    format!("• после {at} — приём закрыт")
 }
 
 pub fn closing_change(before: &str, after: &str) -> String {
@@ -150,13 +168,10 @@ pub fn penalty_rule(period_days: u16, penalty: u16) -> String {
 }
 
 pub fn points(value: u16) -> String {
-    let unit = match (value % 100, value % 10) {
-        (11..=14, _) => "баллов",
-        (_, 1) => "балл",
-        (_, 2..=4) => "балла",
-        _ => "баллов",
-    };
-    format!("{value} {unit}")
+    format!(
+        "{value} {}",
+        plural(u32::from(value), "балл", "балла", "баллов")
+    )
 }
 
 const CANCEL_HINT: &str = "/cancel — отменить";
