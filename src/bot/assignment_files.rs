@@ -20,10 +20,7 @@ pub(super) async fn submit_file(
     transfers: &FileTransfers,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id,
-        deps,
+        bot, message, deps, ..
     } = step;
     let services = &deps.context.services;
     let Some(incoming) = incoming_file(message) else {
@@ -67,22 +64,14 @@ pub(super) async fn submit_file(
         .await?;
         return Ok(());
     }
-    let Some(actor) = crate::bot::handlers::resolve_actor(
-        bot,
-        message.chat.id,
-        telegram_user_id,
-        services,
-        deps.dialogue,
-    )
-    .await?
-    else {
+    let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
     let result = services
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id,
-            actor,
+            actor: screen.actor,
             expected_revision,
             presentation: incoming.presentation,
             filename: incoming.filename,
@@ -96,11 +85,11 @@ pub(super) async fn submit_file(
             bot.send_message(message.chat.id, "Вложение добавлено.")
                 .reply_markup(teacher_keyboard())
                 .await?;
-            show(step.screen(actor), assignment_id, creation_flow).await?;
+            show(screen, assignment_id, creation_flow).await?;
         }
         Err(error) if error.code() == ErrorCode::ConcurrentModification => {
             step.chat().fail(error).await?;
-            show(step.screen(actor), assignment_id, creation_flow).await?;
+            show(screen, assignment_id, creation_flow).await?;
         }
         Err(error) => {
             return Err(error.into());

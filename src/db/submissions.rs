@@ -235,7 +235,7 @@ where
         "where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
         assignment_id.as_uuid(),
         student_id.as_uuid(),
-        page.fetch_limit(),
+        PageRequest::FETCH_LIMIT,
         page.offset(),
     )
     .fetch_all(executor)
@@ -270,10 +270,45 @@ pub struct CourseGradeRow {
     pub max_total: u32,
 }
 
+pub async fn course_gradebook_page(
+    executor: impl PgExecutor<'_>,
+    teaching_course_id: TeachingCourseId,
+    student_group_id: StudentGroupId,
+    students: PageRequest,
+) -> DbResult<Vec<CourseGradeRow>> {
+    course_grades(
+        executor,
+        teaching_course_id,
+        student_group_id,
+        students,
+        None,
+        PageRequest::default(),
+    )
+    .await
+}
+
+pub async fn one_student_grades(
+    executor: impl PgExecutor<'_>,
+    teaching_course_id: TeachingCourseId,
+    student_group_id: StudentGroupId,
+    student_id: UserId,
+    grades: PageRequest,
+) -> DbResult<Vec<CourseGradeRow>> {
+    course_grades(
+        executor,
+        teaching_course_id,
+        student_group_id,
+        PageRequest::default(),
+        Some(student_id),
+        grades,
+    )
+    .await
+}
+
 /// Сводка одним стейтментом: студенты группы слева, оценочные задания курса и принятые сдачи
 /// справа. left joins обязательны - студент без единой сдачи должен вернуться нулевой
 /// строкой, а не пропасть из ведомости.
-pub async fn course_grades<'e, E>(
+async fn course_grades<'e, E>(
     executor: E,
     teaching_course_id: TeachingCourseId,
     student_group_id: StudentGroupId,
@@ -324,10 +359,10 @@ where
         "#,
         teaching_course_id.as_uuid(),
         student_group_id.as_uuid(),
-        student_page.fetch_limit(),
+        PageRequest::FETCH_LIMIT,
         student_page.offset(),
         student_id.map(UserId::as_uuid),
-        grade_page.fetch_limit(),
+        PageRequest::FETCH_LIMIT,
         grade_page.offset(),
     )
     .fetch_all(executor)
@@ -355,10 +390,34 @@ where
     .collect()
 }
 
+pub async fn pending_queue_page(
+    executor: impl PgExecutor<'_>,
+    student_id: UserId,
+    page: PageRequest,
+) -> DbResult<Vec<QueuePlace>> {
+    pending_queue_places(executor, student_id, page, None).await
+}
+
+pub async fn queue_place_for(
+    executor: impl PgExecutor<'_>,
+    student_id: UserId,
+    assignment_id: AssignmentId,
+) -> DbResult<Option<QueuePlace>> {
+    Ok(pending_queue_places(
+        executor,
+        student_id,
+        PageRequest::default(),
+        Some(assignment_id),
+    )
+    .await?
+    .into_iter()
+    .next())
+}
+
 /// Место сдачи студента в очереди проверки. Очередь ревьюера склеена из всех его курсов, поэтому
 /// считаем не по курсу задания, а по всем сдачам, которые видит хотя бы один его преподаватель.
 /// Порядок обязан совпадать с `lock_next_pending_for_reviewer`.
-pub async fn pending_queue_places<'e, E>(
+async fn pending_queue_places<'e, E>(
     executor: E,
     student_id: UserId,
     page: PageRequest,
@@ -420,7 +479,7 @@ where
         order by submissions.submitted_at, submissions.id
         "#,
         student_id.as_uuid(),
-        page.fetch_limit(),
+        PageRequest::FETCH_LIMIT,
         page.offset(),
         assignment_id.map(AssignmentId::as_uuid),
     )

@@ -1,6 +1,6 @@
 use super::home::show_home;
 use super::input::{ensure_text_limit, parse_number, require_text};
-use super::{reset_dialogue, resolve_actor};
+use super::reset_dialogue;
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
 use crate::bot::Bot;
 use crate::bot::context::{Deps, Screen, TextStep};
@@ -128,16 +128,14 @@ pub(super) async fn submit_comment(
     {
         return Ok(());
     }
-    let Some(reviewer) =
-        resolve_actor(bot, message.chat.id, telegram_user_id, services, dialogue).await?
-    else {
+    let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
     let result = services
         .reviews
         .review_submission(ReviewSubmission {
             submission_id,
-            actor: reviewer,
+            actor: screen.actor,
             decision,
             score,
             comment: text.to_owned(),
@@ -170,14 +168,14 @@ pub(super) async fn submit_comment(
         Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
             reset_dialogue(dialogue).await?;
             send_app_error(bot, message.chat.id, error).await?;
-            show_home(bot, message.chat.id, telegram_user_id, services, dialogue).await?;
+            show_home(step.chat(), telegram_user_id).await?;
         }
         Err(AppError::Domain(
             DomainError::ScoreRequired
             | DomainError::ScoreNotAllowed
             | DomainError::ScoreOutOfRange { .. },
         )) => {
-            restart_review(step.screen(reviewer), submission_id).await?;
+            restart_review(screen, submission_id).await?;
         }
         Err(error) => return Err(error.into()),
     }

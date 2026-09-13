@@ -1,6 +1,5 @@
-use crate::bot::context::{Deps, Screen, TextStep};
+use crate::bot::context::{Screen, TextStep};
 use crate::bot::handlers::input::{parse_positive_attempts, require_text};
-use crate::bot::handlers::resolve_actor;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
@@ -184,14 +183,7 @@ pub(in crate::bot::handlers) async fn submit_attempt_amount(
     assignment_id: AssignmentId,
     student_id: UserId,
 ) -> HandlerResult {
-    let TextStep {
-        bot,
-        message,
-        telegram_user_id,
-        deps,
-    } = step;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
+    let TextStep { bot, message, .. } = step;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -204,18 +196,10 @@ pub(in crate::bot::handlers) async fn submit_attempt_amount(
         .await?;
         return Ok(());
     };
-    let Some(actor) =
-        resolve_actor(bot, message.chat.id, telegram_user_id, services, dialogue).await?
-    else {
+    let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
-    grant_attempts(
-        Screen::new(bot, message.chat.id, actor, deps),
-        assignment_id,
-        student_id,
-        amount,
-    )
-    .await?;
+    grant_attempts(screen, assignment_id, student_id, amount).await?;
 
     Ok(())
 }

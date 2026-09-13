@@ -1,5 +1,5 @@
 use super::input::{ensure_text_limit, require_text};
-use super::{reset_dialogue, resolve_actor};
+use super::reset_dialogue;
 use crate::app::{StudentAssignment, SubmitHomework};
 use crate::bot::callbacks::{MENU_ARCHIVE, MENU_ASSIGNMENTS, PageTarget};
 use crate::bot::context::{Chat, Deps, Screen, TextStep};
@@ -381,10 +381,7 @@ pub(super) async fn submit_homework_text(
     assignment_id: AssignmentId,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id,
-        deps,
+        bot, message, deps, ..
     } = step;
     let Deps { context, dialogue } = deps;
     let services = &context.services;
@@ -403,16 +400,14 @@ pub(super) async fn submit_homework_text(
     {
         return Ok(());
     }
-    let Some(actor) =
-        resolve_actor(bot, message.chat.id, telegram_user_id, services, dialogue).await?
-    else {
+    let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
     services
         .submissions
         .submit_homework(SubmitHomework {
             assignment_id,
-            actor,
+            actor: screen.actor,
             content: text.to_owned(),
             submitted_at: Utc::now(),
         })

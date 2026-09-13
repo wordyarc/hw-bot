@@ -295,10 +295,13 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         .map_err(Into::into)
     });
     let signal = cancellation.clone();
-    let task = tokio::spawn(supervisor.run(async move {
-        signal.cancelled().await;
-        Ok(())
-    }));
+    let task = tokio::spawn(supervisor.run_with_cleanup(
+        async move {
+            signal.cancelled().await;
+            Ok(())
+        },
+        async { Ok(()) },
+    ));
     telegram.message(app.student(), "/tasks");
     telegram
         .click_button(

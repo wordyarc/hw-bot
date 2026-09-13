@@ -107,13 +107,11 @@ impl CourseService {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read course gradebook").await?;
 
-        let rows = db::submissions::course_grades(
+        let rows = db::submissions::course_gradebook_page(
             &self.pool,
             course_id,
             course.student_group_id(),
             page,
-            None,
-            PageRequest::default(),
         )
         .await?;
         Ok(Page::from_rows(
@@ -145,12 +143,11 @@ impl CourseService {
     ) -> AppResult<StudentGrades> {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read student grades").await?;
-        let rows = db::submissions::course_grades(
+        let rows = db::submissions::one_student_grades(
             &self.pool,
             course_id,
             course.student_group_id(),
-            PageRequest::default(),
-            Some(student_id),
+            student_id,
             page,
         )
         .await?;

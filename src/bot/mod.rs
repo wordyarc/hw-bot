@@ -49,7 +49,6 @@ use context::BotContext;
 use errors::BotError;
 
 type HandlerResult<T = ()> = Result<T, BotError>;
-type BotServices = ApplicationContainer;
 
 #[derive(Clone)]
 pub struct TelegramBot {

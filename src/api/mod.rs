@@ -114,6 +114,14 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
 }
 
 async fn normalize_transport_error(response: Response) -> Response {
+    // Tower возвращает голые статусы; готовый API-конверт нельзя затирать по совпадению 413/408.
+    if response
+        .extensions()
+        .get::<error::ApiErrorResponse>()
+        .is_some()
+    {
+        return response;
+    }
     match response.status() {
         StatusCode::REQUEST_TIMEOUT => ApiError::new(
             StatusCode::REQUEST_TIMEOUT,
@@ -128,5 +136,59 @@ async fn normalize_transport_error(response: Response) -> Response {
         )
         .into_response(),
         _ => response,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::AppError;
+    use axum::body::{Body, Bytes, to_bytes};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn normalization_preserves_the_file_size_error() {
+        let error = AppError::FileTooLarge {
+            max_bytes: 5,
+            actual_bytes: 6,
+        };
+        let message = error.to_string();
+        let response = ApiError::from(error).into_response();
+
+        let response = normalize_transport_error(response).await;
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "file_too_large");
+        assert_eq!(body["error"]["message"], message);
+    }
+
+    #[tokio::test]
+    async fn streamed_body_over_the_limit_keeps_the_transport_error_code() {
+        let router = Router::new()
+            .route(
+                "/",
+                post(|JsonBody(_): JsonBody<serde_json::Value>| async {}),
+            )
+            .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT))
+            .layer(axum::middleware::map_response(normalize_transport_error));
+        let chunks = futures::stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from_static(b"{\"text\":\"")),
+            Ok(Bytes::from(vec![b'a'; REQUEST_BODY_LIMIT])),
+            Ok(Bytes::from_static(b"\"}")),
+        ]);
+        let request = Request::post("/")
+            .header("content-type", "application/json")
+            .body(Body::from_stream(chunks))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "request_body_too_large");
     }
 }

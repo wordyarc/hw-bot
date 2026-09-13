@@ -214,7 +214,7 @@ where
         "#,
         sees_every_course,
         teacher.id().as_uuid(),
-        page.fetch_limit(),
+        PageRequest::FETCH_LIMIT,
         page.offset(),
     )
     .fetch_all(executor)

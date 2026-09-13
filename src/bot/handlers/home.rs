@@ -5,14 +5,13 @@ use teloxide::utils::command::BotCommands;
 
 use super::Command;
 use crate::app::{Actor, AppResult, ErrorCode};
-use crate::bot::context::Screen;
-use crate::bot::state::{BotDialogue, BotState, ScreenState};
+use crate::bot::HandlerResult;
+use crate::bot::context::{Chat, Screen};
+use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
-use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
     main_keyboard, role_name, send_message_chunks, student_menu, teacher_menu,
 };
-use crate::bot::{BotServices, HandlerResult};
 use crate::domain::{Role, TelegramUserId};
 
 pub(in crate::bot) fn default_commands() -> Vec<BotCommand> {
@@ -54,13 +53,10 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Option<Role>) {
     }
 }
 
-pub(super) async fn open_guest(
-    bot: &Bot,
-    chat_id: ChatId,
-    dialogue: &BotDialogue,
-) -> HandlerResult {
+pub(in crate::bot) async fn open_guest(chat: Chat<'_>) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
     show_guest(bot, chat_id).await?;
-    dialogue
+    deps.dialogue
         .update(BotState::Screen(ScreenState::Guest))
         .await?;
     Ok(())
@@ -78,13 +74,10 @@ pub(super) async fn send_guest_hint(bot: &Bot, chat_id: ChatId) -> HandlerResult
     Ok(())
 }
 
-pub(super) async fn send_help(
-    bot: &Bot,
-    chat_id: ChatId,
-    telegram_user_id: TelegramUserId,
-    services: &BotServices,
-    timezone: &BotTimezone,
-) -> HandlerResult {
+pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
+    let services = &deps.context.services;
+    let timezone = &deps.context.timezone;
     let role = match services
         .users
         .find_by_telegram_user_id(telegram_user_id)
@@ -136,13 +129,9 @@ fn optional_stat<T>(result: AppResult<T>, statistic: &'static str) -> Option<T> 
     }
 }
 
-pub(super) async fn show_home(
-    bot: &Bot,
-    chat_id: ChatId,
-    actor: TelegramUserId,
-    services: &BotServices,
-    dialogue: &BotDialogue,
-) -> HandlerResult {
+pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
+    let services = &deps.context.services;
     match services.users.find_by_telegram_user_id(actor).await {
         Ok(registered) => {
             let role = registered.user.role();
@@ -180,7 +169,7 @@ pub(super) async fn show_home(
                 .await?;
         }
         Err(error) if error.code() == ErrorCode::NotFound => {
-            open_guest(bot, chat_id, dialogue).await?;
+            open_guest(chat).await?;
         }
         Err(error) => return Err(error.into()),
     }

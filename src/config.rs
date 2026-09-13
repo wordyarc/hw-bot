@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -34,8 +35,8 @@ pub struct AppInfoConfig {
 pub struct ServerConfig {
     #[serde(deserialize_with = "deserialize_loopback_ip")]
     pub host: IpAddr,
-    pub port: u16,
-    pub request_timeout_ms: u64,
+    pub port: NonZeroU16,
+    pub request_timeout_ms: NonZeroU64,
 }
 
 fn deserialize_loopback_ip<'de, D>(deserializer: D) -> Result<IpAddr, D::Error>
@@ -56,9 +57,9 @@ where
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     pub url: String,
-    pub max_connections: u32,
-    pub acquire_timeout_ms: u64,
-    pub statement_timeout_ms: u64,
+    pub max_connections: NonZeroU32,
+    pub acquire_timeout_ms: NonZeroU64,
+    pub statement_timeout_ms: NonZeroU64,
     pub run_migrations: bool,
     pub run_bootstrap: bool,
     pub bootstrap_file: PathBuf,
@@ -80,11 +81,11 @@ pub struct LoggingConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilesConfig {
-    pub max_file_size_bytes: u64,
-    pub max_files_per_assignment: usize,
-    pub max_files_per_submission: usize,
-    pub transfer_timeout_ms: u64,
-    pub max_concurrent_transfers: usize,
+    pub max_file_size_bytes: NonZeroU64,
+    pub max_files_per_assignment: NonZeroUsize,
+    pub max_files_per_submission: NonZeroUsize,
+    pub transfer_timeout_ms: NonZeroU64,
+    pub max_concurrent_transfers: NonZeroUsize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -118,12 +119,12 @@ pub struct TelegramConfig {
     pub enabled: bool,
     pub api_base_url: String,
     pub bot_token: Option<String>,
-    pub request_timeout_ms: u64,
-    pub polling_timeout_ms: u64,
-    pub rate_limit_burst: u32,
-    pub rate_limit_replenish_ms: u64,
-    pub max_concurrent_updates: usize,
-    pub shutdown_grace_ms: u64,
+    pub request_timeout_ms: NonZeroU64,
+    pub polling_timeout_ms: NonZeroU64,
+    pub rate_limit_burst: NonZeroU32,
+    pub rate_limit_replenish_ms: NonZeroU64,
+    pub max_concurrent_updates: NonZeroUsize,
+    pub shutdown_grace_ms: NonZeroU64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -144,12 +145,12 @@ fn deserialize_signing_secret<'de, D: Deserializer<'de>>(
 #[serde(deny_unknown_fields)]
 pub struct NotificationWorkerConfig {
     pub enabled: bool,
-    pub poll_interval_ms: u64,
-    pub lease_duration_ms: u64,
-    pub max_attempts: u32,
-    pub retry_initial_ms: u64,
-    pub retry_max_ms: u64,
-    pub shutdown_grace_ms: u64,
+    pub poll_interval_ms: NonZeroU64,
+    pub lease_duration_ms: NonZeroU64,
+    pub max_attempts: NonZeroU32,
+    pub retry_initial_ms: NonZeroU64,
+    pub retry_max_ms: NonZeroU64,
+    pub shutdown_grace_ms: NonZeroU64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -174,7 +175,8 @@ impl AppConfig {
             self.server
                 .request_timeout_ms
                 .max(self.telegram.shutdown_grace_ms)
-                .max(self.notification_worker.shutdown_grace_ms),
+                .max(self.notification_worker.shutdown_grace_ms)
+                .get(),
         )
     }
 
@@ -193,23 +195,9 @@ impl AppConfig {
 
     pub fn validate(self) -> Result<ValidatedAppConfig, ConfigValidationError> {
         validate_non_empty("app.name", &self.app.name)?;
-        validate(self.server.port != 0, "server.port must be positive")?;
-        validate_positive("server.request_timeout_ms", self.server.request_timeout_ms)?;
 
         sqlx::postgres::PgConnectOptions::from_str(&self.database.url)
             .map_err(|_| invalid("database.url must be a valid PostgreSQL URL"))?;
-        validate(
-            self.database.max_connections > 0,
-            "database.max_connections must be positive",
-        )?;
-        validate_positive(
-            "database.acquire_timeout_ms",
-            self.database.acquire_timeout_ms,
-        )?;
-        validate_positive(
-            "database.statement_timeout_ms",
-            self.database.statement_timeout_ms,
-        )?;
 
         tracing_subscriber::EnvFilter::try_new(&self.logging.level)
             .map_err(|_| invalid("logging.level contains an invalid filter directive"))?;
@@ -242,20 +230,6 @@ pub struct ValidatedAppConfig {
     raw: AppConfig,
 }
 
-impl ValidatedAppConfig {
-    pub fn utc_offset(&self) -> FixedOffset {
-        self.ui.utc_offset
-    }
-
-    pub fn deadline_time(&self) -> NaiveTime {
-        self.ui.deadline_time
-    }
-
-    pub fn invite_signing_secret(&self) -> &InviteSigningSecret {
-        &self.group_invites.invite_signing_secret
-    }
-}
-
 impl std::ops::Deref for ValidatedAppConfig {
     type Target = AppConfig;
 
@@ -272,38 +246,21 @@ pub struct ConfigValidationError {
 
 fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
     validate(
-        config.max_file_size_bytes > 0,
-        "files.max_file_size_bytes must be positive",
-    )?;
-    validate(
-        config.max_file_size_bytes <= i64::MAX as u64,
+        config.max_file_size_bytes.get() <= i64::MAX as u64,
         "files.max_file_size_bytes is too large",
     )?;
     validate(
-        config.max_files_per_assignment > 0,
-        "files.max_files_per_assignment must be positive",
-    )?;
-    validate(
-        config.max_files_per_assignment <= 10,
+        config.max_files_per_assignment.get() <= 10,
         "files.max_files_per_assignment must not exceed 10",
     )?;
     validate(
-        config.max_files_per_submission > 0,
-        "files.max_files_per_submission must be positive",
-    )?;
-    validate_positive("files.transfer_timeout_ms", config.transfer_timeout_ms)?;
-    validate(
-        config.max_concurrent_transfers > 0,
-        "files.max_concurrent_transfers must be positive",
-    )?;
-    validate(
-        config.max_concurrent_transfers <= tokio::sync::Semaphore::MAX_PERMITS,
+        config.max_concurrent_transfers.get() <= tokio::sync::Semaphore::MAX_PERMITS,
         "files.max_concurrent_transfers is too large",
     )?;
 
-    let size = usize::try_from(config.max_file_size_bytes)
+    let size = usize::try_from(config.max_file_size_bytes.get())
         .map_err(|_| invalid("files.max_file_size_bytes does not fit this platform"))?;
-    size.checked_mul(config.max_concurrent_transfers)
+    size.checked_mul(config.max_concurrent_transfers.get())
         .ok_or_else(|| invalid("total concurrent file transfer size is too large"))?;
     Ok(())
 }
@@ -315,54 +272,24 @@ fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationErro
         matches!(url.scheme(), "http" | "https"),
         "telegram.api_base_url must use HTTP or HTTPS",
     )?;
-    validate_positive("telegram.request_timeout_ms", config.request_timeout_ms)?;
     validate(
-        config.polling_timeout_ms >= 1000 && config.polling_timeout_ms.is_multiple_of(1000),
+        config.polling_timeout_ms.get().is_multiple_of(1000),
         "telegram.polling_timeout_ms must use whole seconds",
     )?;
     validate(
-        config.polling_timeout_ms / 1000 <= u64::from(u32::MAX),
+        config.polling_timeout_ms.get() / 1000 <= u64::from(u32::MAX),
         "telegram.polling_timeout_ms is too large",
     )?;
     validate(
-        config.rate_limit_burst > 0,
-        "telegram.rate_limit_burst must be positive",
-    )?;
-    validate_positive(
-        "telegram.rate_limit_replenish_ms",
-        config.rate_limit_replenish_ms,
-    )?;
-    validate(
-        (1..=MAX_CONCURRENT_UPDATES).contains(&config.max_concurrent_updates),
-        format!("telegram.max_concurrent_updates must be between 1 and {MAX_CONCURRENT_UPDATES}"),
-    )?;
-    validate_positive("telegram.shutdown_grace_ms", config.shutdown_grace_ms)
+        config.max_concurrent_updates.get() <= MAX_CONCURRENT_UPDATES,
+        format!("telegram.max_concurrent_updates must not exceed {MAX_CONCURRENT_UPDATES}"),
+    )
 }
 
 fn validate_worker(config: &NotificationWorkerConfig) -> Result<(), ConfigValidationError> {
-    validate_positive(
-        "notification_worker.poll_interval_ms",
-        config.poll_interval_ms,
-    )?;
-    validate_positive(
-        "notification_worker.lease_duration_ms",
-        config.lease_duration_ms,
-    )?;
-    validate(
-        config.max_attempts > 0,
-        "notification_worker.max_attempts must be positive",
-    )?;
-    validate_positive(
-        "notification_worker.retry_initial_ms",
-        config.retry_initial_ms,
-    )?;
     validate(
         config.retry_max_ms >= config.retry_initial_ms,
         "notification_worker.retry_max_ms must not be less than retry_initial_ms",
-    )?;
-    validate_positive(
-        "notification_worker.shutdown_grace_ms",
-        config.shutdown_grace_ms,
     )
 }
 
@@ -370,29 +297,26 @@ fn validate_limit_coherence(config: &AppConfig) -> Result<(), ConfigValidationEr
     let database_round_trip = config
         .database
         .acquire_timeout_ms
-        .saturating_add(config.database.statement_timeout_ms);
+        .get()
+        .saturating_add(config.database.statement_timeout_ms.get());
 
     validate(
-        config.server.request_timeout_ms >= database_round_trip,
+        config.server.request_timeout_ms.get() >= database_round_trip,
         "server.request_timeout_ms must cover database.acquire_timeout_ms + \
          database.statement_timeout_ms",
     )?;
     validate(
-        config.notification_worker.lease_duration_ms
+        config.notification_worker.lease_duration_ms.get()
             >= database_round_trip
                 .saturating_mul(2)
-                .saturating_add(config.telegram.request_timeout_ms),
+                .saturating_add(config.telegram.request_timeout_ms.get()),
         "notification_worker.lease_duration_ms must cover 2 * (database.acquire_timeout_ms + \
          database.statement_timeout_ms) + telegram.request_timeout_ms",
     )?;
     validate(
-        Duration::from_millis(config.files.transfer_timeout_ms) <= config.shutdown_grace(),
+        Duration::from_millis(config.files.transfer_timeout_ms.get()) <= config.shutdown_grace(),
         "files.transfer_timeout_ms must not exceed the effective shutdown grace",
     )
-}
-
-fn validate_positive(field: &'static str, value: u64) -> Result<(), ConfigValidationError> {
-    validate(value > 0, format!("{field} must be positive"))
 }
 
 fn validate_non_empty(field: &'static str, value: &str) -> Result<(), ConfigValidationError> {
@@ -490,15 +414,15 @@ mod tests {
 
         assert_eq!(config.app.name, "hw-bot");
         assert_eq!(config.server.host, "127.0.0.1".parse::<IpAddr>().unwrap());
-        assert_eq!(config.server.port, 3000);
-        assert_eq!(config.server.request_timeout_ms, 10000);
+        assert_eq!(config.server.port.get(), 3000);
+        assert_eq!(config.server.request_timeout_ms.get(), 10000);
         assert_eq!(
             config.database.url,
             "postgres://postgres:postgres@localhost:5432/hw-bot"
         );
-        assert_eq!(config.database.max_connections, 5);
-        assert_eq!(config.database.acquire_timeout_ms, 3000);
-        assert_eq!(config.database.statement_timeout_ms, 5000);
+        assert_eq!(config.database.max_connections.get(), 5);
+        assert_eq!(config.database.acquire_timeout_ms.get(), 3000);
+        assert_eq!(config.database.statement_timeout_ms.get(), 5000);
         assert!(config.database.run_migrations);
         assert!(!config.database.run_bootstrap);
         assert_eq!(
@@ -516,11 +440,11 @@ mod tests {
         assert_eq!(config.logging.file_suffix, "log");
         assert!(matches!(config.logging.rotation, LogRotation::Daily));
         assert!(config.logging.also_stdout);
-        assert_eq!(config.files.max_file_size_bytes, 5_242_880);
-        assert_eq!(config.files.max_files_per_assignment, 5);
-        assert_eq!(config.files.max_files_per_submission, 1);
-        assert_eq!(config.files.transfer_timeout_ms, 20_000);
-        assert_eq!(config.files.max_concurrent_transfers, 4);
+        assert_eq!(config.files.max_file_size_bytes.get(), 5_242_880);
+        assert_eq!(config.files.max_files_per_assignment.get(), 5);
+        assert_eq!(config.files.max_files_per_submission.get(), 1);
+        assert_eq!(config.files.transfer_timeout_ms.get(), 20_000);
+        assert_eq!(config.files.max_concurrent_transfers.get(), 4);
         assert_eq!(
             config.ui.utc_offset,
             FixedOffset::east_opt(10 * 3600).unwrap()
@@ -532,13 +456,13 @@ mod tests {
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
         assert!(!config.telegram.enabled);
-        assert_eq!(config.telegram.polling_timeout_ms, 10000);
-        assert_eq!(config.telegram.rate_limit_burst, 8);
-        assert_eq!(config.telegram.rate_limit_replenish_ms, 1000);
-        assert_eq!(config.telegram.max_concurrent_updates, 32);
-        assert_eq!(config.telegram.shutdown_grace_ms, 20000);
+        assert_eq!(config.telegram.polling_timeout_ms.get(), 10000);
+        assert_eq!(config.telegram.rate_limit_burst.get(), 8);
+        assert_eq!(config.telegram.rate_limit_replenish_ms.get(), 1000);
+        assert_eq!(config.telegram.max_concurrent_updates.get(), 32);
+        assert_eq!(config.telegram.shutdown_grace_ms.get(), 20000);
         assert!(!config.notification_worker.enabled);
-        assert_eq!(config.notification_worker.max_attempts, 10);
+        assert_eq!(config.notification_worker.max_attempts.get(), 10);
         assert!(config.validate().is_ok());
     }
 
@@ -653,21 +577,53 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_zero_database_connections() {
-        let mut config = app_config();
-        config.database.max_connections = 0;
-
-        let error = config.validate().err().expect("config must be rejected");
-
-        assert!(error.to_string().contains("database.max_connections"));
+    fn deserialization_rejects_zero_limits_with_the_field_name() {
+        for field in [
+            "server.port",
+            "server.request_timeout_ms",
+            "database.max_connections",
+            "database.acquire_timeout_ms",
+            "database.statement_timeout_ms",
+            "files.max_file_size_bytes",
+            "files.max_files_per_assignment",
+            "files.max_files_per_submission",
+            "files.transfer_timeout_ms",
+            "files.max_concurrent_transfers",
+            "telegram.request_timeout_ms",
+            "telegram.polling_timeout_ms",
+            "telegram.rate_limit_burst",
+            "telegram.rate_limit_replenish_ms",
+            "telegram.max_concurrent_updates",
+            "telegram.shutdown_grace_ms",
+            "notification_worker.poll_interval_ms",
+            "notification_worker.lease_duration_ms",
+            "notification_worker.max_attempts",
+            "notification_worker.retry_initial_ms",
+            "notification_worker.retry_max_ms",
+            "notification_worker.shutdown_grace_ms",
+        ] {
+            let error = config_builder()
+                .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+                .unwrap()
+                .set_override(field, 0)
+                .unwrap()
+                .build()
+                .unwrap()
+                .try_deserialize::<AppConfig>()
+                .err()
+                .expect("zero must be rejected")
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+            assert!(error.contains("nonzero"), "{field}: {error}");
+        }
     }
 
     #[test]
     fn the_effective_shutdown_grace_is_the_largest_contribution() {
         let mut config = app_config();
-        config.server.request_timeout_ms = 1000;
-        config.telegram.shutdown_grace_ms = 7000;
-        config.notification_worker.shutdown_grace_ms = 3000;
+        config.server.request_timeout_ms = NonZeroU64::new(1000).unwrap();
+        config.telegram.shutdown_grace_ms = NonZeroU64::new(7000).unwrap();
+        config.notification_worker.shutdown_grace_ms = NonZeroU64::new(3000).unwrap();
 
         assert_eq!(config.shutdown_grace(), Duration::from_millis(7000));
     }
@@ -682,7 +638,7 @@ mod tests {
     #[test]
     fn validation_rejects_a_request_timeout_shorter_than_one_database_round_trip() {
         let mut config = app_config();
-        config.database.statement_timeout_ms = 10_000;
+        config.database.statement_timeout_ms = NonZeroU64::new(10_000).unwrap();
 
         let error = config.validate().err().expect("config must be rejected");
 
@@ -695,9 +651,9 @@ mod tests {
     #[test]
     fn validation_rejects_a_lease_shorter_than_one_delivery() {
         let mut config = app_config();
-        config.database.statement_timeout_ms = 10_000;
+        config.database.statement_timeout_ms = NonZeroU64::new(10_000).unwrap();
         // Иначе первым сработает правило про HTTP-timeout, и тест проверит не то правило.
-        config.server.request_timeout_ms = 30_000;
+        config.server.request_timeout_ms = NonZeroU64::new(30_000).unwrap();
 
         let error = config.validate().err().expect("config must be rejected");
 
@@ -712,16 +668,17 @@ mod tests {
     #[test]
     fn lease_covers_both_database_trips_even_when_each_trip_fits() {
         let mut config = app_config();
-        config.notification_worker.lease_duration_ms = 13_000;
+        config.notification_worker.lease_duration_ms = NonZeroU64::new(13_000).unwrap();
         assert!(config.clone().validate().is_err());
-        config.notification_worker.lease_duration_ms = 21_000;
+        config.notification_worker.lease_duration_ms = NonZeroU64::new(21_000).unwrap();
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn validation_rejects_a_file_transfer_timeout_beyond_the_shutdown_grace() {
         let mut config = app_config();
-        config.files.transfer_timeout_ms = config.shutdown_grace().as_millis() as u64 + 1;
+        config.files.transfer_timeout_ms =
+            NonZeroU64::new(config.shutdown_grace().as_millis() as u64 + 1).unwrap();
 
         let error = config.validate().err().expect("config must be rejected");
 

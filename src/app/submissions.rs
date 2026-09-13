@@ -66,7 +66,7 @@ impl SubmissionService {
         let student = load_student(&self.pool, actor, "read own review queue").await?;
 
         Ok(Page::from_rows(
-            db::submissions::pending_queue_places(&self.pool, student.id(), page, None).await?,
+            db::submissions::pending_queue_page(&self.pool, student.id(), page).await?,
             page,
         ))
     }
@@ -77,14 +77,6 @@ impl SubmissionService {
         assignment_id: AssignmentId,
     ) -> AppResult<Option<QueuePlace>> {
         let student = load_student(&self.pool, actor, "read own review queue").await?;
-        Ok(db::submissions::pending_queue_places(
-            &self.pool,
-            student.id(),
-            PageRequest::default(),
-            Some(assignment_id),
-        )
-        .await?
-        .into_iter()
-        .next())
+        Ok(db::submissions::queue_place_for(&self.pool, student.id(), assignment_id).await?)
     }
 }

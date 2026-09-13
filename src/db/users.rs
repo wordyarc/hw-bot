@@ -120,7 +120,7 @@ where
         "#,
         assignment_id.as_uuid(),
         student_group_id.as_uuid(),
-        page.fetch_limit(),
+        PageRequest::FETCH_LIMIT,
         page.offset(),
     )
     .fetch_all(executor)
@@ -157,7 +157,7 @@ pub async fn list_student_names<'e, E: PgExecutor<'e>>(
 ) -> DbResult<Vec<CourseStudent>> {
     Ok(sqlx::query!(
         "select id, display_name from users where student_group_id = $1 and role = 'student' order by display_name, id limit $2 offset $3",
-        group_id.as_uuid(), page.fetch_limit(), page.offset(),
+        group_id.as_uuid(), PageRequest::FETCH_LIMIT, page.offset(),
     ).fetch_all(executor).await?.into_iter().map(|row| CourseStudent {
         student_id: UserId::from_uuid(row.id), display_name: row.display_name,
     }).collect())

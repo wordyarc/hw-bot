@@ -374,22 +374,14 @@ impl Assignment {
         new_deadline_at: DateTime<Utc>,
         late_policy: Option<LatePolicy>,
     ) -> DomainResult<()> {
-        self.ensure_managed_by(teaching_course, actor, "change assignment deadline")?;
-
-        if self.status == AssignmentStatus::Archived {
-            return Err(DomainError::AssignmentIsArchived);
-        }
-
-        if new_deadline_at <= self.created_at {
-            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
-        }
-
-        if late_policy.is_some() && !self.grading.is_scored() {
-            return Err(DomainError::LatePolicyRequiresScoredGrading);
-        }
-        if let Some(policy) = late_policy {
-            policy.validate_horizon(new_deadline_at)?;
-        }
+        self.ensure_terms_change(
+            teaching_course,
+            actor,
+            "change assignment deadline",
+            self.grading,
+            late_policy,
+            new_deadline_at,
+        )?;
         self.late_policy = late_policy;
         self.deadline_at = new_deadline_at;
 
@@ -403,10 +395,37 @@ impl Assignment {
         grading: Grading,
         late_policy: Option<LatePolicy>,
     ) -> DomainResult<()> {
-        self.ensure_managed_by(teaching_course, actor, "change assignment grading")?;
+        self.ensure_terms_change(
+            teaching_course,
+            actor,
+            "change assignment grading",
+            grading,
+            late_policy,
+            self.deadline_at,
+        )?;
+        self.grading = grading;
+        self.late_policy = late_policy;
+
+        Ok(())
+    }
+
+    fn ensure_terms_change(
+        &self,
+        teaching_course: &TeachingCourse,
+        actor: &User,
+        action: &'static str,
+        grading: Grading,
+        late_policy: Option<LatePolicy>,
+        deadline_at: DateTime<Utc>,
+    ) -> DomainResult<()> {
+        self.ensure_managed_by(teaching_course, actor, action)?;
 
         if self.status == AssignmentStatus::Archived {
             return Err(DomainError::AssignmentIsArchived);
+        }
+
+        if deadline_at <= self.created_at {
+            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
 
         if late_policy.is_some() && !grading.is_scored() {
@@ -414,10 +433,8 @@ impl Assignment {
         }
 
         if let Some(policy) = late_policy {
-            policy.validate_horizon(self.deadline_at)?;
+            policy.validate_horizon(deadline_at)?;
         }
-        self.grading = grading;
-        self.late_policy = late_policy;
 
         Ok(())
     }

@@ -9,6 +9,9 @@ use crate::domain::DomainError;
 
 const INTERNAL_MESSAGE: &str = "internal server error";
 
+#[derive(Clone, Copy)]
+pub(super) struct ApiErrorResponse;
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -53,7 +56,9 @@ impl IntoResponse for ApiError {
             },
         };
 
-        (self.status, Json(body)).into_response()
+        let mut response = (self.status, Json(body)).into_response();
+        response.extensions_mut().insert(ApiErrorResponse);
+        response
     }
 }
 
@@ -108,6 +113,13 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
 
 impl From<JsonRejection> for ApiError {
     fn from(rejection: JsonRejection) -> Self {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            return Self::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_body_too_large",
+                "request body is too large",
+            );
+        }
         Self::new(
             rejection.status(),
             "invalid_request_body",

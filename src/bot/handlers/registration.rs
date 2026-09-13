@@ -1,40 +1,37 @@
-use crate::bot::Bot;
 use chrono::Utc;
-use teloxide::types::ChatId;
 
 use super::home::show_home;
 use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
 use crate::app::{ErrorCode, RegisterStudent};
-use crate::bot::context::{Deps, TextStep};
+use crate::bot::HandlerResult;
+use crate::bot::context::{Chat, Deps, TextStep};
 use crate::bot::errors::send_error_code;
-use crate::bot::invites::BotInvites;
-use crate::bot::state::{BotDialogue, BotState, FlowState};
+use crate::bot::state::{BotState, FlowState};
 use crate::bot::views::ask_input;
-use crate::bot::{BotServices, HandlerResult};
 use crate::domain::{DISPLAY_NAME_MAX_LEN, TelegramUserId};
 use crate::invites::VerifiedInvite;
 
 pub(super) async fn start_registration(
-    bot: &Bot,
-    chat_id: ChatId,
+    chat: Chat<'_>,
     telegram_user_id: TelegramUserId,
     payload: &str,
-    services: &BotServices,
-    dialogue: &BotDialogue,
-    invites: &BotInvites,
 ) -> HandlerResult {
+    let Chat { bot, chat_id, deps } = chat;
+    let Deps { context, dialogue } = deps;
+    let services = &context.services;
+    let invites = &context.invites;
     match services
         .users
         .find_by_telegram_user_id(telegram_user_id)
         .await
     {
-        Ok(_) => return show_home(bot, chat_id, telegram_user_id, services, dialogue).await,
+        Ok(_) => return show_home(chat, telegram_user_id).await,
         Err(error) if error.code() == ErrorCode::NotFound => {}
         Err(error) => return Err(error.into()),
     }
     if payload.is_empty() {
-        return super::home::open_guest(bot, chat_id, dialogue).await;
+        return super::home::open_guest(chat).await;
     }
     // Битая подпись и отозванная ссылка обязаны выглядеть для гостя одинаково.
     let Ok(invite) = invites.decode(payload) else {
@@ -91,7 +88,7 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
     reset_dialogue(dialogue).await?;
     bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
         .await?;
-    show_home(bot, message.chat.id, telegram_user_id, services, dialogue).await?;
+    show_home(step.chat(), telegram_user_id).await?;
 
     Ok(())
 }

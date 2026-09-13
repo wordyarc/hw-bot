@@ -42,14 +42,6 @@ impl Supervisor {
         self.tasks.spawn(async move { (task, future.await) });
     }
 
-    pub async fn run<S>(self, shutdown_signal: S) -> anyhow::Result<()>
-    where
-        S: Future<Output = anyhow::Result<()>> + Send,
-    {
-        self.run_with_cleanup(shutdown_signal, async { Ok(()) })
-            .await
-    }
-
     pub async fn run_with_cleanup<S, C>(
         mut self,
         shutdown_signal: S,
@@ -121,7 +113,10 @@ mod tests {
             Ok(())
         });
 
-        supervisor.run(async { Ok(()) }).await.unwrap();
+        supervisor
+            .run_with_cleanup(async { Ok(()) }, async { Ok(()) })
+            .await
+            .unwrap();
         assert!(cancellation.is_cancelled());
     }
 
@@ -135,7 +130,10 @@ mod tests {
         );
         supervisor.spawn(CriticalTask::TelegramBot, async { Ok(()) });
 
-        let error = supervisor.run(std::future::pending()).await.unwrap_err();
+        let error = supervisor
+            .run_with_cleanup(std::future::pending(), async { Ok(()) })
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("stopped unexpectedly"));
     }
 

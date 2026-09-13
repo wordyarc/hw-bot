@@ -10,16 +10,14 @@ pub struct PageRequest {
 }
 
 impl PageRequest {
+    pub const FETCH_LIMIT: i64 = PAGE_SIZE as i64 + 1;
+
     pub const fn new(page: u32) -> Self {
         Self { page }
     }
 
     pub fn offset(self) -> i64 {
         i64::from(self.page) * PAGE_SIZE as i64
-    }
-
-    pub fn fetch_limit(self) -> i64 {
-        PAGE_SIZE as i64 + 1
     }
 }
 

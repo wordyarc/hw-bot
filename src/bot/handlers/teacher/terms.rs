@@ -7,7 +7,7 @@ use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, TermsAction};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::handlers::input::{parse_number, require_text};
-use crate::bot::handlers::{reset_dialogue, resolve_actor, run_menu_action};
+use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{AssignmentTerms, BotState, FlowState, TermsForm, TermsStep, TermsTarget};
 use crate::bot::views::{MenuAction, teacher_keyboard, terms_form_view};
 use crate::bot::{Bot, HandlerResult, assignment_files, texts};
@@ -317,18 +317,9 @@ pub(in crate::bot::handlers) async fn submit_terms(
     let Some(text) = require_text(step.bot, step.message).await? else {
         return Ok(());
     };
-    let Some(actor) = resolve_actor(
-        step.bot,
-        step.message.chat.id,
-        step.telegram_user_id,
-        &step.deps.context.services,
-        step.deps.dialogue,
-    )
-    .await?
-    else {
+    let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
-    let screen = step.screen(actor);
     if !matches!(
         form.step,
         TermsStep::Deadline
@@ -413,14 +404,7 @@ pub(in crate::bot::handlers) async fn handle_terms(
             TermsAction::Exit => {
                 abandon(screen.bot, screen.chat_id, &form).await?;
                 reset_dialogue(screen.dialogue).await?;
-                run_menu_action(
-                    screen.bot,
-                    screen.chat_id,
-                    telegram_user_id,
-                    menu,
-                    screen.deps(),
-                )
-                .await
+                run_menu_action(screen.chat(), telegram_user_id, menu).await
             }
             _ => screen.stale().await,
         };
