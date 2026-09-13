@@ -62,11 +62,11 @@ impl From<&Submission> for SubmissionResponse {
 pub async fn submit_homework(
     State(state): State<AppState>,
     actor: Actor,
-    Path(assignment_id): Path<Uuid>,
+    Path(assignment_id): Path<AssignmentId>,
     JsonBody(request): JsonBody<SubmitHomeworkRequest>,
 ) -> Result<(StatusCode, Json<SubmissionResponse>), ApiError> {
     let command = SubmitHomework {
-        assignment_id: AssignmentId::from_uuid(assignment_id),
+        assignment_id,
         actor,
         content: request.content,
         submitted_at: Utc::now(),

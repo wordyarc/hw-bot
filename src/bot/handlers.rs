@@ -144,10 +144,15 @@ pub(super) async fn handle_command(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Зависимости endpoint инъецирует Teloxide"
+)]
 pub(super) async fn handle_message(
     bot: Bot,
     message: Message,
     dialogue: BotDialogue,
+    state: BotState,
     services: BotServices,
     transfers: super::FileTransfers,
     timezone: BotTimezone,
@@ -159,7 +164,6 @@ pub(super) async fn handle_message(
     }
 
     let actor = actor_from_message(&message)?;
-    let state = dialogue.get().await?.unwrap_or_default();
     let deps = Deps {
         services: &services,
         dialogue: &dialogue,
@@ -176,15 +180,6 @@ pub(super) async fn handle_message(
     if let Some(action) = message.text().and_then(menu_action) {
         reset_dialogue(&dialogue).await?;
         return run_menu_action(&bot, message.chat.id, actor, action, deps).await;
-    }
-
-    if matches!(
-        state,
-        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. })
-            | BotState::Flow(FlowState::AwaitingAssignmentFile { .. })
-            | BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. })
-    ) {
-        return assignment_files::handle_message(step, &state, &transfers).await;
     }
 
     match state {
@@ -225,9 +220,31 @@ pub(super) async fn handle_message(
             bot.send_message(message.chat.id, "Выберите действие кнопкой выше.")
                 .await?;
         }
-        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. })
-        | BotState::Flow(FlowState::AwaitingAssignmentFile { .. })
-        | BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => unreachable!(),
+        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
+            bot.send_message(
+                message.chat.id,
+                "Выберите действие кнопкой под списком вложений.",
+            )
+            .await?;
+        }
+        BotState::Flow(FlowState::AwaitingAssignmentFile {
+            assignment_id,
+            expected_revision,
+            creation_flow,
+        }) => {
+            assignment_files::submit_file(
+                step,
+                assignment_id,
+                expected_revision,
+                creation_flow,
+                &transfers,
+            )
+            .await?;
+        }
+        BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
+            bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
+                .await?;
+        }
         BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id }) => {
             teacher::submit_title(step, course_id).await?;
         }
@@ -251,7 +268,6 @@ pub(super) async fn handle_message(
             teacher::submit_late_policy_text(step, draft).await?;
         }
         BotState::Flow(FlowState::ChoosingDeadline { target, .. })
-        | BotState::Flow(FlowState::PickingDeadlineDate { target, .. })
         | BotState::Flow(FlowState::AwaitingDeadlineText { target }) => {
             teacher::submit_deadline_text(step, target).await?;
         }
@@ -299,10 +315,15 @@ async fn run_menu_action(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Зависимости endpoint инъецирует Teloxide"
+)]
 pub(super) async fn handle_callback(
     bot: Bot,
     query: CallbackQuery,
     dialogue: BotDialogue,
+    state: BotState,
     services: BotServices,
     transfers: super::FileTransfers,
     timezone: BotTimezone,
@@ -340,7 +361,6 @@ pub(super) async fn handle_callback(
     if query.data.is_none() {
         return Ok(());
     }
-    let state = dialogue.get().await?.unwrap_or_default();
     let Some(action) = action else {
         send_stale_button(&bot, chat_id).await?;
         return Ok(());
@@ -461,12 +481,23 @@ async fn handle_screen_action(
         ScreenAction::DeleteFile(index) => {
             assignment_files::request_deletion(screen, message_id, &state, index).await
         }
-        ScreenAction::FinishFileCreation
-        | ScreenAction::Publish(_)
-        | ScreenAction::Archive(_)
-        | ScreenAction::ChangeDeadline(_)
-        | ScreenAction::RotateGroupInvite => {
-            teacher::handle_screen_action(screen, message_id, action, state).await
+        ScreenAction::FinishFileCreation => {
+            let Some((assignment_id, _, true)) = state.managing_assignment_files(message_id) else {
+                return send_stale_button(screen.bot, screen.chat_id).await;
+            };
+            teacher::show_assignment(screen, assignment_id).await
+        }
+        ScreenAction::Publish(id) => {
+            teacher::publish_assignment(screen, message_id, id, &state).await
+        }
+        ScreenAction::Archive(id) => {
+            teacher::archive_assignment(screen, message_id, id, &state).await
+        }
+        ScreenAction::ChangeDeadline(id) => {
+            teacher::ask_assignment_deadline(screen, message_id, id, &state).await
+        }
+        ScreenAction::RotateGroupInvite => {
+            teacher::ask_invite_rotation(screen, message_id, &state).await
         }
     }
 }
@@ -514,8 +545,11 @@ async fn handle_flow_action(
         FlowAction::ExtraAttempts(choice) => {
             teacher::handle_extra_attempts(screen, message_id, choice, state).await?;
         }
-        FlowAction::ConfirmInviteRotation | FlowAction::CancelInviteRotation => {
-            teacher::handle_invite_rotation(screen, message_id, action, state).await?;
+        FlowAction::ConfirmInviteRotation => {
+            teacher::confirm_invite_rotation(screen, message_id, &state).await?;
+        }
+        FlowAction::CancelInviteRotation => {
+            teacher::cancel_invite_rotation(screen, message_id, &state).await?;
         }
     }
 

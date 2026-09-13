@@ -5,12 +5,11 @@ use crate::app::{ErrorCode, GroupInviteState};
 use crate::domain::TeachingCourseId;
 
 use crate::bot::HandlerResult;
-use crate::bot::callbacks::FlowAction;
 use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
-use crate::bot::state::{BotState, ScreenState};
-use crate::bot::views::group_invite_keyboard;
+use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::views::send_stale_button;
+use crate::bot::views::{confirm_invite_rotation_keyboard, group_invite_keyboard};
 
 pub(in crate::bot::handlers) async fn show_group_invite(
     screen: Screen<'_>,
@@ -71,11 +70,54 @@ async fn send_group_invite(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn handle_invite_rotation(
+pub(in crate::bot::handlers) async fn ask_invite_rotation(
     screen: Screen<'_>,
     message_id: MessageId,
-    action: FlowAction,
-    state: BotState,
+    state: &BotState,
+) -> HandlerResult {
+    let Some((course_id, generation)) = state.group_invite(message_id) else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    let sent = screen
+        .bot
+        .send_message(
+            screen.chat_id,
+            "Перевыпустить ссылку? Прежняя сразу перестанет работать — в том числе у \
+             других курсов этой же группы. Уже зарегистрированных студентов это не \
+             затрагивает.",
+        )
+        .reply_markup(confirm_invite_rotation_keyboard())
+        .await?;
+    screen
+        .dialogue
+        .update(BotState::Flow(FlowState::ConfirmingInviteRotation {
+            message_id: sent.id,
+            course_id,
+            generation,
+        }))
+        .await?;
+    Ok(())
+}
+
+pub(in crate::bot::handlers) async fn cancel_invite_rotation(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
+) -> HandlerResult {
+    let Some((course_id, _)) = state.confirming_invite_rotation(message_id) else {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    };
+    screen
+        .bot
+        .edit_message_reply_markup(screen.chat_id, message_id)
+        .await?;
+    show_group_invite(screen, course_id).await
+}
+
+pub(in crate::bot::handlers) async fn confirm_invite_rotation(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
 ) -> HandlerResult {
     let Some((course_id, generation)) = state.confirming_invite_rotation(message_id) else {
         return send_stale_button(screen.bot, screen.chat_id).await;
@@ -85,10 +127,6 @@ pub(in crate::bot::handlers) async fn handle_invite_rotation(
         .bot
         .edit_message_reply_markup(screen.chat_id, message_id)
         .await?;
-
-    if action == FlowAction::CancelInviteRotation {
-        return show_group_invite(screen, course_id).await;
-    }
 
     match screen
         .services

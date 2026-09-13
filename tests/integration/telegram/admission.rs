@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -259,35 +257,29 @@ async fn invalid_token_stops_the_telegram_bot() {
 }
 
 #[tokio::test]
-async fn cancellation_during_the_dispatcher_startup_request_stops_the_bot() {
+async fn startup_and_dispatcher_share_one_get_me_response() {
     let app = TestApp::start().await;
-    let telegram = MockServer::start().await;
-    mount_startup_mocks(&telegram).await;
-    let answered = Arc::new(AtomicUsize::new(0));
-    Mock::given(method("POST"))
-        .and(path("/bottest-token/GetMe"))
-        .respond_with(move |_: &wiremock::Request| {
-            let response = ResponseTemplate::new(200).set_body_json(telegram_me_body());
-            // Второй GetMe делает уже dispatcher: задерживаем его, чтобы отмена пришла ровно в
-            // окно между стартовым запросом бота и запуском dispatcher-а.
-            if answered.fetch_add(1, AtomicOrdering::Relaxed) == 0 {
-                response
-            } else {
-                response.set_delay(Duration::from_secs(5))
-            }
-        })
-        .mount(&telegram)
-        .await;
-    let (cancellation, task) = start_bot(&app, &telegram);
-
-    wait_for_request_count(&telegram, "/bottest-token/GetMe", 2).await;
-    cancellation.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(2), task)
-        .await
-        .expect("cancellation during startup stops the bot")
-        .expect("Telegram task does not panic");
-
-    result.expect("startup cancellation is not a failure");
+    let telegram =
+        telegram_server(vec![message_update(1, app.teacher(), 1, "/help@test_bot")]).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+    wait_for_request_count(&telegram, "/bottest-token/SendMessage", 1).await;
+    stop_bot(cancellation, &mut task).await;
+    let requests = telegram.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/bottest-token/GetMe")
+            .count(),
+        1
+    );
+    let help: serde_json::Value = requests
+        .iter()
+        .find(|request| request.url.path() == "/bottest-token/SendMessage")
+        .unwrap()
+        .body_json()
+        .unwrap();
+    assert!(help["text"].as_str().unwrap().starts_with('❓'));
+    telegram.verify().await;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, Months, Utc};
 use hw_bot::bot::{callbacks, texts};
 use serde_json::json;
 use wiremock::Mock;
@@ -8,6 +8,7 @@ use wiremock::matchers::{body_json, method, path};
 
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
+use crate::harness::telegram_scenario::TelegramScenario;
 
 #[tokio::test]
 async fn teacher_creates_a_draft_through_telegram() {
@@ -291,6 +292,103 @@ async fn teacher_picks_a_deadline_from_the_calendar() {
         requests.contains("EditMessageReplyMarkup"),
         "the calendar replaces the keyboard in place; requests:\n{requests}"
     );
+}
+
+async fn open_deadline_calendar(app: &TestApp, telegram: &TelegramScenario) {
+    let teacher = app.teacher();
+    telegram.message(teacher, "/courses");
+    telegram
+        .click_button(teacher, &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(teacher, &cb(callbacks::MANAGE_PREFIX, app.assignment()))
+        .await;
+    telegram
+        .click_button(teacher, &cb(callbacks::DEADLINE_PREFIX, app.assignment()))
+        .await;
+    telegram
+        .click_button(teacher, callbacks::DEADLINE_CALENDAR)
+        .await;
+}
+
+#[tokio::test]
+async fn calendar_month_navigation_keeps_deadline_selection_active() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_deadline_calendar(&app, &telegram).await;
+    let today = Utc::now()
+        .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
+        .date_naive();
+    let next_month = today
+        .with_day(1)
+        .unwrap()
+        .checked_add_months(Months::new(1))
+        .unwrap();
+    let month = telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::CALENDAR_MONTH_PREFIX, next_month.format("%Y-%m")),
+        )
+        .await;
+    let pick = telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::CALENDAR_PICK_PREFIX, next_month),
+        )
+        .await;
+    assert_eq!(month.message_id, pick.message_id);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let details = app
+        .get_as(
+            &format!("/me/assignments/{}", app.assignment()),
+            app.student(),
+        )
+        .await
+        .ok();
+    let actual: DateTime<Utc> =
+        serde_json::from_value(details["assignment"]["deadline_at"].clone()).unwrap();
+    assert_eq!(
+        actual,
+        expected_deadline(&format!("{} 23:59", next_month.format("%d.%m.%Y")))
+    );
+}
+
+#[tokio::test]
+async fn manual_deadline_input_invalidates_the_previous_inline_keyboard() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_deadline_calendar(&app, &telegram).await;
+    telegram
+        .click_button(app.teacher(), callbacks::DEADLINE_OPTIONS)
+        .await;
+    let preset = telegram
+        .button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::DEADLINE_MANUAL)
+        .await;
+    let route = format!("/me/assignments/{}", app.assignment());
+    let before = app.get_as(&route, app.student()).await.ok();
+    telegram.click(app.teacher(), &preset);
+    telegram.flush(app.teacher()).await;
+    let after = app.get_as(&route, app.student()).await.ok();
+    assert_eq!(
+        before["assignment"]["deadline_at"],
+        after["assignment"]["deadline_at"]
+    );
+
+    let input = deadline_input(Utc::now() + chrono::Duration::days(40));
+    telegram.message(app.teacher(), &input);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+    let details = app.get_as(&route, app.student()).await.ok();
+    let actual: DateTime<Utc> =
+        serde_json::from_value(details["assignment"]["deadline_at"].clone()).unwrap();
+    assert_eq!(actual, expected_deadline(&input));
 }
 
 #[tokio::test]

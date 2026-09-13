@@ -11,19 +11,19 @@ mod users;
 
 pub use actor::Actor;
 pub use assignments::{
-    AssignmentService, AssignmentStudentSummary, AssignmentSubmissionHistory, ChangeDeadline,
-    ChangeGrading, CreateAssignment, GrantExtraAttempts, StudentAssignment,
-    StudentAssignmentDetails,
+    AssignmentService, AssignmentSubmissionHistory, ChangeDeadline, ChangeGrading,
+    CreateAssignment, GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
-pub use courses::{
-    AssignmentGrade, CourseGradebook, CourseService, CourseStudent, GroupInviteState,
-    StudentGrades, TeachingCourseSummary,
-};
+pub use courses::{CourseGradebook, CourseService, GroupInviteState, StudentGrades};
 pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
 };
 pub use review::{ReviewQueueItem, ReviewService, ReviewSubmission};
-pub use submissions::{QueuePlace, SubmissionService, SubmitHomework};
+pub use submissions::{SubmissionService, SubmitHomework};
 pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService, UserStatistics};
+
+pub use crate::read_models::{
+    AssignmentGrade, AssignmentStudentSummary, CourseStudent, QueuePlace, TeachingCourseSummary,
+};

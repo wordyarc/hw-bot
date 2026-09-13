@@ -11,6 +11,7 @@ use crate::domain::{
     NewAssignment, StoredFileMetadata, StudentAssignmentProgress, Subject, Submission,
     SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
 };
+use crate::read_models::AssignmentStudentSummary;
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
@@ -67,21 +68,6 @@ pub struct AssignmentSubmissionHistory {
     pub subject_name: String,
     pub assignment_title: String,
     pub submissions: Page<Submission>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssignmentStudentSummary {
-    pub student: User,
-    pub history: SubmissionHistory,
-}
-
-impl From<db::users::AssignmentStudentCard> for AssignmentStudentSummary {
-    fn from(card: db::users::AssignmentStudentCard) -> Self {
-        Self {
-            student: card.student,
-            history: card.history,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -332,10 +318,7 @@ impl AssignmentService {
                 assignment.student_group_id(),
                 page,
             )
-            .await?
-            .into_iter()
-            .map(AssignmentStudentSummary::from)
-            .collect(),
+            .await?,
             page,
         ))
     }

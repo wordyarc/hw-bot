@@ -100,13 +100,13 @@ impl From<&StudentGrades> for StudentGradesResponse {
 pub async fn course_gradebook(
     State(state): State<AppState>,
     actor: Actor,
-    Path(course_id): Path<Uuid>,
+    Path(course_id): Path<TeachingCourseId>,
     Pagination(page): Pagination,
 ) -> Result<(HeaderMap, Json<CourseGradebookResponse>), ApiError> {
     let gradebook = state
         .application
         .courses
-        .gradebook(actor, TeachingCourseId::from_uuid(course_id), page)
+        .gradebook(actor, course_id, page)
         .await?;
 
     Ok((
@@ -118,18 +118,13 @@ pub async fn course_gradebook(
 pub async fn student_grades(
     State(state): State<AppState>,
     actor: Actor,
-    Path((course, student)): Path<(Uuid, Uuid)>,
+    Path((course, student)): Path<(TeachingCourseId, UserId)>,
     Pagination(page): Pagination,
 ) -> Result<Json<StudentGradesResponse>, ApiError> {
     let grades = state
         .application
         .courses
-        .student_grades(
-            actor,
-            TeachingCourseId::from_uuid(course),
-            UserId::from_uuid(student),
-            page,
-        )
+        .student_grades(actor, course, student, page)
         .await?;
     Ok(Json(StudentGradesResponse::from(&grades)))
 }

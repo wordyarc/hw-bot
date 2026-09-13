@@ -110,9 +110,13 @@ pub async fn register_staff(
 /// 404 - предложи регистрацию.
 pub async fn me(
     State(state): State<AppState>,
-    actor: Actor,
+    TelegramIdentity(telegram_user_id): TelegramIdentity,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let registered = state.application.users.find_by_actor(actor).await?;
+    let registered = state
+        .application
+        .users
+        .find_by_telegram_user_id(telegram_user_id)
+        .await?;
 
     Ok(Json(UserResponse::from(&registered)))
 }

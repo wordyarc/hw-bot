@@ -10,6 +10,7 @@ pub mod pagination;
 pub mod supervision;
 pub mod telegram;
 
+mod read_models;
 mod string_enum;
 
 #[doc(hidden)]

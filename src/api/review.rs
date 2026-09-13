@@ -111,11 +111,11 @@ pub async fn take_next_from_queue(
 pub async fn review_submission(
     State(state): State<AppState>,
     reviewer: Actor,
-    Path(submission_id): Path<Uuid>,
+    Path(submission_id): Path<SubmissionId>,
     JsonBody(request): JsonBody<ReviewSubmissionRequest>,
 ) -> Result<Json<SubmissionResponse>, ApiError> {
     let command = ReviewSubmission {
-        submission_id: SubmissionId::from_uuid(submission_id),
+        submission_id,
         actor: reviewer,
         decision: request.decision,
         score: request.score,

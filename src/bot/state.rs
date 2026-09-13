@@ -160,10 +160,6 @@ impl BotState {
             Self::Flow(FlowState::ChoosingDeadline {
                 message_id: current,
                 target,
-            })
-            | Self::Flow(FlowState::PickingDeadlineDate {
-                message_id: current,
-                target,
             }) if current == message_id => Some(target),
             _ => None,
         }
@@ -308,10 +304,6 @@ pub(super) enum FlowState {
         draft: DraftAssignment,
     },
     ChoosingDeadline {
-        message_id: MessageId,
-        target: DeadlineTarget,
-    },
-    PickingDeadlineDate {
         message_id: MessageId,
         target: DeadlineTarget,
     },

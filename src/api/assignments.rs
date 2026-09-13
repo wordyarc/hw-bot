@@ -274,12 +274,12 @@ pub async fn list_archived_student_assignments(
 pub async fn find_student_assignment(
     State(state): State<AppState>,
     actor: Actor,
-    Path(assignment_id): Path<Uuid>,
+    Path(assignment_id): Path<AssignmentId>,
 ) -> Result<Json<StudentAssignmentDetailsResponse>, ApiError> {
     let details = state
         .application
         .assignments
-        .find_for_student(actor, AssignmentId::from_uuid(assignment_id))
+        .find_for_student(actor, assignment_id)
         .await?;
 
     Ok(Json(StudentAssignmentDetailsResponse::from(&details)))
@@ -288,13 +288,13 @@ pub async fn find_student_assignment(
 pub async fn list_course_assignments(
     State(state): State<AppState>,
     actor: Actor,
-    Path(teaching_course_id): Path<Uuid>,
+    Path(teaching_course_id): Path<TeachingCourseId>,
     Pagination(page): Pagination,
 ) -> Result<(HeaderMap, Json<Vec<AssignmentResponse>>), ApiError> {
     let assignments = state
         .application
         .assignments
-        .list_for_course(actor, TeachingCourseId::from_uuid(teaching_course_id), page)
+        .list_for_course(actor, teaching_course_id, page)
         .await?;
 
     Ok((
@@ -306,13 +306,13 @@ pub async fn list_course_assignments(
 pub async fn submission_history(
     State(state): State<AppState>,
     actor: Actor,
-    Path(id): Path<Uuid>,
+    Path(id): Path<AssignmentId>,
     Pagination(page): Pagination,
 ) -> Result<(HeaderMap, Json<Vec<SubmissionResponse>>), ApiError> {
     let submissions = state
         .application
         .assignments
-        .submission_history(actor, AssignmentId::from_uuid(id), page)
+        .submission_history(actor, id, page)
         .await?
         .submissions;
     Ok((
@@ -324,11 +324,11 @@ pub async fn submission_history(
 pub async fn create_assignment(
     State(state): State<AppState>,
     actor: Actor,
-    Path(teaching_course_id): Path<Uuid>,
+    Path(teaching_course_id): Path<TeachingCourseId>,
     JsonBody(request): JsonBody<CreateAssignmentRequest>,
 ) -> Result<(StatusCode, Json<AssignmentResponse>), ApiError> {
     let command = CreateAssignment {
-        teaching_course_id: TeachingCourseId::from_uuid(teaching_course_id),
+        teaching_course_id,
         actor,
         title: request.title,
         body: request.body,
@@ -350,12 +350,12 @@ pub async fn create_assignment(
 pub async fn publish_assignment(
     State(state): State<AppState>,
     actor: Actor,
-    Path(assignment_id): Path<Uuid>,
+    Path(assignment_id): Path<AssignmentId>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let assignment = state
         .application
         .assignments
-        .publish(AssignmentId::from_uuid(assignment_id), actor, Utc::now())
+        .publish(assignment_id, actor, Utc::now())
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
@@ -364,12 +364,12 @@ pub async fn publish_assignment(
 pub async fn archive_assignment(
     State(state): State<AppState>,
     actor: Actor,
-    Path(assignment_id): Path<Uuid>,
+    Path(assignment_id): Path<AssignmentId>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let assignment = state
         .application
         .assignments
-        .archive(AssignmentId::from_uuid(assignment_id), actor)
+        .archive(assignment_id, actor)
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
@@ -378,11 +378,11 @@ pub async fn archive_assignment(
 pub async fn change_deadline(
     State(state): State<AppState>,
     actor: Actor,
-    Path(assignment_id): Path<Uuid>,
+    Path(assignment_id): Path<AssignmentId>,
     JsonBody(request): JsonBody<ChangeDeadlineRequest>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let command = ChangeDeadline {
-        assignment_id: AssignmentId::from_uuid(assignment_id),
+        assignment_id,
         actor,
         deadline_at: request.deadline_at,
     };
@@ -399,11 +399,11 @@ pub async fn change_deadline(
 pub async fn change_grading(
     State(state): State<AppState>,
     actor: Actor,
-    Path(assignment_id): Path<Uuid>,
+    Path(assignment_id): Path<AssignmentId>,
     JsonBody(request): JsonBody<ChangeGradingRequest>,
 ) -> Result<Json<AssignmentResponse>, ApiError> {
     let command = ChangeGrading {
-        assignment_id: AssignmentId::from_uuid(assignment_id),
+        assignment_id,
         actor,
         grading: Grading::from_max_score(request.max_score)?,
         late_policy: request.late_policy.parse()?,
@@ -421,12 +421,12 @@ pub async fn change_grading(
 pub async fn grant_extra_attempts(
     State(state): State<AppState>,
     actor: Actor,
-    Path((assignment_id, student_id)): Path<(Uuid, Uuid)>,
+    Path((assignment_id, student_id)): Path<(AssignmentId, UserId)>,
     JsonBody(request): JsonBody<GrantExtraAttemptsRequest>,
 ) -> Result<Json<StudentAssignmentProgressResponse>, ApiError> {
     let command = GrantExtraAttempts {
-        assignment_id: AssignmentId::from_uuid(assignment_id),
-        student_id: UserId::from_uuid(student_id),
+        assignment_id,
+        student_id,
         actor,
         amount: request.amount,
     };

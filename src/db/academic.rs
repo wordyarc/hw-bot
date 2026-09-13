@@ -11,6 +11,7 @@ use crate::domain::{
     EducationLevel, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, TeachingCourse,
     TeachingCourseId, User, UserId,
 };
+use crate::read_models::TeachingCourseSummary;
 
 const EDUCATION_LEVEL: &str = "student_groups.education_level";
 const STUDY_YEAR: &str = "student_groups.study_year";
@@ -173,7 +174,7 @@ pub(crate) async fn list_teaching_courses_for_teacher<'e, E>(
     executor: E,
     teacher: &User,
     page: PageRequest,
-) -> DbResult<Vec<TeachingCourseCard>>
+) -> DbResult<Vec<TeachingCourseSummary>>
 where
     E: PgExecutor<'e>,
 {
@@ -219,15 +220,8 @@ where
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(TeachingCourseCard::try_from)
+    .map(TeachingCourseSummary::try_from)
     .collect()
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TeachingCourseCard {
-    pub(crate) course: TeachingCourse,
-    pub(crate) subject: Subject,
-    pub(crate) group: StudentGroup,
 }
 
 #[derive(Debug)]
@@ -293,7 +287,7 @@ struct TeachingCourseCardRow {
     study_year: i16,
 }
 
-impl TryFrom<TeachingCourseCardRow> for TeachingCourseCard {
+impl TryFrom<TeachingCourseCardRow> for TeachingCourseSummary {
     type Error = DbError;
 
     fn try_from(row: TeachingCourseCardRow) -> Result<Self, Self::Error> {

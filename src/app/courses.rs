@@ -5,18 +5,8 @@ use crate::app::access::load_managing_teacher;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
-use crate::db::academic::TeachingCourseCard;
-use crate::domain::{
-    AssignmentId, DomainError, InviteGeneration, StudentGroup, Subject, TeachingCourse,
-    TeachingCourseId, UserId,
-};
-
-#[derive(Clone, Debug)]
-pub struct TeachingCourseSummary {
-    pub course: TeachingCourse,
-    pub subject: Subject,
-    pub group: StudentGroup,
-}
+use crate::domain::{DomainError, InviteGeneration, StudentGroup, TeachingCourseId, UserId};
+use crate::read_models::{AssignmentGrade, CourseStudent, TeachingCourseSummary};
 
 #[derive(Clone, Debug)]
 pub struct GroupInviteState {
@@ -24,25 +14,9 @@ pub struct GroupInviteState {
     pub generation: InviteGeneration,
 }
 
-impl From<TeachingCourseCard> for TeachingCourseSummary {
-    fn from(card: TeachingCourseCard) -> Self {
-        Self {
-            course: card.course,
-            subject: card.subject,
-            group: card.group,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct CourseGradebook {
     pub students: Page<StudentGrades>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CourseStudent {
-    pub student_id: UserId,
-    pub display_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -54,25 +28,6 @@ pub struct StudentGrades {
     pub next_grade_page: Option<u32>,
     total: u32,
     max_total: u32,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssignmentGrade {
-    pub assignment_id: AssignmentId,
-    pub title: String,
-    pub max_score: u16,
-    pub final_score: Option<u16>,
-}
-
-impl From<db::submissions::CourseAssignmentGrade> for AssignmentGrade {
-    fn from(grade: db::submissions::CourseAssignmentGrade) -> Self {
-        Self {
-            assignment_id: grade.assignment_id,
-            title: grade.title,
-            max_score: grade.max_score,
-            final_score: grade.final_score,
-        }
-    }
 }
 
 impl StudentGrades {
@@ -111,11 +66,7 @@ impl CourseService {
         }
 
         Ok(Page::from_rows(
-            db::academic::list_teaching_courses_for_teacher(&self.pool, &actor, page)
-                .await?
-                .into_iter()
-                .map(TeachingCourseSummary::from)
-                .collect(),
+            db::academic::list_teaching_courses_for_teacher(&self.pool, &actor, page).await?,
             page,
         ))
     }
@@ -186,11 +137,7 @@ impl CourseService {
         Ok(Page::from_rows(
             db::users::list_student_names(&self.pool, course.student_group_id(), page).await?,
             page,
-        )
-        .map(|student| CourseStudent {
-            student_id: student.student_id,
-            display_name: student.display_name,
-        }))
+        ))
     }
 
     pub async fn student_grades(
@@ -238,17 +185,11 @@ fn group_grades(
     let mut students: Vec<StudentGrades> = Vec::new();
     for row in rows {
         match students.last_mut() {
-            Some(last) if last.student_id == row.student_id => last
-                .grades
-                .extend(row.assignment.map(AssignmentGrade::from)),
+            Some(last) if last.student_id == row.student_id => last.grades.extend(row.assignment),
             _ => students.push(StudentGrades {
                 student_id: row.student_id,
                 display_name: row.display_name,
-                grades: row
-                    .assignment
-                    .into_iter()
-                    .map(AssignmentGrade::from)
-                    .collect(),
+                grades: row.assignment.into_iter().collect(),
                 total: row.total,
                 max_total: row.max_total,
                 grade_page: page.page,

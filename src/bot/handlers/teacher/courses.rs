@@ -8,15 +8,13 @@ use teloxide::types::MessageId;
 use crate::domain::{AssignmentId, TeachingCourseId};
 
 use crate::bot::HandlerResult;
-use crate::bot::callbacks::ScreenAction;
 use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
 use crate::bot::handlers::reset_dialogue;
-use crate::bot::state::{BotState, DeadlineTarget, FlowState, ScreenState};
+use crate::bot::state::{BotState, DeadlineTarget, ScreenState};
 use crate::bot::views::{
-    assignment_actions_keyboard, assignment_status, confirm_invite_rotation_keyboard,
-    course_assignments_keyboard, courses_keyboard, deadline_left, grading_lines,
-    send_message_chunks, send_stale_button, teacher_menu,
+    assignment_actions_keyboard, assignment_status, course_assignments_keyboard, courses_keyboard,
+    deadline_left, grading_lines, send_message_chunks, send_stale_button, teacher_menu,
 };
 
 use super::deadline::ask_deadline;
@@ -176,109 +174,82 @@ pub(in crate::bot::handlers) async fn show_assignment(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn handle_screen_action(
+pub(in crate::bot::handlers) async fn publish_assignment(
     screen: Screen<'_>,
     message_id: MessageId,
-    action: ScreenAction,
-    state: BotState,
+    assignment_id: AssignmentId,
+    state: &BotState,
 ) -> HandlerResult {
-    match action {
-        ScreenAction::AddFile | ScreenAction::OpenFile(_) | ScreenAction::DeleteFile(_) => {
-            unreachable!("assignment file actions are routed directly")
-        }
-        ScreenAction::RotateGroupInvite => {
-            let Some((course_id, generation)) = state.group_invite(message_id) else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-
-            let sent = screen
-                .bot
-                .send_message(
-                    screen.chat_id,
-                    "Перевыпустить ссылку? Прежняя сразу перестанет работать — в том числе у \
-                     других курсов этой же группы. Уже зарегистрированных студентов это не \
-                     затрагивает.",
-                )
-                .reply_markup(confirm_invite_rotation_keyboard())
-                .await?;
-
+    if state
+        .managing_assignment(message_id, assignment_id)
+        .is_none()
+    {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    }
+    match screen
+        .services
+        .assignments
+        .publish(assignment_id, screen.actor, Utc::now())
+        .await
+    {
+        Ok(_) => {
             screen
-                .dialogue
-                .update(BotState::Flow(FlowState::ConfirmingInviteRotation {
-                    message_id: sent.id,
-                    course_id,
-                    generation,
-                }))
+                .bot
+                .send_message(screen.chat_id, "🚀 Задание опубликовано.")
                 .await?;
-            return Ok(());
+            show_assignment(screen, assignment_id).await
         }
-        ScreenAction::FinishFileCreation => {
-            // Кнопка «готово» есть только во флоу создания: вне его она из старого сообщения.
-            let Some((assignment_id, _, true)) = state.managing_assignment_files(message_id) else {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            };
-            return show_assignment(screen, assignment_id).await;
-        }
-        ScreenAction::Publish(assignment_id)
-        | ScreenAction::Archive(assignment_id)
-        | ScreenAction::ChangeDeadline(assignment_id) => {
-            if state
-                .managing_assignment(message_id, assignment_id)
-                .is_none()
-            {
-                return send_stale_button(screen.bot, screen.chat_id).await;
-            }
-        }
+        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await,
     }
+}
 
-    let assignment_id = match action {
-        ScreenAction::Publish(id)
-        | ScreenAction::Archive(id)
-        | ScreenAction::ChangeDeadline(id) => id,
-        _ => unreachable!(),
-    };
-    match action {
-        ScreenAction::Publish(_) => match screen
-            .services
-            .assignments
-            .publish(assignment_id, screen.actor, Utc::now())
-            .await
-        {
-            Ok(_) => {
-                screen
-                    .bot
-                    .send_message(screen.chat_id, "🚀 Задание опубликовано.")
-                    .await?;
-                show_assignment(screen, assignment_id).await?;
-            }
-            Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-        },
-        ScreenAction::Archive(_) => match screen
-            .services
-            .assignments
-            .archive(assignment_id, screen.actor)
-            .await
-        {
-            Ok(_) => {
-                screen
-                    .bot
-                    .send_message(screen.chat_id, "📦 Задание архивировано.")
-                    .await?;
-                show_assignment(screen, assignment_id).await?;
-            }
-            Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-        },
-        ScreenAction::ChangeDeadline(_) => {
-            ask_deadline(
-                screen.bot,
-                screen.chat_id,
-                DeadlineTarget::Change { assignment_id },
-                screen.dialogue,
-                screen.timezone,
-            )
-            .await?;
-        }
-        _ => unreachable!(),
+pub(in crate::bot::handlers) async fn archive_assignment(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    assignment_id: AssignmentId,
+    state: &BotState,
+) -> HandlerResult {
+    if state
+        .managing_assignment(message_id, assignment_id)
+        .is_none()
+    {
+        return send_stale_button(screen.bot, screen.chat_id).await;
     }
-    Ok(())
+    match screen
+        .services
+        .assignments
+        .archive(assignment_id, screen.actor)
+        .await
+    {
+        Ok(_) => {
+            screen
+                .bot
+                .send_message(screen.chat_id, "📦 Задание архивировано.")
+                .await?;
+            show_assignment(screen, assignment_id).await
+        }
+        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await,
+    }
+}
+
+pub(in crate::bot::handlers) async fn ask_assignment_deadline(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    assignment_id: AssignmentId,
+    state: &BotState,
+) -> HandlerResult {
+    if state
+        .managing_assignment(message_id, assignment_id)
+        .is_none()
+    {
+        return send_stale_button(screen.bot, screen.chat_id).await;
+    }
+    ask_deadline(
+        screen.bot,
+        screen.chat_id,
+        DeadlineTarget::Change { assignment_id },
+        screen.dialogue,
+        screen.timezone,
+    )
+    .await
 }

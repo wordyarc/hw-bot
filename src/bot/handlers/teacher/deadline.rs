@@ -49,19 +49,14 @@ pub(in crate::bot::handlers) async fn handle_deadline(
             .await;
         }
         DeadlineAction::Options => {
-            let sent = screen
-                .bot
-                .send_message(screen.chat_id, deadline_prompt(&target, screen.timezone))
-                .reply_markup(deadline_options_keyboard(screen.timezone))
-                .await?;
-            screen
-                .dialogue
-                .update(BotState::Flow(FlowState::ChoosingDeadline {
-                    message_id: sent.id,
-                    target,
-                }))
-                .await?;
-            return Ok(());
+            return ask_deadline(
+                screen.bot,
+                screen.chat_id,
+                target,
+                screen.dialogue,
+                screen.timezone,
+            )
+            .await;
         }
         DeadlineAction::Calendar => {
             let month = screen.timezone.today();
@@ -70,13 +65,6 @@ pub(in crate::bot::handlers) async fn handle_deadline(
                 .edit_message_reply_markup(screen.chat_id, message_id)
                 .reply_markup(calendar_keyboard(month, month))
                 .await?;
-            screen
-                .dialogue
-                .update(BotState::Flow(FlowState::PickingDeadlineDate {
-                    message_id,
-                    target,
-                }))
-                .await?;
             return Ok(());
         }
         DeadlineAction::Month(month) => {
@@ -84,13 +72,6 @@ pub(in crate::bot::handlers) async fn handle_deadline(
                 .bot
                 .edit_message_reply_markup(screen.chat_id, message_id)
                 .reply_markup(calendar_keyboard(month, screen.timezone.today()))
-                .await?;
-            screen
-                .dialogue
-                .update(BotState::Flow(FlowState::PickingDeadlineDate {
-                    message_id,
-                    target,
-                }))
                 .await?;
             return Ok(());
         }

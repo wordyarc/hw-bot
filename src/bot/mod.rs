@@ -293,8 +293,7 @@ impl TelegramBot {
         tokio::select! {
             result = &mut dispatch => result.map_err(map_startup_error)?,
             () = cancellation.cancelled() => {
-                // Отмена может прийти, пока dispatcher ещё делает свой startup-запрос: тогда он
-                // idle, останавливать нечего, и ждать dispatch нельзя - он просто запустится.
+                // До запуска dispatcher ещё idle: ждать dispatch при отмене нельзя — он запустится.
                 if shutdown.shutdown().is_ok() {
                     dispatch.await.map_err(map_startup_error)?;
                 }

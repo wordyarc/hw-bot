@@ -7,6 +7,7 @@ use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     AssignmentId, Role, StudentGroupId, SubmissionHistory, TelegramUserId, User, UserId,
 };
+use crate::read_models::{AssignmentStudentSummary, CourseStudent};
 
 pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
 where
@@ -76,7 +77,7 @@ pub(crate) async fn list_students_with_assignment_history<'e, E>(
     assignment_id: AssignmentId,
     student_group_id: StudentGroupId,
     page: PageRequest,
-) -> DbResult<Vec<AssignmentStudentCard>>
+) -> DbResult<Vec<AssignmentStudentSummary>>
 where
     E: PgExecutor<'e>,
 {
@@ -125,14 +126,8 @@ where
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(AssignmentStudentCard::try_from)
+    .map(AssignmentStudentSummary::try_from)
     .collect()
-}
-
-#[derive(Clone, Debug)]
-pub struct StudentName {
-    pub student_id: UserId,
-    pub display_name: String,
 }
 
 pub async fn profile_statistics<'e, E: PgExecutor<'e>>(
@@ -159,19 +154,13 @@ pub async fn list_student_names<'e, E: PgExecutor<'e>>(
     executor: E,
     group_id: StudentGroupId,
     page: PageRequest,
-) -> DbResult<Vec<StudentName>> {
+) -> DbResult<Vec<CourseStudent>> {
     Ok(sqlx::query!(
         "select id, display_name from users where student_group_id = $1 and role = 'student' order by display_name, id limit $2 offset $3",
         group_id.as_uuid(), page.fetch_limit(), page.offset(),
-    ).fetch_all(executor).await?.into_iter().map(|row| StudentName {
+    ).fetch_all(executor).await?.into_iter().map(|row| CourseStudent {
         student_id: UserId::from_uuid(row.id), display_name: row.display_name,
     }).collect())
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct AssignmentStudentCard {
-    pub(crate) student: User,
-    pub(crate) history: SubmissionHistory,
 }
 
 #[derive(Debug)]
@@ -215,7 +204,7 @@ impl TryFrom<UserRow> for User {
     }
 }
 
-impl TryFrom<AssignmentStudentCardRow> for AssignmentStudentCard {
+impl TryFrom<AssignmentStudentCardRow> for AssignmentStudentSummary {
     type Error = DbError;
 
     fn try_from(row: AssignmentStudentCardRow) -> Result<Self, Self::Error> {

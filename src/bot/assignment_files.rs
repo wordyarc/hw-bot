@@ -13,9 +13,11 @@ use super::views::{
     send_message_chunks, send_stale_button, teacher_keyboard,
 };
 
-pub(super) async fn handle_message(
+pub(super) async fn submit_file(
     step: TextStep<'_>,
-    state: &BotState,
+    assignment_id: AssignmentId,
+    expected_revision: i64,
+    creation_flow: bool,
     transfers: &FileTransfers,
 ) -> HandlerResult {
     let TextStep {
@@ -25,106 +27,82 @@ pub(super) async fn handle_message(
         deps,
     } = step;
     let services = deps.services;
-    match state {
-        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
-            bot.send_message(
-                message.chat.id,
-                "Выберите действие кнопкой под списком вложений.",
-            )
+    let Some(incoming) = incoming_file(message) else {
+        bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
             .await?;
-        }
-        BotState::Flow(FlowState::AwaitingAssignmentFile {
-            assignment_id,
-            expected_revision,
-            creation_flow,
-        }) => {
-            let Some(incoming) = incoming_file(message) else {
-                bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
-                    .await?;
-                return Ok(());
-            };
-            let policy = services.files.policy();
-            if incoming
-                .declared_size
-                .is_some_and(|size| size > policy.max_file_size_bytes)
-            {
-                bot.send_message(message.chat.id, "Файл превышает допустимый размер.")
-                    .await?;
-                return Ok(());
-            }
-            let transfer_permit = transfers.acquire().await?;
-            let content = match transfer_permit
-                .run(transfers.download(&incoming.file_id, policy.max_file_size_bytes))
-                .await
-            {
-                Ok(content) => content,
-                Err(_) => {
-                    tracing::warn!(
-                        kind = "file_download_failed",
-                        "Telegram file download failed"
-                    );
-                    bot.send_message(message.chat.id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
-                        .await?;
-                    return Ok(());
-                }
-            };
-            if incoming
-                .declared_size
-                .is_some_and(|declared| declared != content.len())
-            {
-                bot.send_message(
-                    message.chat.id,
-                    "Telegram передал файл с неверным размером. Попробуйте ещё раз.",
-                )
+        return Ok(());
+    };
+    let policy = services.files.policy();
+    if incoming
+        .declared_size
+        .is_some_and(|size| size > policy.max_file_size_bytes)
+    {
+        bot.send_message(message.chat.id, "Файл превышает допустимый размер.")
+            .await?;
+        return Ok(());
+    }
+    let transfer_permit = transfers.acquire().await?;
+    let content = match transfer_permit
+        .run(transfers.download(&incoming.file_id, policy.max_file_size_bytes))
+        .await
+    {
+        Ok(content) => content,
+        Err(_) => {
+            tracing::warn!(
+                kind = "file_download_failed",
+                "Telegram file download failed"
+            );
+            bot.send_message(message.chat.id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
                 .await?;
-                return Ok(());
-            }
-            let Some(actor) = crate::bot::handlers::resolve_actor(
-                bot,
-                message.chat.id,
-                telegram_user_id,
-                services,
-            )
+            return Ok(());
+        }
+    };
+    if incoming
+        .declared_size
+        .is_some_and(|declared| declared != content.len())
+    {
+        bot.send_message(
+            message.chat.id,
+            "Telegram передал файл с неверным размером. Попробуйте ещё раз.",
+        )
+        .await?;
+        return Ok(());
+    }
+    let Some(actor) =
+        crate::bot::handlers::resolve_actor(bot, message.chat.id, telegram_user_id, services)
             .await?
-            else {
-                return Ok(());
-            };
-            match services
-                .files
-                .add_assignment_file(AddAssignmentFile {
-                    assignment_id: *assignment_id,
-                    actor,
-                    expected_revision: *expected_revision,
-                    presentation: incoming.presentation,
-                    filename: incoming.filename,
-                    mime_type: incoming.mime_type,
-                    content,
-                })
-                .await
-            {
-                Ok(_) => {
-                    drop(transfer_permit);
-                    bot.send_message(message.chat.id, "Вложение добавлено.")
-                        .reply_markup(teacher_keyboard())
-                        .await?;
-                    show(step.screen(actor), *assignment_id, *creation_flow).await?;
-                }
-                Err(error) if error.code() == ErrorCode::ConcurrentModification => {
-                    drop(transfer_permit);
-                    send_app_error(bot, message.chat.id, error).await?;
-                    show(step.screen(actor), *assignment_id, *creation_flow).await?;
-                }
-                Err(error) => {
-                    drop(transfer_permit);
-                    send_app_error(bot, message.chat.id, error).await?;
-                }
-            }
-        }
-        BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
-            bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
+    else {
+        return Ok(());
+    };
+    match services
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id,
+            actor,
+            expected_revision,
+            presentation: incoming.presentation,
+            filename: incoming.filename,
+            mime_type: incoming.mime_type,
+            content,
+        })
+        .await
+    {
+        Ok(_) => {
+            drop(transfer_permit);
+            bot.send_message(message.chat.id, "Вложение добавлено.")
+                .reply_markup(teacher_keyboard())
                 .await?;
+            show(step.screen(actor), assignment_id, creation_flow).await?;
         }
-        _ => unreachable!("not an assignment file state"),
+        Err(error) if error.code() == ErrorCode::ConcurrentModification => {
+            drop(transfer_permit);
+            send_app_error(bot, message.chat.id, error).await?;
+            show(step.screen(actor), assignment_id, creation_flow).await?;
+        }
+        Err(error) => {
+            drop(transfer_permit);
+            send_app_error(bot, message.chat.id, error).await?;
+        }
     }
     Ok(())
 }

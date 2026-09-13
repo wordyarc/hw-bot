@@ -12,6 +12,7 @@ use crate::domain::{
     AssignmentId, DomainError, Role, StudentGroupId, Submission, SubmissionHistory, SubmissionId,
     SubmissionParts, SubmissionStatus, TeachingCourseId, User, UserId,
 };
+use crate::read_models::{AssignmentGrade, QueuePlace};
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const STATUS: &str = "submissions.status";
@@ -313,17 +314,9 @@ pub async fn latest_for_student<'e, E: PgExecutor<'e>>(
 pub struct CourseGradeRow {
     pub student_id: UserId,
     pub display_name: String,
-    pub assignment: Option<CourseAssignmentGrade>,
+    pub assignment: Option<AssignmentGrade>,
     pub total: u32,
     pub max_total: u32,
-}
-
-#[derive(Clone, Debug)]
-pub struct CourseAssignmentGrade {
-    pub assignment_id: AssignmentId,
-    pub title: String,
-    pub max_score: u16,
-    pub final_score: Option<u16>,
 }
 
 /// Сводка одним стейтментом: студенты группы слева, оценочные задания курса и принятые сдачи
@@ -391,7 +384,7 @@ where
     .into_iter()
     .map(|row| {
         let assignment = match (row.assignment_id, row.assignment_title, row.max_score) {
-            (Some(id), Some(title), Some(max_score)) => Some(CourseAssignmentGrade {
+            (Some(id), Some(title), Some(max_score)) => Some(AssignmentGrade {
                 assignment_id: AssignmentId::from_uuid(id),
                 title,
                 max_score: checked_num_cast(MAX_SCORE, max_score)?,
@@ -411,16 +404,6 @@ where
     .collect()
 }
 
-#[derive(Clone, Debug)]
-pub struct PendingQueuePlace {
-    pub assignment_id: AssignmentId,
-    pub subject_name: String,
-    pub assignment_title: String,
-    pub submitted_at: DateTime<Utc>,
-    pub position: u32,
-    pub total: u32,
-}
-
 /// Место сдачи студента в очереди проверки. Очередь ревьюера склеена из всех его курсов, поэтому
 /// считаем не по курсу задания, а по всем сдачам, которые видит хотя бы один его преподаватель.
 /// Порядок обязан совпадать с `lock_next_pending_for_reviewer`.
@@ -429,7 +412,7 @@ pub async fn pending_queue_places<'e, E>(
     student_id: UserId,
     page: PageRequest,
     assignment_id: Option<AssignmentId>,
-) -> DbResult<Vec<PendingQueuePlace>>
+) -> DbResult<Vec<QueuePlace>>
 where
     E: PgExecutor<'e>,
 {
@@ -494,7 +477,7 @@ where
     .await?
     .into_iter()
     .map(|row| {
-        Ok(PendingQueuePlace {
+        Ok(QueuePlace {
             assignment_id: AssignmentId::from_uuid(row.assignment_id),
             subject_name: row.subject_name,
             assignment_title: row.assignment_title,
@@ -539,9 +522,15 @@ pub async fn lock_next_pending_for_reviewer(
     reviewer: &User,
 ) -> DbResult<Option<Submission>> {
     let can_review_all = matches!(reviewer.role(), Role::Admin);
-    let locked_id = sqlx::query_scalar!(
+    let row = sqlx::query_as!(
+        SubmissionRow,
         r#"
-        select submissions.id
+        select
+            submissions.id, submissions.assignment_id, submissions.student_id,
+            submissions.attempt_number, submissions.content, submissions.status,
+            submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
+            submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
+            submissions.late_periods, submissions.penalty, submissions.final_score
         from submissions
         join assignments
           on assignments.id = submissions.assignment_id
@@ -560,11 +549,7 @@ pub async fn lock_next_pending_for_reviewer(
     .fetch_optional(&mut **tx)
     .await?;
 
-    let Some(locked_id) = locked_id else {
-        return Ok(None);
-    };
-
-    find_by_id(&mut **tx, SubmissionId::from_uuid(locked_id)).await
+    row.map(Submission::try_from).transpose()
 }
 
 #[derive(Debug)]

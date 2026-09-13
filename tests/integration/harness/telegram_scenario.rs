@@ -92,6 +92,30 @@ impl TelegramScenario {
             .with_priority(10)
             .mount(&server)
             .await;
+        let messages = state.clone();
+        Mock::given(method("POST"))
+            .and(path("/bottest-token/EditMessageReplyMarkup"))
+            .respond_with(move |request: &wiremock::Request| {
+                let body: Value = request.body_json().unwrap();
+                let mut state = messages.lock().unwrap();
+                let message = state
+                    .messages
+                    .iter_mut()
+                    .find(|message| {
+                        message["chat"]["id"] == body["chat_id"]
+                            && message["message_id"] == body["message_id"]
+                    })
+                    .expect("editing a message sent by the bot");
+                if body["reply_markup"].is_null() {
+                    message.as_object_mut().unwrap().remove("reply_markup");
+                } else {
+                    message["reply_markup"] = body["reply_markup"].clone();
+                }
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": message}))
+            })
+            .with_priority(10)
+            .mount(&server)
+            .await;
         Self { server, state }
     }
 

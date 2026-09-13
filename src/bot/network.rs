@@ -2,20 +2,24 @@ use std::future::IntoFuture;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
+use teloxide::adaptors::{CacheMe, cache_me::CachedMeRequest};
 use teloxide::payloads;
-use teloxide::requests::{HasPayload, JsonRequest, Output, Request, Requester};
+use teloxide::requests::{HasPayload, JsonRequest, Output, Request, Requester, RequesterExt};
 use teloxide::types::{BotCommand, CallbackQueryId, ChatId, MessageId};
 
 // Только интерактивные методы: polling и обмен файлами имеют собственные бюджеты.
 #[derive(Clone)]
 pub(super) struct Bot {
-    pub inner: teloxide::Bot,
+    pub inner: CacheMe<teloxide::Bot>,
     timeout: Duration,
 }
 
 impl Bot {
     pub fn new(inner: teloxide::Bot, timeout: Duration) -> Self {
-        Self { inner, timeout }
+        Self {
+            inner: inner.cache_me(),
+            timeout,
+        }
     }
 
     fn timed<R>(&self, request: R) -> TimedRequest<R> {
@@ -59,7 +63,7 @@ impl Bot {
         self.timed(self.inner.set_chat_menu_button())
     }
 
-    pub fn get_me(&self) -> TimedRequest<JsonRequest<payloads::GetMe>> {
+    pub fn get_me(&self) -> TimedRequest<CachedMeRequest<JsonRequest<payloads::GetMe>>> {
         self.timed(self.inner.get_me())
     }
 }

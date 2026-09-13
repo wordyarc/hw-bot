@@ -200,7 +200,7 @@ pub(crate) async fn telegram_server(updates: Vec<Value>) -> MockServer {
     Mock::given(method("POST"))
         .and(path("/bottest-token/GetMe"))
         .respond_with(ResponseTemplate::new(200).set_body_json(telegram_me_body()))
-        .expect(2)
+        .expect(1)
         .mount(&telegram)
         .await;
     Mock::given(method("POST"))
