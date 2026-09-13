@@ -78,13 +78,13 @@ str_enum! {
 pub struct Grade {
     raw_score: u16,
     max_score: u16,
-    late_periods: u16,
+    late_periods: u32,
     penalty: u16,
     final_score: u16,
 }
 
 impl Grade {
-    pub(crate) fn new(raw_score: u16, max_score: u16, late_periods: u16, penalty: u16) -> Self {
+    pub(crate) fn new(raw_score: u16, max_score: u16, late_periods: u32, penalty: u16) -> Self {
         Self {
             raw_score,
             max_score,
@@ -98,7 +98,7 @@ impl Grade {
     fn restore(
         raw_score: u16,
         max_score: u16,
-        late_periods: u16,
+        late_periods: u32,
         penalty: u16,
         final_score: u16,
     ) -> DomainResult<Self> {
@@ -128,7 +128,7 @@ impl Grade {
         self.max_score
     }
 
-    pub fn late_periods(self) -> u16 {
+    pub fn late_periods(self) -> u32 {
         self.late_periods
     }
 
@@ -195,7 +195,7 @@ pub(crate) struct SubmissionParts {
     pub review_comment: Option<String>,
     pub raw_score: Option<u16>,
     pub grade_max_score: Option<u16>,
-    pub late_periods: Option<u16>,
+    pub late_periods: Option<u32>,
     pub penalty: Option<u16>,
     pub final_score: Option<u16>,
 }

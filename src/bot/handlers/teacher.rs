@@ -4,6 +4,7 @@ mod creation;
 mod deadline;
 mod gradebook;
 mod invites;
+mod terms;
 
 pub(super) use attempts::handle_extra_attempts;
 pub(super) use attempts::select_student;
@@ -16,16 +17,17 @@ pub(super) use courses::show_courses;
 pub(super) use courses::{archive_assignment, ask_assignment_deadline, publish_assignment};
 pub(super) use courses::{show_course_assignments_page, show_courses_page};
 pub(super) use creation::handle_grading;
-pub(super) use creation::handle_late_policy;
 pub(super) use creation::handle_max_attempts;
 pub(super) use creation::submit_body;
 pub(super) use creation::submit_grading_text;
-pub(super) use creation::submit_late_policy_text;
 pub(super) use creation::submit_max_attempts;
 pub(super) use creation::submit_title;
 pub(super) use deadline::handle_deadline;
-pub(super) use deadline::submit_deadline_text;
 pub(super) use gradebook::show_gradebook;
 pub(super) use gradebook::{show_gradebook_page, show_student_grades_page};
 pub(super) use invites::show_group_invite;
 pub(super) use invites::{ask_invite_rotation, cancel_invite_rotation, confirm_invite_rotation};
+pub(super) use terms::{
+    abandon, back, confirm_exit, handle_late_policy, handle_penalty, handle_period, handle_periods,
+    handle_terms, submit_terms,
+};

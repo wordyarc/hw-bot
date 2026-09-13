@@ -10,7 +10,6 @@ use crate::bot::context::{Deps, TextStep};
 use crate::bot::errors::{send_app_error, send_error_code};
 use crate::bot::invites::BotInvites;
 use crate::bot::state::{BotDialogue, BotState, FlowState};
-use crate::bot::texts;
 use crate::bot::views::ask_input;
 use crate::bot::{BotServices, HandlerResult};
 use crate::domain::{DISPLAY_NAME_MAX_LEN, TelegramUserId};
@@ -30,13 +29,12 @@ pub(super) async fn start_registration(
         .find_by_telegram_user_id(telegram_user_id)
         .await
     {
-        Ok(_) => return show_home(bot, chat_id, telegram_user_id, services).await,
+        Ok(_) => return show_home(bot, chat_id, telegram_user_id, services, dialogue).await,
         Err(error) if error.code() == ErrorCode::NotFound => {}
         Err(error) => return send_app_error(bot, chat_id, error).await,
     }
     if payload.is_empty() {
-        bot.send_message(chat_id, texts::GUEST_NEEDS_INVITE).await?;
-        return Ok(());
+        return super::home::open_guest(bot, chat_id, dialogue).await;
     }
     // Битая подпись и отозванная ссылка обязаны выглядеть для гостя одинаково.
     let Ok(invite) = invites.decode(payload) else {
@@ -102,7 +100,7 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
             reset_dialogue(dialogue).await?;
             bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
                 .await?;
-            show_home(bot, message.chat.id, telegram_user_id, services).await?;
+            show_home(bot, message.chat.id, telegram_user_id, services, dialogue).await?;
         }
         Err(error) => send_app_error(bot, message.chat.id, error).await?,
     }

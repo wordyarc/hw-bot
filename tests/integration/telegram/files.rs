@@ -39,9 +39,10 @@ async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
             BOT_MESSAGE_ID,
         ),
         message_update(9, app.teacher(), 5, &deadline),
-        callback_update(10, app.teacher(), callbacks::FILE_ADD, BOT_MESSAGE_ID),
+        callback_update(10, app.teacher(), callbacks::TERMS_SAVE, BOT_MESSAGE_ID),
+        callback_update(11, app.teacher(), callbacks::FILE_ADD, BOT_MESSAGE_ID),
         document_update(
-            11,
+            12,
             app.teacher(),
             6,
             "fixture-document",
@@ -49,7 +50,7 @@ async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
             DOCUMENT_FIXTURE.len(),
         ),
         callback_update(
-            12,
+            13,
             app.teacher(),
             &cb(callbacks::FILE_OPEN_PREFIX, 0),
             BOT_MESSAGE_ID,

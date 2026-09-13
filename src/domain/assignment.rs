@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, NonEmptyString,
+    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, Grade, NonEmptyString,
     StudentGroupId, SubjectId, TeachingCourse, TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
@@ -11,6 +11,7 @@ pub const MAX_SCORE: u16 = 100;
 pub const MAX_LATE_PERIOD_DAYS: u16 = 365;
 pub const MAX_LATE_PENALTY: u16 = MAX_SCORE;
 pub const MAX_LATE_PERIODS: u16 = 100;
+pub const MAX_LATENESS_DAYS: u32 = 366;
 
 str_enum! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,7 +140,36 @@ impl LatePolicy {
         self.max_periods
     }
 
-    fn late_periods(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u16 {
+    pub fn closes_at(self, deadline_at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
+        let days = u32::from(self.period_days)
+            .checked_mul(u32::from(self.max_periods))
+            .ok_or(DomainError::AssignmentClosingOutOfRange)?;
+        deadline_at
+            .checked_add_signed(Duration::days(i64::from(days)))
+            .ok_or(DomainError::AssignmentClosingOutOfRange)
+    }
+
+    pub fn validate_horizon(self, deadline_at: DateTime<Utc>) -> DomainResult<()> {
+        self.closes_at(deadline_at)?;
+        if u32::from(self.period_days) * u32::from(self.max_periods) > MAX_LATENESS_DAYS {
+            return Err(DomainError::LateHorizonTooLong {
+                max_days: MAX_LATENESS_DAYS,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn possible_score(self, max_score: MaxScore, periods: u32) -> u16 {
+        Grade::new(
+            max_score.get(),
+            max_score.get(),
+            periods,
+            self.penalty_for(periods),
+        )
+        .final_score()
+    }
+
+    pub fn periods_until(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u32 {
         if at <= deadline_at {
             return 0;
         }
@@ -150,20 +180,14 @@ impl LatePolicy {
         let periods =
             whole_periods + i64::from(lateness > Duration::seconds(whole_periods * period));
 
-        u16::try_from(periods).unwrap_or(u16::MAX)
-    }
-
-    fn closes_at(self, deadline_at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
-        deadline_at
-            .checked_add_signed(Duration::days(
-                i64::from(self.period_days) * i64::from(self.max_periods),
-            ))
-            .ok_or(DomainError::AssignmentHorizonOutOfRange)
+        u32::try_from(periods).expect("chrono's date range fits in u32 days")
     }
 
     /// Штраф выше максимума шкалы всё равно даёт ноль, переполнение зажимается
-    fn penalty_for(self, late_periods: u16) -> u16 {
-        late_periods.saturating_mul(self.penalty).min(MAX_SCORE)
+    fn penalty_for(self, late_periods: u32) -> u16 {
+        late_periods
+            .saturating_mul(u32::from(self.penalty))
+            .min(u32::from(MAX_SCORE)) as u16
     }
 }
 
@@ -268,6 +292,10 @@ impl Assignment {
             });
         }
 
+        if let Some(policy) = input.late_policy {
+            policy.validate_horizon(input.deadline_at)?;
+        }
+
         Self::restore(AssignmentParts {
             id,
             teaching_course_id: teaching_course.id(),
@@ -328,6 +356,16 @@ impl Assignment {
         actor: &User,
         new_deadline_at: DateTime<Utc>,
     ) -> DomainResult<()> {
+        self.change_terms(teaching_course, actor, new_deadline_at, self.late_policy)
+    }
+
+    pub fn change_terms(
+        &mut self,
+        teaching_course: &TeachingCourse,
+        actor: &User,
+        new_deadline_at: DateTime<Utc>,
+        late_policy: Option<LatePolicy>,
+    ) -> DomainResult<()> {
         self.ensure_managed_by(teaching_course, actor, "change assignment deadline")?;
 
         if self.status == AssignmentStatus::Archived {
@@ -338,9 +376,13 @@ impl Assignment {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
 
-        if let Some(policy) = self.late_policy {
-            policy.closes_at(new_deadline_at)?;
+        if late_policy.is_some() && !self.grading.is_scored() {
+            return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
+        if let Some(policy) = late_policy {
+            policy.validate_horizon(new_deadline_at)?;
+        }
+        self.late_policy = late_policy;
         self.deadline_at = new_deadline_at;
 
         Ok(())
@@ -364,7 +406,7 @@ impl Assignment {
         }
 
         if let Some(policy) = late_policy {
-            policy.closes_at(self.deadline_at)?;
+            policy.validate_horizon(self.deadline_at)?;
         }
         self.grading = grading;
         self.late_policy = late_policy;
@@ -439,9 +481,9 @@ impl Assignment {
         })
     }
 
-    pub fn late_periods_at(&self, at: DateTime<Utc>) -> u16 {
+    pub fn late_periods_at(&self, at: DateTime<Utc>) -> u32 {
         self.late_policy
-            .map_or(0, |policy| policy.late_periods(self.deadline_at, at))
+            .map_or(0, |policy| policy.periods_until(self.deadline_at, at))
     }
 
     pub fn penalty_at(&self, at: DateTime<Utc>) -> u16 {
@@ -609,6 +651,42 @@ mod tests {
             Grading::Score {
                 max_score: MaxScore::new(5).unwrap()
             }
+        );
+    }
+
+    #[test]
+    fn preview_uses_the_same_penalty_for_any_period_count() {
+        let policy = LatePolicy::new(7, 1, 4).unwrap();
+        let maximum = MaxScore::new(10).unwrap();
+        assert_eq!(policy.possible_score(maximum, 0), 10);
+        assert_eq!(policy.possible_score(maximum, 1), 9);
+        assert_eq!(policy.possible_score(maximum, 4), 6);
+        assert_eq!(policy.possible_score(maximum, u32::MAX), 0);
+    }
+
+    #[test]
+    fn reading_old_long_horizons_does_not_apply_the_new_input_limit() {
+        let work = restore(AssignmentStatus::Draft, 2, None).unwrap();
+        let restored = Assignment::restore(AssignmentParts {
+            id: work.id,
+            teaching_course_id: work.teaching_course_id,
+            subject_id: work.subject_id,
+            student_group_id: work.student_group_id,
+            title: work.title.as_str().to_owned(),
+            body: work.body.as_str().to_owned(),
+            max_attempts: work.max_attempts,
+            grading: Grading::scored(10).unwrap(),
+            late_policy: Some(LatePolicy::new(365, 1, 100).unwrap()),
+            status: work.status,
+            created_by: work.created_by,
+            created_at: work.created_at,
+            deadline_at: work.deadline_at,
+            published_at: work.published_at,
+        })
+        .unwrap();
+        assert_eq!(
+            restored.closes_at(),
+            work.deadline_at + Duration::days(36_500)
         );
     }
 

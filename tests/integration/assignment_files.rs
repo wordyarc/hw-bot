@@ -470,6 +470,7 @@ async fn assignment_change_invalidates_an_old_file_card() {
             assignment_id: app.fixture.assignment.id(),
             actor: app.teacher_actor(),
             deadline_at: app.fixture.assignment.deadline_at() + chrono::Duration::hours(1),
+            expected_revision: None,
         })
         .await
         .unwrap();

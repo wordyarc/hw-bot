@@ -11,13 +11,11 @@ use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
 use crate::bot::handlers::reset_dialogue;
-use crate::bot::state::{BotState, DeadlineTarget, ScreenState};
+use crate::bot::state::{BotState, ScreenState};
 use crate::bot::views::{
     assignment_actions_keyboard, assignment_status, course_assignments_keyboard, courses_keyboard,
-    deadline_left, grading_lines, send_message_chunks, send_stale_button, teacher_menu,
+    grading_lines, send_message_chunks, send_stale_button, teacher_menu,
 };
-
-use super::deadline::ask_deadline;
 
 pub(in crate::bot::handlers) async fn show_courses(screen: Screen<'_>) -> HandlerResult {
     show_courses_page(screen, PageRequest::default()).await
@@ -150,11 +148,9 @@ pub(in crate::bot::handlers) async fn show_assignment(
         .map(|published_at| format!("\n🚀 Опубликовано: {}", timezone.format(published_at)))
         .unwrap_or_default();
     let text = format!(
-        "{}\n\nСтатус: {}\n⏰ Дедлайн: {} ({}){}\n🔁 Попыток: {}{}\n\n📄 Текст задания:\n{}",
+        "{}\n\nСтатус: {}{}\n🔁 Попыток: {}{}\n\n📄 Текст задания:\n{}",
         assignment.title().as_str(),
         assignment_status(assignment.status()),
-        timezone.format(assignment.deadline_at()),
-        deadline_left(assignment.deadline_at(), Utc::now()),
         grading_lines(&assignment, Utc::now(), timezone),
         assignment.max_attempts(),
         published,
@@ -238,18 +234,5 @@ pub(in crate::bot::handlers) async fn ask_assignment_deadline(
     assignment_id: AssignmentId,
     state: &BotState,
 ) -> HandlerResult {
-    if state
-        .managing_assignment(message_id, assignment_id)
-        .is_none()
-    {
-        return send_stale_button(screen.bot, screen.chat_id).await;
-    }
-    ask_deadline(
-        screen.bot,
-        screen.chat_id,
-        DeadlineTarget::Change { assignment_id },
-        screen.dialogue,
-        screen.timezone,
-    )
-    .await
+    super::terms::begin_edit(screen, message_id, assignment_id, state).await
 }

@@ -27,7 +27,7 @@ const MAX_SCORE: &str = "assignments.max_score";
 struct GradeColumns {
     raw_score: Option<i16>,
     max_score: Option<i16>,
-    late_periods: Option<i16>,
+    late_periods: Option<i32>,
     penalty: Option<i16>,
     final_score: Option<i16>,
 }
@@ -566,7 +566,7 @@ struct SubmissionRow {
     review_comment: Option<String>,
     raw_score: Option<i16>,
     grade_max_score: Option<i16>,
-    late_periods: Option<i16>,
+    late_periods: Option<i32>,
     penalty: Option<i16>,
     final_score: Option<i16>,
 }
@@ -598,7 +598,10 @@ impl TryFrom<SubmissionRow> for Submission {
             review_comment: row.review_comment,
             raw_score: cast_score(RAW_SCORE, row.raw_score)?,
             grade_max_score: cast_score(GRADE_MAX_SCORE, row.grade_max_score)?,
-            late_periods: cast_score(LATE_PERIODS, row.late_periods)?,
+            late_periods: row
+                .late_periods
+                .map(|value| checked_num_cast(LATE_PERIODS, value))
+                .transpose()?,
             penalty: cast_score(PENALTY, row.penalty)?,
             final_score: cast_score(FINAL_SCORE, row.final_score)?,
         })?)

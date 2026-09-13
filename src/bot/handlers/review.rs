@@ -147,7 +147,8 @@ pub(super) async fn submit_comment(
     {
         return Ok(());
     }
-    let Some(reviewer) = resolve_actor(bot, message.chat.id, telegram_user_id, services).await?
+    let Some(reviewer) =
+        resolve_actor(bot, message.chat.id, telegram_user_id, services, dialogue).await?
     else {
         return Ok(());
     };
@@ -188,7 +189,7 @@ pub(super) async fn submit_comment(
         Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
             reset_dialogue(dialogue).await?;
             send_app_error(bot, message.chat.id, error).await?;
-            show_home(bot, message.chat.id, telegram_user_id, services).await?;
+            show_home(bot, message.chat.id, telegram_user_id, services, dialogue).await?;
         }
         Err(AppError::Domain(
             DomainError::ScoreRequired

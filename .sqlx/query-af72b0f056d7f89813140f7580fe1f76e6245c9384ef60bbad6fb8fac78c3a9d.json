@@ -138,7 +138,7 @@
       {
         "ordinal": 12,
         "name": "late_periods",
-        "type_info": "Int2",
+        "type_info": "Int4",
         "origin": {
           "Table": {
             "table": "submissions",

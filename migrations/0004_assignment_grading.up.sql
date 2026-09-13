@@ -19,7 +19,7 @@ alter table assignments
 alter table submissions
     add column raw_score smallint,
     add column grade_max_score smallint,
-    add column late_periods smallint,
+    add column late_periods integer,
     add column penalty smallint,
     add column final_score smallint,
     add constraint submissions_grade_is_complete check (

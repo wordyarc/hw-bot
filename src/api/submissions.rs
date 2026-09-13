@@ -30,7 +30,7 @@ pub struct SubmissionResponse {
     review_comment: Option<String>,
     raw_score: Option<u16>,
     max_score: Option<u16>,
-    late_periods: Option<u16>,
+    late_periods: Option<u32>,
     penalty: Option<u16>,
     final_score: Option<u16>,
 }

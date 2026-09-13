@@ -29,6 +29,21 @@ pub const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
 pub const GRADING_PREFIX: &str = "grading:";
 pub const REVIEW_SCORE_PREFIX: &str = "reviewscore:";
 pub const LATE_POLICY_PREFIX: &str = "late:";
+pub const PENALTY_PREFIX: &str = "penalty:";
+pub const PENALTY_PERIOD: &str = "penalty:period";
+pub const TERMS_SAVE: &str = "terms:save";
+pub const TERMS_DEADLINE: &str = "terms:deadline";
+pub const TERMS_PENALTY: &str = "terms:penalty";
+pub const TERMS_PERIOD: &str = "terms:period";
+pub const TERMS_PERIODS: &str = "terms:periods";
+pub const TERMS_POLICY: &str = "terms:policy";
+pub const TERMS_BACK: &str = "terms:back";
+pub const TERMS_DURATION_DATE: &str = "terms:duration-date";
+pub const TERMS_DURATION_APPLY: &str = "terms:duration-apply";
+pub const TERMS_EXIT: &str = "terms:exit";
+pub const TERMS_STAY: &str = "terms:stay";
+pub const LATE_PERIODS_PREFIX: &str = "periods:";
+pub const TERMS_CANCEL: &str = "terms:cancel";
 
 pub const FILE_ADD: &str = "file:add";
 pub const FILE_FINISH: &str = "file:finish";
@@ -169,6 +184,10 @@ pub(super) enum FlowAction {
     MaxAttempts(AmountChoice),
     Grading(GradingChoice),
     LatePolicy(LatePolicyChoice),
+    Penalty(AmountChoice),
+    Periods(AmountChoice),
+    PenaltyPeriod,
+    Terms(TermsAction),
     ReviewScore {
         submission_id: SubmissionId,
         choice: AmountChoice,
@@ -198,12 +217,23 @@ pub(super) enum GradingChoice {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum LatePolicyChoice {
     None,
-    Preset {
-        period_days: u16,
-        penalty: u16,
-        max_periods: u16,
-    },
-    Manual,
+    Penalty,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TermsAction {
+    Save,
+    Deadline,
+    Penalty,
+    Period,
+    Periods,
+    Policy,
+    Back,
+    DurationDate,
+    DurationApply,
+    Exit,
+    Stay,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -304,6 +334,8 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         .or_else(|| parse_amount(data, MAX_ATTEMPTS_PREFIX).map(FlowAction::MaxAttempts))
         .or_else(|| parse_grading(data).map(FlowAction::Grading))
         .or_else(|| parse_late_policy(data).map(FlowAction::LatePolicy))
+        .or_else(|| parse_amount(data, PENALTY_PREFIX).map(FlowAction::Penalty))
+        .or_else(|| parse_amount(data, LATE_PERIODS_PREFIX).map(FlowAction::Periods))
         .or_else(|| parse_review_score(data))
         .or_else(|| parse_deadline(data).map(FlowAction::Deadline))
         .or_else(|| {
@@ -317,6 +349,19 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
             FILE_CANCEL_DELETE => Some(FlowAction::CancelFileDeletion),
             INVITE_CONFIRM_ROTATE => Some(FlowAction::ConfirmInviteRotation),
             INVITE_CANCEL_ROTATE => Some(FlowAction::CancelInviteRotation),
+            PENALTY_PERIOD => Some(FlowAction::PenaltyPeriod),
+            TERMS_SAVE => Some(FlowAction::Terms(TermsAction::Save)),
+            TERMS_DEADLINE => Some(FlowAction::Terms(TermsAction::Deadline)),
+            TERMS_PENALTY => Some(FlowAction::Terms(TermsAction::Penalty)),
+            TERMS_PERIOD => Some(FlowAction::Terms(TermsAction::Period)),
+            TERMS_PERIODS => Some(FlowAction::Terms(TermsAction::Periods)),
+            TERMS_POLICY => Some(FlowAction::Terms(TermsAction::Policy)),
+            TERMS_BACK => Some(FlowAction::Terms(TermsAction::Back)),
+            TERMS_DURATION_DATE => Some(FlowAction::Terms(TermsAction::DurationDate)),
+            TERMS_DURATION_APPLY => Some(FlowAction::Terms(TermsAction::DurationApply)),
+            TERMS_EXIT => Some(FlowAction::Terms(TermsAction::Exit)),
+            TERMS_STAY => Some(FlowAction::Terms(TermsAction::Stay)),
+            TERMS_CANCEL => Some(FlowAction::Terms(TermsAction::Cancel)),
             _ => None,
         });
     if let Some(action) = flow {
@@ -372,18 +417,8 @@ fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
     let value = data.strip_prefix(LATE_POLICY_PREFIX)?;
     match value {
         "none" => Some(LatePolicyChoice::None),
-        "manual" => Some(LatePolicyChoice::Manual),
-        _ => {
-            let mut parts = value.split(':');
-            let mut next = || parts.next()?.parse().ok();
-            let (period_days, penalty, max_periods) = (next()?, next()?, next()?);
-
-            parts.next().is_none().then_some(LatePolicyChoice::Preset {
-                period_days,
-                penalty,
-                max_periods,
-            })
-        }
+        "penalty" => Some(LatePolicyChoice::Penalty),
+        _ => None,
     }
 }
 
@@ -534,8 +569,15 @@ mod tests {
             ("grading:manual".to_owned(), "flow"),
             (format!("reviewscore:{submission}:0"), "flow"),
             ("late:none".to_owned(), "flow"),
-            ("late:7:1:4".to_owned(), "flow"),
-            ("late:manual".to_owned(), "flow"),
+            ("late:penalty".to_owned(), "flow"),
+            ("late:7:1:4".to_owned(), "invalid"),
+            ("late:manual".to_owned(), "invalid"),
+            (format!("{PENALTY_PREFIX}1"), "flow"),
+            (PENALTY_PERIOD.to_owned(), "flow"),
+            (TERMS_SAVE.to_owned(), "flow"),
+            (TERMS_DEADLINE.to_owned(), "flow"),
+            (TERMS_PERIODS.to_owned(), "flow"),
+            (TERMS_CANCEL.to_owned(), "flow"),
             ("dl:calendar".to_owned(), "flow"),
             (format!("student:{student}"), "flow"),
             ("attempt:3".to_owned(), "flow"),

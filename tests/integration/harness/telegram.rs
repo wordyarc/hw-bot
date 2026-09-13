@@ -243,6 +243,11 @@ pub(crate) async fn telegram_server(updates: Vec<Value>) -> MockServer {
         .respond_with(telegram_message_response())
         .mount(&telegram)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/EditMessageText"))
+        .respond_with(telegram_message_response())
+        .mount(&telegram)
+        .await;
 
     telegram
 }
@@ -707,7 +712,12 @@ pub(crate) async fn recorded_requests(telegram: &MockServer) -> String {
 pub(crate) async fn sent_callbacks(telegram: &MockServer) -> Vec<String> {
     let mut callbacks = Vec::new();
     for request in telegram.received_requests().await.unwrap() {
-        if request.url.path() != "/bottest-token/SendMessage" {
+        if !matches!(
+            request.url.path(),
+            "/bottest-token/SendMessage"
+                | "/bottest-token/EditMessageText"
+                | "/bottest-token/EditMessageReplyMarkup"
+        ) {
             continue;
         }
         let body: Value = request.body_json().unwrap();

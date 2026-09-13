@@ -33,7 +33,20 @@ impl BotTimezone {
     }
 
     pub fn today(&self) -> NaiveDate {
-        Utc::now().with_timezone(&self.offset).date_naive()
+        self.local_date(Utc::now())
+    }
+
+    pub fn local_date(&self, instant: DateTime<Utc>) -> NaiveDate {
+        instant.with_timezone(&self.offset).date_naive()
+    }
+
+    pub fn first_date_after(&self, instant: DateTime<Utc>) -> Option<NaiveDate> {
+        let date = self.local_date(instant);
+        if self.end_of(date)? > instant {
+            Some(date)
+        } else {
+            date.succ_opt()
+        }
     }
 
     pub fn format(&self, instant: DateTime<Utc>) -> String {
@@ -96,6 +109,20 @@ mod tests {
             FixedOffset::east_opt(10 * 3600).unwrap(),
             NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
         )
+    }
+
+    #[test]
+    fn calendar_lower_bound_uses_local_time_and_requires_a_strictly_later_instant() {
+        let timezone = vladivostok();
+        let created = "2026-08-20T15:00:00Z".parse().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
+        assert_eq!(timezone.first_date_after(created), Some(date));
+        let end = timezone.end_of(date).unwrap();
+        assert_eq!(timezone.first_date_after(end), date.succ_opt());
+        assert_eq!(
+            timezone.first_date_after(end + chrono::Duration::seconds(30)),
+            date.succ_opt()
+        );
     }
 
     #[test]

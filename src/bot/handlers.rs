@@ -59,11 +59,16 @@ pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Зависимости endpoint инъецирует Teloxide"
+)]
 pub(super) async fn handle_command(
     bot: Bot,
     message: Message,
     command: Command,
     dialogue: BotDialogue,
+    state: BotState,
     services: BotServices,
     timezone: BotTimezone,
     invites: BotInvites,
@@ -90,6 +95,41 @@ pub(super) async fn handle_command(
     let telegram_user_id = actor_from_message(&message)?;
     let chat_id = message.chat.id;
 
+    if let Some(form) = state.active_terms()
+        && !matches!(command, Command::Help)
+    {
+        if matches!(command, Command::Cancel) {
+            let Some(actor) =
+                resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
+            else {
+                return Ok(());
+            };
+            let screen = Screen::new(
+                &bot,
+                chat_id,
+                actor,
+                Deps {
+                    services: &services,
+                    dialogue: &dialogue,
+                    timezone: &timezone,
+                    invites: &invites,
+                },
+            );
+            if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
+                return teacher::handle_terms(
+                    screen,
+                    *message_id,
+                    callbacks::TermsAction::Stay,
+                    state,
+                )
+                .await;
+            }
+            return teacher::back(screen, form.clone()).await;
+        }
+        teacher::abandon(&bot, chat_id, form).await?;
+        reset_dialogue(&dialogue).await?;
+    }
+
     let action = match command {
         Command::Start(payload) => {
             reset_dialogue(&dialogue).await?;
@@ -106,14 +146,14 @@ pub(super) async fn handle_command(
         }
         Command::Menu => {
             reset_dialogue(&dialogue).await?;
-            show_home(&bot, chat_id, telegram_user_id, &services).await?;
+            show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
             return Ok(());
         }
         Command::Cancel => {
             reset_dialogue(&dialogue).await?;
             bot.send_message(chat_id, "Текущее действие отменено.")
                 .await?;
-            show_home(&bot, chat_id, telegram_user_id, &services).await?;
+            show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
             return Ok(());
         }
         Command::Help => {
@@ -178,14 +218,36 @@ pub(super) async fn handle_message(
     };
 
     if let Some(action) = message.text().and_then(menu_action) {
+        if let Some(form) = state.active_terms() {
+            let Some(resolved) =
+                resolve_actor(&bot, message.chat.id, actor, &services, &dialogue).await?
+            else {
+                return Ok(());
+            };
+            return teacher::confirm_exit(
+                Screen::new(&bot, message.chat.id, resolved, deps),
+                form.clone(),
+                action,
+                actor,
+            )
+            .await;
+        }
         reset_dialogue(&dialogue).await?;
         return run_menu_action(&bot, message.chat.id, actor, action, deps).await;
     }
 
     match state {
         BotState::Idle => {
-            bot.send_message(message.chat.id, texts::USE_THE_MENU)
-                .await?;
+            if resolve_actor(&bot, message.chat.id, actor, &services, &dialogue)
+                .await?
+                .is_some()
+            {
+                bot.send_message(message.chat.id, texts::USE_THE_MENU)
+                    .await?;
+            }
+        }
+        BotState::Screen(ScreenState::Guest) => {
+            home::send_guest_hint(&bot, message.chat.id).await?;
         }
         BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
             registration::submit_name(step, invite).await?;
@@ -263,13 +325,12 @@ pub(super) async fn handle_message(
         | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
             teacher::submit_grading_text(step, draft).await?;
         }
-        BotState::Flow(FlowState::ChoosingLatePolicy { draft, .. })
-        | BotState::Flow(FlowState::AwaitingLatePolicyText { draft }) => {
-            teacher::submit_late_policy_text(step, draft).await?;
+        BotState::Flow(FlowState::ConfirmingTermsExit { .. }) => {
+            bot.send_message(message.chat.id, texts::CHOOSE_BUTTON)
+                .await?;
         }
-        BotState::Flow(FlowState::ChoosingDeadline { target, .. })
-        | BotState::Flow(FlowState::AwaitingDeadlineText { target }) => {
-            teacher::submit_deadline_text(step, target).await?;
+        BotState::Flow(FlowState::ConfiguringTerms(form)) => {
+            teacher::submit_terms(step, form).await?;
         }
         BotState::Flow(FlowState::ChoosingStudent { .. }) => {
             bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
@@ -299,7 +360,9 @@ async fn run_menu_action(
         return send_help(bot, chat_id, telegram_user_id, deps.services, deps.timezone).await;
     }
 
-    let Some(actor) = resolve_actor(bot, chat_id, telegram_user_id, deps.services).await? else {
+    let Some(actor) =
+        resolve_actor(bot, chat_id, telegram_user_id, deps.services, deps.dialogue).await?
+    else {
         return Ok(());
     };
     let screen = Screen::new(bot, chat_id, actor, deps);
@@ -369,6 +432,9 @@ pub(super) async fn handle_callback(
         return Ok(());
     }
     if matches!(action, CallbackAction::Replayable(_)) {
+        if let Some(form) = state.active_terms() {
+            teacher::abandon(&bot, chat_id, form).await?;
+        }
         reset_dialogue(&dialogue).await?;
     }
 
@@ -378,7 +444,8 @@ pub(super) async fn handle_callback(
         timezone: &timezone,
         invites: &invites,
     };
-    let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services).await? else {
+    let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
+    else {
         return Ok(());
     };
     let screen = Screen::new(&bot, chat_id, actor, deps);
@@ -442,7 +509,7 @@ async fn handle_replayable_action(
                     course_id,
                 }))
                 .await?;
-            ask_input(screen.bot, screen.chat_id, "1/4. Введите название задания:").await
+            ask_input(screen.bot, screen.chat_id, texts::ASSIGNMENT_TITLE_PROMPT).await
         }
         ReplayableAction::StartSubmission(assignment_id) => {
             screen
@@ -527,6 +594,16 @@ async fn handle_flow_action(
         FlowAction::LatePolicy(choice) => {
             teacher::handle_late_policy(screen, message_id, choice, state).await?;
         }
+        FlowAction::Penalty(choice) => {
+            teacher::handle_penalty(screen, message_id, choice, state).await?
+        }
+        FlowAction::Periods(choice) => {
+            teacher::handle_periods(screen, message_id, choice, state).await?
+        }
+        FlowAction::PenaltyPeriod => teacher::handle_period(screen, message_id, state).await?,
+        FlowAction::Terms(action) => {
+            teacher::handle_terms(screen, message_id, action, state).await?
+        }
         FlowAction::ReviewScore {
             submission_id,
             choice,
@@ -585,9 +662,14 @@ pub(super) async fn resolve_actor(
     chat_id: ChatId,
     telegram_user_id: TelegramUserId,
     services: &BotServices,
+    dialogue: &BotDialogue,
 ) -> HandlerResult<Option<Actor>> {
     match services.users.resolve_actor(telegram_user_id).await {
         Ok(actor) => Ok(Some(actor)),
+        Err(error) if error.code() == crate::app::ErrorCode::NotFound => {
+            home::open_guest(bot, chat_id, dialogue).await?;
+            Ok(None)
+        }
         Err(error) => {
             send_app_error(bot, chat_id, error).await?;
             Ok(None)
@@ -652,7 +734,8 @@ mod tests {
             assignment_files_keyboard, assignment_students_keyboard, attempts_keyboard,
             calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
             course_assignments_keyboard, deadline_options_keyboard, gradebook_students_keyboard,
-            grading_keyboard, group_invite_keyboard, late_policy_keyboard, review_score_keyboard,
+            grading_keyboard, group_invite_keyboard, late_policy_keyboard, penalty_keyboard,
+            review_score_keyboard, terms_keyboard,
         };
         use crate::domain::{
             FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
@@ -662,7 +745,7 @@ mod tests {
         let teacher = teacher(1);
         let group = student_group("test-group");
         let course = course_for(&group, &teacher);
-        let assignment = assignment(&course, &teacher).published().build();
+        let assignment = assignment(&course, &teacher).scored(5).published().build();
         let file = StoredFileMetadata::restore(StoredFileParts {
             id: StoredFileId::new(),
             owner: StoredFileOwner::Assignment(assignment.id()),
@@ -678,7 +761,22 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
         let timezone = timezone();
 
-        let keyboards = [
+        let terms = super::super::state::AssignmentTerms {
+            target: super::super::state::TermsTarget::Edit {
+                assignment_id: assignment.id(),
+                grading: assignment.grading(),
+                revision: 0,
+                created_at: assignment.created_at(),
+                original_closes_at: assignment.closes_at(),
+            },
+            deadline_at: Some(assignment.deadline_at()),
+            allow_late: true,
+            period_days: 7,
+            penalty: Some(1),
+            max_periods: Some(4),
+        };
+
+        let mut keyboards = vec![
             student_menu(),
             teacher_menu(Some(1)),
             review_keyboard(SubmissionId::new()),
@@ -688,6 +786,9 @@ mod tests {
             attempts_keyboard(EXTRA_ATTEMPTS_PREFIX),
             grading_keyboard(),
             late_policy_keyboard(),
+            penalty_keyboard(7),
+            terms_keyboard(&terms, &timezone),
+            super::super::views::terms_exit_keyboard(),
             review_score_keyboard(SubmissionId::new(), 10),
             deadline_options_keyboard(&timezone),
             calendar_keyboard(today, today),
@@ -699,6 +800,29 @@ mod tests {
             group_invite_keyboard(course.id()),
             confirm_invite_rotation_keyboard(),
         ];
+
+        use super::super::state::{TermsForm, TermsStep};
+        for step in [
+            TermsStep::Policy,
+            TermsStep::Deadline,
+            TermsStep::Penalty,
+            TermsStep::Period,
+            TermsStep::Periods,
+            TermsStep::DurationDate,
+            TermsStep::DurationConfirm {
+                selected: assignment.deadline_at() + chrono::Duration::days(10),
+                periods: 2,
+            },
+            TermsStep::Summary,
+        ] {
+            keyboards.push(
+                super::super::views::terms_form_view(
+                    &TermsForm::new(terms.clone(), step),
+                    &timezone,
+                )
+                .1,
+            );
+        }
 
         for keyboard in keyboards {
             let json = serde_json::to_value(keyboard).unwrap();

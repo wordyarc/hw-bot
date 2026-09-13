@@ -11,7 +11,7 @@ mod users;
 
 pub use actor::Actor;
 pub use assignments::{
-    AssignmentService, AssignmentSubmissionHistory, ChangeDeadline, ChangeGrading,
+    AssignmentService, AssignmentSubmissionHistory, ChangeDeadline, ChangeGrading, ChangeTerms,
     CreateAssignment, GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;

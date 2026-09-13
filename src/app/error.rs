@@ -80,7 +80,8 @@ impl AppError {
                 | DomainError::ScoreOutOfRange { .. }
                 | DomainError::ScoreRequired
                 | DomainError::ScoreNotAllowed
-                | DomainError::AssignmentHorizonOutOfRange
+                | DomainError::AssignmentClosingOutOfRange
+                | DomainError::LateHorizonTooLong { .. }
                 | DomainError::AssignmentDeadlineMustBeAfterCreatedAt => ErrorCode::InvalidInput,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }

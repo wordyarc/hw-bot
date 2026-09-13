@@ -50,7 +50,7 @@ async fn start_without_an_invite_never_offers_a_group() {
     let app = TestApp::start().await;
     let guest = app.next_telegram_id();
     let telegram = telegram_server(vec![message_update(1, guest, 1, "/start")]).await;
-    let refused = expect_text(&telegram, guest, texts::GUEST_NEEDS_INVITE).await;
+    let refused = expect_guest(&telegram, guest).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
 
     let observed =
@@ -71,7 +71,8 @@ async fn a_valid_link_names_the_group_and_registers_the_student() {
     let token = app.group_invite_token().await;
     let telegram = telegram_server(vec![
         message_update(1, guest, 1, &format!("/start {token}")),
-        message_update(2, guest, 2, "Ivan"),
+        message_update(2, guest, 2, "/help"),
+        message_update(3, guest, 3, "Ivan"),
     ])
     .await;
     let prompt = Mock::given(method("POST"))
@@ -93,10 +94,50 @@ async fn a_valid_link_names_the_group_and_registers_the_student() {
 
     let asked = tokio::time::timeout(Duration::from_secs(5), prompt.wait_until_satisfied()).await;
     let registered = wait_for_group(&app.pool, guest).await;
+    let commands_ready = wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .find_map(|request| {
+                if !request.url.path().ends_with("/SetMyCommands") {
+                    return None;
+                }
+                let body: serde_json::Value = request.body_json().unwrap();
+                (body["scope"]["chat_id"] == guest
+                    && body["commands"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|command| command["command"] == "tasks"))
+                .then_some(())
+            })
+    })
+    .await;
+    assert!(
+        commands_ready.is_some(),
+        "student commands missing: {}",
+        recorded_requests(&telegram).await
+    );
     stop_bot(cancellation, &mut task).await;
     let requests = recorded_requests(&telegram).await;
     asked.unwrap_or_else(|_| panic!("the group was not named; requests:\n{requests}"));
     assert_eq!(registered, Some(app.fixture.group.id().as_uuid()));
+    let requests = telegram.received_requests().await.unwrap();
+    let commands: Vec<serde_json::Value> = requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/SetMyCommands"))
+        .map(|request| request.body_json().unwrap())
+        .filter(|body: &serde_json::Value| body["scope"]["chat_id"] == guest)
+        .collect();
+    assert!(
+        commands.last().unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command["command"] == "tasks")
+    );
 }
 
 #[tokio::test]
@@ -319,4 +360,211 @@ async fn a_stale_confirm_button_does_not_rotate_twice() {
         .await
         .unwrap();
     assert_eq!(generation, 2, "only the first confirmation may rotate");
+}
+
+#[tokio::test]
+async fn every_guest_entry_explains_access_and_removes_the_work_keyboard() {
+    let app = TestApp::start().await;
+    let guest = app.next_telegram_id();
+    let telegram = telegram_server(vec![
+        message_update(1, guest, 1, "/start"),
+        message_update(2, guest, 2, "/help"),
+        message_update(3, guest, 3, "/menu"),
+        message_update(4, guest, 4, "/review"),
+        callback_update(5, guest, callbacks::MENU_COURSES, BOT_MESSAGE_ID),
+        message_update(6, guest, 6, "hello"),
+    ])
+    .await;
+    let screen = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(
+            json!({"chat_id": guest, "text": texts::GUEST_NEEDS_INVITE,
+            "reply_markup": {"remove_keyboard": true}}),
+        ))
+        .respond_with(telegram_message_response())
+        .expect(6)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+    tokio::time::timeout(Duration::from_secs(5), screen.wait_until_satisfied())
+        .await
+        .unwrap();
+    stop_bot(cancellation, &mut task).await;
+    let requests = telegram.received_requests().await.unwrap();
+    for request in requests
+        .iter()
+        .filter(|r| r.url.path().ends_with("/SetMyCommands"))
+    {
+        let body: serde_json::Value = request.body_json().unwrap();
+        let commands = body["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0]["command"], "start");
+        assert_eq!(commands[1]["command"], "help");
+    }
+}
+
+#[tokio::test]
+async fn repeated_guest_text_uses_the_guest_screen_but_navigation_rechecks_access() {
+    use crate::harness::telegram_scenario::TelegramScenario;
+    let app = TestApp::start().await;
+    let guest = app.next_telegram_id();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(guest, "hello");
+    wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .messages(guest)
+            .into_iter()
+            .find(|message| message["text"] == texts::GUEST_NEEDS_INVITE)
+    })
+    .await
+    .expect("guest screen");
+
+    app.pool.close().await;
+    for _ in 0..2 {
+        telegram.message(guest, "hello again");
+    }
+    wait_for_some(Duration::from_secs(5), || async {
+        let messages = telegram.messages(guest);
+        (messages
+            .iter()
+            .filter(|message| message["text"] == texts::GUEST_NEEDS_INVITE)
+            .count()
+            == 3)
+            .then_some(())
+    })
+    .await
+    .expect("guest replies must not need the database");
+    telegram.message(guest, "/menu");
+    wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .messages(guest)
+            .into_iter()
+            .find(|message| message["text"] == app_error_message(ErrorCode::InternalError))
+    })
+    .await
+    .expect("navigation must recheck access");
+    stop_bot(cancellation, &mut task).await;
+
+    let requests = telegram.server.received_requests().await.unwrap();
+    let command_updates = requests
+        .iter()
+        .filter(|request| {
+            request.url.path().ends_with("/SetMyCommands")
+                && request.body_json::<serde_json::Value>().unwrap()["scope"]["chat_id"] == guest
+        })
+        .count();
+    assert_eq!(command_updates, 1);
+}
+
+#[tokio::test]
+async fn losing_registration_replaces_the_previous_teacher_commands() {
+    use crate::harness::telegram_scenario::TelegramScenario;
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/menu");
+    telegram.flush(app.teacher()).await;
+    sqlx::query!(
+        "update users set telegram_user_id = $2 where telegram_user_id = $1",
+        app.teacher(),
+        app.next_telegram_id()
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let screen = expect_guest(&telegram.server, app.teacher()).await;
+    telegram.message(app.teacher(), "/menu");
+    tokio::time::timeout(Duration::from_secs(5), screen.wait_until_satisfied())
+        .await
+        .unwrap();
+    stop_bot(cancellation, &mut task).await;
+    let commands: Vec<serde_json::Value> = telegram
+        .server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path().ends_with("/SetMyCommands"))
+        .map(|r| r.body_json().unwrap())
+        .filter(|body: &serde_json::Value| body["scope"]["chat_id"] == app.teacher())
+        .collect();
+    assert!(
+        commands.first().unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command["command"] == "review"),
+        "{commands:?}"
+    );
+    assert_eq!(
+        commands.last().unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(commands.last().unwrap()["commands"][0]["command"], "start");
+}
+
+#[tokio::test]
+async fn a_command_hint_failure_does_not_hide_the_guest_access_instructions() {
+    let app = TestApp::start().await;
+    let guest = app.next_telegram_id();
+    let telegram = telegram_server(vec![message_update(1, guest, 1, "/start")]).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SetMyCommands"))
+        .and(body_partial_json(json!({ "scope": {"chat_id": guest} })))
+        .respond_with(wiremock::ResponseTemplate::new(400).set_body_json(json!({
+            "ok": false, "error_code": 400, "description": "Bad Request: injected failure"
+        })))
+        .expect(1)
+        .with_priority(1)
+        .mount(&telegram)
+        .await;
+    let screen = expect_guest(&telegram, guest).await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+    tokio::time::timeout(Duration::from_secs(5), screen.wait_until_satisfied())
+        .await
+        .unwrap();
+    stop_bot(cancellation, &mut task).await;
+    telegram.verify().await;
+}
+
+#[tokio::test]
+async fn help_does_not_turn_a_database_failure_into_missing_registration() {
+    let app = TestApp::start().await;
+    let telegram = telegram_server(vec![message_update(1, app.teacher(), 1, "/help")]).await;
+    app.pool.close().await;
+    let failed = expect_text(
+        &telegram,
+        app.teacher(),
+        app_error_message(ErrorCode::InternalError),
+    )
+    .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+    tokio::time::timeout(Duration::from_secs(5), failed.wait_until_satisfied())
+        .await
+        .unwrap();
+    stop_bot(cancellation, &mut task).await;
+    assert!(
+        !recorded_requests(&telegram)
+            .await
+            .contains(texts::GUEST_NEEDS_INVITE)
+    );
+}
+
+async fn expect_guest(telegram: &wiremock::MockServer, guest: i64) -> wiremock::MockGuard {
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_json(
+            json!({ "chat_id": guest, "text": texts::GUEST_NEEDS_INVITE,
+            "reply_markup": { "remove_keyboard": true } }),
+        ))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(telegram)
+        .await
 }

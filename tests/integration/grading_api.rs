@@ -283,16 +283,19 @@ async fn an_assignment_without_a_late_policy_still_reports_the_deadline() {
 }
 
 #[tokio::test]
-async fn moving_the_deadline_moves_the_horizon() {
+async fn moving_the_deadline_recalculates_the_closing() {
     let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(29, Some((7, 1, 4))).await;
+    let assignment = app.add_overdue_assignment(10, Some((7, 1, 4))).await;
     let id = assignment.id().as_uuid();
 
-    app.change_deadline(id, app.teacher(), Utc::now() - Duration::days(1))
-        .await
-        .ok();
-
-    app.submit(id, app.student(), "pull/1").await.created();
+    let deadline = Utc::now() - Duration::days(1);
+    let body = app.change_deadline(id, app.teacher(), deadline).await.ok();
+    let closes_at: chrono::DateTime<Utc> =
+        serde_json::from_value(body["closes_at"].clone()).unwrap();
+    assert_eq!(
+        closes_at.timestamp_micros(),
+        (deadline + Duration::days(28)).timestamp_micros()
+    );
 }
 
 #[tokio::test]
@@ -328,12 +331,175 @@ async fn the_horizon_reaches_the_assignment_response() {
     let card = &body["assignment"];
     assert_eq!(card["late_period_days"], json!(7));
     assert_eq!(card["late_penalty"], json!(1));
+    assert!(card.get("late_closes_at").is_none());
     assert_eq!(card["late_max_periods"], json!(4));
     assert_eq!(
         card["closes_at"].as_str().unwrap(),
         (assignment.deadline_at() + Duration::days(28))
             .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
     );
+}
+
+#[tokio::test]
+async fn a_nonweekly_policy_round_trips_through_http() {
+    let app = TestApp::start().await;
+    let deadline = Utc::now() + Duration::days(7);
+    let closing = deadline + Duration::days(10);
+    let body = app
+        .create_assignment_raw(
+            app.course(),
+            app.teacher(),
+            json!({
+                "title": "Periodic closing", "body": "Send a pull request.", "max_attempts": 2,
+                "max_score": 5, "deadline_at": deadline, "late_period_days": 5,
+                "late_penalty": 1, "late_max_periods": 2,
+            }),
+        )
+        .await
+        .created();
+    let id = hw_bot::domain::AssignmentId::from_uuid(body["id"].as_str().unwrap().parse().unwrap());
+    let saved = db::assignments::find_by_id(&app.pool, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.closes_at().timestamp_micros(),
+        closing.timestamp_micros()
+    );
+    assert_eq!(body["late_max_periods"], json!(2));
+    assert!(body.get("late_closes_at").is_none());
+}
+
+#[tokio::test]
+async fn the_removed_absolute_date_is_rejected_including_null() {
+    let app = TestApp::start().await;
+    for value in [json!(Utc::now()), json!(null)] {
+        app.create_assignment_raw(
+            app.course(),
+            app.teacher(),
+            json!({
+                "title": "Old policy", "body": "Send a pull request.", "max_attempts": 2,
+                "max_score": 5, "deadline_at": Utc::now() + Duration::days(7),
+                "late_closes_at": value,
+            }),
+        )
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
+        app.post_as(
+            &format!("/assignments/{}/grading", app.assignment()),
+            app.teacher(),
+            json!({
+                "max_score": 5, "late_closes_at": value,
+            }),
+        )
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
+        app.post_as(
+            &format!("/assignments/{}/deadline", app.assignment()),
+            app.teacher(),
+            json!({
+                "deadline_at": Utc::now() + Duration::days(5), "late_closes_at": value,
+            }),
+        )
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
+    }
+}
+
+#[tokio::test]
+async fn a_deadline_can_move_past_the_previous_computed_closing() {
+    let app = TestApp::start().await;
+    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
+    let deadline = assignment.closes_at() + Duration::days(1);
+    let closing = deadline + Duration::days(28);
+    let body = app
+        .post_as(
+            &format!("/assignments/{}/deadline", assignment.id().as_uuid()),
+            app.teacher(),
+            json!({ "deadline_at": deadline }),
+        )
+        .await
+        .ok();
+    let saved = db::assignments::find_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.deadline_at().timestamp_micros(),
+        deadline.timestamp_micros()
+    );
+    assert_eq!(
+        saved.closes_at().timestamp_micros(),
+        closing.timestamp_micros()
+    );
+    assert_eq!(body["late_max_periods"], json!(4));
+}
+
+#[tokio::test]
+async fn a_horizon_longer_than_366_days_preserves_conditions_and_revision() {
+    let app = TestApp::start().await;
+    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
+    let before = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = before.revision();
+    let before = before.into_assignment();
+    app.post_as(
+        &format!("/assignments/{}/grading", assignment.id().as_uuid()),
+        app.teacher(),
+        json!({
+            "max_score": 5, "late_period_days": 365, "late_penalty": 1, "late_max_periods": 100,
+        }),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    let after = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.revision(), revision);
+    assert_eq!(after.into_assignment(), before);
+}
+
+#[tokio::test]
+async fn moving_a_deadline_back_does_not_truncate_the_stored_lateness_counter() {
+    let app = TestApp::start().await;
+    let now = Utc::now();
+    let work = hw_bot::test_support::assignment(&app.fixture.course, &app.fixture.teacher)
+        .created_at(now - Duration::days(70_001))
+        .deadline_at(now + Duration::days(1))
+        .scored(5)
+        .late_policy(1, 1, 1)
+        .published()
+        .build();
+    db::assignments::insert(&app.pool, &work).await.unwrap();
+    let id = submission_id(
+        &app.submit(work.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    app.change_deadline(
+        work.id().as_uuid(),
+        app.teacher(),
+        now - Duration::days(70_000),
+    )
+    .await
+    .ok();
+    let body = app
+        .review_with_score(id, app.teacher(), "accept", 5, "Ок")
+        .await
+        .ok();
+    assert!(body["late_periods"].as_u64().unwrap() > u64::from(u16::MAX));
+    let saved = db::submissions::find_by_id(&app.pool, hw_bot::domain::SubmissionId::from_uuid(id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        u64::from(saved.grade().unwrap().late_periods()),
+        body["late_periods"].as_u64().unwrap()
+    );
+    assert_eq!(saved.grade().unwrap().final_score(), 0);
 }
 
 async fn gradebook(app: &TestApp, telegram_id: i64) -> crate::harness::TestResponse {

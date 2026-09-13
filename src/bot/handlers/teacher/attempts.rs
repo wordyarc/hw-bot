@@ -213,7 +213,7 @@ pub(in crate::bot::handlers) async fn submit_attempt_amount(
     } = step;
     let Deps {
         services,
-        dialogue: _,
+        dialogue,
         timezone: _,
         invites: _,
     } = deps;
@@ -229,7 +229,9 @@ pub(in crate::bot::handlers) async fn submit_attempt_amount(
         .await?;
         return Ok(());
     };
-    let Some(actor) = resolve_actor(bot, message.chat.id, telegram_user_id, services).await? else {
+    let Some(actor) =
+        resolve_actor(bot, message.chat.id, telegram_user_id, services, dialogue).await?
+    else {
         return Ok(());
     };
     grant_attempts(

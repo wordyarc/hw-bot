@@ -31,6 +31,16 @@ pub struct ChangeDeadline {
     pub assignment_id: AssignmentId,
     pub actor: Actor,
     pub deadline_at: DateTime<Utc>,
+    pub expected_revision: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChangeTerms {
+    pub assignment_id: AssignmentId,
+    pub actor: Actor,
+    pub deadline_at: DateTime<Utc>,
+    pub late_policy: Option<LatePolicy>,
+    pub expected_revision: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +49,7 @@ pub struct ChangeGrading {
     pub actor: Actor,
     pub grading: Grading,
     pub late_policy: Option<LatePolicy>,
+    pub expected_revision: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -118,7 +129,7 @@ impl AssignmentService {
         actor: Actor,
         published_at: DateTime<Utc>,
     ) -> AppResult<Assignment> {
-        self.change(assignment_id, actor, |assignment, course, actor| {
+        self.change(assignment_id, actor, None, |assignment, course, actor| {
             assignment.publish(course, actor, published_at)
         })
         .await
@@ -129,13 +140,15 @@ impl AssignmentService {
         assignment_id: AssignmentId,
         actor: Actor,
     ) -> AppResult<Assignment> {
-        self.change(assignment_id, actor, Assignment::archive).await
+        self.change(assignment_id, actor, None, Assignment::archive)
+            .await
     }
 
     pub async fn change_deadline(&self, command: ChangeDeadline) -> AppResult<Assignment> {
         self.change(
             command.assignment_id,
             command.actor,
+            command.expected_revision,
             |assignment, course, actor| {
                 assignment.change_deadline(course, actor, command.deadline_at)
             },
@@ -147,8 +160,21 @@ impl AssignmentService {
         self.change(
             command.assignment_id,
             command.actor,
+            command.expected_revision,
             |assignment, course, actor| {
                 assignment.change_grading(course, actor, command.grading, command.late_policy)
+            },
+        )
+        .await
+    }
+
+    pub async fn change_terms(&self, command: ChangeTerms) -> AppResult<Assignment> {
+        self.change(
+            command.assignment_id,
+            command.actor,
+            Some(command.expected_revision),
+            |assignment, course, actor| {
+                assignment.change_terms(course, actor, command.deadline_at, command.late_policy)
             },
         )
         .await
@@ -354,22 +380,45 @@ impl AssignmentService {
         assignment_id: AssignmentId,
         action: &'static str,
     ) -> AppResult<Assignment> {
-        let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
+        self.load_managed_versioned_assignment(actor, assignment_id, action)
+            .await
+            .map(|(assignment, _)| assignment)
+    }
+
+    pub async fn find_versioned_for_teacher(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+    ) -> AppResult<(Assignment, i64)> {
+        self.load_managed_versioned_assignment(actor, assignment_id, "read assignment")
+            .await
+    }
+
+    async fn load_managed_versioned_assignment(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+        action: &'static str,
+    ) -> AppResult<(Assignment, i64)> {
+        let stored = db::assignments::find_versioned_by_id(&self.pool, assignment_id)
             .await?
             .required("assignment")?;
+        let revision = stored.revision();
+        let assignment = stored.into_assignment();
         let (actor, teaching_course) =
             load_managing_teacher(&self.pool, actor, assignment.teaching_course_id(), action)
                 .await?;
 
         assignment.ensure_managed_by(&teaching_course, &actor, action)?;
 
-        Ok(assignment)
+        Ok((assignment, revision))
     }
 
     async fn change<F>(
         &self,
         assignment_id: AssignmentId,
         actor: Actor,
+        expected_revision: Option<i64>,
         apply: F,
     ) -> AppResult<Assignment>
     where
@@ -391,6 +440,9 @@ impl AssignmentService {
         )
         .await?;
 
+        if expected_revision.is_some_and(|expected| expected != revision) {
+            return Err(AppError::AssignmentChangedConcurrently);
+        }
         apply(&mut assignment, &teaching_course, &actor)?;
 
         match db::assignments::update(&mut *tx, &assignment, revision).await {

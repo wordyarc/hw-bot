@@ -48,14 +48,16 @@ async fn failed_confirmation_does_not_create_a_second_assignment() {
     telegram
         .click_button(app.teacher(), &cb(callbacks::GRADING_PREFIX, "passfail"))
         .await;
-    let deadline = telegram
-        .button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
         .await;
+    let save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
     fail_next(&telegram, "SendMessage").await;
-    telegram.click(app.teacher(), &deadline);
+    telegram.click(app.teacher(), &save);
     wait_for_created_assignment(&app.pool, "Unique draft")
         .await
         .expect("committed draft");
+    telegram.click(app.teacher(), &save);
     telegram.message(
         app.teacher(),
         &deadline_input(Utc::now() + chrono::Duration::days(7)),

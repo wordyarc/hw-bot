@@ -68,9 +68,14 @@ pub(super) async fn submit_file(
         .await?;
         return Ok(());
     }
-    let Some(actor) =
-        crate::bot::handlers::resolve_actor(bot, message.chat.id, telegram_user_id, services)
-            .await?
+    let Some(actor) = crate::bot::handlers::resolve_actor(
+        bot,
+        message.chat.id,
+        telegram_user_id,
+        services,
+        deps.dialogue,
+    )
+    .await?
     else {
         return Ok(());
     };

@@ -8,8 +8,8 @@ use teloxide::types::{
 
 use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
 use crate::domain::{
-    Assignment, AssignmentStatus, Grade, Role, StoredFileMetadata, SubmissionId, SubmissionStatus,
-    TeachingCourseId,
+    Assignment, AssignmentStatus, Grade, Grading, LatePolicy, Role, StoredFileMetadata,
+    SubmissionId, SubmissionStatus, TeachingCourseId,
 };
 
 use super::HandlerResult;
@@ -23,6 +23,13 @@ use super::callbacks::{
     MENU_PROFILE, MENU_QUEUE, NEXT_REVIEW, PUBLISH_PREFIX, REVIEW_ACCEPT_PREFIX,
     REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, STUDENT_PREFIX,
 };
+use super::callbacks::{
+    LATE_PERIODS_PREFIX, PENALTY_PERIOD, PENALTY_PREFIX, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
+    TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS,
+    TERMS_POLICY, TERMS_SAVE,
+};
+use super::state::{AssignmentTerms, TermsForm, TermsStep, TermsTarget};
+use super::texts;
 use super::timezone::BotTimezone;
 
 const MESSAGE_LIMIT: usize = 4096;
@@ -219,7 +226,7 @@ pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
 
     if assignment.status() != AssignmentStatus::Archived {
         rows.push(vec![InlineKeyboardButton::callback(
-            "⏰ Изменить дедлайн",
+            texts::BUTTON_EDIT_DATES,
             format!("{DEADLINE_PREFIX}{assignment_id}"),
         )]);
     }
@@ -277,6 +284,58 @@ pub(super) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboar
         DEADLINE_MANUAL,
     )]);
 
+    InlineKeyboardMarkup::new(rows)
+}
+
+fn duration_options_keyboard(
+    terms: &AssignmentTerms,
+    timezone: &BotTimezone,
+) -> InlineKeyboardMarkup {
+    let deadline = terms.deadline_at.expect("duration follows deadline");
+    let base = timezone.local_date(deadline);
+    let mut rows = Vec::new();
+    for (label, date) in [
+        (
+            "Неделя после срока",
+            base.checked_add_days(chrono::Days::new(7)),
+        ),
+        (
+            "2 недели после срока",
+            base.checked_add_days(chrono::Days::new(14)),
+        ),
+        (
+            "Месяц после срока",
+            base.checked_add_months(chrono::Months::new(1)),
+        ),
+    ] {
+        let Some(date) = date else { continue };
+        let Some(at) = timezone.end_of(date) else {
+            continue;
+        };
+        let policy = LatePolicy::new(terms.period_days, terms.penalty.unwrap_or(1), 1)
+            .expect("valid period and penalty");
+        let Ok(periods) = u16::try_from(policy.periods_until(deadline, at)) else {
+            continue;
+        };
+        if LatePolicy::new(policy.period_days(), policy.penalty(), periods)
+            .and_then(|policy| policy.validate_horizon(deadline))
+            .is_err()
+        {
+            continue;
+        }
+        rows.push(vec![InlineKeyboardButton::callback(
+            format!("📅 {label} · {}", timezone.format_date(date)),
+            format!("{CALENDAR_PICK_PREFIX}{date}"),
+        )]);
+    }
+    rows.push(vec![InlineKeyboardButton::callback(
+        "🗓 Выбрать дату",
+        DEADLINE_CALENDAR,
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "✍️ Ввести вручную",
+        DEADLINE_MANUAL,
+    )]);
     InlineKeyboardMarkup::new(rows)
 }
 
@@ -359,7 +418,7 @@ pub(super) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKey
     }
 
     rows.push(vec![InlineKeyboardButton::callback(
-        "⬅️ Назад",
+        texts::BUTTON_DATE_OPTIONS,
         DEADLINE_OPTIONS,
     )]);
 
@@ -407,26 +466,300 @@ pub(super) fn grading_keyboard() -> InlineKeyboardMarkup {
 }
 
 pub(super) fn late_policy_keyboard() -> InlineKeyboardMarkup {
-    let preset = |period_days: u16, penalty: u16, max_periods: u16| {
-        InlineKeyboardButton::callback(
-            format!("−{penalty} за {period_days} дн. · закрыть через {max_periods}"),
-            format!("{LATE_POLICY_PREFIX}{period_days}:{penalty}:{max_periods}"),
-        )
-    };
-
     InlineKeyboardMarkup::new(vec![
-        vec![preset(7, 1, 4)],
-        vec![preset(14, 1, 2)],
-        vec![preset(14, 2, 2)],
         vec![InlineKeyboardButton::callback(
-            "✍️ Свои значения",
-            format!("{LATE_POLICY_PREFIX}manual"),
-        )],
-        vec![InlineKeyboardButton::callback(
-            "⏭ Без штрафов за опоздание",
+            texts::BUTTON_STRICT,
             format!("{LATE_POLICY_PREFIX}none"),
         )],
+        vec![InlineKeyboardButton::callback(
+            texts::BUTTON_LATE,
+            format!("{LATE_POLICY_PREFIX}penalty"),
+        )],
     ])
+}
+
+pub(super) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        [1, 2]
+            .into_iter()
+            .map(|n| {
+                InlineKeyboardButton::callback(
+                    format!("На {}", texts::points(n)),
+                    format!("{PENALTY_PREFIX}{n}"),
+                )
+            })
+            .collect(),
+        vec![InlineKeyboardButton::callback(
+            texts::BUTTON_OTHER_NUMBER,
+            format!("{PENALTY_PREFIX}manual"),
+        )],
+        vec![InlineKeyboardButton::callback(
+            format!("Изменить период: {period_days} дн."),
+            PENALTY_PERIOD,
+        )],
+    ])
+}
+
+pub(super) fn terms_keyboard(
+    terms: &AssignmentTerms,
+    timezone: &BotTimezone,
+) -> InlineKeyboardMarkup {
+    let mut rows = vec![vec![InlineKeyboardButton::callback(
+        if matches!(terms.target, TermsTarget::Create(_)) {
+            texts::BUTTON_SAVE_DRAFT
+        } else {
+            texts::BUTTON_SAVE_TERMS
+        },
+        TERMS_SAVE,
+    )]];
+    rows.push(vec![InlineKeyboardButton::callback(
+        format!(
+            "{} {}",
+            texts::SUBMIT_UNTIL,
+            terms
+                .deadline_at
+                .map(|date| timezone.format_short(date))
+                .unwrap_or_default()
+        ),
+        TERMS_DEADLINE,
+    )]);
+    if terms.allow_late {
+        rows.push(vec![
+            InlineKeyboardButton::callback(
+                format!("{} −{}", texts::PENALTY_LABEL, terms.penalty.unwrap_or(0)),
+                TERMS_PENALTY,
+            ),
+            InlineKeyboardButton::callback(
+                format!("{} {} дн.", texts::PERIOD_LABEL, terms.period_days),
+                TERMS_PERIOD,
+            ),
+        ]);
+        rows.push(vec![InlineKeyboardButton::callback(
+            format!(
+                "{} {}",
+                texts::LATENESS_LABEL,
+                texts::lateness_duration(terms.period_days, terms.max_periods.unwrap_or(0))
+            ),
+            TERMS_PERIODS,
+        )]);
+    }
+    if terms.grading().is_scored() {
+        rows.push(vec![InlineKeyboardButton::callback(
+            if terms.allow_late {
+                "После срока: со штрафом"
+            } else {
+                "После срока: не принимать"
+            },
+            TERMS_POLICY,
+        )]);
+    }
+    rows.push(vec![InlineKeyboardButton::callback(
+        if matches!(terms.target, TermsTarget::Create(_)) {
+            texts::BUTTON_CANCEL_CREATION
+        } else {
+            texts::BUTTON_CANCEL_TERMS
+        },
+        TERMS_CANCEL,
+    )]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
+    use super::callbacks::{TERMS_EXIT, TERMS_STAY};
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            texts::BUTTON_STAY,
+            TERMS_STAY,
+        )],
+        vec![InlineKeyboardButton::callback(
+            texts::BUTTON_EXIT,
+            TERMS_EXIT,
+        )],
+    ])
+}
+
+pub(super) fn terms_form_view(
+    form: &TermsForm,
+    timezone: &BotTimezone,
+) -> (String, InlineKeyboardMarkup) {
+    let terms = &form.terms;
+    let button = |label: &str, data: &str| InlineKeyboardButton::callback(label, data);
+    let empty = || InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new());
+    let context = terms
+        .deadline_at
+        .map(|deadline| {
+            format!(
+                "{} {}.\n",
+                if terms.allow_late {
+                    texts::NO_PENALTY_UNTIL
+                } else {
+                    texts::SUBMIT_UNTIL
+                },
+                timezone.format(deadline)
+            )
+        })
+        .unwrap_or_default();
+    let date_keyboard = || {
+        if let Some(month) = form.calendar_month {
+            let after = if form.step == TermsStep::DurationDate {
+                terms.deadline_at.expect("duration follows deadline")
+            } else {
+                match terms.target {
+                    TermsTarget::Edit { created_at, .. } => created_at,
+                    _ => Utc::now(),
+                }
+            };
+            let earliest = timezone.first_date_after(after).unwrap_or(NaiveDate::MAX);
+            calendar_keyboard(month, earliest)
+        } else if form.step == TermsStep::DurationDate {
+            duration_options_keyboard(terms, timezone)
+        } else {
+            deadline_options_keyboard(timezone)
+        }
+    };
+    let (text, mut keyboard) = match form.step {
+        TermsStep::Policy => (
+            texts::LATE_POLICY_QUESTION.to_owned(),
+            late_policy_keyboard(),
+        ),
+        TermsStep::Deadline | TermsStep::DurationDate => {
+            let question = if form.step == TermsStep::DurationDate {
+                texts::DURATION_DATE_QUESTION
+            } else if terms.allow_late {
+                texts::NO_PENALTY_QUESTION
+            } else {
+                texts::DEADLINE_QUESTION
+            };
+            (
+                format!(
+                    "{context}{question}\nВремя по умолчанию — {} ({}). Можно прислать дату сообщением.\n{}",
+                    timezone.deadline_time().format("%H:%M"),
+                    timezone.suffix(),
+                    texts::DATE_FORMAT
+                ),
+                date_keyboard(),
+            )
+        }
+        TermsStep::Penalty => (
+            format!(
+                "{context}{}\nРазмер штрафа в баллах за каждые начавшиеся {} дн. Пришлите число от 1 до 100 сообщением.",
+                texts::penalty_question(terms.period_days),
+                terms.period_days
+            ),
+            penalty_keyboard(terms.period_days),
+        ),
+        TermsStep::Period => (format!("{context}{}", texts::PERIOD_PROMPT), empty()),
+        TermsStep::Periods => {
+            let mut rows = Vec::new();
+            if let Some(deadline) = terms.deadline_at {
+                for periods in [1, 2, 4] {
+                    let policy =
+                        LatePolicy::new(terms.period_days, terms.penalty.unwrap_or(1), periods)
+                            .expect("valid preset");
+                    if policy.validate_horizon(deadline).is_ok() {
+                        let date = policy.closes_at(deadline).expect("validated horizon");
+                        rows.push(vec![InlineKeyboardButton::callback(
+                            format!(
+                                "{} · до {}",
+                                texts::lateness_duration(terms.period_days, periods),
+                                timezone.format_short(date)
+                            ),
+                            format!("{LATE_PERIODS_PREFIX}{periods}"),
+                        )]);
+                    }
+                }
+            }
+            rows.push(vec![
+                button(
+                    "Другое число периодов",
+                    &format!("{LATE_PERIODS_PREFIX}manual"),
+                ),
+                button("Выбрать дату", TERMS_DURATION_DATE),
+            ]);
+            (
+                format!(
+                    "{context}{}\n{}",
+                    texts::penalty_rule(terms.period_days, terms.penalty.unwrap_or(0)),
+                    texts::periods_question(terms.period_days)
+                ),
+                InlineKeyboardMarkup::new(rows),
+            )
+        }
+        TermsStep::DurationConfirm { selected, periods } => {
+            let policy = LatePolicy::new(terms.period_days, terms.penalty.unwrap_or(1), periods)
+                .expect("validated duration");
+            let closing = policy
+                .closes_at(terms.deadline_at.expect("duration follows deadline"))
+                .expect("validated duration");
+            (
+                format!(
+                    "{} — это {}.\n{} {} включительно. Применить?",
+                    timezone.format(selected),
+                    texts::lateness_duration(terms.period_days, periods),
+                    texts::SUBMISSIONS_CLOSE_LABEL,
+                    timezone.format(closing)
+                ),
+                InlineKeyboardMarkup::new(vec![vec![button(
+                    "Применить число периодов",
+                    TERMS_DURATION_APPLY,
+                )]]),
+            )
+        }
+        TermsStep::Summary => {
+            let deadline = terms.deadline_at.expect("summary requires deadline");
+            let policy = terms
+                .late_policy()
+                .expect("summary requires complete policy");
+            let closing = policy.map_or(deadline, |policy| {
+                policy.closes_at(deadline).expect("validated horizon")
+            });
+            let mut text = format!(
+                "{}\n{}",
+                texts::TERMS_CONFIRM,
+                terms_lines(terms.grading(), deadline, policy, timezone)
+            );
+            if let (Some(policy), Grading::Score { max_score }) = (policy, terms.grading()) {
+                text.push_str(&format!(
+                    "\n{}",
+                    texts::score_preview(
+                        policy.possible_score(max_score, 1),
+                        policy.possible_score(max_score, u32::from(policy.max_periods()))
+                    )
+                ));
+            }
+            let previous = match terms.target {
+                TermsTarget::Edit {
+                    original_closes_at, ..
+                } => Some(original_closes_at),
+                _ => form.previous_closes_at,
+            };
+            if let Some(previous) = previous
+                && closing != previous
+            {
+                text.push_str(&format!(
+                    "\n{}",
+                    texts::closing_change(&timezone.format(previous), &timezone.format(closing))
+                ));
+            }
+            if matches!(terms.target, TermsTarget::Edit { .. }) && deadline <= Utc::now() {
+                text.push_str(&format!(
+                    "\n{}",
+                    if policy.is_some() {
+                        texts::PAST_PENALTY_WARNING
+                    } else {
+                        texts::PAST_STRICT_WARNING
+                    }
+                ));
+            }
+            (text, terms_keyboard(terms, timezone))
+        }
+    };
+    if !form.manual && form.can_go_back() {
+        keyboard
+            .inline_keyboard
+            .push(vec![button(texts::BUTTON_BACK, TERMS_BACK)]);
+    }
+    (text, keyboard)
 }
 
 /// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
@@ -618,20 +951,22 @@ pub(super) fn grading_lines(
     now: DateTime<Utc>,
     timezone: &BotTimezone,
 ) -> String {
-    let Some(max_score) = assignment.grading().max_score() else {
-        return String::new();
-    };
-
-    let mut lines = format!("\n🏅 Оценивание: до {max_score} баллов");
-    if assignment.late_policy().is_none() {
-        return lines;
+    let mut lines = format!(
+        "\n{}",
+        terms_lines(
+            assignment.grading(),
+            assignment.deadline_at(),
+            assignment.late_policy(),
+            timezone
+        )
+    );
+    if now > assignment.closes_at() {
+        lines.push_str(&format!(
+            "\n{} {}.",
+            texts::CLOSED_ON,
+            timezone.format(assignment.closes_at())
+        ));
     }
-
-    lines.push_str(&format!(
-        "\n{} {}",
-        super::texts::SUBMISSIONS_CLOSE_LABEL,
-        timezone.format(assignment.closes_at()),
-    ));
 
     let penalty = assignment.penalty_at(now);
     if penalty > 0 && now <= assignment.closes_at() {
@@ -642,6 +977,36 @@ pub(super) fn grading_lines(
     }
 
     lines
+}
+
+pub(super) fn terms_lines(
+    grading: Grading,
+    deadline_at: DateTime<Utc>,
+    late_policy: Option<LatePolicy>,
+    timezone: &BotTimezone,
+) -> String {
+    let scale = match grading.max_score() {
+        Some(max) => format!("{} {}", texts::MAX_SCORE_LABEL, texts::points(max)),
+        None => texts::PASS_FAIL_LABEL.to_owned(),
+    };
+    match late_policy {
+        Some(policy) => format!(
+            "{scale}\n{} {}.\n{}\n{} {}.\n{} {} включительно.",
+            texts::NO_PENALTY_UNTIL,
+            timezone.format(deadline_at),
+            texts::penalty_rule(policy.period_days(), policy.penalty()),
+            texts::LATENESS_LABEL,
+            texts::lateness_duration(policy.period_days(), policy.max_periods()),
+            texts::SUBMISSIONS_CLOSE_LABEL,
+            timezone.format(policy.closes_at(deadline_at).expect("validated horizon"))
+        ),
+        None => format!(
+            "{scale}\n{} {}. {}",
+            texts::SUBMIT_UNTIL,
+            timezone.format(deadline_at),
+            texts::STRICT_AFTER_DEADLINE
+        ),
+    }
 }
 
 pub(super) fn grade_line(grade: Grade) -> String {
@@ -764,6 +1129,104 @@ mod tests {
     use chrono::{DateTime, FixedOffset, NaiveTime};
 
     use super::*;
+
+    fn scored_terms() -> AssignmentTerms {
+        let mut draft = crate::bot::state::DraftAssignment::new(
+            TeachingCourseId::new(),
+            "Task".into(),
+            "Body".into(),
+            2,
+        );
+        draft.grading = Grading::scored(10).unwrap();
+        AssignmentTerms {
+            deadline_at: Some(crate::test_support::t0() + chrono::Duration::days(7)),
+            allow_late: true,
+            period_days: 1,
+            penalty: Some(1),
+            max_periods: Some(100),
+            ..AssignmentTerms::creating(draft)
+        }
+    }
+
+    #[test]
+    fn duration_presets_start_after_the_deadline_and_respect_the_horizon() {
+        use crate::bot::callbacks::{CallbackAction, DeadlineAction, FlowAction};
+        let timezone = timezone();
+        let mut terms = scored_terms();
+        terms.deadline_at = timezone.parse_deadline("20.08.2027 23:59");
+        terms.period_days = 365;
+        let deadline = terms.deadline_at.unwrap();
+        let policy = LatePolicy::new(365, 1, 1).unwrap();
+        let keyboard = duration_options_keyboard(&terms, &timezone);
+        let mut dates = Vec::new();
+        for button in keyboard.inline_keyboard.iter().flatten() {
+            let teloxide::types::InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
+                panic!("expected a callback");
+            };
+            let action = crate::bot::callbacks::parse(data).expect("routable duration button");
+            if let CallbackAction::Flow(FlowAction::Deadline(DeadlineAction::Pick(date))) = action {
+                let at = timezone.end_of(date).unwrap();
+                assert!(at > deadline);
+                let periods = u16::try_from(policy.periods_until(deadline, at)).unwrap();
+                LatePolicy::new(365, 1, periods)
+                    .unwrap()
+                    .validate_horizon(deadline)
+                    .unwrap();
+                dates.push(date);
+            }
+        }
+        assert_eq!(dates.len(), 3);
+        assert_eq!(
+            dates[0],
+            timezone.local_date(deadline) + chrono::Days::new(7)
+        );
+    }
+
+    #[test]
+    fn edit_calendar_hides_the_utc_day_before_local_creation() {
+        let timezone = timezone();
+        let created_at = "2026-08-20T15:00:00Z".parse().unwrap();
+        let mut terms = scored_terms();
+        terms.target = TermsTarget::Edit {
+            assignment_id: crate::domain::AssignmentId::new(),
+            grading: terms.grading(),
+            revision: 0,
+            created_at,
+            original_closes_at: terms.deadline_at.unwrap(),
+        };
+        let mut form = TermsForm::new(terms, TermsStep::Deadline);
+        form.calendar_month = Some(timezone.local_date(created_at));
+        let (_, keyboard) = terms_form_view(&form, &timezone);
+        let json = serde_json::to_string(&keyboard).unwrap();
+        assert!(!json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-20")));
+        assert!(json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-21")));
+    }
+
+    #[test]
+    fn a_hundred_periods_still_produce_a_short_two_boundary_preview() {
+        let form = TermsForm::new(scored_terms(), TermsStep::Summary);
+        let (text, keyboard) = terms_form_view(&form, &timezone());
+        assert!(text.contains(&texts::score_preview(9, 0)));
+        assert!(text.chars().count() < 1000);
+        assert_eq!(keyboard.inline_keyboard.last().unwrap().len(), 1);
+        assert_eq!(
+            keyboard.inline_keyboard.last().unwrap()[0].text,
+            texts::BUTTON_CANCEL_CREATION
+        );
+    }
+
+    #[test]
+    fn calendar_return_and_previous_step_have_distinct_labels_and_actions() {
+        let mut form = TermsForm::new(scored_terms(), TermsStep::Deadline);
+        form.calendar_month = Some(timezone().today());
+        let (_, keyboard) = terms_form_view(&form, &timezone());
+        let json = serde_json::to_value(keyboard).unwrap();
+        let rows = json["inline_keyboard"].as_array().unwrap();
+        assert_eq!(rows[rows.len() - 2][0]["text"], texts::BUTTON_DATE_OPTIONS);
+        assert_eq!(rows[rows.len() - 2][0]["callback_data"], DEADLINE_OPTIONS);
+        assert_eq!(rows.last().unwrap()[0]["text"], texts::BUTTON_BACK);
+        assert_eq!(rows.last().unwrap()[0]["callback_data"], TERMS_BACK);
+    }
 
     fn timezone() -> BotTimezone {
         BotTimezone::new(

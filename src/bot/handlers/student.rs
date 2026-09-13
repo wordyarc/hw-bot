@@ -56,7 +56,7 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
             place.subject_name,
             place.assignment_title,
             timezone.format_short(place.submitted_at),
-            queue_place(place.position, place.total),
+            texts::queue_ahead(place.position),
         ));
     }
 
@@ -72,14 +72,6 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
         )),
     )
     .await
-}
-
-fn queue_place(position: u32, total: u32) -> String {
-    if position == 0 {
-        "преподаватель ещё не назначен на курс".to_owned()
-    } else {
-        format!("ваш номер в очереди: {position} из {total}")
-    }
 }
 
 #[derive(Default)]
@@ -142,10 +134,23 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
         };
         subjects.push(&mut text, subject);
         text.push_str(&format!(
-            "\n{}\n{status} · до {} ({})\nосталось попыток: {}\n",
+            "\n{}\n{status} · {} {} ({}){}\nосталось попыток: {}\n",
             assignment.title().as_str(),
+            if assignment.late_policy().is_some() {
+                texts::NO_PENALTY_UNTIL
+            } else {
+                texts::SUBMIT_UNTIL
+            },
             timezone.format(assignment.deadline_at()),
             deadline_left(assignment.deadline_at(), now),
+            assignment
+                .late_policy()
+                .map(|_| format!(
+                    "\n{} {}",
+                    texts::SUBMISSIONS_CLOSE_LABEL,
+                    timezone.format(assignment.closes_at())
+                ))
+                .unwrap_or_default(),
             remaining,
         ));
         rows.push(vec![InlineKeyboardButton::callback(
@@ -266,11 +271,9 @@ pub(super) async fn show_assignment(
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
     let mut summary = format!(
-        "📘 {}\n{}\n\n⏰ Дедлайн: {} ({}){}\n🔁 Попытки: использовано {}, доступно {}, осталось {}",
+        "📘 {}\n{}\n{}\n🔁 Попытки: использовано {}, доступно {}, осталось {}",
         details.assignment.subject.name().as_str(),
         assignment.title().as_str(),
-        timezone.format(assignment.deadline_at()),
-        deadline_left(assignment.deadline_at(), Utc::now()),
         grading_lines(assignment, Utc::now(), timezone),
         history.used_attempts(),
         history.allowed_attempts_for(assignment),
@@ -289,8 +292,8 @@ pub(super) async fn show_assignment(
             })
     {
         summary.push_str(&format!(
-            "\n⏳ Работа на проверке, {}",
-            queue_place(place.position, place.total),
+            "\n⏳ Работа на проверке.\n{}",
+            texts::queue_ahead(place.position),
         ));
     }
 
@@ -463,7 +466,9 @@ pub(super) async fn submit_homework_text(
     {
         return Ok(());
     }
-    let Some(actor) = resolve_actor(bot, message.chat.id, telegram_user_id, services).await? else {
+    let Some(actor) =
+        resolve_actor(bot, message.chat.id, telegram_user_id, services, dialogue).await?
+    else {
         return Ok(());
     };
     let result = services
@@ -495,7 +500,8 @@ mod tests {
 
     #[test]
     fn a_queue_without_reviewers_does_not_show_a_made_up_position() {
-        assert_eq!(queue_place(2, 5), "ваш номер в очереди: 2 из 5");
-        assert_eq!(queue_place(0, 0), "преподаватель ещё не назначен на курс");
+        assert!(texts::queue_ahead(6).contains('5'));
+        assert_eq!(texts::queue_ahead(1), texts::QUEUE_FIRST);
+        assert_eq!(texts::queue_ahead(0), texts::QUEUE_NO_TEACHER);
     }
 }

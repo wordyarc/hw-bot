@@ -509,10 +509,11 @@ impl TestApp {
         days_since_deadline: i64,
         late_policy: Option<(u16, u16, u16)>,
     ) -> Assignment {
+        let deadline_at = Utc::now() - Duration::days(days_since_deadline);
         let mut builder = wall_clock_assignment(&self.fixture.course, &self.fixture.teacher)
             .title("Overdue assignment")
             .created_at(Utc::now() - Duration::days(days_since_deadline + 1))
-            .deadline_at(Utc::now() - Duration::days(days_since_deadline));
+            .deadline_at(deadline_at);
 
         if let Some((period_days, penalty, max_periods)) = late_policy {
             builder = builder

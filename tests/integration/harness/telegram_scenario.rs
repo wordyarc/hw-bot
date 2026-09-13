@@ -29,6 +29,17 @@ pub struct Button {
 }
 
 impl TelegramScenario {
+    pub fn messages(&self, user: i64) -> Vec<Value> {
+        self.state
+            .lock()
+            .unwrap()
+            .messages
+            .iter()
+            .filter(|message| message["chat"]["id"] == user)
+            .cloned()
+            .collect()
+    }
+
     pub async fn new() -> Self {
         let server = MockServer::start().await;
         let state = Arc::new(Mutex::new(State {
@@ -92,30 +103,35 @@ impl TelegramScenario {
             .with_priority(10)
             .mount(&server)
             .await;
-        let messages = state.clone();
-        Mock::given(method("POST"))
-            .and(path("/bottest-token/EditMessageReplyMarkup"))
-            .respond_with(move |request: &wiremock::Request| {
-                let body: Value = request.body_json().unwrap();
-                let mut state = messages.lock().unwrap();
-                let message = state
-                    .messages
-                    .iter_mut()
-                    .find(|message| {
-                        message["chat"]["id"] == body["chat_id"]
-                            && message["message_id"] == body["message_id"]
-                    })
-                    .expect("editing a message sent by the bot");
-                if body["reply_markup"].is_null() {
-                    message.as_object_mut().unwrap().remove("reply_markup");
-                } else {
-                    message["reply_markup"] = body["reply_markup"].clone();
-                }
-                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": message}))
-            })
-            .with_priority(10)
-            .mount(&server)
-            .await;
+        for endpoint in ["EditMessageReplyMarkup", "EditMessageText"] {
+            let messages = state.clone();
+            Mock::given(method("POST"))
+                .and(path(format!("/bottest-token/{endpoint}")))
+                .respond_with(move |request: &wiremock::Request| {
+                    let body: Value = request.body_json().unwrap();
+                    let mut state = messages.lock().unwrap();
+                    let message = state
+                        .messages
+                        .iter_mut()
+                        .find(|message| {
+                            message["chat"]["id"] == body["chat_id"]
+                                && message["message_id"] == body["message_id"]
+                        })
+                        .expect("editing a message sent by the bot");
+                    if body["reply_markup"].is_null() {
+                        message.as_object_mut().unwrap().remove("reply_markup");
+                    } else {
+                        message["reply_markup"] = body["reply_markup"].clone();
+                    }
+                    if !body["text"].is_null() {
+                        message["text"] = body["text"].clone();
+                    }
+                    ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": message}))
+                })
+                .with_priority(10)
+                .mount(&server)
+                .await;
+        }
         Self { server, state }
     }
 
@@ -190,6 +206,8 @@ impl TelegramScenario {
     pub async fn click_button(&self, user: i64, data: &str) -> Button {
         let button = self.button(user, data).await;
         self.click(user, &button);
+        // При редактировании сообщения ID не меняется: ждём переход, а не повторно видим старую кнопку.
+        self.flush(user).await;
         button
     }
 

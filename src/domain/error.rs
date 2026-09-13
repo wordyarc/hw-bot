@@ -55,8 +55,11 @@ pub enum DomainError {
     #[error("assignment deadline must be after created_at")]
     AssignmentDeadlineMustBeAfterCreatedAt,
 
-    #[error("assignment submission horizon is outside the supported date range")]
-    AssignmentHorizonOutOfRange,
+    #[error("computed assignment closing is outside the supported date range")]
+    AssignmentClosingOutOfRange,
+
+    #[error("late submission horizon must not exceed {max_days} days")]
+    LateHorizonTooLong { max_days: u32 },
 
     #[error("assignment does not belong to teaching course")]
     AssignmentDoesNotBelongToTeachingCourse,

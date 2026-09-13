@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
@@ -145,22 +146,21 @@ impl BotState {
         }
     }
 
-    pub(super) fn choosing_late_policy(self, message_id: MessageId) -> Option<DraftAssignment> {
+    pub(super) fn terms_form(self, message_id: MessageId, step: TermsStep) -> Option<TermsForm> {
         match self {
-            Self::Flow(FlowState::ChoosingLatePolicy {
-                message_id: current,
-                draft,
-            }) if current == message_id => Some(draft),
+            Self::Flow(FlowState::ConfiguringTerms(form))
+                if form.message_id == Some(message_id) && form.step == step && !form.manual =>
+            {
+                Some(form)
+            }
             _ => None,
         }
     }
 
-    pub(super) fn choosing_deadline(self, message_id: MessageId) -> Option<DeadlineTarget> {
+    pub(super) fn active_terms(&self) -> Option<&TermsForm> {
         match self {
-            Self::Flow(FlowState::ChoosingDeadline {
-                message_id: current,
-                target,
-            }) if current == message_id => Some(target),
+            Self::Flow(FlowState::ConfiguringTerms(form)) => Some(form),
+            Self::Flow(FlowState::ConfirmingTermsExit { form, .. }) => Some(form),
             _ => None,
         }
     }
@@ -173,7 +173,6 @@ pub(super) struct DraftAssignment {
     pub body: String,
     pub max_attempts: u16,
     pub grading: Grading,
-    pub late_policy: Option<LatePolicy>,
 }
 
 impl DraftAssignment {
@@ -189,7 +188,6 @@ impl DraftAssignment {
             body,
             max_attempts,
             grading: Grading::PassFail,
-            late_policy: None,
         }
     }
 }
@@ -201,9 +199,117 @@ pub(super) enum StudentChoice {
 }
 
 #[derive(Clone)]
-pub(super) enum DeadlineTarget {
+pub(super) enum TermsTarget {
     Create(DraftAssignment),
-    Change { assignment_id: AssignmentId },
+    Edit {
+        assignment_id: AssignmentId,
+        grading: Grading,
+        revision: i64,
+        created_at: DateTime<Utc>,
+        original_closes_at: DateTime<Utc>,
+    },
+}
+
+#[derive(Clone)]
+pub(super) struct AssignmentTerms {
+    pub target: TermsTarget,
+    pub deadline_at: Option<DateTime<Utc>>,
+    pub allow_late: bool,
+    pub period_days: u16,
+    pub penalty: Option<u16>,
+    pub max_periods: Option<u16>,
+}
+
+impl AssignmentTerms {
+    pub fn next_step(&self) -> TermsStep {
+        if self.deadline_at.is_none() {
+            TermsStep::Deadline
+        } else if self.allow_late && self.penalty.is_none() {
+            TermsStep::Penalty
+        } else if self.allow_late && self.max_periods.is_none() {
+            TermsStep::Periods
+        } else {
+            TermsStep::Summary
+        }
+    }
+
+    pub fn creating(draft: DraftAssignment) -> Self {
+        Self {
+            target: TermsTarget::Create(draft),
+            deadline_at: None,
+            allow_late: false,
+            period_days: 7,
+            penalty: None,
+            max_periods: None,
+        }
+    }
+
+    pub fn late_policy(&self) -> crate::domain::DomainResult<Option<LatePolicy>> {
+        if !self.allow_late {
+            return Ok(None);
+        }
+        Ok(Some(LatePolicy::new(
+            self.period_days,
+            self.penalty.unwrap_or(0),
+            self.max_periods.unwrap_or(0),
+        )?))
+    }
+
+    pub fn grading(&self) -> Grading {
+        match &self.target {
+            TermsTarget::Create(draft) => draft.grading,
+            TermsTarget::Edit { grading, .. } => *grading,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TermsStep {
+    Policy,
+    Deadline,
+    Penalty,
+    Period,
+    Periods,
+    DurationDate,
+    DurationConfirm {
+        selected: DateTime<Utc>,
+        periods: u16,
+    },
+    Summary,
+}
+
+#[derive(Clone)]
+pub(super) struct TermsForm {
+    pub terms: AssignmentTerms,
+    pub step: TermsStep,
+    pub message_id: Option<MessageId>,
+    pub manual: bool,
+    pub return_to_summary: bool,
+    pub calendar_month: Option<chrono::NaiveDate>,
+    pub previous_closes_at: Option<DateTime<Utc>>,
+}
+
+impl TermsForm {
+    pub fn can_go_back(&self) -> bool {
+        match self.step {
+            TermsStep::Summary => false,
+            TermsStep::Policy => self.return_to_summary,
+            TermsStep::Deadline => self.terms.grading().is_scored() || self.return_to_summary,
+            _ => true,
+        }
+    }
+
+    pub fn new(terms: AssignmentTerms, step: TermsStep) -> Self {
+        Self {
+            terms,
+            step,
+            message_id: None,
+            manual: false,
+            return_to_summary: false,
+            calendar_month: None,
+            previous_closes_at: None,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -216,6 +322,7 @@ pub(super) enum BotState {
 
 #[derive(Clone)]
 pub(super) enum ScreenState {
+    Guest,
     ManagingAssignment {
         message_id: MessageId,
         assignment_id: AssignmentId,
@@ -296,19 +403,12 @@ pub(super) enum FlowState {
     AwaitingGradingText {
         draft: DraftAssignment,
     },
-    ChoosingLatePolicy {
+    ConfiguringTerms(TermsForm),
+    ConfirmingTermsExit {
         message_id: MessageId,
-        draft: DraftAssignment,
-    },
-    AwaitingLatePolicyText {
-        draft: DraftAssignment,
-    },
-    ChoosingDeadline {
-        message_id: MessageId,
-        target: DeadlineTarget,
-    },
-    AwaitingDeadlineText {
-        target: DeadlineTarget,
+        form: TermsForm,
+        action: crate::bot::views::MenuAction,
+        telegram_user_id: crate::domain::TelegramUserId,
     },
     ChoosingStudent {
         message_id: MessageId,

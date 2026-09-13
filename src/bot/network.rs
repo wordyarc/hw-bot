@@ -52,6 +52,15 @@ impl Bot {
         self.timed(self.inner.edit_message_reply_markup(chat_id, message_id))
     }
 
+    pub fn edit_message_text(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        text: impl Into<String>,
+    ) -> TimedRequest<JsonRequest<payloads::EditMessageText>> {
+        self.timed(self.inner.edit_message_text(chat_id, message_id, text))
+    }
+
     pub fn set_my_commands(
         &self,
         commands: Vec<BotCommand>,

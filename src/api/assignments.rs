@@ -385,6 +385,7 @@ pub async fn change_deadline(
         assignment_id,
         actor,
         deadline_at: request.deadline_at,
+        expected_revision: None,
     };
 
     let assignment = state
@@ -407,6 +408,7 @@ pub async fn change_grading(
         actor,
         grading: Grading::from_max_score(request.max_score)?,
         late_policy: request.late_policy.parse()?,
+        expected_revision: None,
     };
 
     let assignment = state
