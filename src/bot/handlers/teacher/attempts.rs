@@ -12,21 +12,13 @@ use crate::pagination::PageRequest;
 
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX};
-use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::views::{
     ask_input, assignment_students_keyboard, attempts_keyboard, send_message_chunks,
     send_stale_button, teacher_keyboard,
 };
 
-use super::gradebook::show_student_grades;
-
-pub(in crate::bot::handlers) async fn show_students(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
-) -> HandlerResult {
-    show_students_page(screen, assignment_id, PageRequest::default()).await
-}
+use super::gradebook::show_student_grades_page;
 
 pub(in crate::bot::handlers) async fn show_students_page(
     screen: Screen<'_>,
@@ -41,17 +33,10 @@ pub(in crate::bot::handlers) async fn show_students_page(
         dialogue,
         ..
     } = screen;
-    let students = match services
+    let students = services
         .assignments
         .list_students_for_assignment(actor, assignment_id, page)
-        .await
-    {
-        Ok(students) => students,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+        .await?;
 
     if students.items.is_empty() {
         bot.send_message(chat_id, "В группе пока нет студентов.")
@@ -115,7 +100,8 @@ pub(in crate::bot::handlers) async fn select_student(
     };
     let assignment_id = match purpose {
         StudentChoice::Grades { course_id } => {
-            return show_student_grades(screen, course_id, student_id).await;
+            return show_student_grades_page(screen, course_id, student_id, PageRequest::default())
+                .await;
         }
         StudentChoice::ExtraAttempts { assignment_id } => assignment_id,
     };
@@ -169,7 +155,7 @@ pub(super) async fn grant_attempts(
     student_id: UserId,
     amount: u16,
 ) -> HandlerResult {
-    match screen
+    let progress = screen
         .services
         .assignments
         .grant_extra_attempts(GrantExtraAttempts {
@@ -178,25 +164,20 @@ pub(super) async fn grant_attempts(
             actor: screen.actor,
             amount,
         })
-        .await
-    {
-        Ok(progress) => {
-            crate::bot::handlers::reset_dialogue(screen.dialogue).await?;
-            screen
-                .bot
-                .send_message(
-                    screen.chat_id,
-                    format!(
-                        "🎁 Добавлено попыток: {amount}. Всего дополнительных: {}.",
-                        progress.extra_attempts()
-                    ),
-                )
-                .reply_markup(teacher_keyboard())
-                .await?;
-            show_students(screen, assignment_id).await?;
-        }
-        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-    }
+        .await?;
+    crate::bot::handlers::reset_dialogue(screen.dialogue).await?;
+    screen
+        .bot
+        .send_message(
+            screen.chat_id,
+            format!(
+                "🎁 Добавлено попыток: {amount}. Всего дополнительных: {}.",
+                progress.extra_attempts()
+            ),
+        )
+        .reply_markup(teacher_keyboard())
+        .await?;
+    show_students_page(screen, assignment_id, PageRequest::default()).await?;
     Ok(())
 }
 

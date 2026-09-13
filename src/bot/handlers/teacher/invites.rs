@@ -6,7 +6,6 @@ use crate::domain::TeachingCourseId;
 
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
-use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::views::send_stale_button;
 use crate::bot::views::{confirm_invite_rotation_keyboard, group_invite_keyboard};
@@ -15,15 +14,11 @@ pub(in crate::bot::handlers) async fn show_group_invite(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
 ) -> HandlerResult {
-    let invite = match screen
+    let invite = screen
         .services
         .courses
         .get_group_invite(screen.actor, course_id)
-        .await
-    {
-        Ok(invite) => invite,
-        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
-    };
+        .await?;
 
     send_group_invite(screen, course_id, &invite).await
 }
@@ -144,6 +139,6 @@ pub(in crate::bot::handlers) async fn confirm_invite_rotation(
         Err(error) if error.code() == ErrorCode::ConcurrentModification => {
             show_group_invite(screen, course_id).await
         }
-        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await,
+        Err(error) => Err(error.into()),
     }
 }

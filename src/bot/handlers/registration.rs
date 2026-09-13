@@ -7,7 +7,7 @@ use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
 use crate::app::{ErrorCode, RegisterStudent};
 use crate::bot::context::{Deps, TextStep};
-use crate::bot::errors::{send_app_error, send_error_code};
+use crate::bot::errors::send_error_code;
 use crate::bot::invites::BotInvites;
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::views::ask_input;
@@ -31,7 +31,7 @@ pub(super) async fn start_registration(
     {
         Ok(_) => return show_home(bot, chat_id, telegram_user_id, services, dialogue).await,
         Err(error) if error.code() == ErrorCode::NotFound => {}
-        Err(error) => return send_app_error(bot, chat_id, error).await,
+        Err(error) => return Err(error.into()),
     }
     if payload.is_empty() {
         return super::home::open_guest(bot, chat_id, dialogue).await;
@@ -40,10 +40,7 @@ pub(super) async fn start_registration(
     let Ok(invite) = invites.decode(payload) else {
         return send_error_code(bot, chat_id, ErrorCode::InviteInvalid).await;
     };
-    let group = match services.users.resolve_group_invite(invite).await {
-        Ok(group) => group,
-        Err(error) => return send_app_error(bot, chat_id, error).await,
-    };
+    let group = services.users.resolve_group_invite(invite).await?;
     dialogue
         .update(BotState::Flow(FlowState::AwaitingRegistrationName {
             invite,
@@ -86,7 +83,7 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
         return Ok(());
     }
 
-    match services
+    services
         .users
         .register_student(RegisterStudent {
             telegram_user_id,
@@ -94,16 +91,11 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
             invite,
             registered_at: Utc::now(),
         })
-        .await
-    {
-        Ok(_) => {
-            reset_dialogue(dialogue).await?;
-            bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
-                .await?;
-            show_home(bot, message.chat.id, telegram_user_id, services, dialogue).await?;
-        }
-        Err(error) => send_app_error(bot, message.chat.id, error).await?,
-    }
+        .await?;
+    reset_dialogue(dialogue).await?;
+    bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
+        .await?;
+    show_home(bot, message.chat.id, telegram_user_id, services, dialogue).await?;
 
     Ok(())
 }

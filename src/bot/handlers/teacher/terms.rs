@@ -296,7 +296,8 @@ pub(super) async fn apply_date(
 ) -> HandlerResult {
     if form.step == TermsStep::DurationDate {
         let deadline = form.terms.deadline_at.expect("duration follows deadline");
-        let policy = LatePolicy::new(form.terms.period_days, form.terms.penalty.unwrap_or(1), 1)?;
+        let policy = LatePolicy::new(form.terms.period_days, form.terms.penalty.unwrap_or(1), 1)
+            .map_err(crate::app::AppError::from)?;
         let periods = policy.periods_until(deadline, at);
         if periods == 0 || periods > u32::from(crate::domain::MAX_LATE_PERIODS) {
             return show(screen, form, Some(texts::INVALID_DURATION_DATE)).await;

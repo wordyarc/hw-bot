@@ -1,3 +1,4 @@
+use super::error::ensure_updated;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
@@ -11,6 +12,9 @@ const ATTEMPT_COUNT: &str = "review_notification_outbox.attempt_count";
 const OUTCOME: &str = "review_notification_outbox.outcome";
 const FINAL_SCORE: &str = "review_notification_outbox.final_score";
 const MAX_SCORE: &str = "review_notification_outbox.max_score";
+const LOST_LEASE: DbError = DbError::Conflict {
+    message: "notification lease is no longer owned by this worker",
+};
 
 #[derive(Clone, Debug)]
 
@@ -159,7 +163,7 @@ pub async fn mark_delivered<'e, E>(
     id: Uuid,
     lease_token: Uuid,
     delivered_at: DateTime<Utc>,
-) -> DbResult<bool>
+) -> DbResult<()>
 where
     E: PgExecutor<'e>,
 {
@@ -173,7 +177,7 @@ where
     .execute(executor)
     .await?;
 
-    Ok(result.rows_affected() == 1)
+    ensure_updated(result, LOST_LEASE)
 }
 
 pub async fn reschedule<'e, E>(
@@ -182,7 +186,7 @@ pub async fn reschedule<'e, E>(
     lease_token: Uuid,
     available_at: DateTime<Utc>,
     last_error: &str,
-) -> DbResult<bool>
+) -> DbResult<()>
 where
     E: PgExecutor<'e>,
 {
@@ -197,7 +201,7 @@ where
     .execute(executor)
     .await?;
 
-    Ok(result.rows_affected() == 1)
+    ensure_updated(result, LOST_LEASE)
 }
 
 pub async fn release_after_credentials_failure<'e, E>(
@@ -205,7 +209,7 @@ pub async fn release_after_credentials_failure<'e, E>(
     id: Uuid,
     lease_token: Uuid,
     last_error: &str,
-) -> DbResult<bool>
+) -> DbResult<()>
 where
     E: PgExecutor<'e>,
 {
@@ -219,7 +223,7 @@ where
     .execute(executor)
     .await?;
 
-    Ok(result.rows_affected() == 1)
+    ensure_updated(result, LOST_LEASE)
 }
 
 pub async fn mark_failed<'e, E>(
@@ -228,7 +232,7 @@ pub async fn mark_failed<'e, E>(
     lease_token: Uuid,
     failed_at: DateTime<Utc>,
     last_error: &str,
-) -> DbResult<bool>
+) -> DbResult<()>
 where
     E: PgExecutor<'e>,
 {
@@ -243,7 +247,7 @@ where
     .execute(executor)
     .await?;
 
-    Ok(result.rows_affected() == 1)
+    ensure_updated(result, LOST_LEASE)
 }
 
 #[derive(Debug)]

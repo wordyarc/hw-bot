@@ -2,7 +2,10 @@ use crate::pagination::{Page, PageRequest};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::app::access::{load_managing_teacher, load_managing_teacher_on, load_student};
+use crate::app::access::{
+    load_managed_versioned_assignment, load_managing_teacher, load_managing_teacher_on,
+    load_student,
+};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -380,7 +383,7 @@ impl AssignmentService {
         assignment_id: AssignmentId,
         action: &'static str,
     ) -> AppResult<Assignment> {
-        self.load_managed_versioned_assignment(actor, assignment_id, action)
+        load_managed_versioned_assignment(&self.pool, actor, assignment_id, action)
             .await
             .map(|(assignment, _)| assignment)
     }
@@ -390,28 +393,7 @@ impl AssignmentService {
         actor: Actor,
         assignment_id: AssignmentId,
     ) -> AppResult<(Assignment, i64)> {
-        self.load_managed_versioned_assignment(actor, assignment_id, "read assignment")
-            .await
-    }
-
-    async fn load_managed_versioned_assignment(
-        &self,
-        actor: Actor,
-        assignment_id: AssignmentId,
-        action: &'static str,
-    ) -> AppResult<(Assignment, i64)> {
-        let stored = db::assignments::find_versioned_by_id(&self.pool, assignment_id)
-            .await?
-            .required("assignment")?;
-        let revision = stored.revision();
-        let assignment = stored.into_assignment();
-        let (actor, teaching_course) =
-            load_managing_teacher(&self.pool, actor, assignment.teaching_course_id(), action)
-                .await?;
-
-        assignment.ensure_managed_by(&teaching_course, &actor, action)?;
-
-        Ok((assignment, revision))
+        load_managed_versioned_assignment(&self.pool, actor, assignment_id, "read assignment").await
     }
 
     async fn change<F>(

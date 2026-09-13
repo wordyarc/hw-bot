@@ -15,11 +15,6 @@ pub struct GroupInviteState {
 }
 
 #[derive(Clone, Debug)]
-pub struct CourseGradebook {
-    pub students: Page<StudentGrades>,
-}
-
-#[derive(Clone, Debug)]
 pub struct StudentGrades {
     pub student_id: UserId,
     pub display_name: String,
@@ -108,7 +103,7 @@ impl CourseService {
         actor: Actor,
         course_id: TeachingCourseId,
         page: PageRequest,
-    ) -> AppResult<CourseGradebook> {
+    ) -> AppResult<Page<StudentGrades>> {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read course gradebook").await?;
 
@@ -121,9 +116,10 @@ impl CourseService {
             PageRequest::default(),
         )
         .await?;
-        Ok(CourseGradebook {
-            students: Page::from_rows(group_grades(rows, PageRequest::default()), page),
-        })
+        Ok(Page::from_rows(
+            group_grades(rows, PageRequest::default()),
+            page,
+        ))
     }
 
     pub async fn list_students(

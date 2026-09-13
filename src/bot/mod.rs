@@ -31,22 +31,23 @@ mod errors;
 mod files;
 mod handlers;
 mod invites;
-mod network;
 mod state;
 pub mod texts;
 mod timezone;
 mod views;
 
+use crate::telegram::network::Bot;
 pub use errors::app_error_message;
 use files::FileTransfers;
 use handlers::home::default_commands;
 use handlers::{Command, handle_callback, handle_command, handle_message};
 use invites::BotInvites;
-use network::Bot;
 use state::BotState;
 pub use timezone::BotTimezone;
 
-type HandlerResult<T = ()> = anyhow::Result<T>;
+use errors::BotError;
+
+type HandlerResult<T = ()> = Result<T, BotError>;
 type BotServices = ApplicationContainer;
 
 #[derive(Clone)]
@@ -111,46 +112,6 @@ impl TelegramBot {
         timezone: BotTimezone,
         codec: GroupInviteCodec,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            !settings.request_timeout.is_zero(),
-            "Telegram request timeout must be positive"
-        );
-        anyhow::ensure!(
-            !settings.polling_timeout.is_zero(),
-            "Telegram polling timeout must be positive"
-        );
-        anyhow::ensure!(
-            !settings.rate_limit_replenish.is_zero(),
-            "Telegram rate limit replenishment must be positive"
-        );
-        anyhow::ensure!(
-            settings.max_concurrent_updates > 0,
-            "Telegram max concurrent updates must be positive"
-        );
-        anyhow::ensure!(
-            !settings.file_transfer_timeout.is_zero(),
-            "Telegram file transfer timeout must be positive"
-        );
-        anyhow::ensure!(
-            settings.max_concurrent_file_transfers > 0,
-            "Telegram max concurrent file transfers must be positive"
-        );
-        anyhow::ensure!(
-            settings.max_concurrent_updates <= MAX_CONCURRENT_UPDATES,
-            "Telegram max concurrent updates is too large"
-        );
-        anyhow::ensure!(
-            settings.polling_timeout.as_millis() >= 1000,
-            "Telegram polling timeout must be at least one second"
-        );
-        anyhow::ensure!(
-            settings.polling_timeout.subsec_nanos() == 0,
-            "Telegram polling timeout must use whole seconds"
-        );
-        anyhow::ensure!(
-            settings.polling_timeout.as_secs() <= u64::from(u32::MAX),
-            "Telegram polling timeout is too large"
-        );
         let burst = NonZeroU32::new(settings.rate_limit_burst)
             .context("Telegram rate limit burst must be positive")?;
         let quota = Quota::with_period(settings.rate_limit_replenish)
@@ -160,23 +121,12 @@ impl TelegramBot {
             .polling_timeout
             .checked_add(settings.request_timeout)
             .context("Telegram polling HTTP timeout is too large")?;
-        let api_url: reqwest::Url = api_base_url
-            .parse()
-            .with_context(|| format!("invalid Telegram API base URL: {api_base_url}"))?;
         let token = token.into();
-        let bot = teloxide::Bot::with_client(
-            token.clone(),
-            telegram_http_client(settings.request_timeout)?,
-        )
-        .set_api_url(api_url.clone());
+        let bot = crate::telegram::new_bot(token.clone(), api_base_url, settings.request_timeout)?;
         let polling_bot =
-            teloxide::Bot::with_client(token.clone(), telegram_http_client(polling_http_timeout)?)
-                .set_api_url(api_url.clone());
-        let transfer_bot = teloxide::Bot::with_client(
-            token,
-            telegram_http_client(settings.file_transfer_timeout)?,
-        )
-        .set_api_url(api_url);
+            crate::telegram::new_bot(token.clone(), api_base_url, polling_http_timeout)?;
+        let transfer_bot =
+            crate::telegram::new_bot(token, api_base_url, settings.file_transfer_timeout)?;
         let admission = UpdateAdmission {
             rate_limiter: Arc::new(RateLimiter::keyed(quota)),
             semaphore: Arc::new(Semaphore::new(settings.max_concurrent_updates)),
@@ -257,12 +207,12 @@ impl TelegramBot {
             .distribution_function(|update| update.chat().map(|chat| chat.id))
             .worker_queue_size(self.settings.max_concurrent_updates)
             .default_handler(|_| async {})
-            .error_handler(Arc::new(move |error: anyhow::Error| {
+            .error_handler(Arc::new(move |error: BotError| {
                 let credentials = handler_credentials.clone();
                 let cancellation = handler_cancellation.clone();
                 async move {
                     if matches!(
-                        error.downcast_ref::<teloxide::RequestError>(),
+                        error.request_error(),
                         Some(teloxide::RequestError::Api(
                             teloxide::ApiError::InvalidToken
                         ))
@@ -346,14 +296,6 @@ fn map_startup_error(error: teloxide::RequestError) -> TelegramBotError {
         errors::log_request_error("startup", &error);
         TelegramBotError::Startup(errors::request_error_kind(&error))
     }
-}
-
-fn telegram_http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
-        .connect_timeout(timeout.min(Duration::from_secs(5)))
-        .timeout(timeout)
-        .tcp_nodelay(true)
-        .build()
 }
 
 async fn admit_update(update: &Update, admission: &UpdateAdmission) -> bool {
@@ -498,7 +440,7 @@ fn take_admission_permit(
         .remove(&update.id)
 }
 
-fn schema(force_stop: CancellationToken) -> UpdateHandler<anyhow::Error> {
+fn schema(force_stop: CancellationToken) -> UpdateHandler<BotError> {
     let messages = Update::filter_message()
         .branch(
             dptree::entry()
@@ -517,7 +459,7 @@ fn schema(force_stop: CancellationToken) -> UpdateHandler<anyhow::Error> {
         )
 }
 
-fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<anyhow::Error> {
+fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<BotError> {
     use std::ops::ControlFlow;
     use tracing::Instrument;
 

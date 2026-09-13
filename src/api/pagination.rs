@@ -1,7 +1,7 @@
 use super::ApiError;
 use crate::pagination::{Page, PageRequest};
 use axum::extract::{FromRequestParts, Query};
-use axum::http::{HeaderMap, StatusCode, request::Parts};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, request::Parts};
 
 pub struct Pagination(pub PageRequest);
 
@@ -24,15 +24,9 @@ impl<S: Send + Sync> FromRequestParts<S> for Pagination {
 
 pub fn page_headers<T>(page: &Page<T>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-page",
-        page.page.to_string().parse().expect("numeric header"),
-    );
+    headers.insert("x-page", HeaderValue::from(page.page));
     if let Some(next) = page.next_page {
-        headers.insert(
-            "x-next-page",
-            next.to_string().parse().expect("numeric header"),
-        );
+        headers.insert("x-next-page", HeaderValue::from(next));
     }
     headers
 }

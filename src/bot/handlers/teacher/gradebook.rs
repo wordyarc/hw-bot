@@ -8,31 +8,19 @@ use crate::domain::{TeachingCourseId, UserId};
 
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
-use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::views::{gradebook_students_keyboard, send_message_chunks};
-
-pub(in crate::bot::handlers) async fn show_gradebook(
-    screen: Screen<'_>,
-    course_id: TeachingCourseId,
-) -> HandlerResult {
-    show_gradebook_page(screen, course_id, PageRequest::default()).await
-}
 
 pub(in crate::bot::handlers) async fn show_gradebook_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
     page: PageRequest,
 ) -> HandlerResult {
-    let students = match screen
+    let students = screen
         .services
         .courses
         .list_students(screen.actor, course_id, page)
-        .await
-    {
-        Ok(gradebook) => gradebook,
-        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
-    };
+        .await?;
 
     render_gradebook(screen, course_id, &students).await
 }
@@ -75,29 +63,17 @@ async fn render_gradebook(
     Ok(())
 }
 
-pub(super) async fn show_student_grades(
-    screen: Screen<'_>,
-    course_id: TeachingCourseId,
-    student_id: UserId,
-) -> HandlerResult {
-    show_student_grades_page(screen, course_id, student_id, PageRequest::default()).await
-}
-
 pub(in crate::bot::handlers) async fn show_student_grades_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
     student_id: UserId,
     page: PageRequest,
 ) -> HandlerResult {
-    let student = match screen
+    let student = screen
         .services
         .courses
         .student_grades(screen.actor, course_id, student_id, page)
-        .await
-    {
-        Ok(gradebook) => gradebook,
-        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
-    };
+        .await?;
 
     let mut text = format!(
         "👤 {}\n🏅 Итого: {} из {}\n",

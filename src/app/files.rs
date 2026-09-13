@@ -1,8 +1,8 @@
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgPool;
 
-use crate::app::access::load_managing_teacher_on;
+use crate::app::access::{load_managed_versioned_assignment, load_managed_versioned_assignment_on};
 use crate::app::assignments::load_visible_assignment_for_student;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -70,9 +70,13 @@ impl FileService {
         actor: Actor,
         assignment_id: AssignmentId,
     ) -> AppResult<AssignmentFiles> {
-        let (assignment, revision) = self
-            .load_managed_assignment(actor, assignment_id, "view assignment files")
-            .await?;
+        let (assignment, revision) = load_managed_versioned_assignment(
+            &self.pool,
+            actor,
+            assignment_id,
+            "view assignment files",
+        )
+        .await?;
         let files = db::files::list_for_assignment(&self.pool, assignment_id).await?;
 
         Ok(AssignmentFiles {
@@ -111,7 +115,7 @@ impl FileService {
         })?;
 
         let mut tx = self.pool.begin().await?;
-        let (assignment, _) = load_versioned_managed_assignment(
+        let (assignment, _) = load_managed_versioned_assignment_on(
             &mut tx,
             command.actor,
             command.assignment_id,
@@ -146,7 +150,7 @@ impl FileService {
         command: DeleteAssignmentFile,
     ) -> AppResult<AssignmentFiles> {
         let mut tx = self.pool.begin().await?;
-        let (assignment, _) = load_versioned_managed_assignment(
+        let (assignment, _) = load_managed_versioned_assignment_on(
             &mut tx,
             command.actor,
             command.assignment_id,
@@ -174,7 +178,7 @@ impl FileService {
         assignment_id: AssignmentId,
         file_id: StoredFileId,
     ) -> AppResult<OpenedFile> {
-        self.load_managed_assignment(actor, assignment_id, "open assignment file")
+        load_managed_versioned_assignment(&self.pool, actor, assignment_id, "open assignment file")
             .await?;
         let file = db::files::find_assignment_file(&self.pool, assignment_id, file_id)
             .await?
@@ -202,19 +206,6 @@ impl FileService {
             content: file.content,
         })
     }
-
-    async fn load_managed_assignment(
-        &self,
-        actor: Actor,
-        assignment_id: AssignmentId,
-        action: &'static str,
-    ) -> AppResult<(Assignment, i64)> {
-        let mut connection = self.pool.acquire().await?;
-        let (assignment, revision) =
-            load_versioned_managed_assignment(&mut connection, actor, assignment_id, action)
-                .await?;
-        Ok((assignment, revision))
-    }
 }
 
 async fn advance_revision(
@@ -226,29 +217,6 @@ async fn advance_revision(
         Err(db::DbError::Conflict { .. }) => Err(AppError::AssignmentChangedConcurrently),
         result => Ok(result?),
     }
-}
-
-async fn load_versioned_managed_assignment(
-    connection: &mut PgConnection,
-    actor: Actor,
-    assignment_id: AssignmentId,
-    action: &'static str,
-) -> AppResult<(Assignment, i64)> {
-    let stored = db::assignments::find_versioned_by_id(&mut *connection, assignment_id)
-        .await?
-        .required("assignment")?;
-    let revision = stored.revision();
-    let assignment = stored.into_assignment();
-    let (actor, course) = load_managing_teacher_on(
-        &mut *connection,
-        actor,
-        assignment.teaching_course_id(),
-        action,
-    )
-    .await?;
-    assignment.ensure_managed_by(&course, &actor, action)?;
-
-    Ok((assignment, revision))
 }
 
 fn first_free_position(files: &[StoredFileMetadata]) -> AppResult<u64> {

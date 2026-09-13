@@ -2,20 +2,21 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use teloxide::prelude::*;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{TelegramClient, TelegramError};
+use super::network::TimedRequest;
+use super::text::{MESSAGE_LIMIT, truncate};
+use super::{DeliveryFailure, delivery_failure, request_error_kind};
 use crate::db::{self, DbError, DbResult};
 use crate::domain::SubmissionStatus;
 use crate::health::ComponentHealth;
 
-const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
-const LAST_ERROR_LIMIT: usize = 1000;
-
 #[derive(Clone, Debug)]
 pub struct NotificationWorkerSettings {
+    pub request_timeout: Duration,
     pub poll_interval: Duration,
     pub lease_duration: Duration,
     pub max_attempts: u32,
@@ -37,8 +38,8 @@ pub enum NotificationWorkerError {
     #[error("Telegram credentials were rejected")]
     InvalidCredentials,
 
-    #[error(transparent)]
-    Telegram(#[from] TelegramError),
+    #[error("Telegram notification worker startup failed: {0}")]
+    Startup(&'static str),
 
     #[error(transparent)]
     Database(#[from] DbError),
@@ -47,16 +48,12 @@ pub enum NotificationWorkerError {
 #[derive(Clone)]
 pub struct NotificationWorker {
     pool: PgPool,
-    telegram: TelegramClient,
+    telegram: Bot,
     settings: NotificationWorkerSettings,
 }
 
 impl NotificationWorker {
-    pub fn new(
-        pool: PgPool,
-        telegram: TelegramClient,
-        settings: NotificationWorkerSettings,
-    ) -> Self {
+    pub fn new(pool: PgPool, telegram: Bot, settings: NotificationWorkerSettings) -> Self {
         Self {
             pool,
             telegram,
@@ -84,90 +81,87 @@ impl NotificationWorker {
             &notification.review_comment,
         );
 
-        match self
-            .telegram
-            .send_message(notification.recipient_telegram_user_id, &text)
-            .await
-        {
-            Ok(()) => {
-                ensure_claim_updated(
-                    db::notifications::mark_delivered(
-                        &self.pool,
-                        notification.id,
-                        notification.lease_token,
-                        Utc::now(),
-                    )
-                    .await?,
-                )?;
-                Ok(DeliveryOutcome::Delivered)
-            }
-            Err(error) if error.is_invalid_credentials() => {
-                let last_error = bounded_error(&error.to_string());
-                ensure_claim_updated(
-                    db::notifications::release_after_credentials_failure(
-                        &self.pool,
-                        notification.id,
-                        notification.lease_token,
-                        &last_error,
-                    )
-                    .await?,
-                )?;
-                Err(NotificationWorkerError::InvalidCredentials)
-            }
-            Err(error)
-                if error.is_permanent()
-                    || notification.attempt_count >= self.settings.max_attempts =>
-            {
-                log_retry_after(&error);
-                let last_error = bounded_error(&error.to_string());
-                ensure_claim_updated(
-                    db::notifications::mark_failed(
-                        &self.pool,
-                        notification.id,
-                        notification.lease_token,
-                        Utc::now(),
-                        &last_error,
-                    )
-                    .await?,
-                )?;
-                tracing::warn!(
-                    notification_id = %notification.id,
-                    submission_id = %notification.submission_id.as_uuid(),
-                    attempt = notification.attempt_count,
-                    reason = if error.is_permanent() { "permanent_rejection" } else { "attempts_exhausted" },
-                    "notification delivery failed permanently"
-                );
-                Ok(self.outcome_after_error(
-                    DeliveryOutcome::Failed,
-                    &error,
-                    notification.attempt_count,
-                ))
-            }
-            Err(error) => {
-                log_retry_after(&error);
-                let retry_after = error
-                    .retry_after()
-                    .unwrap_or_else(|| self.retry_delay(notification.attempt_count));
-                let available_at = Utc::now() + chrono_duration(retry_after)?;
-                let last_error = bounded_error(&error.to_string());
-                ensure_claim_updated(
-                    db::notifications::reschedule(
-                        &self.pool,
-                        notification.id,
-                        notification.lease_token,
-                        available_at,
-                        &last_error,
-                    )
-                    .await?,
-                )?;
-                tracing::debug!(notification_id = %notification.id, attempt = notification.attempt_count, "notification rescheduled");
-                Ok(self.outcome_after_error(
-                    DeliveryOutcome::Rescheduled,
-                    &error,
-                    notification.attempt_count,
-                ))
-            }
+        let result = TimedRequest::new(
+            self.telegram.send_message(
+                ChatId(notification.recipient_telegram_user_id.as_i64()),
+                text,
+            ),
+            self.settings.request_timeout,
+        )
+        .await;
+        let Err(error) = result else {
+            db::notifications::mark_delivered(
+                &self.pool,
+                notification.id,
+                notification.lease_token,
+                Utc::now(),
+            )
+            .await?;
+            return Ok(DeliveryOutcome::Delivered);
+        };
+        let failure = delivery_failure(&error);
+        // InvalidJson и Unknown могут содержать токен и пользовательский текст.
+        let last_error = request_error_kind(&error);
+        if failure == DeliveryFailure::InvalidCredentials {
+            db::notifications::release_after_credentials_failure(
+                &self.pool,
+                notification.id,
+                notification.lease_token,
+                last_error,
+            )
+            .await?;
+            return Err(NotificationWorkerError::InvalidCredentials);
         }
+
+        let retry_after = match failure {
+            DeliveryFailure::RateLimited(Some(delay)) => delay,
+            _ => retry_delay(&self.settings, notification.attempt_count),
+        };
+        let rate_limited = matches!(failure, DeliveryFailure::RateLimited(_));
+        if rate_limited {
+            tracing::warn!(
+                retry_after_seconds = retry_after.as_secs(),
+                "Telegram rate limited a notification request"
+            );
+        }
+        let outcome = if failure == DeliveryFailure::Permanent
+            || notification.attempt_count >= self.settings.max_attempts
+        {
+            db::notifications::mark_failed(
+                &self.pool,
+                notification.id,
+                notification.lease_token,
+                Utc::now(),
+                last_error,
+            )
+            .await?;
+            tracing::warn!(
+                notification_id = %notification.id,
+                submission_id = %notification.submission_id.as_uuid(),
+                attempt = notification.attempt_count,
+                kind = last_error,
+                reason = if failure == DeliveryFailure::Permanent { "permanent_rejection" } else { "attempts_exhausted" },
+                "notification delivery failed permanently"
+            );
+            DeliveryOutcome::Failed
+        } else {
+            let available_at = Utc::now() + chrono_duration(retry_after)?;
+            db::notifications::reschedule(
+                &self.pool,
+                notification.id,
+                notification.lease_token,
+                available_at,
+                last_error,
+            )
+            .await?;
+            tracing::debug!(notification_id = %notification.id, attempt = notification.attempt_count, kind = last_error, "notification rescheduled");
+            DeliveryOutcome::Rescheduled
+        };
+        Ok(if rate_limited {
+            DeliveryOutcome::RateLimited { retry_after }
+        } else {
+            outcome
+        })
     }
 
     pub async fn run(
@@ -177,12 +171,12 @@ impl NotificationWorker {
     ) -> Result<(), NotificationWorkerError> {
         tokio::select! {
             () = cancellation.cancelled() => return Ok(()),
-            result = self.telegram.validate_credentials() => match result {
-                Ok(()) => {}
-                Err(error) if error.is_invalid_credentials() => {
+            result = TimedRequest::new(self.telegram.get_me(), self.settings.request_timeout).send() => match result {
+                Ok(_) => {}
+                Err(error) if delivery_failure(&error) == DeliveryFailure::InvalidCredentials => {
                     return Err(NotificationWorkerError::InvalidCredentials);
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(NotificationWorkerError::Startup(request_error_kind(&error))),
             },
         }
         let _ready = health.ready();
@@ -219,36 +213,6 @@ impl NotificationWorker {
             }
         }
     }
-
-    fn retry_delay(&self, attempt_count: u32) -> Duration {
-        retry_delay(&self.settings, attempt_count)
-    }
-
-    fn outcome_after_error(
-        &self,
-        outcome: DeliveryOutcome,
-        error: &TelegramError,
-        attempt: u32,
-    ) -> DeliveryOutcome {
-        if error.is_rate_limited() {
-            DeliveryOutcome::RateLimited {
-                retry_after: error
-                    .retry_after()
-                    .unwrap_or_else(|| self.retry_delay(attempt)),
-            }
-        } else {
-            outcome
-        }
-    }
-}
-
-fn log_retry_after(error: &TelegramError) {
-    if error.is_rate_limited() {
-        tracing::warn!(
-            retry_after_seconds = error.retry_after().map(|value| value.as_secs()),
-            "Telegram rate limited a notification request"
-        );
-    }
 }
 
 fn render_review_notification(
@@ -271,21 +235,11 @@ fn render_review_notification(
          💬 Комментарий преподавателя:\n{review_comment}"
     );
 
-    truncate_chars(text, TELEGRAM_MESSAGE_LIMIT)
-}
-
-fn truncate_chars(text: String, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text;
+    if text.chars().count() <= MESSAGE_LIMIT {
+        text
+    } else {
+        truncate(&text, MESSAGE_LIMIT - 3, true)
     }
-
-    let mut truncated: String = text.chars().take(limit.saturating_sub(3)).collect();
-    truncated.push_str("...");
-    truncated
-}
-
-fn bounded_error(error: &str) -> String {
-    error.chars().take(LAST_ERROR_LIMIT).collect()
 }
 
 fn retry_delay(settings: &NotificationWorkerSettings, attempt_count: u32) -> Duration {
@@ -306,16 +260,6 @@ fn chrono_duration(duration: Duration) -> DbResult<chrono::Duration> {
     })
 }
 
-fn ensure_claim_updated(updated: bool) -> DbResult<()> {
-    if updated {
-        Ok(())
-    } else {
-        Err(DbError::Conflict {
-            message: "notification lease is no longer owned by this worker",
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,10 +271,10 @@ mod tests {
             "Backend development",
             "Ownership",
             None,
-            &"x".repeat(TELEGRAM_MESSAGE_LIMIT * 2),
+            &"x".repeat(MESSAGE_LIMIT * 2),
         );
 
-        assert_eq!(message.chars().count(), TELEGRAM_MESSAGE_LIMIT);
+        assert_eq!(message.chars().count(), MESSAGE_LIMIT);
         assert!(message.ends_with("..."));
     }
 
@@ -380,6 +324,7 @@ mod tests {
     #[test]
     fn retry_delay_grows_and_is_capped() {
         let worker = NotificationWorkerSettings {
+            request_timeout: Duration::from_secs(1),
             poll_interval: Duration::from_secs(1),
             lease_duration: Duration::from_secs(10),
             max_attempts: 10,

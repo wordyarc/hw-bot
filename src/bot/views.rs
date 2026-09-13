@@ -32,7 +32,7 @@ use super::state::{AssignmentTerms, TermsForm, TermsStep, TermsTarget};
 use super::texts;
 use super::timezone::BotTimezone;
 
-const MESSAGE_LIMIT: usize = 4096;
+use crate::telegram::text::{MESSAGE_LIMIT, truncate};
 
 pub(super) const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
 pub(super) const BUTTON_ARCHIVE: &str = "🗄 Архив";
@@ -1056,12 +1056,7 @@ pub(super) fn role_name(role: Role) -> &'static str {
 }
 
 pub(super) fn button_label(label: &str) -> String {
-    let truncated = label.chars().count() > 60;
-    let mut label: String = label.chars().take(60).collect();
-    if truncated {
-        label.push_str("...");
-    }
-    label
+    truncate(label, 60, true)
 }
 
 fn message_chunks(text: String) -> Vec<String> {

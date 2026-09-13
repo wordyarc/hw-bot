@@ -9,7 +9,7 @@ use teloxide::types::{BotCommand, CallbackQueryId, ChatId, MessageId};
 
 // Только интерактивные методы: polling и обмен файлами имеют собственные бюджеты.
 #[derive(Clone)]
-pub(super) struct Bot {
+pub(crate) struct Bot {
     pub inner: CacheMe<teloxide::Bot>,
     timeout: Duration,
 }
@@ -23,10 +23,7 @@ impl Bot {
     }
 
     fn timed<R>(&self, request: R) -> TimedRequest<R> {
-        TimedRequest {
-            request,
-            timeout: self.timeout,
-        }
+        TimedRequest::new(request, self.timeout)
     }
 
     pub fn send_message(
@@ -77,9 +74,15 @@ impl Bot {
     }
 }
 
-pub(super) struct TimedRequest<R> {
+pub(crate) struct TimedRequest<R> {
     request: R,
     timeout: Duration,
+}
+
+impl<R> TimedRequest<R> {
+    pub(crate) fn new(request: R, timeout: Duration) -> Self {
+        Self { request, timeout }
+    }
 }
 
 impl<R: HasPayload> HasPayload for TimedRequest<R> {

@@ -67,13 +67,13 @@ impl FileTransfers {
         let mut stream = self.bot.download_file_stream(&file.path);
         let mut content = Vec::with_capacity((file.size as usize).min(max_size));
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+            let chunk = chunk.context("Telegram file download failed")?;
             let size = content
                 .len()
                 .checked_add(chunk.len())
                 .context("downloaded file size overflow")?;
             if size > max_size {
-                return Err(anyhow!("downloaded file exceeds configured limit"));
+                return Err(anyhow!("downloaded file exceeds configured limit").into());
             }
             content.extend_from_slice(&chunk);
         }

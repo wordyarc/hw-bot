@@ -45,16 +45,13 @@ async fn expired_notification_lease_can_be_reclaimed() {
 
     assert_eq!(reclaimed.id, first.id);
     assert_eq!(reclaimed.attempt_count, 2);
-    assert!(
-        !db::notifications::mark_delivered(&app.pool, first.id, first_token, Utc::now())
-            .await
-            .expect("stale acknowledgement is handled")
-    );
-    assert!(
-        db::notifications::mark_delivered(&app.pool, first.id, second_token, Utc::now())
-            .await
-            .expect("current acknowledgement succeeds")
-    );
+    assert!(matches!(
+        db::notifications::mark_delivered(&app.pool, first.id, first_token, Utc::now()).await,
+        Err(db::DbError::Conflict { .. })
+    ));
+    db::notifications::mark_delivered(&app.pool, first.id, second_token, Utc::now())
+        .await
+        .expect("current acknowledgement succeeds");
 }
 
 #[tokio::test]

@@ -5,28 +5,55 @@ use crate::app::{AppError, ErrorCode};
 
 use super::HandlerResult;
 
-pub(super) fn log_handler_error(error: &anyhow::Error) {
-    if let Some(request) = error.downcast_ref::<teloxide::RequestError>() {
+#[derive(Debug, thiserror::Error)]
+pub(super) enum BotError {
+    #[error(transparent)]
+    App(#[from] AppError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl From<teloxide::RequestError> for BotError {
+    fn from(error: teloxide::RequestError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<teloxide::dispatching::dialogue::InMemStorageError> for BotError {
+    fn from(error: teloxide::dispatching::dialogue::InMemStorageError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl BotError {
+    pub(super) fn request_error(&self) -> Option<&teloxide::RequestError> {
+        match self {
+            Self::App(_) => None,
+            Self::Other(error) => error.downcast_ref(),
+        }
+    }
+}
+
+pub(super) async fn finish_handler(
+    bot: &Bot,
+    chat_id: ChatId,
+    result: HandlerResult,
+) -> HandlerResult {
+    match result {
+        Err(BotError::App(error)) => send_app_error(bot, chat_id, error).await,
+        result => result,
+    }
+}
+
+pub(super) fn log_handler_error(error: &BotError) {
+    if let Some(request) = error.request_error() {
         log_request_error("update", request);
     } else {
         tracing::error!(error = ?error, "Telegram update failed");
     }
 }
 
-pub(super) fn request_error_kind(error: &teloxide::RequestError) -> &'static str {
-    use teloxide::{ApiError, RequestError};
-    match error {
-        RequestError::RetryAfter(_) => "telegram_rate_limit",
-        RequestError::Network(_) => "telegram_network",
-        RequestError::Io(_) => "telegram_io_or_deadline",
-        RequestError::InvalidJson { .. } => "telegram_invalid_response",
-        RequestError::Api(ApiError::InvalidToken) => "telegram_invalid_credentials",
-        RequestError::Api(ApiError::BotBlocked) => "telegram_bot_blocked",
-        RequestError::Api(ApiError::MessageNotModified) => "telegram_message_not_modified",
-        RequestError::Api(_) => "telegram_api",
-        RequestError::MigrateToChatId(_) => "telegram_chat_migrated",
-    }
-}
+pub(super) use crate::telegram::request_error_kind;
 
 pub(super) fn log_request_error(operation: &'static str, error: &teloxide::RequestError) {
     let retry_after_seconds = match error {

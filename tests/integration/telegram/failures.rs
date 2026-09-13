@@ -12,6 +12,72 @@ use wiremock::{Mock, ResponseTemplate};
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
+use hw_bot::app::ErrorCode;
+use hw_bot::bot::app_error_message;
+
+#[tokio::test]
+async fn a_command_reports_an_application_error_to_the_user_once() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.student(), "/courses");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .filter(|message| message["text"] == app_error_message(ErrorCode::PermissionDenied))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_submission_error_preserves_the_input_step_for_retry() {
+    let app = TestApp::start().await;
+    let pending = app.queued_submission(app.student(), "pull/first").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram.message(app.student(), "pull/retry");
+    telegram.flush(app.student()).await;
+    assert_eq!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .filter(
+                |message| message["text"] == app_error_message(ErrorCode::SubmissionPendingReview)
+            )
+            .count(),
+        1
+    );
+
+    app.review(pending, app.teacher(), "reject", "Retry")
+        .await
+        .ok();
+    telegram.message(app.student(), "pull/retry");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+    let count: i64 = sqlx::query_scalar("select count(*) from submissions")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
 
 async fn open_course(app: &TestApp, telegram: &TelegramScenario) {
     telegram.message(app.teacher(), "/courses");

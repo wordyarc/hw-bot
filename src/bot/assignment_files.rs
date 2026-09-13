@@ -106,7 +106,7 @@ pub(super) async fn submit_file(
         }
         Err(error) => {
             drop(transfer_permit);
-            send_app_error(bot, message.chat.id, error).await?;
+            return Err(error.into());
         }
     }
     Ok(())
@@ -146,15 +146,12 @@ pub(super) async fn open(
     let transfer = transfers.acquire().await?;
     transfer
         .run(async {
-            match screen
+            let file = screen
                 .services
                 .files
                 .open_assignment_file_for_teacher(screen.actor, assignment_id, file_id)
-                .await
-            {
-                Ok(file) => transfers.send(screen.chat_id, file).await?,
-                Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-            }
+                .await?;
+            transfers.send(screen.chat_id, file).await?;
             Ok(())
         })
         .await
@@ -247,17 +244,10 @@ pub(super) async fn show(
         dialogue,
         ..
     } = screen;
-    let card = match services
+    let card = services
         .files
         .list_assignment_files_for_teacher(actor, assignment_id)
-        .await
-    {
-        Ok(card) => card,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+        .await?;
     let policy = services.files.policy();
     let mut text = if card.files.is_empty() {
         String::from("Вложений нет.")

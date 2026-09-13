@@ -1,6 +1,7 @@
 use super::Bot;
 use crate::app::Actor;
 use crate::domain::TelegramUserId;
+use crate::pagination::PageRequest;
 use anyhow::{Context, anyhow};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
@@ -10,7 +11,7 @@ use teloxide::utils::command::BotCommands;
 use super::assignment_files;
 use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
 use super::context::{Deps, Screen, TextStep};
-use super::errors::send_app_error;
+use super::errors::finish_handler;
 use super::invites::BotInvites;
 use super::state::{BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
@@ -73,115 +74,119 @@ pub(super) async fn handle_command(
     timezone: BotTimezone,
     invites: BotInvites,
 ) -> HandlerResult {
-    tracing::Span::current().record(
-        "action",
-        match &command {
-            Command::Start(_) => "start",
-            Command::Menu => "menu",
-            Command::Tasks => "tasks",
-            Command::Queue => "queue",
-            Command::Archive => "archive",
-            Command::Review => "review",
-            Command::Courses => "courses",
-            Command::Profile => "profile",
-            Command::Cancel => "cancel",
-            Command::Help => "help",
-        },
-    );
-    if !ensure_private_message(&bot, &message).await? {
-        return Ok(());
-    }
-
-    let telegram_user_id = actor_from_message(&message)?;
     let chat_id = message.chat.id;
+    let result = async {
+        tracing::Span::current().record(
+            "action",
+            match &command {
+                Command::Start(_) => "start",
+                Command::Menu => "menu",
+                Command::Tasks => "tasks",
+                Command::Queue => "queue",
+                Command::Archive => "archive",
+                Command::Review => "review",
+                Command::Courses => "courses",
+                Command::Profile => "profile",
+                Command::Cancel => "cancel",
+                Command::Help => "help",
+            },
+        );
+        if !ensure_private_message(&bot, &message).await? {
+            return Ok(());
+        }
 
-    if let Some(form) = state.active_terms()
-        && !matches!(command, Command::Help)
-    {
-        if matches!(command, Command::Cancel) {
-            let Some(actor) =
-                resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
-            else {
-                return Ok(());
-            };
-            let screen = Screen::new(
-                &bot,
-                chat_id,
-                actor,
-                Deps {
-                    services: &services,
-                    dialogue: &dialogue,
-                    timezone: &timezone,
-                    invites: &invites,
-                },
-            );
-            if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
-                return teacher::handle_terms(
-                    screen,
-                    *message_id,
-                    callbacks::TermsAction::Stay,
-                    state,
+        let telegram_user_id = actor_from_message(&message)?;
+
+        if let Some(form) = state.active_terms()
+            && !matches!(command, Command::Help)
+        {
+            if matches!(command, Command::Cancel) {
+                let Some(actor) =
+                    resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
+                else {
+                    return Ok(());
+                };
+                let screen = Screen::new(
+                    &bot,
+                    chat_id,
+                    actor,
+                    Deps {
+                        services: &services,
+                        dialogue: &dialogue,
+                        timezone: &timezone,
+                        invites: &invites,
+                    },
+                );
+                if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
+                    return teacher::handle_terms(
+                        screen,
+                        *message_id,
+                        callbacks::TermsAction::Stay,
+                        state,
+                    )
+                    .await;
+                }
+                return teacher::back(screen, form.clone()).await;
+            }
+            teacher::abandon(&bot, chat_id, form).await?;
+            reset_dialogue(&dialogue).await?;
+        }
+
+        let action = match command {
+            Command::Start(payload) => {
+                reset_dialogue(&dialogue).await?;
+                return start_registration(
+                    &bot,
+                    chat_id,
+                    telegram_user_id,
+                    payload.trim(),
+                    &services,
+                    &dialogue,
+                    &invites,
                 )
                 .await;
             }
-            return teacher::back(screen, form.clone()).await;
-        }
-        teacher::abandon(&bot, chat_id, form).await?;
+            Command::Menu => {
+                reset_dialogue(&dialogue).await?;
+                show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
+                return Ok(());
+            }
+            Command::Cancel => {
+                reset_dialogue(&dialogue).await?;
+                bot.send_message(chat_id, "Текущее действие отменено.")
+                    .await?;
+                show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
+                return Ok(());
+            }
+            Command::Help => {
+                send_help(&bot, chat_id, telegram_user_id, &services, &timezone).await?;
+                return Ok(());
+            }
+            Command::Tasks => MenuAction::Assignments,
+            Command::Queue => MenuAction::Queue,
+            Command::Archive => MenuAction::Archive,
+            Command::Review => MenuAction::Review,
+            Command::Courses => MenuAction::Courses,
+            Command::Profile => MenuAction::Profile,
+        };
+
         reset_dialogue(&dialogue).await?;
+        run_menu_action(
+            &bot,
+            chat_id,
+            telegram_user_id,
+            action,
+            Deps {
+                services: &services,
+                dialogue: &dialogue,
+                timezone: &timezone,
+                invites: &invites,
+            },
+        )
+        .await
     }
-
-    let action = match command {
-        Command::Start(payload) => {
-            reset_dialogue(&dialogue).await?;
-            return start_registration(
-                &bot,
-                chat_id,
-                telegram_user_id,
-                payload.trim(),
-                &services,
-                &dialogue,
-                &invites,
-            )
-            .await;
-        }
-        Command::Menu => {
-            reset_dialogue(&dialogue).await?;
-            show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
-            return Ok(());
-        }
-        Command::Cancel => {
-            reset_dialogue(&dialogue).await?;
-            bot.send_message(chat_id, "Текущее действие отменено.")
-                .await?;
-            show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
-            return Ok(());
-        }
-        Command::Help => {
-            send_help(&bot, chat_id, telegram_user_id, &services, &timezone).await?;
-            return Ok(());
-        }
-        Command::Tasks => MenuAction::Assignments,
-        Command::Queue => MenuAction::Queue,
-        Command::Archive => MenuAction::Archive,
-        Command::Review => MenuAction::Review,
-        Command::Courses => MenuAction::Courses,
-        Command::Profile => MenuAction::Profile,
-    };
-
-    reset_dialogue(&dialogue).await?;
-    run_menu_action(
-        &bot,
-        chat_id,
-        telegram_user_id,
-        action,
-        Deps {
-            services: &services,
-            dialogue: &dialogue,
-            timezone: &timezone,
-            invites: &invites,
-        },
-    )
-    .await
+    .await;
+    finish_handler(&bot, chat_id, result).await
 }
 
 #[expect(
@@ -198,154 +203,159 @@ pub(super) async fn handle_message(
     timezone: BotTimezone,
     invites: BotInvites,
 ) -> HandlerResult {
-    tracing::Span::current().record("action", "input");
-    if !ensure_private_message(&bot, &message).await? {
-        return Ok(());
-    }
-
-    let actor = actor_from_message(&message)?;
-    let deps = Deps {
-        services: &services,
-        dialogue: &dialogue,
-        timezone: &timezone,
-        invites: &invites,
-    };
-    let step = TextStep {
-        bot: &bot,
-        message: &message,
-        telegram_user_id: actor,
-        deps,
-    };
-
-    if let Some(action) = message.text().and_then(menu_action) {
-        if let Some(form) = state.active_terms() {
-            let Some(resolved) =
-                resolve_actor(&bot, message.chat.id, actor, &services, &dialogue).await?
-            else {
-                return Ok(());
-            };
-            return teacher::confirm_exit(
-                Screen::new(&bot, message.chat.id, resolved, deps),
-                form.clone(),
-                action,
-                actor,
-            )
-            .await;
+    let chat_id = message.chat.id;
+    let result = async {
+        tracing::Span::current().record("action", "input");
+        if !ensure_private_message(&bot, &message).await? {
+            return Ok(());
         }
-        reset_dialogue(&dialogue).await?;
-        return run_menu_action(&bot, message.chat.id, actor, action, deps).await;
-    }
 
-    match state {
-        BotState::Idle => {
-            if resolve_actor(&bot, message.chat.id, actor, &services, &dialogue)
-                .await?
-                .is_some()
-            {
-                bot.send_message(message.chat.id, texts::USE_THE_MENU)
+        let actor = actor_from_message(&message)?;
+        let deps = Deps {
+            services: &services,
+            dialogue: &dialogue,
+            timezone: &timezone,
+            invites: &invites,
+        };
+        let step = TextStep {
+            bot: &bot,
+            message: &message,
+            telegram_user_id: actor,
+            deps,
+        };
+
+        if let Some(action) = message.text().and_then(menu_action) {
+            if let Some(form) = state.active_terms() {
+                let Some(resolved) =
+                    resolve_actor(&bot, message.chat.id, actor, &services, &dialogue).await?
+                else {
+                    return Ok(());
+                };
+                return teacher::confirm_exit(
+                    Screen::new(&bot, message.chat.id, resolved, deps),
+                    form.clone(),
+                    action,
+                    actor,
+                )
+                .await;
+            }
+            reset_dialogue(&dialogue).await?;
+            return run_menu_action(&bot, message.chat.id, actor, action, deps).await;
+        }
+
+        match state {
+            BotState::Idle => {
+                if resolve_actor(&bot, message.chat.id, actor, &services, &dialogue)
+                    .await?
+                    .is_some()
+                {
+                    bot.send_message(message.chat.id, texts::USE_THE_MENU)
+                        .await?;
+                }
+            }
+            BotState::Screen(ScreenState::Guest) => {
+                home::send_guest_hint(&bot, message.chat.id).await?;
+            }
+            BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
+                registration::submit_name(step, invite).await?;
+            }
+            BotState::Flow(FlowState::AwaitingSubmission { assignment_id }) => {
+                student::submit_homework_text(step, assignment_id).await?;
+            }
+            BotState::Flow(FlowState::AwaitingReviewDecision { .. }) => {
+                bot.send_message(message.chat.id, "Выберите решение кнопкой под сдачей.")
                     .await?;
             }
-        }
-        BotState::Screen(ScreenState::Guest) => {
-            home::send_guest_hint(&bot, message.chat.id).await?;
-        }
-        BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
-            registration::submit_name(step, invite).await?;
-        }
-        BotState::Flow(FlowState::AwaitingSubmission { assignment_id }) => {
-            student::submit_homework_text(step, assignment_id).await?;
-        }
-        BotState::Flow(FlowState::AwaitingReviewDecision { .. }) => {
-            bot.send_message(message.chat.id, "Выберите решение кнопкой под сдачей.")
+            BotState::Flow(FlowState::AwaitingReviewScore {
+                submission_id,
+                max_score,
+                penalty,
+            }) => {
+                review::submit_score_text(step, submission_id, max_score, penalty).await?;
+            }
+            BotState::Flow(FlowState::AwaitingReviewComment {
+                submission_id,
+                decision,
+                score,
+            }) => {
+                review::submit_comment(step, submission_id, decision, score).await?;
+            }
+            BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
+                bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
+                    .await?;
+            }
+            BotState::Screen(ScreenState::GroupInvite { .. })
+            | BotState::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
+                bot.send_message(message.chat.id, "Выберите действие кнопкой выше.")
+                    .await?;
+            }
+            BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
+                bot.send_message(
+                    message.chat.id,
+                    "Выберите действие кнопкой под списком вложений.",
+                )
                 .await?;
-        }
-        BotState::Flow(FlowState::AwaitingReviewScore {
-            submission_id,
-            max_score,
-            penalty,
-        }) => {
-            review::submit_score_text(step, submission_id, max_score, penalty).await?;
-        }
-        BotState::Flow(FlowState::AwaitingReviewComment {
-            submission_id,
-            decision,
-            score,
-        }) => {
-            review::submit_comment(step, submission_id, decision, score).await?;
-        }
-        BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
-            bot.send_message(message.chat.id, "Выберите действие кнопкой под заданием.")
-                .await?;
-        }
-        BotState::Screen(ScreenState::GroupInvite { .. })
-        | BotState::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
-            bot.send_message(message.chat.id, "Выберите действие кнопкой выше.")
-                .await?;
-        }
-        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
-            bot.send_message(
-                message.chat.id,
-                "Выберите действие кнопкой под списком вложений.",
-            )
-            .await?;
-        }
-        BotState::Flow(FlowState::AwaitingAssignmentFile {
-            assignment_id,
-            expected_revision,
-            creation_flow,
-        }) => {
-            assignment_files::submit_file(
-                step,
+            }
+            BotState::Flow(FlowState::AwaitingAssignmentFile {
                 assignment_id,
                 expected_revision,
                 creation_flow,
-                &transfers,
-            )
-            .await?;
-        }
-        BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
-            bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
+            }) => {
+                assignment_files::submit_file(
+                    step,
+                    assignment_id,
+                    expected_revision,
+                    creation_flow,
+                    &transfers,
+                )
                 .await?;
+            }
+            BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
+                bot.send_message(message.chat.id, "Подтвердите удаление кнопкой выше.")
+                    .await?;
+            }
+            BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id }) => {
+                teacher::submit_title(step, course_id).await?;
+            }
+            BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
+                teacher::submit_body(step, course_id, title).await?;
+            }
+            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
+                course_id,
+                title,
+                body,
+                ..
+            }) => {
+                teacher::submit_max_attempts(step, course_id, title, body).await?;
+            }
+            BotState::Flow(FlowState::ChoosingGrading { draft, .. })
+            | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
+                teacher::submit_grading_text(step, draft).await?;
+            }
+            BotState::Flow(FlowState::ConfirmingTermsExit { .. }) => {
+                bot.send_message(message.chat.id, texts::CHOOSE_BUTTON)
+                    .await?;
+            }
+            BotState::Flow(FlowState::ConfiguringTerms(form)) => {
+                teacher::submit_terms(step, form).await?;
+            }
+            BotState::Flow(FlowState::ChoosingStudent { .. }) => {
+                bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
+                    .await?;
+            }
+            BotState::Flow(FlowState::AwaitingAttemptAmount {
+                assignment_id,
+                student_id,
+                ..
+            }) => {
+                teacher::submit_attempt_amount(step, assignment_id, student_id).await?;
+            }
         }
-        BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id }) => {
-            teacher::submit_title(step, course_id).await?;
-        }
-        BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
-            teacher::submit_body(step, course_id, title).await?;
-        }
-        BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
-            course_id,
-            title,
-            body,
-            ..
-        }) => {
-            teacher::submit_max_attempts(step, course_id, title, body).await?;
-        }
-        BotState::Flow(FlowState::ChoosingGrading { draft, .. })
-        | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
-            teacher::submit_grading_text(step, draft).await?;
-        }
-        BotState::Flow(FlowState::ConfirmingTermsExit { .. }) => {
-            bot.send_message(message.chat.id, texts::CHOOSE_BUTTON)
-                .await?;
-        }
-        BotState::Flow(FlowState::ConfiguringTerms(form)) => {
-            teacher::submit_terms(step, form).await?;
-        }
-        BotState::Flow(FlowState::ChoosingStudent { .. }) => {
-            bot.send_message(message.chat.id, "Выберите студента кнопкой выше.")
-                .await?;
-        }
-        BotState::Flow(FlowState::AwaitingAttemptAmount {
-            assignment_id,
-            student_id,
-            ..
-        }) => {
-            teacher::submit_attempt_amount(step, assignment_id, student_id).await?;
-        }
-    }
 
-    Ok(())
+        Ok(())
+    }
+    .await;
+    finish_handler(&bot, chat_id, result).await
 }
 
 async fn run_menu_action(
@@ -368,11 +378,13 @@ async fn run_menu_action(
     let screen = Screen::new(bot, chat_id, actor, deps);
 
     match action {
-        MenuAction::Assignments => student::show_assignments(screen).await,
-        MenuAction::Archive => student::show_archive(screen).await,
-        MenuAction::Queue => student::show_queue(screen).await,
+        MenuAction::Assignments => {
+            student::show_assignments_page(screen, PageRequest::default()).await
+        }
+        MenuAction::Archive => student::show_archive_page(screen, PageRequest::default()).await,
+        MenuAction::Queue => student::show_queue_page(screen, PageRequest::default()).await,
         MenuAction::Review => review::show_next(screen).await,
-        MenuAction::Courses => teacher::show_courses(screen).await,
+        MenuAction::Courses => teacher::show_courses_page(screen, PageRequest::default()).await,
         MenuAction::Profile => show_profile(screen).await,
         MenuAction::Help => Ok(()),
     }
@@ -420,46 +432,53 @@ pub(super) async fn handle_callback(
         return Ok(());
     }
     let chat_id = message.chat.id;
-    let telegram_user_id = actor_from_user(&query.from)?;
-    if query.data.is_none() {
-        return Ok(());
-    }
-    let Some(action) = action else {
-        send_stale_button(&bot, chat_id).await?;
-        return Ok(());
-    };
-    if action == CallbackAction::Noop {
-        return Ok(());
-    }
-    if matches!(action, CallbackAction::Replayable(_)) {
-        if let Some(form) = state.active_terms() {
-            teacher::abandon(&bot, chat_id, form).await?;
+    let result = async {
+        let telegram_user_id = actor_from_user(&query.from)?;
+        if query.data.is_none() {
+            return Ok(());
         }
-        reset_dialogue(&dialogue).await?;
-    }
+        let Some(action) = action else {
+            send_stale_button(&bot, chat_id).await?;
+            return Ok(());
+        };
+        if action == CallbackAction::Noop {
+            return Ok(());
+        }
+        if matches!(action, CallbackAction::Replayable(_)) {
+            if let Some(form) = state.active_terms() {
+                teacher::abandon(&bot, chat_id, form).await?;
+            }
+            reset_dialogue(&dialogue).await?;
+        }
 
-    let deps = Deps {
-        services: &services,
-        dialogue: &dialogue,
-        timezone: &timezone,
-        invites: &invites,
-    };
-    let Some(actor) = resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
-    else {
-        return Ok(());
-    };
-    let screen = Screen::new(&bot, chat_id, actor, deps);
+        let deps = Deps {
+            services: &services,
+            dialogue: &dialogue,
+            timezone: &timezone,
+            invites: &invites,
+        };
+        let Some(actor) =
+            resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
+        else {
+            return Ok(());
+        };
+        let screen = Screen::new(&bot, chat_id, actor, deps);
 
-    match action {
-        CallbackAction::Replayable(action) => {
-            handle_replayable_action(screen, action, &transfers).await
+        match action {
+            CallbackAction::Replayable(action) => {
+                handle_replayable_action(screen, action, &transfers).await
+            }
+            CallbackAction::Screen(action) => {
+                handle_screen_action(screen, message.id, action, state, &transfers).await
+            }
+            CallbackAction::Flow(action) => {
+                handle_flow_action(screen, message.id, action, state).await
+            }
+            CallbackAction::Noop => Ok(()),
         }
-        CallbackAction::Screen(action) => {
-            handle_screen_action(screen, message.id, action, state, &transfers).await
-        }
-        CallbackAction::Flow(action) => handle_flow_action(screen, message.id, action, state).await,
-        CallbackAction::Noop => Ok(()),
     }
+    .await;
+    finish_handler(&bot, chat_id, result).await
 }
 
 async fn handle_replayable_action(
@@ -487,14 +506,22 @@ async fn handle_replayable_action(
                 }
             }
         }
-        ReplayableAction::StudentAssignments => student::show_assignments(screen).await,
-        ReplayableAction::StudentArchive => student::show_archive(screen).await,
-        ReplayableAction::StudentQueue => student::show_queue(screen).await,
+        ReplayableAction::StudentAssignments => {
+            student::show_assignments_page(screen, PageRequest::default()).await
+        }
+        ReplayableAction::StudentArchive => {
+            student::show_archive_page(screen, PageRequest::default()).await
+        }
+        ReplayableAction::StudentQueue => {
+            student::show_queue_page(screen, PageRequest::default()).await
+        }
         ReplayableAction::Profile => show_profile(screen).await,
-        ReplayableAction::Courses => teacher::show_courses(screen).await,
+        ReplayableAction::Courses => {
+            teacher::show_courses_page(screen, PageRequest::default()).await
+        }
         ReplayableAction::NextReview => review::show_next(screen).await,
         ReplayableAction::Course(course_id) => {
-            teacher::show_course_assignments(screen, course_id).await
+            teacher::show_course_assignments_page(screen, course_id, PageRequest::default()).await
         }
         ReplayableAction::Assignment(assignment_id) => {
             student::show_assignment(screen, assignment_id, transfers).await
@@ -524,12 +551,14 @@ async fn handle_replayable_action(
             assignment_files::show(screen, assignment_id, false).await
         }
         ReplayableAction::GrantAttempts(assignment_id) => {
-            teacher::show_students(screen, assignment_id).await
+            teacher::show_students_page(screen, assignment_id, PageRequest::default()).await
         }
         ReplayableAction::GroupInvite(course_id) => {
             teacher::show_group_invite(screen, course_id).await
         }
-        ReplayableAction::Gradebook(course_id) => teacher::show_gradebook(screen, course_id).await,
+        ReplayableAction::Gradebook(course_id) => {
+            teacher::show_gradebook_page(screen, course_id, PageRequest::default()).await
+        }
     }
 }
 
@@ -654,7 +683,7 @@ fn actor_from_message(message: &Message) -> HandlerResult<TelegramUserId> {
 
 fn actor_from_user(user: &User) -> HandlerResult<TelegramUserId> {
     let value = i64::try_from(user.id.0).context("Telegram user id does not fit into i64")?;
-    TelegramUserId::new(value).map_err(|error| anyhow!(error))
+    TelegramUserId::new(value).map_err(|error| anyhow!(error).into())
 }
 
 pub(super) async fn resolve_actor(
@@ -670,10 +699,7 @@ pub(super) async fn resolve_actor(
             home::open_guest(bot, chat_id, dialogue).await?;
             Ok(None)
         }
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            Ok(None)
-        }
+        Err(error) => Err(error.into()),
     }
 }
 

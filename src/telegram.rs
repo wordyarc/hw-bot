@@ -1,210 +1,87 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use anyhow::Context;
+use teloxide::{ApiError, RequestError};
 
-use crate::domain::TelegramUserId;
-
+pub(crate) mod network;
 mod notification_worker;
+pub(crate) mod text;
 
 pub use notification_worker::{
     DeliveryOutcome, NotificationWorker, NotificationWorkerError, NotificationWorkerSettings,
 };
 
-#[derive(Clone)]
-pub struct TelegramClient {
-    http: reqwest::Client,
-    api_base_url: String,
-    bot_token: String,
+pub fn new_bot(
+    token: impl Into<String>,
+    api_base_url: &str,
+    timeout: Duration,
+) -> anyhow::Result<teloxide::Bot> {
+    let api_url = api_base_url
+        .parse()
+        .context("invalid Telegram API base URL")?;
+    let http = reqwest::Client::builder()
+        .connect_timeout(timeout.min(Duration::from_secs(5)))
+        .timeout(timeout)
+        .tcp_nodelay(true)
+        .build()?;
+    Ok(teloxide::Bot::with_client(token, http).set_api_url(api_url))
 }
 
-impl TelegramClient {
-    pub fn new(
-        api_base_url: impl Into<String>,
-        bot_token: impl Into<String>,
-        request_timeout: Duration,
-    ) -> Result<Self, reqwest::Error> {
-        Ok(Self {
-            http: reqwest::Client::builder()
-                .timeout(request_timeout)
-                .build()?,
-            api_base_url: api_base_url.into().trim_end_matches('/').to_owned(),
-            bot_token: bot_token.into(),
-        })
-    }
-
-    pub async fn send_message(
-        &self,
-        recipient: TelegramUserId,
-        text: &str,
-    ) -> Result<(), TelegramError> {
-        let url = format!("{}/bot{}/sendMessage", self.api_base_url, self.bot_token);
-        let response = self
-            .http
-            .post(url)
-            .json(&SendMessageRequest {
-                chat_id: recipient.as_i64(),
-                text,
-            })
-            .send()
-            .await
-            .map_err(transport_error)?;
-
-        let status = response.status();
-        let body = response.json::<TelegramResponse>().await;
-
-        classify_response(status, body)
-    }
-
-    pub async fn validate_credentials(&self) -> Result<(), TelegramError> {
-        let url = format!("{}/bot{}/getMe", self.api_base_url, self.bot_token);
-        let response = self.http.post(url).send().await.map_err(transport_error)?;
-        let status = response.status();
-        let body = response.json::<TelegramResponse>().await;
-
-        classify_response(status, body)
-    }
-}
-
-fn classify_response(
-    status: reqwest::StatusCode,
-    body: Result<TelegramResponse, reqwest::Error>,
-) -> Result<(), TelegramError> {
-    match body {
-        Ok(body) if status.is_success() && body.ok => Ok(()),
-        Ok(body) => Err(classify_error(
-            body.error_code.unwrap_or(status.as_u16()),
-            body.description
-                .unwrap_or_else(|| "request was rejected".to_owned()),
-            body.parameters
-                .and_then(|parameters| parameters.retry_after)
-                .map(Duration::from_secs),
-        )),
-        Err(_) if status.as_u16() == 401 => Err(TelegramError::InvalidCredentials),
-        Err(_) if status.is_server_error() || matches!(status.as_u16(), 408 | 429) => {
-            Err(TelegramError::Retryable {
-                message: format!("HTTP {status}"),
-                retry_after: None,
-                rate_limited: status.as_u16() == 429,
-            })
+pub(crate) fn request_error_kind(error: &RequestError) -> &'static str {
+    match error {
+        RequestError::RetryAfter(_) => "telegram_rate_limit",
+        RequestError::Network(_) => "telegram_network",
+        RequestError::Io(_) => "telegram_io_or_deadline",
+        RequestError::InvalidJson { .. } => "telegram_invalid_response",
+        RequestError::Api(ApiError::InvalidToken) => "telegram_invalid_credentials",
+        RequestError::Api(ApiError::BotBlocked) => "telegram_bot_blocked",
+        RequestError::Api(ApiError::MessageNotModified) => "telegram_message_not_modified",
+        RequestError::Api(ApiError::Unknown(description)) if is_flood_control(description) => {
+            "telegram_rate_limit"
         }
-        Err(_) if status.is_client_error() => Err(TelegramError::Permanent {
-            message: format!("HTTP {status}"),
-        }),
-        Err(_) => Err(TelegramError::Retryable {
-            message: "malformed response".to_owned(),
-            retry_after: None,
-            rate_limited: false,
-        }),
+        RequestError::Api(_) => "telegram_api",
+        RequestError::MigrateToChatId(_) => "telegram_chat_migrated",
     }
 }
 
-fn transport_error(error: reqwest::Error) -> TelegramError {
-    TelegramError::Retryable {
-        message: if error.is_timeout() {
-            "request timed out".to_owned()
-        } else {
-            "transport error".to_owned()
-        },
-        retry_after: None,
-        rate_limited: false,
-    }
+fn is_flood_control(description: &str) -> bool {
+    description
+        .to_ascii_lowercase()
+        .starts_with("too many requests")
 }
 
-#[derive(Debug, Error)]
-pub enum TelegramError {
-    #[error("Telegram credentials were rejected")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeliveryFailure {
     InvalidCredentials,
-
-    #[error("Telegram API temporarily unavailable: {message}")]
-    Retryable {
-        message: String,
-        retry_after: Option<Duration>,
-        rate_limited: bool,
-    },
-
-    #[error("Telegram rejected the message: {message}")]
-    Permanent { message: String },
+    Permanent,
+    Retry,
+    RateLimited(Option<Duration>),
 }
 
-impl TelegramError {
-    pub fn retry_after(&self) -> Option<Duration> {
-        match self {
-            Self::Retryable { retry_after, .. } => *retry_after,
-            Self::InvalidCredentials | Self::Permanent { .. } => None,
+fn delivery_failure(error: &RequestError) -> DeliveryFailure {
+    match error {
+        RequestError::Api(ApiError::InvalidToken) => DeliveryFailure::InvalidCredentials,
+        RequestError::RetryAfter(delay) => DeliveryFailure::RateLimited(Some(delay.duration())),
+        // Без retry_after teloxide оставляет описание 429 в Unknown.
+        RequestError::Api(ApiError::Unknown(description)) if is_flood_control(description) => {
+            DeliveryFailure::RateLimited(None)
         }
-    }
-
-    pub fn is_invalid_credentials(&self) -> bool {
-        matches!(self, Self::InvalidCredentials)
-    }
-
-    pub fn is_permanent(&self) -> bool {
-        matches!(self, Self::Permanent { .. })
-    }
-
-    pub fn is_rate_limited(&self) -> bool {
-        matches!(
-            self,
-            Self::Retryable {
-                rate_limited: true,
-                ..
-            }
-        )
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct SendMessageRequest<'a> {
-    chat_id: i64,
-    text: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct TelegramResponse {
-    ok: bool,
-    description: Option<String>,
-    error_code: Option<u16>,
-    parameters: Option<ResponseParameters>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseParameters {
-    retry_after: Option<u64>,
-}
-
-fn classify_error(
-    error_code: u16,
-    message: String,
-    retry_after: Option<Duration>,
-) -> TelegramError {
-    if error_code == 401 {
-        TelegramError::InvalidCredentials
-    } else if matches!(error_code, 408 | 429) || error_code >= 500 {
-        TelegramError::Retryable {
-            message,
-            retry_after,
-            rate_limited: error_code == 429,
+        RequestError::Api(ApiError::Unknown(description))
+            if matches!(
+                description.to_ascii_lowercase().as_str(),
+                "request timeout"
+                    | "internal server error"
+                    | "internal error"
+                    | "bad gateway"
+                    | "service unavailable"
+                    | "gateway timeout"
+            ) =>
+        {
+            DeliveryFailure::Retry
         }
-    } else {
-        TelegramError::Permanent { message }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classifies_telegram_429_without_retry_after() {
-        let error = classify_error(429, "too many requests".to_owned(), None);
-
-        assert!(error.is_rate_limited());
-        assert_eq!(error.retry_after(), None);
-    }
-
-    #[test]
-    fn classifies_telegram_401_as_invalid_credentials() {
-        assert!(classify_error(401, "Unauthorized".to_owned(), None).is_invalid_credentials());
+        RequestError::Api(_) | RequestError::MigrateToChatId(_) => DeliveryFailure::Permanent,
+        RequestError::Network(_) | RequestError::Io(_) | RequestError::InvalidJson { .. } => {
+            DeliveryFailure::Retry
+        }
     }
 }

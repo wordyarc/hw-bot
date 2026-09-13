@@ -28,13 +28,7 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
         dialogue,
         ..
     } = screen;
-    let item = match services.reviews.take_next_from_queue(actor).await {
-        Ok(item) => item,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+    let item = services.reviews.take_next_from_queue(actor).await?;
     let Some(item) = item else {
         reset_dialogue(dialogue).await?;
         bot.send_message(chat_id, crate::bot::texts::REVIEW_QUEUE_EMPTY)
@@ -198,7 +192,7 @@ pub(super) async fn submit_comment(
         )) => {
             restart_review(step.screen(reviewer), submission_id).await?;
         }
-        Err(error) => send_app_error(bot, message.chat.id, error).await?,
+        Err(error) => return Err(error.into()),
     }
 
     Ok(())
@@ -227,7 +221,7 @@ async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> Hand
             ) {
                 reset_dialogue(screen.dialogue).await?;
             }
-            send_app_error(screen.bot, screen.chat_id, error).await
+            Err(error.into())
         }
     }
 }

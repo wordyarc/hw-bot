@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::api::users::StudentGroupResponse;
 use crate::api::{Actor, ApiError, AppState};
-use crate::app::{CourseGradebook, StudentGrades, TeachingCourseSummary};
+use crate::app::{StudentGrades, TeachingCourseSummary};
 use crate::domain::{TeachingCourseId, UserId};
+use crate::pagination::Page;
 
 #[derive(Debug, Serialize)]
 pub struct TeachingCourseResponse {
@@ -66,10 +67,10 @@ struct AssignmentGradeResponse {
     final_score: Option<u16>,
 }
 
-impl From<&CourseGradebook> for CourseGradebookResponse {
-    fn from(gradebook: &CourseGradebook) -> Self {
+impl From<&Page<StudentGrades>> for CourseGradebookResponse {
+    fn from(gradebook: &Page<StudentGrades>) -> Self {
         Self {
-            students: gradebook.students.items.iter().map(Into::into).collect(),
+            students: gradebook.items.iter().map(Into::into).collect(),
         }
     }
 }
@@ -110,7 +111,7 @@ pub async fn course_gradebook(
         .await?;
 
     Ok((
-        page_headers(&gradebook.students),
+        page_headers(&gradebook),
         Json(CourseGradebookResponse::from(&gradebook)),
     ))
 }

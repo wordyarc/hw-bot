@@ -7,7 +7,7 @@ use hw_bot::db;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::invites::GroupInviteCodec;
 use hw_bot::supervision::{CriticalTask, Supervisor};
-use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, TelegramClient};
+use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, new_bot};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -209,9 +209,9 @@ fn build_notification_worker(
     let worker = &config.notification_worker;
     let bot_token = required_bot_token(config)?;
 
-    let telegram = TelegramClient::new(
-        &config.telegram.api_base_url,
+    let telegram = new_bot(
         bot_token,
+        &config.telegram.api_base_url,
         Duration::from_millis(config.telegram.request_timeout_ms),
     )
     .context("failed to initialize Telegram client")?;
@@ -219,6 +219,7 @@ fn build_notification_worker(
         pool,
         telegram,
         NotificationWorkerSettings {
+            request_timeout: Duration::from_millis(config.telegram.request_timeout_ms),
             poll_interval: Duration::from_millis(worker.poll_interval_ms),
             lease_duration: Duration::from_millis(worker.lease_duration_ms),
             max_attempts: worker.max_attempts,

@@ -9,17 +9,12 @@ use crate::domain::{AssignmentId, TeachingCourseId};
 
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
-use crate::bot::errors::send_app_error;
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::views::{
     assignment_actions_keyboard, assignment_status, course_assignments_keyboard, courses_keyboard,
     grading_lines, send_message_chunks, send_stale_button, teacher_menu,
 };
-
-pub(in crate::bot::handlers) async fn show_courses(screen: Screen<'_>) -> HandlerResult {
-    show_courses_page(screen, PageRequest::default()).await
-}
 
 pub(in crate::bot::handlers) async fn show_courses_page(
     screen: Screen<'_>,
@@ -33,13 +28,7 @@ pub(in crate::bot::handlers) async fn show_courses_page(
         dialogue,
         ..
     } = screen;
-    let courses = match services.courses.list_for_teacher(actor, page).await {
-        Ok(courses) => courses,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+    let courses = services.courses.list_for_teacher(actor, page).await?;
     if courses.items.is_empty() && page.page == 0 {
         reset_dialogue(dialogue).await?;
         bot.send_message(chat_id, "📘 У вас пока нет учебных курсов.")
@@ -59,13 +48,6 @@ pub(in crate::bot::handlers) async fn show_courses_page(
     reset_dialogue(dialogue).await
 }
 
-pub(in crate::bot::handlers) async fn show_course_assignments(
-    screen: Screen<'_>,
-    course_id: TeachingCourseId,
-) -> HandlerResult {
-    show_course_assignments_page(screen, course_id, PageRequest::default()).await
-}
-
 pub(in crate::bot::handlers) async fn show_course_assignments_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
@@ -80,17 +62,10 @@ pub(in crate::bot::handlers) async fn show_course_assignments_page(
         timezone,
         ..
     } = screen;
-    let assignments = match services
+    let assignments = services
         .assignments
         .list_for_course(actor, course_id, page)
-        .await
-    {
-        Ok(assignments) => assignments,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+        .await?;
 
     if assignments.items.is_empty() {
         bot.send_message(chat_id, "В этом курсе пока нет заданий.")
@@ -132,17 +107,10 @@ pub(in crate::bot::handlers) async fn show_assignment(
         timezone,
         ..
     } = screen;
-    let assignment = match services
+    let assignment = services
         .assignments
         .find_for_teacher(actor, assignment_id)
-        .await
-    {
-        Ok(assignment) => assignment,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+        .await?;
     let published = assignment
         .published_at()
         .map(|published_at| format!("\n🚀 Опубликовано: {}", timezone.format(published_at)))
@@ -182,21 +150,16 @@ pub(in crate::bot::handlers) async fn publish_assignment(
     {
         return send_stale_button(screen.bot, screen.chat_id).await;
     }
-    match screen
+    screen
         .services
         .assignments
         .publish(assignment_id, screen.actor, Utc::now())
-        .await
-    {
-        Ok(_) => {
-            screen
-                .bot
-                .send_message(screen.chat_id, "🚀 Задание опубликовано.")
-                .await?;
-            show_assignment(screen, assignment_id).await
-        }
-        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await,
-    }
+        .await?;
+    screen
+        .bot
+        .send_message(screen.chat_id, "🚀 Задание опубликовано.")
+        .await?;
+    show_assignment(screen, assignment_id).await
 }
 
 pub(in crate::bot::handlers) async fn archive_assignment(
@@ -211,21 +174,16 @@ pub(in crate::bot::handlers) async fn archive_assignment(
     {
         return send_stale_button(screen.bot, screen.chat_id).await;
     }
-    match screen
+    screen
         .services
         .assignments
         .archive(assignment_id, screen.actor)
-        .await
-    {
-        Ok(_) => {
-            screen
-                .bot
-                .send_message(screen.chat_id, "📦 Задание архивировано.")
-                .await?;
-            show_assignment(screen, assignment_id).await
-        }
-        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await,
-    }
+        .await?;
+    screen
+        .bot
+        .send_message(screen.chat_id, "📦 Задание архивировано.")
+        .await?;
+    show_assignment(screen, assignment_id).await
 }
 
 pub(in crate::bot::handlers) async fn ask_assignment_deadline(

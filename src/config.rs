@@ -90,18 +90,26 @@ pub struct FilesConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiConfig {
-    pub utc_offset: String,
-    pub deadline_time: String,
+    #[serde(deserialize_with = "deserialize_utc_offset")]
+    pub utc_offset: FixedOffset,
+    #[serde(deserialize_with = "deserialize_deadline_time")]
+    pub deadline_time: NaiveTime,
 }
 
-impl UiConfig {
-    pub fn resolved_utc_offset(&self) -> Option<FixedOffset> {
-        self.utc_offset.trim().parse().ok()
-    }
+fn deserialize_utc_offset<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<FixedOffset, D::Error> {
+    String::deserialize(deserializer)?
+        .trim()
+        .parse()
+        .map_err(|_| serde::de::Error::custom("ui.utc_offset must look like +10:00"))
+}
 
-    pub fn resolved_deadline_time(&self) -> Option<NaiveTime> {
-        NaiveTime::parse_from_str(self.deadline_time.trim(), "%H:%M").ok()
-    }
+fn deserialize_deadline_time<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<NaiveTime, D::Error> {
+    NaiveTime::parse_from_str(String::deserialize(deserializer)?.trim(), "%H:%M")
+        .map_err(|_| serde::de::Error::custom("ui.deadline_time must use HH:MM"))
 }
 
 #[derive(Clone, Deserialize)]
@@ -121,13 +129,15 @@ pub struct TelegramConfig {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GroupInvitesConfig {
-    pub invite_signing_secret: Option<String>,
+    #[serde(deserialize_with = "deserialize_signing_secret")]
+    pub invite_signing_secret: InviteSigningSecret,
 }
 
-impl GroupInvitesConfig {
-    pub fn resolved_signing_secret(&self) -> Option<InviteSigningSecret> {
-        InviteSigningSecret::from_base64url(self.invite_signing_secret.as_deref()?).ok()
-    }
+fn deserialize_signing_secret<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<InviteSigningSecret, D::Error> {
+    InviteSigningSecret::from_base64url(&String::deserialize(deserializer)?)
+        .map_err(|_| serde::de::Error::custom("group_invites.invite_signing_secret must be 32 random bytes in base64url without padding"))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -210,7 +220,6 @@ impl AppConfig {
         }
 
         validate_files(&self.files)?;
-        let (utc_offset, deadline_time) = validate_ui(&self.ui)?;
         validate_telegram(&self.telegram)?;
         validate_worker(&self.notification_worker)?;
         validate_limit_coherence(&self)?;
@@ -225,38 +234,25 @@ impl AppConfig {
             )?;
         }
 
-        // Секрет нужен всегда: HTTP-регистрация проверяет инвайт и при выключенном Telegram.
-        let invite_signing_secret = self.group_invites.resolved_signing_secret().ok_or_else(|| {
-            invalid("group_invites.invite_signing_secret must be 32 random bytes in base64url without padding")
-        })?;
-
-        Ok(ValidatedAppConfig {
-            raw: self,
-            utc_offset,
-            deadline_time,
-            invite_signing_secret,
-        })
+        Ok(ValidatedAppConfig { raw: self })
     }
 }
 
 pub struct ValidatedAppConfig {
     raw: AppConfig,
-    utc_offset: FixedOffset,
-    deadline_time: NaiveTime,
-    invite_signing_secret: InviteSigningSecret,
 }
 
 impl ValidatedAppConfig {
     pub fn utc_offset(&self) -> FixedOffset {
-        self.utc_offset
+        self.ui.utc_offset
     }
 
     pub fn deadline_time(&self) -> NaiveTime {
-        self.deadline_time
+        self.ui.deadline_time
     }
 
     pub fn invite_signing_secret(&self) -> &InviteSigningSecret {
-        &self.invite_signing_secret
+        &self.group_invites.invite_signing_secret
     }
 }
 
@@ -310,22 +306,6 @@ fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
     size.checked_mul(config.max_concurrent_transfers)
         .ok_or_else(|| invalid("total concurrent file transfer size is too large"))?;
     Ok(())
-}
-
-fn validate_ui(config: &UiConfig) -> Result<(FixedOffset, NaiveTime), ConfigValidationError> {
-    let utc_offset = config.resolved_utc_offset().ok_or_else(|| {
-        invalid(format!(
-            "ui.utc_offset must look like +10:00, got {}",
-            config.utc_offset
-        ))
-    })?;
-    let deadline_time = config.resolved_deadline_time().ok_or_else(|| {
-        invalid(format!(
-            "ui.deadline_time must use HH:MM, got {}",
-            config.deadline_time
-        ))
-    })?;
-    Ok((utc_offset, deadline_time))
 }
 
 fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationError> {
@@ -542,12 +522,12 @@ mod tests {
         assert_eq!(config.files.transfer_timeout_ms, 20_000);
         assert_eq!(config.files.max_concurrent_transfers, 4);
         assert_eq!(
-            config.ui.resolved_utc_offset(),
-            FixedOffset::east_opt(10 * 3600)
+            config.ui.utc_offset,
+            FixedOffset::east_opt(10 * 3600).unwrap()
         );
         assert_eq!(
-            config.ui.resolved_deadline_time(),
-            NaiveTime::from_hms_opt(23, 59, 0)
+            config.ui.deadline_time,
+            NaiveTime::from_hms_opt(23, 59, 0).unwrap()
         );
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
@@ -559,29 +539,29 @@ mod tests {
         assert_eq!(config.telegram.shutdown_grace_ms, 20000);
         assert!(!config.notification_worker.enabled);
         assert_eq!(config.notification_worker.max_attempts, 10);
-        assert!(config.group_invites.resolved_signing_secret().is_some());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn validation_rejects_a_missing_invite_signing_secret() {
-        let mut config = app_config();
-        config.telegram.enabled = false;
-        config.notification_worker.enabled = false;
-        config.group_invites.invite_signing_secret = None;
-
-        let error = config.validate().err().expect("config must be rejected");
-
-        assert!(error.to_string().contains("group_invites"));
+    fn deserialization_rejects_a_missing_invite_signing_secret() {
+        let error = config_builder()
+            .build()
+            .unwrap()
+            .try_deserialize::<AppConfig>()
+            .err()
+            .expect("config must be rejected");
+        assert!(error.to_string().contains("invite_signing_secret"));
     }
 
     #[test]
-    fn validation_rejects_an_invite_signing_secret_of_the_wrong_size() {
+    fn deserialization_rejects_an_invite_signing_secret_of_the_wrong_size() {
         for secret in ["", "AAEC", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"] {
-            let mut config = app_config();
-            config.group_invites.invite_signing_secret = Some(secret.to_owned());
-
-            let error = config
-                .validate()
+            let error = config_builder()
+                .set_override("group_invites.invite_signing_secret", secret)
+                .unwrap()
+                .build()
+                .unwrap()
+                .try_deserialize::<AppConfig>()
                 .err()
                 .unwrap_or_else(|| panic!("secret {secret:?} must be rejected"));
 
@@ -629,13 +609,16 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_an_unparsable_utc_offset() {
+    fn deserialization_rejects_an_unparsable_utc_offset() {
         for offset in ["UTC+10", "+10", "10:00", ""] {
-            let mut config = app_config();
-            config.ui.utc_offset = offset.to_owned();
-
-            let error = config
-                .validate()
+            let error = config_builder()
+                .set_override("ui.utc_offset", offset)
+                .unwrap()
+                .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+                .unwrap()
+                .build()
+                .unwrap()
+                .try_deserialize::<AppConfig>()
                 .err()
                 .unwrap_or_else(|| panic!("offset {offset} must be rejected"));
 
@@ -647,11 +630,17 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_an_unparsable_deadline_time() {
-        let mut config = app_config();
-        config.ui.deadline_time = "24:00".to_owned();
-
-        let error = config.validate().err().expect("config must be rejected");
+    fn deserialization_rejects_an_unparsable_deadline_time() {
+        let error = config_builder()
+            .set_override("ui.deadline_time", "24:00")
+            .unwrap()
+            .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+            .unwrap()
+            .build()
+            .unwrap()
+            .try_deserialize::<AppConfig>()
+            .err()
+            .expect("config must be rejected");
 
         assert!(error.to_string().contains("ui.deadline_time"));
     }
@@ -660,10 +649,7 @@ mod tests {
     fn the_installation_timezone_defaults_to_utc_plus_ten() {
         let config = app_config();
 
-        assert_eq!(
-            config.ui.resolved_utc_offset().unwrap().local_minus_utc(),
-            10 * 3600
-        );
+        assert_eq!(config.ui.utc_offset.local_minus_utc(), 10 * 3600);
     }
 
     #[test]
@@ -766,16 +752,20 @@ mod tests {
         assert!(error.to_string().contains("unknown field"));
     }
 
+    const TEST_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
+    fn config_builder() -> ::config::ConfigBuilder<::config::builder::DefaultState> {
+        ::config::Config::builder().add_source(::config::File::with_name("config/default"))
+    }
+
     fn app_config() -> AppConfig {
-        let mut config: AppConfig = ::config::Config::builder()
-            .add_source(::config::File::with_name("config/default"))
+        config_builder()
+            .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+            .unwrap()
             .build()
             .unwrap()
             .try_deserialize()
-            .unwrap();
-        config.group_invites.invite_signing_secret =
-            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_owned());
-        config
+            .unwrap()
     }
 
     #[test]

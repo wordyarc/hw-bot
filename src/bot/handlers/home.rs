@@ -6,7 +6,6 @@ use teloxide::utils::command::BotCommands;
 use super::Command;
 use crate::app::{Actor, AppResult, ErrorCode};
 use crate::bot::context::Screen;
-use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotDialogue, BotState, ScreenState};
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
@@ -98,7 +97,7 @@ pub(super) async fn send_help(
         Err(error) if error.code() == ErrorCode::NotFound => {
             return show_guest(bot, chat_id).await;
         }
-        Err(error) => return send_app_error(bot, chat_id, error).await,
+        Err(error) => return Err(error.into()),
     };
     let text = format!(
         "{}\n\n🕒 Даты показываются и вводятся в поясе {}.\n\n{}",
@@ -170,14 +169,10 @@ pub(super) async fn show_home(
                     }
                 }
                 Role::Teacher | Role::Admin => {
-                    let pending = match services
+                    let pending = services
                         .reviews
                         .queue_size(Actor::new(registered.user.id()))
-                        .await
-                    {
-                        Ok(pending) => pending,
-                        Err(error) => return send_app_error(bot, chat_id, error).await,
-                    };
+                        .await?;
                     format!(
                         "👋 Здравствуйте, {name}!\n⏳ Ждут проверки: {pending}\nВыберите пункт меню ниже 👇"
                     )
@@ -190,7 +185,7 @@ pub(super) async fn show_home(
         Err(error) if error.code() == ErrorCode::NotFound => {
             open_guest(bot, chat_id, dialogue).await?;
         }
-        Err(error) => send_app_error(bot, chat_id, error).await?,
+        Err(error) => return Err(error.into()),
     }
     Ok(())
 }
@@ -204,10 +199,7 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
         timezone,
         ..
     } = screen;
-    let registered = match services.users.find_by_actor(actor).await {
-        Ok(registered) => registered,
-        Err(error) => return send_app_error(bot, chat_id, error).await,
-    };
+    let registered = services.users.find_by_actor(actor).await?;
     let role = registered.user.role();
     let mut text = format!(
         "👤 Профиль\n\nИмя: {}\nРоль: {}\n",

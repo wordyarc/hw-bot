@@ -14,16 +14,11 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::domain::{AssignmentId, AssignmentStatus};
 
-use crate::bot::errors::send_app_error;
 use crate::bot::views::{
     button_label, deadline_left, grade_line, grading_lines, send_message_chunks, student_menu,
     submission_status,
 };
 use crate::bot::{FileTransfers, HandlerResult};
-
-pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
-    show_queue_page(screen, PageRequest::default()).await
-}
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen {
@@ -34,13 +29,7 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
         timezone,
         ..
     } = screen;
-    let places = match services.submissions.pending_queue(actor, page).await {
-        Ok(places) => places,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+    let places = services.submissions.pending_queue(actor, page).await?;
 
     if places.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, crate::bot::texts::STUDENT_QUEUE_EMPTY)
@@ -89,10 +78,6 @@ impl SubjectHeadings {
     }
 }
 
-pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
-    show_assignments_page(screen, PageRequest::default()).await
-}
-
 pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen {
         bot,
@@ -102,13 +87,7 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
         timezone,
         ..
     } = screen;
-    let assignments = match services.assignments.list_for_student(actor, page).await {
-        Ok(assignments) => assignments,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+    let assignments = services.assignments.list_for_student(actor, page).await?;
 
     if assignments.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, "📚 Опубликованных заданий пока нет.")
@@ -177,10 +156,6 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
     .await
 }
 
-pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
-    show_archive_page(screen, PageRequest::default()).await
-}
-
 pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen {
         bot,
@@ -189,17 +164,10 @@ pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> 
         services,
         ..
     } = screen;
-    let assignments = match services
+    let assignments = services
         .assignments
         .list_archived_for_student(actor, page)
-        .await
-    {
-        Ok(assignments) => assignments,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+        .await?;
 
     if assignments.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, "🗄 Архив заданий пока пуст.")
@@ -257,17 +225,10 @@ pub(super) async fn show_assignment(
         timezone,
         ..
     } = screen;
-    let details = match services
+    let details = services
         .assignments
         .find_for_student(actor, assignment_id)
-        .await
-    {
-        Ok(details) => details,
-        Err(error) => {
-            send_app_error(bot, chat_id, error).await?;
-            return Ok(());
-        }
-    };
+        .await?;
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
     let mut summary = format!(
@@ -332,21 +293,15 @@ pub(super) async fn show_assignment(
         bot.send_message(chat_id, "📎 Вложения задания:").await?;
         for metadata in &details.files {
             let transfer = transfers.acquire().await?;
-            let file = transfer
+            transfer
                 .run(async {
-                    Ok(services
+                    let file = services
                         .files
                         .open_assignment_file_for_student(actor, assignment.id(), metadata.id())
-                        .await)
+                        .await?;
+                    transfers.send(chat_id, file).await
                 })
                 .await?;
-            match file {
-                Ok(file) => transfer.run(transfers.send(chat_id, file)).await?,
-                Err(error) => {
-                    send_app_error(bot, chat_id, error).await?;
-                    return Ok(());
-                }
-            }
         }
     }
     for submission in &details.submissions {
@@ -391,15 +346,11 @@ pub(super) async fn show_history(
     assignment_id: AssignmentId,
     page: PageRequest,
 ) -> HandlerResult {
-    let history = match screen
+    let history = screen
         .services
         .assignments
         .submission_history(screen.actor, assignment_id, page)
-        .await
-    {
-        Ok(submissions) => submissions,
-        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
-    };
+        .await?;
     screen
         .bot
         .send_message(
@@ -471,7 +422,7 @@ pub(super) async fn submit_homework_text(
     else {
         return Ok(());
     };
-    let result = services
+    services
         .submissions
         .submit_homework(SubmitHomework {
             assignment_id,
@@ -479,17 +430,12 @@ pub(super) async fn submit_homework_text(
             content: text.to_owned(),
             submitted_at: Utc::now(),
         })
-        .await;
+        .await?;
 
-    match result {
-        Ok(_) => {
-            reset_dialogue(dialogue).await?;
-            bot.send_message(message.chat.id, texts::submission_queued())
-                .reply_markup(student_keyboard())
-                .await?;
-        }
-        Err(error) => send_app_error(bot, message.chat.id, error).await?,
-    }
+    reset_dialogue(dialogue).await?;
+    bot.send_message(message.chat.id, texts::submission_queued())
+        .reply_markup(student_keyboard())
+        .await?;
 
     Ok(())
 }
