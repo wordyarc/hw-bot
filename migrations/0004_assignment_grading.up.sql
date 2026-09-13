@@ -32,8 +32,8 @@ alter table submissions
             and grade_max_score between 1 and 100
             and raw_score between 0 and grade_max_score
             and late_periods >= 0
-            and penalty >= 0
-            and final_score between 0 and raw_score
+            and penalty between 0 and 100
+            and final_score = greatest(raw_score - penalty, 0)
         )
     );
 

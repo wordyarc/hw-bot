@@ -1,5 +1,5 @@
+use crate::bot::Bot;
 use teloxide::payloads::{SendMessageSetters, SetMyCommandsSetters};
-use teloxide::prelude::{Bot, Requester};
 use teloxide::types::{BotCommand, BotCommandScope, ChatId, Recipient};
 use teloxide::utils::command::BotCommands;
 

@@ -153,8 +153,12 @@ impl LatePolicy {
         u16::try_from(periods).unwrap_or(u16::MAX)
     }
 
-    fn closes_at(self, deadline_at: DateTime<Utc>) -> DateTime<Utc> {
-        deadline_at + Duration::days(i64::from(self.period_days) * i64::from(self.max_periods))
+    fn closes_at(self, deadline_at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
+        deadline_at
+            .checked_add_signed(Duration::days(
+                i64::from(self.period_days) * i64::from(self.max_periods),
+            ))
+            .ok_or(DomainError::AssignmentHorizonOutOfRange)
     }
 
     /// Штраф выше максимума шкалы всё равно даёт ноль, переполнение зажимается
@@ -214,6 +218,9 @@ impl Assignment {
         // Штраф выражен в баллах, поэтому у «зачёт/незачёт» политика опозданий смысла не имеет.
         if parts.late_policy.is_some() && !parts.grading.is_scored() {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
+        }
+        if let Some(policy) = parts.late_policy {
+            policy.closes_at(parts.deadline_at)?;
         }
 
         // В архив можно убрать и черновик, поэтому published_at у архива необязателен.
@@ -331,6 +338,9 @@ impl Assignment {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
 
+        if let Some(policy) = self.late_policy {
+            policy.closes_at(new_deadline_at)?;
+        }
         self.deadline_at = new_deadline_at;
 
         Ok(())
@@ -353,6 +363,9 @@ impl Assignment {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
 
+        if let Some(policy) = late_policy {
+            policy.closes_at(self.deadline_at)?;
+        }
         self.grading = grading;
         self.late_policy = late_policy;
 
@@ -420,7 +433,9 @@ impl Assignment {
 
     pub fn closes_at(&self) -> DateTime<Utc> {
         self.late_policy.map_or(self.deadline_at, |policy| {
-            policy.closes_at(self.deadline_at)
+            policy
+                .closes_at(self.deadline_at)
+                .expect("validated assignment horizon")
         })
     }
 

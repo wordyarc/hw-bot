@@ -104,6 +104,9 @@ impl ReviewService {
                 command.comment,
                 command.reviewed_at,
             )?,
+            ReviewDecision::Reject if command.score.is_some() => {
+                return Err(DomainError::ScoreNotAllowed.into());
+            }
             ReviewDecision::Reject => submission.reject(
                 &assignment,
                 &teaching_course,

@@ -10,6 +10,9 @@ pub enum DomainError {
     #[error("{field} must not be empty")]
     EmptyField { field: &'static str },
 
+    #[error("{field} must not contain a null character")]
+    NullCharacter { field: &'static str },
+
     #[error("{field} must be at most {max} characters, got {actual}")]
     FieldTooLong {
         field: &'static str,
@@ -51,6 +54,9 @@ pub enum DomainError {
 
     #[error("assignment deadline must be after created_at")]
     AssignmentDeadlineMustBeAfterCreatedAt,
+
+    #[error("assignment submission horizon is outside the supported date range")]
+    AssignmentHorizonOutOfRange,
 
     #[error("assignment does not belong to teaching course")]
     AssignmentDoesNotBelongToTeachingCourse,
@@ -103,7 +109,7 @@ pub enum DomainError {
     #[error("scored assignment requires a score")]
     ScoreRequired,
 
-    #[error("pass/fail assignment does not accept a score")]
+    #[error("score is only allowed when accepting a scored assignment")]
     ScoreNotAllowed,
 
     #[error("assignment already has an accepted submission")]

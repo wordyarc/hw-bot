@@ -4,7 +4,6 @@ use crate::bot::handlers::input::{
 };
 use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, USER_TEXT_MAX_LEN};
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
 
 use crate::domain::{Grading, LatePolicy, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
@@ -47,7 +46,7 @@ pub(in crate::bot::handlers) async fn handle_max_attempts(
 }
 
 pub(super) async fn ask_grading(
-    bot: &teloxide::Bot,
+    bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
     draft: DraftAssignment,
     dialogue: &BotDialogue,
@@ -107,7 +106,7 @@ pub(in crate::bot::handlers) async fn handle_grading(
 }
 
 pub(super) async fn apply_grading(
-    bot: &teloxide::Bot,
+    bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
     draft: DraftAssignment,
     grading: Grading,
@@ -187,7 +186,7 @@ pub(in crate::bot::handlers) async fn handle_late_policy(
 }
 
 pub(super) async fn apply_late_policy(
-    bot: &teloxide::Bot,
+    bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
     draft: DraftAssignment,
     late_policy: Option<LatePolicy>,
@@ -208,7 +207,7 @@ pub(super) async fn apply_late_policy(
 }
 
 pub(super) async fn ask_max_attempts(
-    bot: &teloxide::Bot,
+    bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
     course_id: TeachingCourseId,
     title: String,

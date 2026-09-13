@@ -231,6 +231,25 @@ async fn stored_grade_requires_the_frozen_scale_and_raw_score_within_it() {
 }
 
 #[tokio::test]
+async fn stored_grade_rejects_inconsistent_arithmetic_and_excessive_penalty() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    app.review(submission, app.teacher(), "accept", "ok")
+        .await
+        .ok();
+    for (penalty, final_score) in [(2_i16, 4_i16), (101, 0)] {
+        let error = sqlx::query("update submissions set raw_score = 4, grade_max_score = 5, late_periods = 2, penalty = $2, final_score = $3 where id = $1")
+            .bind(submission).bind(penalty).bind(final_score).execute(&app.pool).await.unwrap_err();
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(|error| error.constraint()),
+            Some("submissions_grade_belongs_to_accepted_submission")
+        );
+    }
+}
+
+#[tokio::test]
 async fn stored_file_requires_exactly_one_owner() -> anyhow::Result<()> {
     let app = TestApp::start().await;
     let valid = |assignment: Option<uuid::Uuid>, submission: Option<uuid::Uuid>, position: i64| {

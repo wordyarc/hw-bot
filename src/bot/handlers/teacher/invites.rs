@@ -1,5 +1,4 @@
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
 
 use crate::app::{ErrorCode, GroupInviteState};

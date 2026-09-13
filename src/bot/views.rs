@@ -1,6 +1,7 @@
+use super::Bot;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::{Bot, ChatId, Requester};
+use teloxide::prelude::ChatId;
 use teloxide::types::{
     InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup, KeyboardRemove,
 };

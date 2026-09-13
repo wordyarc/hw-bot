@@ -26,6 +26,7 @@ mod database;
 mod fixture;
 mod response;
 pub mod telegram;
+pub mod telegram_scenario;
 
 pub use database::{fresh_database, migrated_database, saturated_database};
 pub use fixture::{CourseFixture, Fixture};

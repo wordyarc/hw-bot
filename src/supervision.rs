@@ -42,9 +42,22 @@ impl Supervisor {
         self.tasks.spawn(async move { (task, future.await) });
     }
 
-    pub async fn run<S>(mut self, shutdown_signal: S) -> anyhow::Result<()>
+    pub async fn run<S>(self, shutdown_signal: S) -> anyhow::Result<()>
     where
         S: Future<Output = anyhow::Result<()>> + Send,
+    {
+        self.run_with_cleanup(shutdown_signal, async { Ok(()) })
+            .await
+    }
+
+    pub async fn run_with_cleanup<S, C>(
+        mut self,
+        shutdown_signal: S,
+        cleanup: C,
+    ) -> anyhow::Result<()>
+    where
+        S: Future<Output = anyhow::Result<()>> + Send,
+        C: Future<Output = anyhow::Result<()>> + Send,
     {
         let failure = tokio::select! {
             biased;
@@ -58,15 +71,18 @@ impl Supervisor {
         self.health.begin_shutdown();
         self.cancellation.cancel();
 
-        if tokio::time::timeout(self.shutdown_grace, async {
+        let stopped = tokio::time::timeout(self.shutdown_grace, async {
             while self.tasks.join_next().await.is_some() {}
+            cleanup.await
         })
-        .await
-        .is_err()
-        {
+        .await;
+        if stopped.is_err() {
             tracing::warn!("critical tasks did not stop within shutdown grace");
             self.tasks.abort_all();
             while self.tasks.join_next().await.is_some() {}
+        }
+        if let Ok(result) = stopped {
+            result?;
         }
 
         match failure {
@@ -121,5 +137,21 @@ mod tests {
 
         let error = supervisor.run(std::future::pending()).await.unwrap_err();
         assert!(error.to_string().contains("stopped unexpectedly"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_is_bounded_by_the_same_shutdown_grace() {
+        let supervisor = Supervisor::new(
+            CancellationToken::new(),
+            HealthState::new(false, false),
+            Duration::from_millis(30),
+        );
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            supervisor.run_with_cleanup(async { Ok(()) }, std::future::pending()),
+        )
+        .await
+        .expect("cleanup cannot hang shutdown")
+        .unwrap();
     }
 }

@@ -1,5 +1,4 @@
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::Requester;
 
 use crate::domain::{TeachingCourseId, UserId};
 
@@ -23,6 +22,14 @@ pub(in crate::bot::handlers) async fn show_gradebook(
         Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
     };
 
+    render_gradebook(screen, course_id, &gradebook).await
+}
+
+async fn render_gradebook(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    gradebook: &crate::app::CourseGradebook,
+) -> HandlerResult {
     if gradebook.students.is_empty() {
         screen
             .bot
@@ -95,5 +102,5 @@ pub(super) async fn show_student_grades(
     }
 
     send_message_chunks(screen.bot, screen.chat_id, text, None).await?;
-    show_gradebook(screen, course_id).await
+    render_gradebook(screen, course_id, &gradebook).await
 }

@@ -1,9 +1,9 @@
+use super::Bot;
 use crate::app::Actor;
 use crate::domain::TelegramUserId;
 use anyhow::{Context, anyhow};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
-use teloxide::prelude::{Bot, Requester};
 use teloxide::types::{CallbackQuery, ChatId, Message, MessageId, User};
 use teloxide::utils::command::BotCommands;
 
@@ -68,6 +68,21 @@ pub(super) async fn handle_command(
     timezone: BotTimezone,
     invites: BotInvites,
 ) -> HandlerResult {
+    tracing::Span::current().record(
+        "action",
+        match &command {
+            Command::Start(_) => "start",
+            Command::Menu => "menu",
+            Command::Tasks => "tasks",
+            Command::Queue => "queue",
+            Command::Archive => "archive",
+            Command::Review => "review",
+            Command::Courses => "courses",
+            Command::Profile => "profile",
+            Command::Cancel => "cancel",
+            Command::Help => "help",
+        },
+    );
     if !ensure_private_message(&bot, &message).await? {
         return Ok(());
     }
@@ -138,6 +153,7 @@ pub(super) async fn handle_message(
     timezone: BotTimezone,
     invites: BotInvites,
 ) -> HandlerResult {
+    tracing::Span::current().record("action", "input");
     if !ensure_private_message(&bot, &message).await? {
         return Ok(());
     }
@@ -262,6 +278,7 @@ async fn run_menu_action(
     action: MenuAction,
     deps: Deps<'_>,
 ) -> HandlerResult {
+    tracing::Span::current().record("action", tracing::field::debug(action));
     if action == MenuAction::Help {
         return send_help(bot, chat_id, telegram_user_id, deps.services, deps.timezone).await;
     }
@@ -291,9 +308,26 @@ pub(super) async fn handle_callback(
     timezone: BotTimezone,
     invites: BotInvites,
 ) -> HandlerResult {
-    bot.answer_callback_query(query.id.clone())
+    let action = query.data.as_deref().and_then(callbacks::parse);
+    if let Some(action) = action {
+        tracing::Span::current().record("action", tracing::field::debug(action));
+    }
+    if let Err(error) = bot
+        .answer_callback_query(query.id.clone())
         .cache_time(0)
-        .await?;
+        .await
+    {
+        if matches!(
+            error,
+            teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)
+        ) {
+            return Err(error.into());
+        }
+        tracing::warn!(
+            kind = "callback_ack_failed",
+            "Telegram callback acknowledgement failed"
+        );
+    }
 
     let Some(message) = query.regular_message() else {
         return Ok(());
@@ -303,11 +337,11 @@ pub(super) async fn handle_callback(
     }
     let chat_id = message.chat.id;
     let telegram_user_id = actor_from_user(&query.from)?;
-    let Some(data) = query.data.as_deref() else {
+    if query.data.is_none() {
         return Ok(());
-    };
+    }
     let state = dialogue.get().await?.unwrap_or_default();
-    let Some(action) = callbacks::parse(data) else {
+    let Some(action) = action else {
         send_stale_button(&bot, chat_id).await?;
         return Ok(());
     };

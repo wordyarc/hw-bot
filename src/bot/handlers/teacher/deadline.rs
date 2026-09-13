@@ -3,7 +3,6 @@ use crate::bot::handlers::input::{require_text, send_deadline_format_error};
 use crate::bot::handlers::resolve_actor;
 use chrono::{DateTime, Utc};
 use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
-use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
 
 use crate::app::{ChangeDeadline, CreateAssignment};
@@ -116,7 +115,7 @@ fn deadline_prompt(target: &DeadlineTarget, timezone: &BotTimezone) -> String {
 }
 
 pub(super) async fn ask_deadline(
-    bot: &teloxide::Bot,
+    bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
     target: DeadlineTarget,
     dialogue: &BotDialogue,
@@ -159,6 +158,7 @@ pub(super) async fn apply_deadline(
                 .await;
             match result {
                 Ok(assignment) => {
+                    crate::bot::handlers::reset_dialogue(screen.dialogue).await?;
                     screen
                         .bot
                         .send_message(

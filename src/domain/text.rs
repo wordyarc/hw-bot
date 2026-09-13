@@ -16,6 +16,9 @@ impl NonEmptyString {
         if value.is_empty() {
             return Err(DomainError::EmptyField { field });
         }
+        if value.contains('\0') {
+            return Err(DomainError::NullCharacter { field });
+        }
 
         Ok(Self(value))
     }
@@ -57,6 +60,14 @@ mod tests {
         let value = NonEmptyString::new("field", "  text  ").unwrap();
 
         assert_eq!(value.as_str(), "text");
+    }
+
+    #[test]
+    fn rejects_null_characters_before_persistence() {
+        assert_eq!(
+            NonEmptyString::new("content", "pull/1\0").unwrap_err(),
+            DomainError::NullCharacter { field: "content" },
+        );
     }
 
     #[test]

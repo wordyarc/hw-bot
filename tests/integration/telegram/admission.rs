@@ -157,6 +157,38 @@ async fn interactive_timeout_releases_the_permit_and_keeps_long_polling_alive() 
     assert!(polling, "long polling must still be running");
 }
 
+#[tokio::test]
+async fn a_server_error_cannot_hold_the_permit_during_teloxides_internal_sleep() {
+    let app = TestApp::start().await;
+    let telegram = telegram_server(vec![
+        message_update(1, app.teacher(), 1, "/help"),
+        message_update(2, app.teacher(), 2, "/help"),
+    ])
+    .await;
+    let sent = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_json(json!({"ok": false, "error_code": 500, "description": "failed"})),
+        )
+        .expect(2)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot_with_settings(
+        &app,
+        &telegram,
+        bot_settings_with(|settings| {
+            settings.request_timeout = Duration::from_millis(100);
+            settings.max_concurrent_updates = 1;
+        }),
+    );
+    tokio::time::timeout(Duration::from_secs(2), sent.wait_until_satisfied())
+        .await
+        .expect("the second update does not wait for the ten-second library sleep");
+    stop_bot(cancellation, &mut task).await;
+}
+
 /// Фиксируем фактическое поведение teloxide: остаток буферизованного batch дренируется,
 /// финальный polling-запрос уходит с новым offset, `limit = 1` и `timeout = 0`.
 #[tokio::test]

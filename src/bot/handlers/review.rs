@@ -2,12 +2,12 @@ use super::home::show_home;
 use super::input::{ensure_text_limit, parse_number, require_text};
 use super::{reset_dialogue, resolve_actor};
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
+use crate::bot::Bot;
 use crate::bot::context::{Deps, Screen, TextStep};
 use crate::bot::views::teacher_keyboard;
 use crate::domain::{DomainError, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::{Bot, Requester};
 use teloxide::types::ChatId;
 
 use crate::bot::HandlerResult;

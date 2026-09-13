@@ -327,7 +327,7 @@ where
         from users students
         left join assignments
           on assignments.teaching_course_id = $1
-         and assignments.status <> 'draft'
+         and assignments.published_at is not null
         left join submissions
           on submissions.assignment_id = assignments.id
          and submissions.student_id = students.id

@@ -440,6 +440,38 @@ async fn a_draft_assignment_is_not_in_the_gradebook_yet() {
 }
 
 #[tokio::test]
+async fn archiving_an_unpublished_draft_does_not_increase_the_gradebook_maximum() {
+    let app = TestApp::start().await;
+    let created = app
+        .create_assignment_raw(
+            app.course(),
+            app.teacher(),
+            json!({
+                "title": "Unused draft", "body": "Not assigned", "max_attempts": 2,
+                "max_score": 10, "deadline_at": Utc::now() + Duration::days(7),
+            }),
+        )
+        .await
+        .created();
+    let id = created["id"].as_str().unwrap();
+    app.post_empty_as(&format!("/assignments/{id}/archive"), app.teacher())
+        .await
+        .ok();
+    let body = gradebook(&app, app.teacher()).await.ok();
+    assert_eq!(body["students"][0]["max_total"], json!(0));
+}
+
+#[tokio::test]
+async fn a_rejection_with_a_score_does_not_finish_the_review() {
+    let app = TestApp::start().await;
+    let id = app.queued_submission(app.student(), "pull/1").await;
+    app.review_with_score(id, app.teacher(), "reject", 4, "Fix it")
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    app.review(id, app.teacher(), "reject", "Fix it").await.ok();
+}
+
+#[tokio::test]
 async fn moving_the_deadline_does_not_change_a_grade_that_was_already_given() {
     let app = TestApp::start().await;
     let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;

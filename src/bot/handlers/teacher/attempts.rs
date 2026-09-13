@@ -2,7 +2,6 @@ use crate::bot::context::{Deps, Screen, TextStep};
 use crate::bot::handlers::input::{parse_positive_attempts, require_text};
 use crate::bot::handlers::resolve_actor;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
 
 use crate::app::GrantExtraAttempts;
@@ -162,6 +161,7 @@ pub(super) async fn grant_attempts(
         .await
     {
         Ok(progress) => {
+            crate::bot::handlers::reset_dialogue(screen.dialogue).await?;
             screen
                 .bot
                 .send_message(

@@ -1,7 +1,6 @@
 use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
 use crate::domain::{AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata};
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::Requester;
 use teloxide::types::MessageId;
 
 use super::HandlerResult;
@@ -54,13 +53,16 @@ pub(super) async fn handle_message(
                 return Ok(());
             }
             let transfer_permit = transfers.acquire().await?;
-            let content = match transfers
-                .download(&incoming.file_id, policy.max_file_size_bytes)
+            let content = match transfer_permit
+                .run(transfers.download(&incoming.file_id, policy.max_file_size_bytes))
                 .await
             {
                 Ok(content) => content,
-                Err(error) => {
-                    tracing::warn!(error = ?error, "Telegram file download failed");
+                Err(_) => {
+                    tracing::warn!(
+                        kind = "file_download_failed",
+                        "Telegram file download failed"
+                    );
                     bot.send_message(message.chat.id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
                         .await?;
                     return Ok(());
@@ -158,17 +160,21 @@ pub(super) async fn open(
     let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
         return send_stale_button(screen.bot, screen.chat_id).await;
     };
-    let _permit = transfers.acquire().await?;
-    match screen
-        .services
-        .files
-        .open_assignment_file_for_teacher(screen.actor, assignment_id, file_id)
+    let transfer = transfers.acquire().await?;
+    transfer
+        .run(async {
+            match screen
+                .services
+                .files
+                .open_assignment_file_for_teacher(screen.actor, assignment_id, file_id)
+                .await
+            {
+                Ok(file) => transfers.send(screen.chat_id, file).await?,
+                Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
+            }
+            Ok(())
+        })
         .await
-    {
-        Ok(file) => transfers.send(screen.chat_id, file).await?,
-        Err(error) => send_app_error(screen.bot, screen.chat_id, error).await?,
-    }
-    Ok(())
 }
 
 pub(super) async fn request_deletion(

@@ -105,7 +105,8 @@ impl Grade {
         if max_score == 0
             || max_score > MAX_SCORE
             || raw_score > max_score
-            || final_score > raw_score
+            || penalty > MAX_SCORE
+            || final_score != raw_score.saturating_sub(penalty)
         {
             return Err(DomainError::InvalidSubmissionGradeState);
         }
@@ -137,6 +138,32 @@ impl Grade {
 
     pub fn final_score(self) -> u16 {
         self.final_score
+    }
+}
+
+#[cfg(test)]
+mod grade_restore_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_a_stored_grade_with_inconsistent_arithmetic() {
+        assert_eq!(
+            Grade::restore(4, 5, 2, 2, 4),
+            Err(DomainError::InvalidSubmissionGradeState)
+        );
+    }
+
+    #[test]
+    fn rejects_a_stored_penalty_above_the_effective_limit() {
+        assert_eq!(
+            Grade::restore(4, 5, 2, 101, 0),
+            Err(DomainError::InvalidSubmissionGradeState)
+        );
+    }
+
+    #[test]
+    fn restores_a_grade_clamped_to_zero() {
+        assert_eq!(Grade::restore(4, 5, 2, 100, 0).unwrap().final_score(), 0);
     }
 }
 

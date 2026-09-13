@@ -1,4 +1,4 @@
-use teloxide::prelude::{Bot, Requester};
+use crate::bot::Bot;
 use teloxide::types::{ChatId, Message};
 
 use crate::bot::HandlerResult;

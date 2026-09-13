@@ -32,6 +32,7 @@ mod errors;
 mod files;
 mod handlers;
 mod invites;
+mod network;
 mod state;
 pub mod texts;
 mod timezone;
@@ -42,6 +43,7 @@ use files::FileTransfers;
 use handlers::home::default_commands;
 use handlers::{Command, handle_callback, handle_command, handle_message};
 use invites::BotInvites;
+use network::Bot;
 use state::BotState;
 pub use timezone::BotTimezone;
 
@@ -51,7 +53,7 @@ type BotServices = ApplicationContainer;
 #[derive(Clone)]
 pub struct TelegramBot {
     bot: Bot,
-    polling_bot: Bot,
+    polling_bot: teloxide::Bot,
     application: ApplicationContainer,
     settings: TelegramBotSettings,
     timezone: BotTimezone,
@@ -163,17 +165,19 @@ impl TelegramBot {
             .parse()
             .with_context(|| format!("invalid Telegram API base URL: {api_base_url}"))?;
         let token = token.into();
-        let bot = Bot::with_client(
+        let bot = teloxide::Bot::with_client(
             token.clone(),
             telegram_http_client(settings.request_timeout)?,
         )
         .set_api_url(api_url.clone());
         let polling_bot =
-            Bot::with_client(token.clone(), telegram_http_client(polling_http_timeout)?)
+            teloxide::Bot::with_client(token.clone(), telegram_http_client(polling_http_timeout)?)
                 .set_api_url(api_url.clone());
-        let transfer_bot =
-            Bot::with_client(token, telegram_http_client(settings.file_transfer_timeout)?)
-                .set_api_url(api_url);
+        let transfer_bot = teloxide::Bot::with_client(
+            token,
+            telegram_http_client(settings.file_transfer_timeout)?,
+        )
+        .set_api_url(api_url);
         let admission = UpdateAdmission {
             rate_limiter: Arc::new(RateLimiter::keyed(quota)),
             semaphore: Arc::new(Semaphore::new(settings.max_concurrent_updates)),
@@ -183,7 +187,7 @@ impl TelegramBot {
         };
 
         Ok(Self {
-            bot,
+            bot: Bot::new(bot, settings.request_timeout),
             polling_bot,
             application,
             settings,
@@ -192,6 +196,7 @@ impl TelegramBot {
             file_transfers: FileTransfers::new(
                 transfer_bot,
                 settings.max_concurrent_file_transfers,
+                settings.file_transfer_timeout,
             ),
             codec,
         })
@@ -235,8 +240,14 @@ impl TelegramBot {
         }
         let _ready = health.ready();
         let storage = InMemStorage::<BotState>::new();
-        let mut dispatcher = Dispatcher::builder(self.bot, schema())
+        let force_stop = CancellationToken::new();
+        let _stop_handlers_on_drop = force_stop.clone().drop_guard();
+        let invalid_credentials = Arc::new(AtomicBool::new(false));
+        let handler_credentials = invalid_credentials.clone();
+        let handler_cancellation = cancellation.clone();
+        let mut dispatcher = Dispatcher::builder(self.bot.inner.clone(), schema(force_stop))
             .dependencies(dptree::deps![
+                self.bot,
                 storage,
                 self.application,
                 self.admission.clone(),
@@ -247,23 +258,25 @@ impl TelegramBot {
             .distribution_function(|update| update.chat().map(|chat| chat.id))
             .worker_queue_size(self.settings.max_concurrent_updates)
             .default_handler(|_| async {})
-            .error_handler(Arc::new(|error: anyhow::Error| async move {
-                if let Some(teloxide::RequestError::RetryAfter(retry_after)) =
-                    error.downcast_ref::<teloxide::RequestError>()
-                {
-                    tracing::warn!(
-                        retry_after_seconds = retry_after.seconds(),
-                        "Telegram rate limited an interactive request"
-                    );
-                } else {
-                    tracing::error!(error = ?error, "Telegram update handler failed");
+            .error_handler(Arc::new(move |error: anyhow::Error| {
+                let credentials = handler_credentials.clone();
+                let cancellation = handler_cancellation.clone();
+                async move {
+                    if matches!(
+                        error.downcast_ref::<teloxide::RequestError>(),
+                        Some(teloxide::RequestError::Api(
+                            teloxide::ApiError::InvalidToken
+                        ))
+                    ) {
+                        credentials.store(true, Ordering::Release);
+                        cancellation.cancel();
+                    }
                 }
             }))
             .build();
         let listener = Polling::builder(self.polling_bot)
             .timeout(self.settings.polling_timeout)
             .build();
-        let invalid_credentials = Arc::new(AtomicBool::new(false));
         let listener = admitted_listener(
             listener,
             self.admission.clone(),
@@ -284,7 +297,9 @@ impl TelegramBot {
                 if shutdown.shutdown().is_ok() {
                     dispatch.await.map_err(map_startup_error)?;
                 }
-                return Ok(());
+                return if invalid_credentials.load(Ordering::Acquire) {
+                    Err(TelegramBotError::InvalidCredentials)
+                } else { Ok(()) };
             }
         }
 
@@ -482,7 +497,7 @@ fn take_admission_permit(
         .remove(&update.id)
 }
 
-fn schema() -> UpdateHandler<anyhow::Error> {
+fn schema(force_stop: CancellationToken) -> UpdateHandler<anyhow::Error> {
     let messages = Update::filter_message()
         .branch(
             dptree::entry()
@@ -492,9 +507,51 @@ fn schema() -> UpdateHandler<anyhow::Error> {
         .branch(dptree::endpoint(handle_message));
     let callbacks = Update::filter_callback_query().endpoint(handle_callback);
 
-    dptree::entry().filter_map(take_admission_permit).chain(
-        dialogue::enter::<Update, InMemStorage<BotState>, BotState, _>()
-            .branch(messages)
-            .branch(callbacks),
+    update_lifecycle(force_stop)
+        .filter_map(take_admission_permit)
+        .chain(
+            dialogue::enter::<Update, InMemStorage<BotState>, BotState, _>()
+                .branch(messages)
+                .branch(callbacks),
+        )
+}
+
+fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<anyhow::Error> {
+    use std::ops::ControlFlow;
+    use tracing::Instrument;
+
+    dptree::from_fn(
+        move |deps, next| {
+            let force_stop = force_stop.clone();
+            let update = deps.get::<Update>();
+            let kind = match &update.kind {
+                teloxide::types::UpdateKind::Message(_) => "message",
+                teloxide::types::UpdateKind::CallbackQuery(_) => "callback",
+                _ => "other",
+            };
+            let span = tracing::info_span!(
+                "telegram_update",
+                update_id = update.id.0,
+                chat_id = update.chat().map(|chat| chat.id.0),
+                kind,
+                action = tracing::field::Empty,
+            );
+            async move {
+                let started = tokio::time::Instant::now();
+                tokio::select! {
+                    biased;
+                    () = force_stop.cancelled() => ControlFlow::Break(Ok(())),
+                    result = next(deps) => {
+                        if let ControlFlow::Break(Err(ref error)) = result {
+                            errors::log_handler_error(error);
+                        }
+                        tracing::debug!(elapsed_ms = started.elapsed().as_millis(), "Telegram update completed");
+                        result
+                    }
+                }
+            }
+            .instrument(span)
+        },
+        dptree::HandlerSignature::Entry,
     )
 }

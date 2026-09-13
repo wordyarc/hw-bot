@@ -1,5 +1,5 @@
+use crate::bot::Bot;
 use chrono::Utc;
-use teloxide::prelude::{Bot, Requester};
 use teloxide::types::ChatId;
 
 use super::home::show_home;

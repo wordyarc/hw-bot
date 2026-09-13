@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            students.id as \"student_id!\",\n            students.display_name as \"display_name!\",\n            assignments.id as \"assignment_id?\",\n            assignments.title as \"assignment_title?\",\n            coalesce(submissions.grade_max_score, assignments.max_score) as \"max_score?\",\n            submissions.final_score as \"final_score?\"\n        from users students\n        left join assignments\n          on assignments.teaching_course_id = $1\n         and assignments.status <> 'draft'\n        left join submissions\n          on submissions.assignment_id = assignments.id\n         and submissions.student_id = students.id\n         and submissions.status = 'accepted'\n        where students.role = 'student'\n          and students.student_group_id = $2\n        order by students.display_name, students.id, assignments.deadline_at, assignments.id\n        ",
+  "query": "\n        select\n            students.id as \"student_id!\",\n            students.display_name as \"display_name!\",\n            assignments.id as \"assignment_id?\",\n            assignments.title as \"assignment_title?\",\n            coalesce(submissions.grade_max_score, assignments.max_score) as \"max_score?\",\n            submissions.final_score as \"final_score?\"\n        from users students\n        left join assignments\n          on assignments.teaching_course_id = $1\n         and assignments.published_at is not null\n        left join submissions\n          on submissions.assignment_id = assignments.id\n         and submissions.student_id = students.id\n         and submissions.status = 'accepted'\n        where students.role = 'student'\n          and students.student_group_id = $2\n        order by students.display_name, students.id, assignments.deadline_at, assignments.id\n        ",
   "describe": {
     "columns": [
       {
@@ -80,5 +80,5 @@
       true
     ]
   },
-  "hash": "ac2838e98c4cedffaa98f442ec3ff38aa8236518c28fdbcffd6586aa4467f0cf"
+  "hash": "8aa6b75343b84b9d919ced6c0c3323d12559341338f865b53fb2d387537fc621"
 }

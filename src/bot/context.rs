@@ -1,4 +1,4 @@
-use teloxide::prelude::Bot;
+use super::Bot;
 use teloxide::types::{ChatId, Message};
 
 use crate::app::Actor;

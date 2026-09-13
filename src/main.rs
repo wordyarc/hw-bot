@@ -155,9 +155,12 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
         });
     }
 
-    let result = supervisor.run(shutdown_signal()).await;
-    db_pool.close().await;
-    result
+    supervisor
+        .run_with_cleanup(shutdown_signal(), async {
+            db_pool.close().await;
+            Ok(())
+        })
+        .await
 }
 
 fn build_telegram_bot(

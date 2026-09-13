@@ -508,6 +508,60 @@ fn a_submission_at_the_deadline_is_not_late() {
 }
 
 #[test]
+fn creating_an_assignment_rejects_an_unrepresentable_horizon() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    assert_eq!(
+        assignment(&course, &teacher)
+            .scored(5)
+            .late_policy(1, 1, 2)
+            .deadline_at(DateTime::<Utc>::MAX_UTC - Duration::days(1))
+            .try_build(),
+        Err(DomainError::AssignmentHorizonOutOfRange)
+    );
+}
+
+#[test]
+fn a_failed_deadline_change_preserves_the_previous_horizon() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    let mut work = assignment(&course, &teacher)
+        .scored(5)
+        .late_policy(1, 1, 2)
+        .build();
+    let before = work.clone();
+    assert_eq!(
+        work.change_deadline(
+            &course,
+            &teacher,
+            DateTime::<Utc>::MAX_UTC - Duration::days(1)
+        ),
+        Err(DomainError::AssignmentHorizonOutOfRange)
+    );
+    assert_eq!(work, before);
+}
+
+#[test]
+fn adding_a_policy_rejects_an_unrepresentable_horizon_without_changing_the_scale() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    let mut work = assignment(&course, &teacher)
+        .deadline_at(DateTime::<Utc>::MAX_UTC)
+        .build();
+    let before = work.clone();
+    assert_eq!(
+        work.change_grading(
+            &course,
+            &teacher,
+            Grading::scored(5).unwrap(),
+            Some(LatePolicy::new(1, 1, 1).unwrap())
+        ),
+        Err(DomainError::AssignmentHorizonOutOfRange)
+    );
+    assert_eq!(work, before);
+}
+
+#[test]
 fn any_lateness_costs_the_first_period_at_once() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);

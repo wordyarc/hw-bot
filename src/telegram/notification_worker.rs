@@ -29,6 +29,7 @@ pub enum DeliveryOutcome {
     Delivered,
     Rescheduled,
     Failed,
+    RateLimited { retry_after: Duration },
 }
 
 #[derive(Debug, Error)]
@@ -129,7 +130,18 @@ impl NotificationWorker {
                     )
                     .await?,
                 )?;
-                Ok(DeliveryOutcome::Failed)
+                tracing::warn!(
+                    notification_id = %notification.id,
+                    submission_id = %notification.submission_id.as_uuid(),
+                    attempt = notification.attempt_count,
+                    reason = if error.is_permanent() { "permanent_rejection" } else { "attempts_exhausted" },
+                    "notification delivery failed permanently"
+                );
+                Ok(self.outcome_after_error(
+                    DeliveryOutcome::Failed,
+                    &error,
+                    notification.attempt_count,
+                ))
             }
             Err(error) => {
                 log_retry_after(&error);
@@ -148,7 +160,12 @@ impl NotificationWorker {
                     )
                     .await?,
                 )?;
-                Ok(DeliveryOutcome::Rescheduled)
+                tracing::debug!(notification_id = %notification.id, attempt = notification.attempt_count, "notification rescheduled");
+                Ok(self.outcome_after_error(
+                    DeliveryOutcome::Rescheduled,
+                    &error,
+                    notification.attempt_count,
+                ))
             }
         }
     }
@@ -176,6 +193,12 @@ impl NotificationWorker {
             }
 
             match self.deliver_one(Utc::now()).await {
+                Ok(DeliveryOutcome::RateLimited { retry_after }) => {
+                    tokio::select! {
+                        () = cancellation.cancelled() => return Ok(()),
+                        () = tokio::time::sleep(retry_after) => {}
+                    }
+                }
                 Ok(DeliveryOutcome::Idle) => {
                     tokio::select! {
                         () = cancellation.cancelled() => return Ok(()),
@@ -199,6 +222,23 @@ impl NotificationWorker {
 
     fn retry_delay(&self, attempt_count: u32) -> Duration {
         retry_delay(&self.settings, attempt_count)
+    }
+
+    fn outcome_after_error(
+        &self,
+        outcome: DeliveryOutcome,
+        error: &TelegramError,
+        attempt: u32,
+    ) -> DeliveryOutcome {
+        if error.is_rate_limited() {
+            DeliveryOutcome::RateLimited {
+                retry_after: error
+                    .retry_after()
+                    .unwrap_or_else(|| self.retry_delay(attempt)),
+            }
+        } else {
+            outcome
+        }
     }
 }
 

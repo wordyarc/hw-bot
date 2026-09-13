@@ -136,6 +136,115 @@ async fn permanent_telegram_error_fails_notification() {
 }
 
 #[tokio::test]
+async fn flood_control_pauses_the_worker_before_the_next_ready_notification() {
+    use std::sync::{Arc, Mutex};
+    use tokio::time::Instant;
+    let app = TestApp::start().await;
+    for content in ["pull/1", "pull/2"] {
+        let id = app.queued_submission(app.student(), content).await;
+        app.review(id, app.teacher(), "reject", "Fix it").await.ok();
+    }
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getMe"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .mount(&telegram)
+        .await;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let recorded = calls.clone();
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(move |_: &wiremock::Request| {
+            let mut calls = recorded.lock().unwrap();
+            calls.push(Instant::now());
+            if calls.len() == 1 {
+                ResponseTemplate::new(429).set_body_json(json!({"ok": false, "error_code": 429,
+                    "parameters": {"retry_after": 1}}))
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true}))
+            }
+        })
+        .mount(&telegram)
+        .await;
+    let cancellation = CancellationToken::new();
+    let task = tokio::spawn(worker(&app, &telegram, 3).run(
+        cancellation.clone(),
+        HealthState::new(false, true).component(CriticalComponent::NotificationWorker),
+    ));
+    assert!(
+        crate::harness::telegram::wait_until(Duration::from_secs(4), || async {
+            calls.lock().unwrap().len() >= 2
+        })
+        .await
+    );
+    cancellation.cancel();
+    task.await.unwrap().unwrap();
+    let calls = calls.lock().unwrap();
+    assert!(calls[1].duration_since(calls[0]) >= Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_the_flood_control_cooldown() {
+    let app = TestApp::start().await;
+    let id = app.queued_submission(app.student(), "pull/1").await;
+    app.review(id, app.teacher(), "reject", "Fix it").await.ok();
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getMe"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .mount(&telegram)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(
+            ResponseTemplate::new(429).set_body_json(json!({"ok": false, "error_code": 429,
+            "parameters": {"retry_after": 60}})),
+        )
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let cancellation = CancellationToken::new();
+    let task = tokio::spawn(worker(&app, &telegram, 3).run(
+        cancellation.clone(),
+        HealthState::new(false, true).component(CriticalComponent::NotificationWorker),
+    ));
+    assert!(crate::harness::telegram::wait_until(Duration::from_secs(3), || async {
+        sqlx::query_scalar::<_, bool>("select lease_token is null and last_error is not null from review_notification_outbox where submission_id = $1")
+            .bind(id).fetch_one(&app.pool).await.unwrap()
+    }).await);
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_millis(500), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn exhausting_delivery_attempts_marks_the_notification_failed() {
+    let app = TestApp::start().await;
+    let id = app.queued_submission(app.student(), "pull/1").await;
+    app.review(id, app.teacher(), "reject", "Fix it").await.ok();
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    assert_eq!(
+        worker(&app, &telegram, 1)
+            .deliver_one(Utc::now())
+            .await
+            .unwrap(),
+        DeliveryOutcome::Failed
+    );
+    let failed: bool = sqlx::query_scalar("select failed_at is not null and lease_token is null from review_notification_outbox where submission_id = $1")
+        .bind(id).fetch_one(&app.pool).await.unwrap();
+    assert!(failed);
+}
+
+#[tokio::test]
 async fn invalid_credentials_preserve_the_notification_for_a_fixed_deployment() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;

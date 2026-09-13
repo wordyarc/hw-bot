@@ -7,7 +7,6 @@ use crate::bot::views::student_keyboard;
 use crate::domain::USER_TEXT_MAX_LEN;
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::Requester;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::domain::{AssignmentId, AssignmentStatus};
@@ -226,7 +225,16 @@ pub(super) async fn show_assignment(
         history.remaining_attempts_for(assignment),
     );
     if history.has_pending_submission()
-        && let Ok(places) = services.submissions.pending_queue(actor).await
+        && let Ok(places) = services
+            .submissions
+            .pending_queue(actor)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    code = error.code().as_str(),
+                    "student queue position is unavailable"
+                );
+            })
         && let Some(place) = places
             .iter()
             .find(|place| place.assignment_id == assignment_id)
@@ -264,14 +272,18 @@ pub(super) async fn show_assignment(
         .await?;
     if !details.files.is_empty() {
         bot.send_message(chat_id, "📎 Вложения задания:").await?;
-        let _permit = transfers.acquire().await?;
         for metadata in &details.files {
-            match services
-                .files
-                .open_assignment_file_for_student(actor, assignment.id(), metadata.id())
-                .await
-            {
-                Ok(file) => transfers.send(chat_id, file).await?,
+            let transfer = transfers.acquire().await?;
+            let file = transfer
+                .run(async {
+                    Ok(services
+                        .files
+                        .open_assignment_file_for_student(actor, assignment.id(), metadata.id())
+                        .await)
+                })
+                .await?;
+            match file {
+                Ok(file) => transfer.run(transfers.send(chat_id, file)).await?,
                 Err(error) => {
                     send_app_error(bot, chat_id, error).await?;
                     return Ok(());

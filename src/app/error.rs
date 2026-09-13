@@ -67,6 +67,7 @@ impl AppError {
         match self {
             Self::Domain(error) => match error {
                 DomainError::EmptyField { .. }
+                | DomainError::NullCharacter { .. }
                 | DomainError::FieldTooLong { .. }
                 | DomainError::InvalidTelegramUserId { .. }
                 | DomainError::InvalidStudyYear { .. }
@@ -79,6 +80,7 @@ impl AppError {
                 | DomainError::ScoreOutOfRange { .. }
                 | DomainError::ScoreRequired
                 | DomainError::ScoreNotAllowed
+                | DomainError::AssignmentHorizonOutOfRange
                 | DomainError::AssignmentDeadlineMustBeAfterCreatedAt => ErrorCode::InvalidInput,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }
