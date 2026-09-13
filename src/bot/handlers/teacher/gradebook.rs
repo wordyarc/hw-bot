@@ -17,6 +17,7 @@ pub(in crate::bot::handlers) async fn show_gradebook_page(
     page: PageRequest,
 ) -> HandlerResult {
     let students = screen
+        .context
         .services
         .courses
         .list_students(screen.actor, course_id, page)
@@ -70,6 +71,7 @@ pub(in crate::bot::handlers) async fn show_student_grades_page(
     page: PageRequest,
 ) -> HandlerResult {
     let student = screen
+        .context
         .services
         .courses
         .student_grades(screen.actor, course_id, student_id, page)

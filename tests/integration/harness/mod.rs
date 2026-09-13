@@ -70,7 +70,6 @@ impl TestApp {
         let invites = invite_codec();
         let router = api::router(
             AppState::new(
-                "hw-bot-test",
                 pool.clone(),
                 application.clone(),
                 invites.clone(),
@@ -173,6 +172,15 @@ impl TestApp {
             body,
         ))
         .await
+    }
+
+    pub async fn post_raw_as(&self, path: &str, actor: i64, body: Vec<u8>) -> TestResponse {
+        let request = Request::post(path)
+            .header(ACTOR_HEADER, actor)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("valid request");
+        self.send(request).await
     }
 
     pub async fn post_empty_as(&self, path: &str, actor: i64) -> TestResponse {

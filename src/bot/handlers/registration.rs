@@ -64,12 +64,8 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
         telegram_user_id,
         deps,
     } = step;
-    let Deps {
-        services,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
+    let Deps { context, dialogue } = deps;
+    let services = &context.services;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());

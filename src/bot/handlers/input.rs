@@ -39,11 +39,7 @@ pub(super) fn parse_max_score(text: &str) -> Option<Grading> {
 }
 
 pub(super) fn parse_number(text: &str) -> Option<u16> {
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
+    crate::bot::callbacks::parse_u16(text.trim())
 }
 
 pub(super) fn parse_positive_attempts(text: &str) -> Option<u16> {

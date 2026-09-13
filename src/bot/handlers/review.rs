@@ -24,10 +24,11 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
         bot,
         chat_id,
         actor,
-        services,
+        context,
         dialogue,
         ..
     } = screen;
+    let services = &context.services;
     let item = services.reviews.take_next_from_queue(actor).await?;
     let Some(item) = item else {
         reset_dialogue(dialogue).await?;
@@ -78,17 +79,9 @@ pub(super) async fn submit_score_text(
     penalty: u16,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id: _,
-        deps,
+        bot, message, deps, ..
     } = step;
-    let Deps {
-        services: _,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
+    let Deps { dialogue, .. } = deps;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -127,12 +120,8 @@ pub(super) async fn submit_comment(
         telegram_user_id,
         deps,
     } = step;
-    let Deps {
-        services,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
+    let Deps { context, dialogue } = deps;
+    let services = &context.services;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -200,6 +189,7 @@ pub(super) async fn submit_comment(
 
 async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> HandlerResult {
     match screen
+        .context
         .services
         .reviews
         .find_for_review(screen.actor, submission_id)

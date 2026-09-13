@@ -26,7 +26,7 @@ pub(super) async fn submit_file(
         telegram_user_id,
         deps,
     } = step;
-    let services = deps.services;
+    let services = &deps.context.services;
     let Some(incoming) = incoming_file(message) else {
         bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
             .await?;
@@ -147,6 +147,7 @@ pub(super) async fn open(
     transfer
         .run(async {
             let file = screen
+                .context
                 .services
                 .files
                 .open_assignment_file_for_teacher(screen.actor, assignment_id, file_id)
@@ -240,10 +241,11 @@ pub(super) async fn show(
         bot,
         chat_id,
         actor,
-        services,
+        context,
         dialogue,
         ..
     } = screen;
+    let services = &context.services;
     let card = services
         .files
         .list_assignment_files_for_teacher(actor, assignment_id)
@@ -299,6 +301,7 @@ async fn delete(
     creation_flow: bool,
 ) -> HandlerResult {
     match screen
+        .context
         .services
         .files
         .delete_assignment_file(DeleteAssignmentFile {

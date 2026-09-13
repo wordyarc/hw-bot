@@ -15,6 +15,7 @@ pub(in crate::bot::handlers) async fn show_group_invite(
     course_id: TeachingCourseId,
 ) -> HandlerResult {
     let invite = screen
+        .context
         .services
         .courses
         .get_group_invite(screen.actor, course_id)
@@ -42,7 +43,10 @@ async fn send_group_invite(
         .bot
         .send_message(
             screen.chat_id,
-            screen.invites.link(invite.group.id(), invite.generation),
+            screen
+                .context
+                .invites
+                .link(invite.group.id(), invite.generation),
         )
         .await?;
     let sent = screen
@@ -124,6 +128,7 @@ pub(in crate::bot::handlers) async fn confirm_invite_rotation(
         .await?;
 
     match screen
+        .context
         .services
         .courses
         .rotate_group_invite(screen.actor, course_id, generation)

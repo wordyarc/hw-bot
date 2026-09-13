@@ -14,9 +14,8 @@ const SIZE_BYTES: &str = "stored_files.size_bytes";
 const SHA256: &str = "stored_files.sha256";
 
 macro_rules! select_stored_files {
-    ($row:ty, $extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_as!(
-            $row,
+    ($extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query!(
             r#"
             select
                 id, assignment_id, submission_id, position, presentation, filename, mime_type,
@@ -24,6 +23,23 @@ macro_rules! select_stored_files {
             "# + $extra + $tail
             $(, $arg)*
         )
+    };
+}
+
+macro_rules! stored_file_row {
+    ($row:expr) => {
+        StoredFileRow {
+            id: $row.id,
+            assignment_id: $row.assignment_id,
+            submission_id: $row.submission_id,
+            position: $row.position,
+            presentation: $row.presentation,
+            filename: $row.filename,
+            mime_type: $row.mime_type,
+            size_bytes: $row.size_bytes,
+            sha256: $row.sha256,
+            created_at: $row.created_at,
+        }
     };
 }
 
@@ -80,7 +96,6 @@ where
     E: PgExecutor<'e>,
 {
     select_stored_files!(
-        StoredFileRow,
         "",
         " from stored_files where assignment_id = $1 order by position",
         assignment_id.as_uuid(),
@@ -88,7 +103,7 @@ where
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(StoredFileMetadata::try_from)
+    .map(|row| StoredFileMetadata::try_from(stored_file_row!(row)))
     .collect()
 }
 
@@ -101,7 +116,6 @@ where
     E: PgExecutor<'e>,
 {
     let row = select_stored_files!(
-        StoredFileWithContentRow,
         ", content ",
         " from stored_files where assignment_id = $1 and id = $2",
         assignment_id.as_uuid(),
@@ -110,7 +124,13 @@ where
     .fetch_optional(executor)
     .await?;
 
-    row.map(StoredFile::try_from).transpose()
+    row.map(|row| {
+        Ok(StoredFile {
+            metadata: StoredFileMetadata::try_from(stored_file_row!(row))?,
+            content: row.content,
+        })
+    })
+    .transpose()
 }
 
 pub async fn delete_assignment_file<'e, E>(
@@ -147,44 +167,6 @@ struct StoredFileRow {
     size_bytes: i64,
     sha256: Vec<u8>,
     created_at: DateTime<Utc>,
-}
-
-struct StoredFileWithContentRow {
-    id: Uuid,
-    assignment_id: Option<Uuid>,
-    submission_id: Option<Uuid>,
-    position: i64,
-    presentation: String,
-    filename: String,
-    mime_type: Option<String>,
-    size_bytes: i64,
-    sha256: Vec<u8>,
-    created_at: DateTime<Utc>,
-    content: Vec<u8>,
-}
-
-impl TryFrom<StoredFileWithContentRow> for StoredFile {
-    type Error = DbError;
-
-    fn try_from(row: StoredFileWithContentRow) -> Result<Self, Self::Error> {
-        let metadata = StoredFileMetadata::try_from(StoredFileRow {
-            id: row.id,
-            assignment_id: row.assignment_id,
-            submission_id: row.submission_id,
-            position: row.position,
-            presentation: row.presentation,
-            filename: row.filename,
-            mime_type: row.mime_type,
-            size_bytes: row.size_bytes,
-            sha256: row.sha256,
-            created_at: row.created_at,
-        })?;
-
-        Ok(Self {
-            metadata,
-            content: row.content,
-        })
-    }
 }
 
 impl TryFrom<StoredFileRow> for StoredFileMetadata {

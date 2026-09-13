@@ -1,5 +1,5 @@
 use super::ApiPath as Path;
-use super::pagination::{Pagination, page_headers};
+use super::pagination::{Pagination, page_json};
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -248,10 +248,7 @@ pub async fn list_student_assignments(
         .list_for_student(actor, page)
         .await?;
 
-    Ok((
-        page_headers(&assignments),
-        Json(assignments.items.iter().map(Into::into).collect()),
-    ))
+    Ok(page_json(&assignments))
 }
 
 pub async fn list_archived_student_assignments(
@@ -265,10 +262,7 @@ pub async fn list_archived_student_assignments(
         .list_archived_for_student(actor, page)
         .await?;
 
-    Ok((
-        page_headers(&assignments),
-        Json(assignments.items.iter().map(Into::into).collect()),
-    ))
+    Ok(page_json(&assignments))
 }
 
 pub async fn find_student_assignment(
@@ -297,10 +291,7 @@ pub async fn list_course_assignments(
         .list_for_course(actor, teaching_course_id, page)
         .await?;
 
-    Ok((
-        page_headers(&assignments),
-        Json(assignments.items.iter().map(Into::into).collect()),
-    ))
+    Ok(page_json(&assignments))
 }
 
 pub async fn submission_history(
@@ -315,10 +306,7 @@ pub async fn submission_history(
         .submission_history(actor, id, page)
         .await?
         .submissions;
-    Ok((
-        page_headers(&submissions),
-        Json(submissions.items.iter().map(Into::into).collect()),
-    ))
+    Ok(page_json(&submissions))
 }
 
 pub async fn create_assignment(

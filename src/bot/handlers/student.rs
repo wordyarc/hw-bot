@@ -25,10 +25,11 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
         bot,
         chat_id,
         actor,
-        services,
-        timezone,
+        context,
         ..
     } = screen;
+    let services = &context.services;
+    let timezone = &context.timezone;
     let places = services.submissions.pending_queue(actor, page).await?;
 
     if places.items.is_empty() && page.page == 0 {
@@ -83,10 +84,11 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
         bot,
         chat_id,
         actor,
-        services,
-        timezone,
+        context,
         ..
     } = screen;
+    let services = &context.services;
+    let timezone = &context.timezone;
     let assignments = services.assignments.list_for_student(actor, page).await?;
 
     if assignments.items.is_empty() && page.page == 0 {
@@ -161,9 +163,10 @@ pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> 
         bot,
         chat_id,
         actor,
-        services,
+        context,
         ..
     } = screen;
+    let services = &context.services;
     let assignments = services
         .assignments
         .list_archived_for_student(actor, page)
@@ -221,10 +224,11 @@ pub(super) async fn show_assignment(
         bot,
         chat_id,
         actor,
-        services,
-        timezone,
+        context,
         ..
     } = screen;
+    let services = &context.services;
+    let timezone = &context.timezone;
     let details = services
         .assignments
         .find_for_student(actor, assignment_id)
@@ -347,6 +351,7 @@ pub(super) async fn show_history(
     page: PageRequest,
 ) -> HandlerResult {
     let history = screen
+        .context
         .services
         .assignments
         .submission_history(screen.actor, assignment_id, page)
@@ -396,12 +401,8 @@ pub(super) async fn submit_homework_text(
         telegram_user_id,
         deps,
     } = step;
-    let Deps {
-        services,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
+    let Deps { context, dialogue } = deps;
+    let services = &context.services;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());

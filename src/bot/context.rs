@@ -9,12 +9,17 @@ use super::invites::BotInvites;
 use super::state::BotDialogue;
 use super::timezone::BotTimezone;
 
+#[derive(Clone)]
+pub(super) struct BotContext {
+    pub services: BotServices,
+    pub timezone: BotTimezone,
+    pub invites: BotInvites,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Deps<'a> {
-    pub services: &'a BotServices,
+    pub context: &'a BotContext,
     pub dialogue: &'a BotDialogue,
-    pub timezone: &'a BotTimezone,
-    pub invites: &'a BotInvites,
 }
 
 #[derive(Clone, Copy)]
@@ -22,10 +27,8 @@ pub(super) struct Screen<'a> {
     pub bot: &'a Bot,
     pub chat_id: ChatId,
     pub actor: Actor,
-    pub services: &'a BotServices,
+    pub context: &'a BotContext,
     pub dialogue: &'a BotDialogue,
-    pub timezone: &'a BotTimezone,
-    pub invites: &'a BotInvites,
 }
 
 impl<'a> Screen<'a> {
@@ -34,10 +37,15 @@ impl<'a> Screen<'a> {
             bot,
             chat_id,
             actor,
-            services: deps.services,
+            context: deps.context,
             dialogue: deps.dialogue,
-            timezone: deps.timezone,
-            invites: deps.invites,
+        }
+    }
+
+    pub fn deps(self) -> Deps<'a> {
+        Deps {
+            context: self.context,
+            dialogue: self.dialogue,
         }
     }
 }

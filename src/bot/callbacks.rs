@@ -406,10 +406,7 @@ fn parse_grading(data: &str) -> Option<GradingChoice> {
     match data.strip_prefix(GRADING_PREFIX)? {
         "passfail" => Some(GradingChoice::PassFail),
         "manual" => Some(GradingChoice::Manual),
-        value => match parse_amount(data, GRADING_PREFIX)? {
-            AmountChoice::Preset(max_score) => Some(GradingChoice::Preset(max_score)),
-            AmountChoice::Manual => unreachable!("{value} is not the manual marker"),
-        },
+        value => parse_u16(value).map(GradingChoice::Preset),
     }
 }
 
@@ -427,11 +424,15 @@ fn parse_amount(data: &str, prefix: &str) -> Option<AmountChoice> {
     if value == "manual" {
         return Some(AmountChoice::Manual);
     }
+    parse_u16(value).map(AmountChoice::Preset)
+}
+
+pub(super) fn parse_u16(value: &str) -> Option<u16> {
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
 
-    value.parse().ok().map(AmountChoice::Preset)
+    value.parse().ok()
 }
 
 fn parse_deadline(data: &str) -> Option<DeadlineAction> {

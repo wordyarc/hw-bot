@@ -195,10 +195,11 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
         bot,
         chat_id,
         actor,
-        services,
-        timezone,
+        context,
         ..
     } = screen;
+    let services = &context.services;
+    let timezone = &context.timezone;
     let registered = services.users.find_by_actor(actor).await?;
     let role = registered.user.role();
     let mut text = format!(

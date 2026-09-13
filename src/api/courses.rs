@@ -1,5 +1,5 @@
 use super::ApiPath as Path;
-use super::pagination::{Pagination, page_headers};
+use super::pagination::{Pagination, page_headers, page_json};
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -141,8 +141,5 @@ pub async fn list_my_courses(
         .list_for_teacher(actor, page)
         .await?;
 
-    Ok((
-        page_headers(&courses),
-        Json(courses.items.iter().map(Into::into).collect()),
-    ))
+    Ok(page_json(&courses))
 }

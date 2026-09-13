@@ -11,9 +11,8 @@ use crate::domain::{Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::state::{
-    AssignmentTerms, BotDialogue, BotState, DraftAssignment, FlowState, TermsForm, TermsStep,
+    AssignmentTerms, BotState, DraftAssignment, FlowState, TermsForm, TermsStep,
 };
-use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{ask_input, attempts_keyboard, grading_keyboard, send_stale_button};
 
 use super::attempts::chosen_amount;
@@ -38,8 +37,8 @@ pub(in crate::bot::handlers) async fn handle_max_attempts(
     ask_grading(
         screen.bot,
         screen.chat_id,
+        screen.deps(),
         DraftAssignment::new(course_id, title, body, max_attempts),
-        screen.dialogue,
     )
     .await
 }
@@ -47,14 +46,14 @@ pub(in crate::bot::handlers) async fn handle_max_attempts(
 pub(super) async fn ask_grading(
     bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
+    deps: Deps<'_>,
     draft: DraftAssignment,
-    dialogue: &BotDialogue,
 ) -> HandlerResult {
     let sent = bot
         .send_message(chat_id, crate::bot::texts::GRADING_QUESTION)
         .reply_markup(grading_keyboard())
         .await?;
-    dialogue
+    deps.dialogue
         .update(BotState::Flow(FlowState::ChoosingGrading {
             message_id: sent.id,
             draft,
@@ -97,24 +96,15 @@ pub(in crate::bot::handlers) async fn handle_grading(
         .bot
         .edit_message_reply_markup(screen.chat_id, message_id)
         .await?;
-    apply_grading(
-        screen.bot,
-        screen.chat_id,
-        draft,
-        grading,
-        screen.dialogue,
-        screen.timezone,
-    )
-    .await
+    apply_grading(screen.bot, screen.chat_id, screen.deps(), draft, grading).await
 }
 
 pub(super) async fn apply_grading(
     bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
+    deps: Deps<'_>,
     draft: DraftAssignment,
     grading: Grading,
-    dialogue: &BotDialogue,
-    timezone: &BotTimezone,
 ) -> HandlerResult {
     let draft = DraftAssignment { grading, ..draft };
 
@@ -126,8 +116,7 @@ pub(super) async fn apply_grading(
     super::terms::render(
         bot,
         chat_id,
-        dialogue,
-        timezone,
+        deps,
         TermsForm::new(AssignmentTerms::creating(draft), step),
         None,
     )
@@ -137,16 +126,16 @@ pub(super) async fn apply_grading(
 pub(super) async fn ask_max_attempts(
     bot: &crate::bot::Bot,
     chat_id: teloxide::types::ChatId,
+    deps: Deps<'_>,
     course_id: TeachingCourseId,
     title: String,
     body: String,
-    dialogue: &BotDialogue,
 ) -> HandlerResult {
     let sent = bot
         .send_message(chat_id, crate::bot::texts::ATTEMPTS_QUESTION)
         .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
         .await?;
-    dialogue
+    deps.dialogue
         .update(BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
             message_id: sent.id,
             course_id,
@@ -162,17 +151,9 @@ pub(in crate::bot::handlers) async fn submit_title(
     course_id: TeachingCourseId,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id: _,
-        deps,
+        bot, message, deps, ..
     } = step;
-    let Deps {
-        services: _,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
+    let Deps { dialogue, .. } = deps;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -215,17 +196,8 @@ pub(in crate::bot::handlers) async fn submit_body(
     title: String,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id: _,
-        deps,
+        bot, message, deps, ..
     } = step;
-    let Deps {
-        services: _,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -249,10 +221,10 @@ pub(in crate::bot::handlers) async fn submit_body(
     ask_max_attempts(
         bot,
         message.chat.id,
+        deps,
         course_id,
         title,
         text.to_owned(),
-        dialogue,
     )
     .await?;
 
@@ -266,17 +238,8 @@ pub(in crate::bot::handlers) async fn submit_max_attempts(
     body: String,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id: _,
-        deps,
+        bot, message, deps, ..
     } = step;
-    let Deps {
-        services: _,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -292,8 +255,8 @@ pub(in crate::bot::handlers) async fn submit_max_attempts(
     ask_grading(
         bot,
         message.chat.id,
+        deps,
         DraftAssignment::new(course_id, title, body, max_attempts),
-        dialogue,
     )
     .await?;
 
@@ -305,17 +268,8 @@ pub(in crate::bot::handlers) async fn submit_grading_text(
     draft: DraftAssignment,
 ) -> HandlerResult {
     let TextStep {
-        bot,
-        message,
-        telegram_user_id: _,
-        deps,
+        bot, message, deps, ..
     } = step;
-    let Deps {
-        services: _,
-        dialogue,
-        timezone,
-        invites: _,
-    } = deps;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -328,7 +282,7 @@ pub(in crate::bot::handlers) async fn submit_grading_text(
         .await?;
         return Ok(());
     };
-    apply_grading(bot, message.chat.id, draft, grading, dialogue, timezone).await?;
+    apply_grading(bot, message.chat.id, deps, draft, grading).await?;
 
     Ok(())
 }

@@ -1060,24 +1060,11 @@ pub(super) fn button_label(label: &str) -> String {
 }
 
 fn message_chunks(text: String) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_len = 0;
-
-    for character in text.chars() {
-        if current_len == MESSAGE_LIMIT {
-            chunks.push(std::mem::take(&mut current));
-            current_len = 0;
-        }
-        current.push(character);
-        current_len += 1;
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-
-    chunks
+    text.chars()
+        .collect::<Vec<_>>()
+        .chunks(MESSAGE_LIMIT)
+        .map(|chunk| chunk.iter().collect())
+        .collect()
 }
 
 pub(super) async fn send_message_chunks(

@@ -24,10 +24,11 @@ pub(in crate::bot::handlers) async fn show_courses_page(
         bot,
         chat_id,
         actor,
-        services,
+        context,
         dialogue,
         ..
     } = screen;
+    let services = &context.services;
     let courses = services.courses.list_for_teacher(actor, page).await?;
     if courses.items.is_empty() && page.page == 0 {
         reset_dialogue(dialogue).await?;
@@ -57,11 +58,12 @@ pub(in crate::bot::handlers) async fn show_course_assignments_page(
         bot,
         chat_id,
         actor,
-        services,
+        context,
         dialogue,
-        timezone,
         ..
     } = screen;
+    let services = &context.services;
+    let timezone = &context.timezone;
     let assignments = services
         .assignments
         .list_for_course(actor, course_id, page)
@@ -102,11 +104,12 @@ pub(in crate::bot::handlers) async fn show_assignment(
         bot,
         chat_id,
         actor,
-        services,
+        context,
         dialogue,
-        timezone,
         ..
     } = screen;
+    let services = &context.services;
+    let timezone = &context.timezone;
     let assignment = services
         .assignments
         .find_for_teacher(actor, assignment_id)
@@ -151,6 +154,7 @@ pub(in crate::bot::handlers) async fn publish_assignment(
         return send_stale_button(screen.bot, screen.chat_id).await;
     }
     screen
+        .context
         .services
         .assignments
         .publish(assignment_id, screen.actor, Utc::now())
@@ -175,6 +179,7 @@ pub(in crate::bot::handlers) async fn archive_assignment(
         return send_stale_button(screen.bot, screen.chat_id).await;
     }
     screen
+        .context
         .services
         .assignments
         .archive(assignment_id, screen.actor)

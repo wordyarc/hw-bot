@@ -1,5 +1,6 @@
 use super::ApiError;
 use crate::pagination::{Page, PageRequest};
+use axum::Json;
 use axum::extract::{FromRequestParts, Query};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, request::Parts};
 
@@ -29,4 +30,11 @@ pub fn page_headers<T>(page: &Page<T>) -> HeaderMap {
         headers.insert("x-next-page", HeaderValue::from(next));
     }
     headers
+}
+
+pub fn page_json<'a, T, U: From<&'a T>>(page: &'a Page<T>) -> (HeaderMap, Json<Vec<U>>) {
+    (
+        page_headers(page),
+        Json(page.items.iter().map(Into::into).collect()),
+    )
 }

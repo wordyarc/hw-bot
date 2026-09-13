@@ -90,9 +90,8 @@ macro_rules! assignment_row {
 }
 
 macro_rules! select_assignments {
-    ($row:ty, $extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_as!(
-            $row,
+    ($extra:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query!(
             r#"
             select
                 id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
@@ -106,8 +105,7 @@ macro_rules! select_assignments {
 
 macro_rules! select_assignment_cards {
     ($tail:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_as!(
-            StudentAssignmentCardRow,
+        sqlx::query!(
             r#"
             select
                 assignments.id, assignments.teaching_course_id, assignments.subject_id,
@@ -260,7 +258,6 @@ where
     E: PgExecutor<'e>,
 {
     let row = select_assignments!(
-        VersionedAssignmentRow,
         ", revision ",
         " from assignments where id = $1",
         id.as_uuid(),
@@ -268,23 +265,25 @@ where
     .fetch_optional(executor)
     .await?;
 
-    row.map(VersionedAssignment::try_from).transpose()
+    row.map(|row| {
+        Ok(VersionedAssignment {
+            assignment: Assignment::try_from(assignment_row!(row))?,
+            revision: row.revision,
+        })
+    })
+    .transpose()
 }
 
 pub async fn find_by_id<'e, E>(executor: E, id: AssignmentId) -> DbResult<Option<Assignment>>
 where
     E: PgExecutor<'e>,
 {
-    let row = select_assignments!(
-        AssignmentRow,
-        "",
-        " from assignments where id = $1",
-        id.as_uuid(),
-    )
-    .fetch_optional(executor)
-    .await?;
+    let row = select_assignments!("", " from assignments where id = $1", id.as_uuid(),)
+        .fetch_optional(executor)
+        .await?;
 
-    row.map(Assignment::try_from).transpose()
+    row.map(|row| Assignment::try_from(assignment_row!(row)))
+        .transpose()
 }
 
 pub async fn list_published_for_group<'e, E>(
@@ -306,7 +305,12 @@ where
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(StudentAssignmentCard::try_from)
+    .map(|row| {
+        Ok(StudentAssignmentCard {
+            subject: Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?,
+            assignment: Assignment::try_from(assignment_row!(row))?,
+        })
+    })
     .collect()
 }
 
@@ -330,7 +334,12 @@ where
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(StudentAssignmentCard::try_from)
+    .map(|row| {
+        Ok(StudentAssignmentCard {
+            subject: Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?,
+            assignment: Assignment::try_from(assignment_row!(row))?,
+        })
+    })
     .collect()
 }
 
@@ -343,7 +352,6 @@ where
     E: PgExecutor<'e>,
 {
     select_assignments!(
-        AssignmentRow,
         "",
         " from assignments where teaching_course_id = $1 order by created_at desc, id limit $2 offset $3",
         teaching_course_id.as_uuid(),
@@ -353,7 +361,7 @@ where
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(Assignment::try_from)
+    .map(|row| Assignment::try_from(assignment_row!(row)))
     .collect()
 }
 
@@ -377,80 +385,10 @@ struct AssignmentRow {
     published_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug)]
-struct VersionedAssignmentRow {
-    id: Uuid,
-    teaching_course_id: Uuid,
-    subject_id: Uuid,
-    student_group_id: Uuid,
-    title: String,
-    body: String,
-    max_attempts: i16,
-    max_score: Option<i16>,
-    late_period_days: Option<i16>,
-    late_penalty: Option<i16>,
-    late_max_periods: Option<i16>,
-    status: String,
-    created_by: Uuid,
-    created_at: DateTime<Utc>,
-    deadline_at: DateTime<Utc>,
-    published_at: Option<DateTime<Utc>>,
-    revision: i64,
-}
-
-impl TryFrom<VersionedAssignmentRow> for VersionedAssignment {
-    type Error = DbError;
-
-    fn try_from(row: VersionedAssignmentRow) -> Result<Self, Self::Error> {
-        let revision = row.revision;
-        let assignment = Assignment::try_from(assignment_row!(row))?;
-
-        Ok(Self {
-            assignment,
-            revision,
-        })
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct StudentAssignmentCard {
     pub assignment: Assignment,
     pub subject: Subject,
-}
-
-#[derive(Debug)]
-struct StudentAssignmentCardRow {
-    id: Uuid,
-    teaching_course_id: Uuid,
-    subject_id: Uuid,
-    student_group_id: Uuid,
-    title: String,
-    body: String,
-    max_attempts: i16,
-    max_score: Option<i16>,
-    late_period_days: Option<i16>,
-    late_penalty: Option<i16>,
-    late_max_periods: Option<i16>,
-    status: String,
-    created_by: Uuid,
-    created_at: DateTime<Utc>,
-    deadline_at: DateTime<Utc>,
-    published_at: Option<DateTime<Utc>>,
-    subject_name: String,
-}
-
-impl TryFrom<StudentAssignmentCardRow> for StudentAssignmentCard {
-    type Error = DbError;
-
-    fn try_from(row: StudentAssignmentCardRow) -> Result<Self, Self::Error> {
-        let subject = Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?;
-        let assignment = Assignment::try_from(assignment_row!(row))?;
-
-        Ok(Self {
-            assignment,
-            subject,
-        })
-    }
 }
 
 impl TryFrom<AssignmentRow> for Assignment {

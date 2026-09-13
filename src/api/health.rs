@@ -1,25 +1,7 @@
-use axum::Json;
+use crate::api::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use serde::{Deserialize, Serialize};
-
-use crate::api::{AppState, JsonBody};
-
-#[derive(Debug, Deserialize)]
-pub struct EchoRequest {
-    text: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EchoResponse {
-    app: String,
-    text: String,
-}
-
-pub async fn root() -> &'static str {
-    "Hello, axum!"
-}
 
 pub async fn liveness() -> StatusCode {
     StatusCode::OK
@@ -41,14 +23,4 @@ pub async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
             StatusCode::SERVICE_UNAVAILABLE
         }
     }
-}
-
-pub async fn echo(
-    State(state): State<AppState>,
-    JsonBody(payload): JsonBody<EchoRequest>,
-) -> Json<EchoResponse> {
-    Json(EchoResponse {
-        app: state.app_name.clone(),
-        text: payload.text,
-    })
 }

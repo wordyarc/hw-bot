@@ -106,13 +106,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let telegram_bot = build_telegram_bot(&config, application.clone(), invites.clone())?;
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
-        AppState::new(
-            config.app.name.clone(),
-            db_pool.clone(),
-            application,
-            invites,
-            health.clone(),
-        ),
+        AppState::new(db_pool.clone(), application, invites, health.clone()),
         Duration::from_millis(config.server.request_timeout_ms),
     );
 

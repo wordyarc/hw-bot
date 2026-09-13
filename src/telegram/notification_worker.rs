@@ -169,15 +169,20 @@ impl NotificationWorker {
         cancellation: CancellationToken,
         health: ComponentHealth,
     ) -> Result<(), NotificationWorkerError> {
-        tokio::select! {
-            () = cancellation.cancelled() => return Ok(()),
-            result = TimedRequest::new(self.telegram.get_me(), self.settings.request_timeout).send() => match result {
-                Ok(_) => {}
-                Err(error) if delivery_failure(&error) == DeliveryFailure::InvalidCredentials => {
-                    return Err(NotificationWorkerError::InvalidCredentials);
-                }
-                Err(error) => return Err(NotificationWorkerError::Startup(request_error_kind(&error))),
-            },
+        let Some(result) = cancellation
+            .run_until_cancelled(
+                TimedRequest::new(self.telegram.get_me(), self.settings.request_timeout).send(),
+            )
+            .await
+        else {
+            return Ok(());
+        };
+        match result {
+            Ok(_) => {}
+            Err(error) if delivery_failure(&error) == DeliveryFailure::InvalidCredentials => {
+                return Err(NotificationWorkerError::InvalidCredentials);
+            }
+            Err(error) => return Err(NotificationWorkerError::Startup(request_error_kind(&error))),
         }
         let _ready = health.ready();
 
@@ -188,16 +193,14 @@ impl NotificationWorker {
 
             match self.deliver_one(Utc::now()).await {
                 Ok(DeliveryOutcome::RateLimited { retry_after }) => {
-                    tokio::select! {
-                        () = cancellation.cancelled() => return Ok(()),
-                        () = tokio::time::sleep(retry_after) => {}
-                    }
+                    cancellation
+                        .run_until_cancelled(tokio::time::sleep(retry_after))
+                        .await;
                 }
                 Ok(DeliveryOutcome::Idle) => {
-                    tokio::select! {
-                        () = cancellation.cancelled() => return Ok(()),
-                        () = tokio::time::sleep(self.settings.poll_interval) => {}
-                    }
+                    cancellation
+                        .run_until_cancelled(tokio::time::sleep(self.settings.poll_interval))
+                        .await;
                 }
                 Ok(_) => {}
                 Err(NotificationWorkerError::InvalidCredentials) => {
@@ -205,10 +208,9 @@ impl NotificationWorker {
                 }
                 Err(error) => {
                     tracing::error!(error = ?error, "notification worker failed to access database");
-                    tokio::select! {
-                        () = cancellation.cancelled() => return Ok(()),
-                        () = tokio::time::sleep(self.settings.poll_interval) => {}
-                    }
+                    cancellation
+                        .run_until_cancelled(tokio::time::sleep(self.settings.poll_interval))
+                        .await;
                 }
             }
         }

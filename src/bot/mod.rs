@@ -45,6 +45,7 @@ use invites::BotInvites;
 use state::BotState;
 pub use timezone::BotTimezone;
 
+use context::BotContext;
 use errors::BotError;
 
 type HandlerResult<T = ()> = Result<T, BotError>;
@@ -156,33 +157,32 @@ impl TelegramBot {
         cancellation: CancellationToken,
         health: ComponentHealth,
     ) -> Result<(), TelegramBotError> {
-        let bot_username = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Ok(()),
-            result = self.bot.get_me().send() => {
-                result
-                    .map_err(map_startup_error)?
-                    .user
-                    .username
-                    .ok_or(TelegramBotError::MissingBotUsername)?
-            }
+        let Some(me) = cancellation
+            .run_until_cancelled(self.bot.get_me().send())
+            .await
+        else {
+            return Ok(());
         };
+        let bot_username = me
+            .map_err(map_startup_error)?
+            .user
+            .username
+            .ok_or(TelegramBotError::MissingBotUsername)?;
         let invites = BotInvites::new(self.codec, bot_username);
-        let webhook = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Ok(()),
-            result = self.polling_bot.get_webhook_info().send() => {
-                result.map_err(map_startup_error)?
-            }
+        let Some(webhook) = cancellation
+            .run_until_cancelled(self.polling_bot.get_webhook_info().send())
+            .await
+        else {
+            return Ok(());
         };
-        if webhook.url.is_some() {
-            tokio::select! {
-                biased;
-                () = cancellation.cancelled() => return Ok(()),
-                result = self.polling_bot.delete_webhook().send() => {
-                    result.map_err(map_startup_error)?;
-                }
-            }
+        if webhook.map_err(map_startup_error)?.url.is_some() {
+            let Some(result) = cancellation
+                .run_until_cancelled(self.polling_bot.delete_webhook().send())
+                .await
+            else {
+                return Ok(());
+            };
+            result.map_err(map_startup_error)?;
         }
         if !announce_commands(&self.bot, &cancellation).await {
             return Ok(());
@@ -198,11 +198,13 @@ impl TelegramBot {
             .dependencies(dptree::deps![
                 self.bot,
                 storage,
-                self.application,
+                BotContext {
+                    services: self.application,
+                    timezone: self.timezone,
+                    invites,
+                },
                 self.admission.clone(),
-                self.file_transfers,
-                self.timezone,
-                invites
+                self.file_transfers
             ])
             .distribution_function(|update| update.chat().map(|chat| chat.id))
             .worker_queue_size(self.settings.max_concurrent_updates)
@@ -262,22 +264,25 @@ impl TelegramBot {
 }
 
 async fn announce_commands(bot: &Bot, cancellation: &CancellationToken) -> bool {
-    let commands = tokio::select! {
-        biased;
-        () = cancellation.cancelled() => return false,
-        result = bot.set_my_commands(default_commands()).send() => result,
+    let Some(commands) = cancellation
+        .run_until_cancelled(bot.set_my_commands(default_commands()).send())
+        .await
+    else {
+        return false;
     };
     if let Err(error) = commands {
         errors::log_request_error("set_my_commands", &error);
     }
 
-    let menu = tokio::select! {
-        biased;
-        () = cancellation.cancelled() => return false,
-        result = bot
-            .set_chat_menu_button()
-            .menu_button(teloxide::types::MenuButton::Commands)
-            .send() => result,
+    let Some(menu) = cancellation
+        .run_until_cancelled(
+            bot.set_chat_menu_button()
+                .menu_button(teloxide::types::MenuButton::Commands)
+                .send(),
+        )
+        .await
+    else {
+        return false;
     };
     if let Err(error) = menu {
         errors::log_request_error("set_chat_menu_button", &error);

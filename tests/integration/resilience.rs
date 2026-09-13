@@ -31,19 +31,23 @@ async fn unsupported_method_uses_the_api_error_envelope() {
 #[tokio::test]
 async fn http_accepts_a_body_at_the_transport_limit() {
     let app = TestApp::start().await;
-    let body = echo_body(REQUEST_BODY_LIMIT);
+    let body = registration_body(&app.group_invite_token().await, REQUEST_BODY_LIMIT);
 
-    let response = app.post_raw("/echo", body).await;
+    let response = app
+        .post_raw_as("/students", app.next_telegram_id(), body)
+        .await;
 
-    response.expect(StatusCode::OK);
+    response.created();
 }
 
 #[tokio::test]
 async fn http_rejects_a_body_above_the_transport_limit() {
     let app = TestApp::start().await;
-    let body = echo_body(REQUEST_BODY_LIMIT + 1);
+    let body = registration_body(&app.group_invite_token().await, REQUEST_BODY_LIMIT + 1);
 
-    let response = app.post_raw("/echo", body).await;
+    let response = app
+        .post_raw_as("/students", app.next_telegram_id(), body)
+        .await;
 
     response.error(StatusCode::PAYLOAD_TOO_LARGE, "request_body_too_large");
 }
@@ -123,8 +127,13 @@ async fn runtime_pool_applies_statement_timeout() {
     );
 }
 
-fn echo_body(size: usize) -> Vec<u8> {
-    const OVERHEAD: usize = r#"{"text":""}"#.len();
-    assert!(size >= OVERHEAD);
-    format!(r#"{{"text":"{}"}}"#, "x".repeat(size - OVERHEAD)).into_bytes()
+fn registration_body(invite_token: &str, size: usize) -> Vec<u8> {
+    let mut body = serde_json::to_vec(&serde_json::json!({
+        "display_name": "Student",
+        "invite_token": invite_token,
+    }))
+    .unwrap();
+    assert!(size >= body.len());
+    body.resize(size, b' ');
+    body
 }

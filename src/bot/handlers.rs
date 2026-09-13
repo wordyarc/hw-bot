@@ -10,12 +10,10 @@ use teloxide::utils::command::BotCommands;
 
 use super::assignment_files;
 use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
-use super::context::{Deps, Screen, TextStep};
+use super::context::{BotContext, Deps, Screen, TextStep};
 use super::errors::finish_handler;
-use super::invites::BotInvites;
 use super::state::{BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
-use super::timezone::BotTimezone;
 use super::views::{MenuAction, ask_input, menu_action, send_stale_button};
 use super::{BotServices, HandlerResult};
 
@@ -60,20 +58,23 @@ pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Зависимости endpoint инъецирует Teloxide"
-)]
 pub(super) async fn handle_command(
     bot: Bot,
     message: Message,
     command: Command,
     dialogue: BotDialogue,
     state: BotState,
-    services: BotServices,
-    timezone: BotTimezone,
-    invites: BotInvites,
+    context: BotContext,
 ) -> HandlerResult {
+    let BotContext {
+        services,
+        timezone,
+        invites,
+    } = &context;
+    let deps = Deps {
+        context: &context,
+        dialogue: &dialogue,
+    };
     let chat_id = message.chat.id;
     let result = async {
         tracing::Span::current().record(
@@ -102,21 +103,11 @@ pub(super) async fn handle_command(
         {
             if matches!(command, Command::Cancel) {
                 let Some(actor) =
-                    resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
+                    resolve_actor(&bot, chat_id, telegram_user_id, services, &dialogue).await?
                 else {
                     return Ok(());
                 };
-                let screen = Screen::new(
-                    &bot,
-                    chat_id,
-                    actor,
-                    Deps {
-                        services: &services,
-                        dialogue: &dialogue,
-                        timezone: &timezone,
-                        invites: &invites,
-                    },
-                );
+                let screen = Screen::new(&bot, chat_id, actor, deps);
                 if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
                     return teacher::handle_terms(
                         screen,
@@ -132,77 +123,63 @@ pub(super) async fn handle_command(
             reset_dialogue(&dialogue).await?;
         }
 
-        let action = match command {
+        if let Some(action) = menu_action_for(&command) {
+            reset_dialogue(&dialogue).await?;
+            return run_menu_action(&bot, chat_id, telegram_user_id, action, deps).await;
+        }
+        match command {
             Command::Start(payload) => {
                 reset_dialogue(&dialogue).await?;
-                return start_registration(
+                start_registration(
                     &bot,
                     chat_id,
                     telegram_user_id,
                     payload.trim(),
-                    &services,
+                    services,
                     &dialogue,
-                    &invites,
+                    invites,
                 )
-                .await;
+                .await
             }
             Command::Menu => {
                 reset_dialogue(&dialogue).await?;
-                show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
-                return Ok(());
+                show_home(&bot, chat_id, telegram_user_id, services, &dialogue).await
             }
             Command::Cancel => {
                 reset_dialogue(&dialogue).await?;
                 bot.send_message(chat_id, "Текущее действие отменено.")
                     .await?;
-                show_home(&bot, chat_id, telegram_user_id, &services, &dialogue).await?;
-                return Ok(());
+                show_home(&bot, chat_id, telegram_user_id, services, &dialogue).await
             }
-            Command::Help => {
-                send_help(&bot, chat_id, telegram_user_id, &services, &timezone).await?;
-                return Ok(());
-            }
-            Command::Tasks => MenuAction::Assignments,
-            Command::Queue => MenuAction::Queue,
-            Command::Archive => MenuAction::Archive,
-            Command::Review => MenuAction::Review,
-            Command::Courses => MenuAction::Courses,
-            Command::Profile => MenuAction::Profile,
-        };
-
-        reset_dialogue(&dialogue).await?;
-        run_menu_action(
-            &bot,
-            chat_id,
-            telegram_user_id,
-            action,
-            Deps {
-                services: &services,
-                dialogue: &dialogue,
-                timezone: &timezone,
-                invites: &invites,
-            },
-        )
-        .await
+            Command::Help => send_help(&bot, chat_id, telegram_user_id, services, timezone).await,
+            _ => Ok(()),
+        }
     }
     .await;
     finish_handler(&bot, chat_id, result).await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Зависимости endpoint инъецирует Teloxide"
-)]
+fn menu_action_for(command: &Command) -> Option<MenuAction> {
+    match command {
+        Command::Tasks => Some(MenuAction::Assignments),
+        Command::Queue => Some(MenuAction::Queue),
+        Command::Archive => Some(MenuAction::Archive),
+        Command::Review => Some(MenuAction::Review),
+        Command::Courses => Some(MenuAction::Courses),
+        Command::Profile => Some(MenuAction::Profile),
+        Command::Start(_) | Command::Menu | Command::Cancel | Command::Help => None,
+    }
+}
+
 pub(super) async fn handle_message(
     bot: Bot,
     message: Message,
     dialogue: BotDialogue,
     state: BotState,
-    services: BotServices,
+    context: BotContext,
     transfers: super::FileTransfers,
-    timezone: BotTimezone,
-    invites: BotInvites,
 ) -> HandlerResult {
+    let services = &context.services;
     let chat_id = message.chat.id;
     let result = async {
         tracing::Span::current().record("action", "input");
@@ -212,10 +189,8 @@ pub(super) async fn handle_message(
 
         let actor = actor_from_message(&message)?;
         let deps = Deps {
-            services: &services,
+            context: &context,
             dialogue: &dialogue,
-            timezone: &timezone,
-            invites: &invites,
         };
         let step = TextStep {
             bot: &bot,
@@ -227,7 +202,7 @@ pub(super) async fn handle_message(
         if let Some(action) = message.text().and_then(menu_action) {
             if let Some(form) = state.active_terms() {
                 let Some(resolved) =
-                    resolve_actor(&bot, message.chat.id, actor, &services, &dialogue).await?
+                    resolve_actor(&bot, message.chat.id, actor, services, &dialogue).await?
                 else {
                     return Ok(());
                 };
@@ -245,7 +220,7 @@ pub(super) async fn handle_message(
 
         match state {
             BotState::Idle => {
-                if resolve_actor(&bot, message.chat.id, actor, &services, &dialogue)
+                if resolve_actor(&bot, message.chat.id, actor, services, &dialogue)
                     .await?
                     .is_some()
                 {
@@ -367,11 +342,24 @@ async fn run_menu_action(
 ) -> HandlerResult {
     tracing::Span::current().record("action", tracing::field::debug(action));
     if action == MenuAction::Help {
-        return send_help(bot, chat_id, telegram_user_id, deps.services, deps.timezone).await;
+        return send_help(
+            bot,
+            chat_id,
+            telegram_user_id,
+            &deps.context.services,
+            &deps.context.timezone,
+        )
+        .await;
     }
 
-    let Some(actor) =
-        resolve_actor(bot, chat_id, telegram_user_id, deps.services, deps.dialogue).await?
+    let Some(actor) = resolve_actor(
+        bot,
+        chat_id,
+        telegram_user_id,
+        &deps.context.services,
+        deps.dialogue,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -390,19 +378,13 @@ async fn run_menu_action(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Зависимости endpoint инъецирует Teloxide"
-)]
 pub(super) async fn handle_callback(
     bot: Bot,
     query: CallbackQuery,
     dialogue: BotDialogue,
     state: BotState,
-    services: BotServices,
+    context: BotContext,
     transfers: super::FileTransfers,
-    timezone: BotTimezone,
-    invites: BotInvites,
 ) -> HandlerResult {
     let action = query.data.as_deref().and_then(callbacks::parse);
     if let Some(action) = action {
@@ -452,13 +434,17 @@ pub(super) async fn handle_callback(
         }
 
         let deps = Deps {
-            services: &services,
+            context: &context,
             dialogue: &dialogue,
-            timezone: &timezone,
-            invites: &invites,
         };
-        let Some(actor) =
-            resolve_actor(&bot, chat_id, telegram_user_id, &services, &dialogue).await?
+        let Some(actor) = resolve_actor(
+            &bot,
+            chat_id,
+            telegram_user_id,
+            &context.services,
+            &dialogue,
+        )
+        .await?
         else {
             return Ok(());
         };
@@ -706,6 +692,7 @@ pub(super) async fn resolve_actor(
 #[cfg(test)]
 mod tests {
     use super::input::parse_positive_attempts;
+    use crate::bot::BotTimezone;
     use crate::bot::callbacks::{EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX};
     use crate::bot::views::{
         assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
@@ -740,17 +727,8 @@ mod tests {
             ("/courses", MenuAction::Courses),
             ("/profile", MenuAction::Profile),
         ] {
-            let action = match Command::parse(input, "test_bot").unwrap() {
-                Command::Tasks => MenuAction::Assignments,
-                Command::Queue => MenuAction::Queue,
-                Command::Archive => MenuAction::Archive,
-                Command::Review => MenuAction::Review,
-                Command::Courses => MenuAction::Courses,
-                Command::Profile => MenuAction::Profile,
-                _ => panic!("{input} must open a menu screen"),
-            };
-
-            assert_eq!(action, expected, "{input}");
+            let action = menu_action_for(&Command::parse(input, "test_bot").unwrap());
+            assert_eq!(action, Some(expected), "{input}");
         }
     }
 

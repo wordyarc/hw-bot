@@ -29,10 +29,11 @@ pub(in crate::bot::handlers) async fn show_students_page(
         bot,
         chat_id,
         actor,
-        services,
+        context,
         dialogue,
         ..
     } = screen;
+    let services = &context.services;
     let students = services
         .assignments
         .list_students_for_assignment(actor, assignment_id, page)
@@ -156,6 +157,7 @@ pub(super) async fn grant_attempts(
     amount: u16,
 ) -> HandlerResult {
     let progress = screen
+        .context
         .services
         .assignments
         .grant_extra_attempts(GrantExtraAttempts {
@@ -192,12 +194,8 @@ pub(in crate::bot::handlers) async fn submit_attempt_amount(
         telegram_user_id,
         deps,
     } = step;
-    let Deps {
-        services,
-        dialogue,
-        timezone: _,
-        invites: _,
-    } = deps;
+    let Deps { context, dialogue } = deps;
+    let services = &context.services;
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
