@@ -1,3 +1,4 @@
+use crate::pagination::{Page, PageRequest};
 use sqlx::PgPool;
 
 use crate::app::access::load_managing_teacher;
@@ -35,7 +36,13 @@ impl From<TeachingCourseCard> for TeachingCourseSummary {
 
 #[derive(Clone, Debug)]
 pub struct CourseGradebook {
-    pub students: Vec<StudentGrades>,
+    pub students: Page<StudentGrades>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CourseStudent {
+    pub student_id: UserId,
+    pub display_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +50,10 @@ pub struct StudentGrades {
     pub student_id: UserId,
     pub display_name: String,
     pub grades: Vec<AssignmentGrade>,
+    pub grade_page: u32,
+    pub next_grade_page: Option<u32>,
+    total: u32,
+    max_total: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -67,18 +78,11 @@ impl From<db::submissions::CourseAssignmentGrade> for AssignmentGrade {
 impl StudentGrades {
     /// Непроверенная сдача в сумму не входит: у неё ещё нет балла, и это не ноль.
     pub fn total(&self) -> u32 {
-        self.grades
-            .iter()
-            .filter_map(|grade| grade.final_score)
-            .map(u32::from)
-            .sum()
+        self.total
     }
 
     pub fn max_total(&self) -> u32 {
-        self.grades
-            .iter()
-            .map(|grade| u32::from(grade.max_score))
-            .sum()
+        self.max_total
     }
 }
 
@@ -92,7 +96,11 @@ impl CourseService {
         Self { pool }
     }
 
-    pub async fn list_for_teacher(&self, actor: Actor) -> AppResult<Vec<TeachingCourseSummary>> {
+    pub async fn list_for_teacher(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+    ) -> AppResult<Page<TeachingCourseSummary>> {
         let actor = load_actor(&self.pool, actor, "teacher").await?;
 
         if !actor.role().can_manage_assignments() {
@@ -102,13 +110,14 @@ impl CourseService {
             .into());
         }
 
-        Ok(
-            db::academic::list_teaching_courses_for_teacher(&self.pool, &actor)
+        Ok(Page::from_rows(
+            db::academic::list_teaching_courses_for_teacher(&self.pool, &actor, page)
                 .await?
                 .into_iter()
                 .map(TeachingCourseSummary::from)
                 .collect(),
-        )
+            page,
+        ))
     }
 
     pub async fn get_group_invite(
@@ -147,33 +156,65 @@ impl CourseService {
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
+        page: PageRequest,
     ) -> AppResult<CourseGradebook> {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read course gradebook").await?;
 
-        let rows = db::submissions::course_grades(&self.pool, course_id, course.student_group_id())
-            .await?;
+        let rows = db::submissions::course_grades(
+            &self.pool,
+            course_id,
+            course.student_group_id(),
+            page,
+            None,
+            PageRequest::default(),
+        )
+        .await?;
+        Ok(CourseGradebook {
+            students: Page::from_rows(group_grades(rows, PageRequest::default()), page),
+        })
+    }
 
-        let mut students: Vec<StudentGrades> = Vec::new();
-        for row in rows {
-            match students.last_mut() {
-                Some(last) if last.student_id == row.student_id => {
-                    last.grades
-                        .extend(row.assignment.map(AssignmentGrade::from));
-                }
-                _ => students.push(StudentGrades {
-                    student_id: row.student_id,
-                    display_name: row.display_name,
-                    grades: row
-                        .assignment
-                        .into_iter()
-                        .map(AssignmentGrade::from)
-                        .collect(),
-                }),
-            }
-        }
+    pub async fn list_students(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+        page: PageRequest,
+    ) -> AppResult<Page<CourseStudent>> {
+        let (_, course) =
+            load_managing_teacher(&self.pool, actor, course_id, "read course students").await?;
+        Ok(Page::from_rows(
+            db::users::list_student_names(&self.pool, course.student_group_id(), page).await?,
+            page,
+        )
+        .map(|student| CourseStudent {
+            student_id: student.student_id,
+            display_name: student.display_name,
+        }))
+    }
 
-        Ok(CourseGradebook { students })
+    pub async fn student_grades(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+        student_id: UserId,
+        page: PageRequest,
+    ) -> AppResult<StudentGrades> {
+        let (_, course) =
+            load_managing_teacher(&self.pool, actor, course_id, "read student grades").await?;
+        let rows = db::submissions::course_grades(
+            &self.pool,
+            course_id,
+            course.student_group_id(),
+            PageRequest::default(),
+            Some(student_id),
+            page,
+        )
+        .await?;
+        group_grades(rows, page)
+            .into_iter()
+            .next()
+            .required("student")
     }
 
     async fn managed_group(
@@ -188,4 +229,37 @@ impl CourseService {
             .await?
             .required("student group")
     }
+}
+
+fn group_grades(
+    rows: Vec<db::submissions::CourseGradeRow>,
+    page: PageRequest,
+) -> Vec<StudentGrades> {
+    let mut students: Vec<StudentGrades> = Vec::new();
+    for row in rows {
+        match students.last_mut() {
+            Some(last) if last.student_id == row.student_id => last
+                .grades
+                .extend(row.assignment.map(AssignmentGrade::from)),
+            _ => students.push(StudentGrades {
+                student_id: row.student_id,
+                display_name: row.display_name,
+                grades: row
+                    .assignment
+                    .into_iter()
+                    .map(AssignmentGrade::from)
+                    .collect(),
+                total: row.total,
+                max_total: row.max_total,
+                grade_page: page.page,
+                next_grade_page: None,
+            }),
+        }
+    }
+    for student in &mut students {
+        let grades = Page::from_rows(std::mem::take(&mut student.grades), page);
+        student.grades = grades.items;
+        student.next_grade_page = grades.next_page;
+    }
+    students
 }

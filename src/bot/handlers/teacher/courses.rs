@@ -1,3 +1,6 @@
+use crate::bot::callbacks::PageTarget;
+use crate::bot::views::paginated_keyboard;
+use crate::pagination::PageRequest;
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
@@ -19,6 +22,13 @@ use crate::bot::views::{
 use super::deadline::ask_deadline;
 
 pub(in crate::bot::handlers) async fn show_courses(screen: Screen<'_>) -> HandlerResult {
+    show_courses_page(screen, PageRequest::default()).await
+}
+
+pub(in crate::bot::handlers) async fn show_courses_page(
+    screen: Screen<'_>,
+    page: PageRequest,
+) -> HandlerResult {
     let Screen {
         bot,
         chat_id,
@@ -27,14 +37,14 @@ pub(in crate::bot::handlers) async fn show_courses(screen: Screen<'_>) -> Handle
         dialogue,
         ..
     } = screen;
-    let courses = match services.courses.list_for_teacher(actor).await {
+    let courses = match services.courses.list_for_teacher(actor, page).await {
         Ok(courses) => courses,
         Err(error) => {
             send_app_error(bot, chat_id, error).await?;
             return Ok(());
         }
     };
-    if courses.is_empty() {
+    if courses.items.is_empty() && page.page == 0 {
         reset_dialogue(dialogue).await?;
         bot.send_message(chat_id, "📘 У вас пока нет учебных курсов.")
             .reply_markup(teacher_menu(None))
@@ -43,7 +53,12 @@ pub(in crate::bot::handlers) async fn show_courses(screen: Screen<'_>) -> Handle
     }
 
     bot.send_message(chat_id, "📘 Выберите курс:")
-        .reply_markup(courses_keyboard(&courses))
+        .reply_markup(paginated_keyboard(
+            courses_keyboard(&courses.items),
+            PageTarget::Courses,
+            courses.page,
+            courses.next_page,
+        ))
         .await?;
     reset_dialogue(dialogue).await
 }
@@ -51,6 +66,14 @@ pub(in crate::bot::handlers) async fn show_courses(screen: Screen<'_>) -> Handle
 pub(in crate::bot::handlers) async fn show_course_assignments(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
+) -> HandlerResult {
+    show_course_assignments_page(screen, course_id, PageRequest::default()).await
+}
+
+pub(in crate::bot::handlers) async fn show_course_assignments_page(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    page: PageRequest,
 ) -> HandlerResult {
     let Screen {
         bot,
@@ -61,7 +84,11 @@ pub(in crate::bot::handlers) async fn show_course_assignments(
         timezone,
         ..
     } = screen;
-    let assignments = match services.assignments.list_for_course(actor, course_id).await {
+    let assignments = match services
+        .assignments
+        .list_for_course(actor, course_id, page)
+        .await
+    {
         Ok(assignments) => assignments,
         Err(error) => {
             send_app_error(bot, chat_id, error).await?;
@@ -69,12 +96,12 @@ pub(in crate::bot::handlers) async fn show_course_assignments(
         }
     };
 
-    if assignments.is_empty() {
+    if assignments.items.is_empty() {
         bot.send_message(chat_id, "В этом курсе пока нет заданий.")
             .await?;
     } else {
         let mut text = String::from("Задания курса:\n");
-        for assignment in &assignments {
+        for assignment in &assignments.items {
             text.push_str(&format!(
                 "\n{} · {}\n⏰ {}\n",
                 assignment.title().as_str(),
@@ -86,7 +113,12 @@ pub(in crate::bot::handlers) async fn show_course_assignments(
     }
 
     bot.send_message(chat_id, "Выберите задание или создайте новое:")
-        .reply_markup(course_assignments_keyboard(course_id, &assignments))
+        .reply_markup(paginated_keyboard(
+            course_assignments_keyboard(course_id, &assignments.items),
+            PageTarget::Course(course_id),
+            assignments.page,
+            assignments.next_page,
+        ))
         .await?;
     reset_dialogue(dialogue).await
 }

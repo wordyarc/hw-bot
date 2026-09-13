@@ -6,7 +6,7 @@ use teloxide::types::{
     InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup, KeyboardRemove,
 };
 
-use crate::app::{AssignmentStudentSummary, StudentGrades, TeachingCourseSummary};
+use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
 use crate::domain::{
     Assignment, AssignmentStatus, Grade, Role, StoredFileMetadata, SubmissionId, SubmissionStatus,
     TeachingCourseId,
@@ -530,18 +530,13 @@ pub(super) fn format_file_size(size_bytes: u64) -> String {
 
 pub(super) fn gradebook_students_keyboard(
     course_id: TeachingCourseId,
-    students: &[StudentGrades],
+    students: &[CourseStudent],
 ) -> InlineKeyboardMarkup {
     let mut rows = students
         .iter()
         .map(|student| {
             vec![InlineKeyboardButton::callback(
-                button_label(&format!(
-                    "👤 {} · {} из {}",
-                    student.display_name,
-                    student.total(),
-                    student.max_total()
-                )),
+                button_label(&format!("👤 {}", student.display_name,)),
                 format!("{STUDENT_PREFIX}{}", student.student_id.as_uuid()),
             )]
         })
@@ -552,6 +547,31 @@ pub(super) fn gradebook_students_keyboard(
     )]);
 
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn paginated_keyboard(
+    mut keyboard: InlineKeyboardMarkup,
+    target: super::callbacks::PageTarget,
+    page: u32,
+    next: Option<u32>,
+) -> InlineKeyboardMarkup {
+    let mut buttons = Vec::new();
+    if let Some(previous) = page.checked_sub(1) {
+        buttons.push(InlineKeyboardButton::callback(
+            "◀️ Назад",
+            target.callback(previous),
+        ));
+    }
+    if let Some(next) = next {
+        buttons.push(InlineKeyboardButton::callback(
+            "Вперёд ▶️",
+            target.callback(next),
+        ));
+    }
+    if !buttons.is_empty() {
+        keyboard.inline_keyboard.push(buttons);
+    }
+    keyboard
 }
 
 pub(super) fn assignment_students_keyboard(

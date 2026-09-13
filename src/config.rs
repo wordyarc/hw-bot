@@ -399,9 +399,11 @@ fn validate_limit_coherence(config: &AppConfig) -> Result<(), ConfigValidationEr
     )?;
     validate(
         config.notification_worker.lease_duration_ms
-            >= database_round_trip.saturating_add(config.telegram.request_timeout_ms),
-        "notification_worker.lease_duration_ms must cover database.acquire_timeout_ms + \
-         database.statement_timeout_ms + telegram.request_timeout_ms",
+            >= database_round_trip
+                .saturating_mul(2)
+                .saturating_add(config.telegram.request_timeout_ms),
+        "notification_worker.lease_duration_ms must cover 2 * (database.acquire_timeout_ms + \
+         database.statement_timeout_ms) + telegram.request_timeout_ms",
     )?;
     validate(
         Duration::from_millis(config.files.transfer_timeout_ms) <= config.shutdown_grace(),
@@ -493,7 +495,7 @@ mod tests {
                 [notification_worker]
                 enabled = false
                 poll_interval_ms = 500
-                lease_duration_ms = 15000
+                lease_duration_ms = 25000
                 max_attempts = 10
                 retry_initial_ms = 1000
                 retry_max_ms = 300000
@@ -719,6 +721,15 @@ mod tests {
                 .contains("notification_worker.lease_duration_ms"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn lease_covers_both_database_trips_even_when_each_trip_fits() {
+        let mut config = app_config();
+        config.notification_worker.lease_duration_ms = 13_000;
+        assert!(config.clone().validate().is_err());
+        config.notification_worker.lease_duration_ms = 21_000;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

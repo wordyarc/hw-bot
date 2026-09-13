@@ -1,8 +1,10 @@
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::NaiveDate;
 
 use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId, UserId};
 
 pub const MENU_ASSIGNMENTS: &str = "menu:assignments";
+pub const PAGE_PREFIX: &str = "pg:";
 pub const MENU_ARCHIVE: &str = "menu:archive";
 pub const MENU_QUEUE: &str = "menu:queue";
 pub const MENU_PROFILE: &str = "menu:profile";
@@ -62,6 +64,7 @@ pub(super) enum CallbackAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReplayableAction {
+    Page(PageTarget, u32),
     StudentAssignments,
     StudentArchive,
     StudentQueue,
@@ -77,6 +80,72 @@ pub(super) enum ReplayableAction {
     GrantAttempts(AssignmentId),
     GroupInvite(TeachingCourseId),
     Gradebook(TeachingCourseId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PageTarget {
+    Assignments,
+    Archive,
+    Queue,
+    Courses,
+    Course(TeachingCourseId),
+    Students(AssignmentId),
+    Gradebook(TeachingCourseId),
+    History(AssignmentId),
+    StudentGrades(TeachingCourseId, UserId),
+}
+
+impl PageTarget {
+    pub fn callback(self, page: u32) -> String {
+        let id = |id: uuid::Uuid| URL_SAFE_NO_PAD.encode(id.as_bytes());
+        let target = match self {
+            Self::Assignments => "a".to_owned(),
+            Self::Archive => "ar".to_owned(),
+            Self::Queue => "q".to_owned(),
+            Self::Courses => "c".to_owned(),
+            Self::Course(course) => format!("ca:{}", id(course.as_uuid())),
+            Self::Students(assignment) => format!("s:{}", id(assignment.as_uuid())),
+            Self::Gradebook(course) => format!("g:{}", id(course.as_uuid())),
+            Self::History(assignment) => format!("h:{}", id(assignment.as_uuid())),
+            Self::StudentGrades(course, student) => {
+                format!("sg:{}:{}", id(course.as_uuid()), id(student.as_uuid()))
+            }
+        };
+        format!("{PAGE_PREFIX}{target}:{page}")
+    }
+}
+
+fn parse_page(data: &str) -> Option<ReplayableAction> {
+    let value = data.strip_prefix(PAGE_PREFIX)?;
+    let (target, page) = value.rsplit_once(':')?;
+    if page.is_empty() || !page.bytes().all(|byte| byte.is_ascii_digit()) || data.len() > 64 {
+        return None;
+    }
+    let page = page.parse().ok()?;
+    let mut parts = target.split(':');
+    let kind = parts.next()?;
+    let mut id = || {
+        let bytes = URL_SAFE_NO_PAD.decode(parts.next()?).ok()?;
+        uuid::Uuid::from_slice(&bytes).ok()
+    };
+    let target = match kind {
+        "a" => PageTarget::Assignments,
+        "ar" => PageTarget::Archive,
+        "q" => PageTarget::Queue,
+        "c" => PageTarget::Courses,
+        "ca" => PageTarget::Course(TeachingCourseId::from_uuid(id()?)),
+        "s" => PageTarget::Students(AssignmentId::from_uuid(id()?)),
+        "g" => PageTarget::Gradebook(TeachingCourseId::from_uuid(id()?)),
+        "h" => PageTarget::History(AssignmentId::from_uuid(id()?)),
+        "sg" => {
+            PageTarget::StudentGrades(TeachingCourseId::from_uuid(id()?), UserId::from_uuid(id()?))
+        }
+        _ => return None,
+    };
+    parts
+        .next()
+        .is_none()
+        .then_some(ReplayableAction::Page(target, page))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,6 +251,9 @@ const REPLAYABLE_FAMILIES: [ReplayableFamily; 9] = [
 ];
 
 pub(super) fn parse(data: &str) -> Option<CallbackAction> {
+    if data.starts_with(PAGE_PREFIX) {
+        return parse_page(data).map(CallbackAction::Replayable);
+    }
     let replayable = match data {
         MENU_ASSIGNMENTS => Some(ReplayableAction::StudentAssignments),
         MENU_ARCHIVE => Some(ReplayableAction::StudentArchive),
@@ -362,6 +434,40 @@ fn parse_month(value: &str) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pagination_routes_fit_telegram_even_with_two_ids_and_the_last_page() {
+        for target in [
+            PageTarget::Assignments,
+            PageTarget::Archive,
+            PageTarget::Queue,
+            PageTarget::Courses,
+            PageTarget::Course(TeachingCourseId::new()),
+            PageTarget::Students(AssignmentId::new()),
+            PageTarget::Gradebook(TeachingCourseId::new()),
+            PageTarget::History(AssignmentId::new()),
+            PageTarget::StudentGrades(TeachingCourseId::new(), UserId::new()),
+        ] {
+            let data = target.callback(u32::MAX);
+            assert!(data.len() <= 64, "{data}");
+            assert_eq!(
+                parse(&data),
+                Some(CallbackAction::Replayable(ReplayableAction::Page(
+                    target,
+                    u32::MAX
+                )))
+            );
+        }
+        for invalid in [
+            "pg:a:-1",
+            "pg:a:4294967296",
+            "pg:a:extra:0",
+            "pg:sg:bad:bad:0",
+            "pg:a:",
+        ] {
+            assert_eq!(parse(invalid), None, "{invalid}");
+        }
+    }
 
     #[test]
     fn callbacks_are_split_by_state_policy() {

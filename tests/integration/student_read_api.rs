@@ -35,9 +35,10 @@ async fn the_student_list_names_the_subject_and_groups_assignments_by_it() {
     let assignments = app
         .application
         .assignments
-        .list_for_student(Actor::new(app.fixture.student.id()))
+        .list_for_student(Actor::new(app.fixture.student.id()), Default::default())
         .await
-        .expect("the student list is readable");
+        .expect("the student list is readable")
+        .items;
 
     let listed: Vec<_> = assignments
         .iter()
@@ -180,7 +181,7 @@ async fn an_acceptance_is_visible_in_the_list() {
 }
 
 #[tokio::test]
-async fn the_card_carries_every_attempt_with_its_review() {
+async fn the_history_endpoint_carries_attempts_with_reviews_newest_first() {
     let app = TestApp::start().await;
     let first = app.queued_submission(app.student(), "pull/1").await;
     app.review(first, app.teacher(), "reject", "Add tests.")
@@ -189,16 +190,19 @@ async fn the_card_carries_every_attempt_with_its_review() {
     app.queued_submission(app.student(), "pull/2").await;
 
     let body = app
-        .student_assignment(app.assignment(), app.student())
+        .get_as(
+            &format!("/me/assignments/{}/submissions", app.assignment()),
+            app.student(),
+        )
         .await
         .ok();
 
-    let submissions = body["submissions"].as_array().expect("a json array");
+    let submissions = body.as_array().expect("a json array");
     assert_eq!(submissions.len(), 2);
-    assert_eq!(submissions[0]["attempt_number"], json!(1));
-    assert_eq!(submissions[0]["review_comment"], json!("Add tests."));
-    assert_eq!(submissions[1]["attempt_number"], json!(2));
-    assert_eq!(submissions[1]["status"], json!("pending_review"));
+    assert_eq!(submissions[1]["attempt_number"], json!(1));
+    assert_eq!(submissions[1]["review_comment"], json!("Add tests."));
+    assert_eq!(submissions[0]["attempt_number"], json!(2));
+    assert_eq!(submissions[0]["status"], json!("pending_review"));
 }
 
 #[tokio::test]

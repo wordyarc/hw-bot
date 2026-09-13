@@ -7,6 +7,28 @@ use sqlx::ConnectOptions;
 use crate::harness::TestApp;
 
 #[tokio::test]
+async fn malformed_path_uses_the_api_error_envelope() {
+    let app = TestApp::start().await;
+    app.get_as("/me/assignments/not-a-uuid", app.student())
+        .await
+        .error(StatusCode::BAD_REQUEST, "invalid_path");
+}
+
+#[tokio::test]
+async fn unknown_route_uses_the_api_error_envelope() {
+    let app = TestApp::start().await;
+    app.get("/does-not-exist").await.not_found();
+}
+
+#[tokio::test]
+async fn unsupported_method_uses_the_api_error_envelope() {
+    let app = TestApp::start().await;
+    app.post_raw("/health/live", Vec::new())
+        .await
+        .error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed");
+}
+
+#[tokio::test]
 async fn http_accepts_a_body_at_the_transport_limit() {
     let app = TestApp::start().await;
     let body = echo_body(REQUEST_BODY_LIMIT);

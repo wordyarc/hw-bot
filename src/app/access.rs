@@ -1,21 +1,28 @@
 use sqlx::postgres::PgExecutor;
+use sqlx::{PgConnection, PgPool};
 
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{DomainError, TeachingCourse, TeachingCourseId, User};
 
-pub(crate) async fn load_managing_teacher<'e, E>(
-    executor: E,
+pub(crate) async fn load_managing_teacher(
+    pool: &PgPool,
     actor: Actor,
     course_id: TeachingCourseId,
     action: &'static str,
-) -> AppResult<(User, TeachingCourse)>
-where
-    E: PgExecutor<'e> + Copy,
-{
-    let actor = load_actor(executor, actor, "teacher").await?;
-    let course = db::academic::find_teaching_course_by_id(executor, course_id)
+) -> AppResult<(User, TeachingCourse)> {
+    load_managing_teacher_on(&mut *pool.acquire().await?, actor, course_id, action).await
+}
+
+pub(crate) async fn load_managing_teacher_on(
+    connection: &mut PgConnection,
+    actor: Actor,
+    course_id: TeachingCourseId,
+    action: &'static str,
+) -> AppResult<(User, TeachingCourse)> {
+    let actor = load_actor(&mut *connection, actor, "teacher").await?;
+    let course = db::academic::find_teaching_course_by_id(&mut *connection, course_id)
         .await?
         .required("teaching course")?;
 

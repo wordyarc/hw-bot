@@ -19,9 +19,10 @@ async fn a_student_sees_their_place_in_the_submit_order() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(first.id()))
+        .pending_queue(Actor::new(first.id()), Default::default())
         .await
-        .expect("the queue is readable");
+        .expect("the queue is readable")
+        .items;
 
     assert_eq!(places.len(), 1);
     assert_eq!(places[0].assignment_id, app.fixture.assignment.id());
@@ -32,9 +33,10 @@ async fn a_student_sees_their_place_in_the_submit_order() {
     let last = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()))
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
         .await
-        .expect("the queue is readable");
+        .expect("the queue is readable")
+        .items;
 
     assert_eq!(last[0].position, 3, "submitted last");
 }
@@ -46,11 +48,15 @@ async fn a_reviewed_submission_leaves_the_queue() {
     submit(&app, &app.fixture.assignment, &student, 2).await;
     submit(&app, &app.fixture.assignment, &app.fixture.student, 1).await;
 
-    let mut ahead =
-        db::submissions::list_for_student(&app.pool, app.fixture.assignment.id(), student.id())
-            .await
-            .expect("the submission is stored")
-            .remove(0);
+    let mut ahead = db::submissions::list_for_student(
+        &app.pool,
+        app.fixture.assignment.id(),
+        student.id(),
+        Default::default(),
+    )
+    .await
+    .expect("the submission is stored")
+    .remove(0);
     ahead
         .accept(
             &app.fixture.assignment,
@@ -68,9 +74,10 @@ async fn a_reviewed_submission_leaves_the_queue() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()))
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
         .await
-        .expect("the queue is readable");
+        .expect("the queue is readable")
+        .items;
 
     assert_eq!(places[0].position, 1, "the reviewed one no longer counts");
     assert_eq!(places[0].total, 1);
@@ -93,9 +100,10 @@ async fn the_queue_spans_every_course_of_the_same_teachers() {
     let alone = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()))
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
         .await
-        .expect("the queue is readable");
+        .expect("the queue is readable")
+        .items;
 
     assert_eq!(alone[0].total, 1, "a foreign teacher reviews their own");
 
@@ -111,9 +119,10 @@ async fn the_queue_spans_every_course_of_the_same_teachers() {
     let shared = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()))
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
         .await
-        .expect("the queue is readable");
+        .expect("the queue is readable")
+        .items;
 
     assert_eq!(shared[0].total, 2, "one reviewer now sees both courses");
     assert_eq!(
@@ -135,9 +144,10 @@ async fn a_course_without_a_reviewer_reports_no_position() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()))
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
         .await
-        .expect("the queue is readable");
+        .expect("the queue is readable")
+        .items;
 
     assert_eq!(places.len(), 1, "the submission itself is still visible");
     assert_eq!(places[0].position, 0);
@@ -151,7 +161,7 @@ async fn a_teacher_has_no_student_queue() {
     let error = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.teacher.id()))
+        .pending_queue(Actor::new(app.fixture.teacher.id()), Default::default())
         .await
         .expect_err("a teacher reads the review queue, not the student one");
 

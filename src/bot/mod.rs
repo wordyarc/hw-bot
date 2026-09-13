@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use teloxide::dispatching::UpdateHandler;
 use teloxide::dispatching::dialogue::{self, InMemStorage};
-use teloxide::error_handlers::LoggingErrorHandler;
 use teloxide::prelude::*;
 use teloxide::stop::StopToken;
 use teloxide::types::{AllowedUpdate, UpdateId};
@@ -94,7 +93,7 @@ pub enum TelegramBotError {
     InvalidCredentials,
 
     #[error("Telegram bot startup request failed: {0}")]
-    Startup(#[source] teloxide::RequestError),
+    Startup(&'static str),
 
     #[error("Telegram bot has no username, group invite links cannot be built")]
     MissingBotUsername,
@@ -285,7 +284,9 @@ impl TelegramBot {
         let shutdown = dispatcher.shutdown_token();
         let dispatch = dispatcher.try_dispatch_with_listener(
             listener,
-            LoggingErrorHandler::with_custom_text("Telegram update listener failed"),
+            Arc::new(|error: teloxide::RequestError| async move {
+                errors::log_request_error("get_updates", &error);
+            }),
         );
         tokio::pin!(dispatch);
 
@@ -318,7 +319,7 @@ async fn announce_commands(bot: &Bot, cancellation: &CancellationToken) -> bool 
         result = bot.set_my_commands(default_commands()).send() => result,
     };
     if let Err(error) = commands {
-        tracing::warn!(error = ?error, "failed to publish Telegram command hints");
+        errors::log_request_error("set_my_commands", &error);
     }
 
     let menu = tokio::select! {
@@ -330,7 +331,7 @@ async fn announce_commands(bot: &Bot, cancellation: &CancellationToken) -> bool 
             .send() => result,
     };
     if let Err(error) = menu {
-        tracing::warn!(error = ?error, "failed to set the Telegram menu button");
+        errors::log_request_error("set_chat_menu_button", &error);
     }
 
     true
@@ -343,7 +344,8 @@ fn map_startup_error(error: teloxide::RequestError) -> TelegramBotError {
     ) {
         TelegramBotError::InvalidCredentials
     } else {
-        TelegramBotError::Startup(error)
+        errors::log_request_error("startup", &error);
+        TelegramBotError::Startup(errors::request_error_kind(&error))
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
@@ -289,6 +290,7 @@ where
 pub async fn list_published_for_group<'e, E>(
     executor: E,
     student_group_id: StudentGroupId,
+    page: PageRequest,
 ) -> DbResult<Vec<StudentAssignmentCard>>
 where
     E: PgExecutor<'e>,
@@ -296,8 +298,10 @@ where
     select_assignment_cards!(
         " where assignments.student_group_id = $1
            and assignments.status = 'published'
-         order by subjects.name, assignments.deadline_at, assignments.id",
+         order by subjects.name, assignments.deadline_at, assignments.id limit $2 offset $3",
         student_group_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
     )
     .fetch_all(executor)
     .await?
@@ -309,6 +313,7 @@ where
 pub async fn list_archived_for_group<'e, E>(
     executor: E,
     student_group_id: StudentGroupId,
+    page: PageRequest,
 ) -> DbResult<Vec<StudentAssignmentCard>>
 where
     E: PgExecutor<'e>,
@@ -317,8 +322,10 @@ where
         " where assignments.student_group_id = $1
            and assignments.status = 'archived'
            and assignments.published_at is not null
-         order by subjects.name, assignments.published_at desc, assignments.id",
+         order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
         student_group_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
     )
     .fetch_all(executor)
     .await?
@@ -330,6 +337,7 @@ where
 pub async fn list_for_course<'e, E>(
     executor: E,
     teaching_course_id: TeachingCourseId,
+    page: PageRequest,
 ) -> DbResult<Vec<Assignment>>
 where
     E: PgExecutor<'e>,
@@ -337,8 +345,10 @@ where
     select_assignments!(
         AssignmentRow,
         "",
-        " from assignments where teaching_course_id = $1 order by created_at desc, id",
+        " from assignments where teaching_course_id = $1 order by created_at desc, id limit $2 offset $3",
         teaching_course_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
     )
     .fetch_all(executor)
     .await?

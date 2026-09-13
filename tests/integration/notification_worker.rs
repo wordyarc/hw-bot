@@ -49,6 +49,84 @@ async fn successful_telegram_delivery_completes_notification() {
 }
 
 #[tokio::test]
+async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
+    use sqlx::ConnectOptions;
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/slow").await;
+    app.review(submission, app.teacher(), "accept", "Done")
+        .await
+        .ok();
+    sqlx::query(
+        "create function slow_outbox_write() returns trigger language plpgsql as $$
+         begin perform pg_sleep(0.15); return new; end $$",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "create trigger slow_outbox_write before update on review_notification_outbox
+         for each row execute function slow_outbox_write()",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let runtime = hw_bot::db::connect_runtime(
+        app.pool.connect_options().to_url_lossy().as_str(),
+        1,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    let telegram = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(250))
+                .set_body_json(json!({"ok": true})),
+        )
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let worker = NotificationWorker::new(
+        runtime.clone(),
+        TelegramClient::new(telegram.uri(), "test-token", Duration::from_secs(1)).unwrap(),
+        NotificationWorkerSettings {
+            poll_interval: Duration::from_millis(10),
+            lease_duration: Duration::from_secs(5),
+            max_attempts: 3,
+            retry_initial: Duration::from_secs(1),
+            retry_max: Duration::from_secs(2),
+        },
+    );
+    let held = runtime.acquire().await.unwrap();
+    let delivery = tokio::spawn(async move { worker.deliver_one(Utc::now()).await });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    drop(held);
+    wait_for_worker_request(&telegram, "/bottest-token/sendMessage").await;
+    // Во время Telegram-запроса соединение свободно; подтверждение затем ждёт его заново.
+    let held = runtime.acquire().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(!delivery.is_finished());
+    let now = Utc::now();
+    assert!(
+        hw_bot::db::notifications::claim_next(
+            &app.pool,
+            now,
+            uuid::Uuid::new_v4(),
+            now + chrono::Duration::seconds(5)
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    drop(held);
+    assert_eq!(delivery.await.unwrap().unwrap(), DeliveryOutcome::Delivered);
+    runtime.close().await;
+}
+
+#[tokio::test]
 async fn transient_telegram_error_reschedules_notification() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;

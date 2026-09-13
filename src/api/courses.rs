@@ -1,5 +1,8 @@
+use super::ApiPath as Path;
+use super::pagination::{Pagination, page_headers};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
+use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
@@ -7,7 +10,7 @@ use uuid::Uuid;
 use crate::api::users::StudentGroupResponse;
 use crate::api::{Actor, ApiError, AppState};
 use crate::app::{CourseGradebook, StudentGrades, TeachingCourseSummary};
-use crate::domain::TeachingCourseId;
+use crate::domain::{TeachingCourseId, UserId};
 
 #[derive(Debug, Serialize)]
 pub struct TeachingCourseResponse {
@@ -45,12 +48,14 @@ pub struct CourseGradebookResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct StudentGradesResponse {
+pub struct StudentGradesResponse {
     student_id: Uuid,
     display_name: String,
     total: u32,
     max_total: u32,
     grades: Vec<AssignmentGradeResponse>,
+    grade_page: u32,
+    next_grade_page: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,7 +69,7 @@ struct AssignmentGradeResponse {
 impl From<&CourseGradebook> for CourseGradebookResponse {
     fn from(gradebook: &CourseGradebook) -> Self {
         Self {
-            students: gradebook.students.iter().map(Into::into).collect(),
+            students: gradebook.students.items.iter().map(Into::into).collect(),
         }
     }
 }
@@ -76,6 +81,8 @@ impl From<&StudentGrades> for StudentGradesResponse {
             display_name: student.display_name.clone(),
             total: student.total(),
             max_total: student.max_total(),
+            grade_page: student.grade_page,
+            next_grade_page: student.next_grade_page,
             grades: student
                 .grades
                 .iter()
@@ -94,21 +101,52 @@ pub async fn course_gradebook(
     State(state): State<AppState>,
     actor: Actor,
     Path(course_id): Path<Uuid>,
-) -> Result<Json<CourseGradebookResponse>, ApiError> {
+    Pagination(page): Pagination,
+) -> Result<(HeaderMap, Json<CourseGradebookResponse>), ApiError> {
     let gradebook = state
         .application
         .courses
-        .gradebook(actor, TeachingCourseId::from_uuid(course_id))
+        .gradebook(actor, TeachingCourseId::from_uuid(course_id), page)
         .await?;
 
-    Ok(Json(CourseGradebookResponse::from(&gradebook)))
+    Ok((
+        page_headers(&gradebook.students),
+        Json(CourseGradebookResponse::from(&gradebook)),
+    ))
+}
+
+pub async fn student_grades(
+    State(state): State<AppState>,
+    actor: Actor,
+    Path((course, student)): Path<(Uuid, Uuid)>,
+    Pagination(page): Pagination,
+) -> Result<Json<StudentGradesResponse>, ApiError> {
+    let grades = state
+        .application
+        .courses
+        .student_grades(
+            actor,
+            TeachingCourseId::from_uuid(course),
+            UserId::from_uuid(student),
+            page,
+        )
+        .await?;
+    Ok(Json(StudentGradesResponse::from(&grades)))
 }
 
 pub async fn list_my_courses(
     State(state): State<AppState>,
     actor: Actor,
-) -> Result<Json<Vec<TeachingCourseResponse>>, ApiError> {
-    let courses = state.application.courses.list_for_teacher(actor).await?;
+    Pagination(page): Pagination,
+) -> Result<(HeaderMap, Json<Vec<TeachingCourseResponse>>), ApiError> {
+    let courses = state
+        .application
+        .courses
+        .list_for_teacher(actor, page)
+        .await?;
 
-    Ok(Json(courses.iter().map(Into::into).collect()))
+    Ok((
+        page_headers(&courses),
+        Json(courses.items.iter().map(Into::into).collect()),
+    ))
 }

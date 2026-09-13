@@ -2,8 +2,8 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool};
 
+use crate::app::access::load_managing_teacher_on;
 use crate::app::assignments::load_visible_assignment_for_student;
-use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
@@ -234,16 +234,18 @@ async fn load_versioned_managed_assignment(
     assignment_id: AssignmentId,
     action: &'static str,
 ) -> AppResult<(Assignment, i64)> {
-    let actor = load_actor(&mut *connection, actor, "teacher").await?;
     let stored = db::assignments::find_versioned_by_id(&mut *connection, assignment_id)
         .await?
         .required("assignment")?;
     let revision = stored.revision();
     let assignment = stored.into_assignment();
-    let course =
-        db::academic::find_teaching_course_by_id(&mut *connection, assignment.teaching_course_id())
-            .await?
-            .required("teaching course")?;
+    let (actor, course) = load_managing_teacher_on(
+        &mut *connection,
+        actor,
+        assignment.teaching_course_id(),
+        action,
+    )
+    .await?;
     assignment.ensure_managed_by(&course, &actor, action)?;
 
     Ok((assignment, revision))

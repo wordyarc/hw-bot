@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        with history as (\n            select\n                student_id,\n                count(*) filter (\n                    where status in ('accepted', 'rejected')\n                )::bigint as used_attempts,\n                bool_or(status = 'accepted') as has_accepted_submission,\n                bool_or(status = 'pending_review') as has_pending_submission\n            from submissions\n            where assignment_id = $1\n            group by student_id\n        )\n        select\n            users.id,\n            users.telegram_user_id,\n            users.role,\n            users.display_name,\n            users.student_group_id,\n            users.registered_at,\n            coalesce(history.used_attempts, 0)::bigint as \"used_attempts!\",\n            coalesce(progress.extra_attempts, 0)::smallint as \"extra_attempts!\",\n            coalesce(history.has_accepted_submission, false) as \"has_accepted_submission!\",\n            coalesce(history.has_pending_submission, false) as \"has_pending_submission!\"\n        from users\n        left join history\n          on history.student_id = users.id\n        left join student_assignment_progress progress\n          on progress.assignment_id = $1\n         and progress.student_id = users.id\n        where users.role = 'student'\n          and users.student_group_id = $2\n        order by users.display_name, users.id\n        ",
+  "query": "\n        with history as (\n            select\n                student_id,\n                count(*) filter (\n                    where status in ('accepted', 'rejected')\n                )::bigint as used_attempts,\n                bool_or(status = 'accepted') as has_accepted_submission,\n                bool_or(status = 'pending_review') as has_pending_submission\n            from submissions\n            where assignment_id = $1\n            group by student_id\n        )\n        select\n            users.id,\n            users.telegram_user_id,\n            users.role,\n            users.display_name,\n            users.student_group_id,\n            users.registered_at,\n            coalesce(history.used_attempts, 0)::bigint as \"used_attempts!\",\n            coalesce(progress.extra_attempts, 0)::smallint as \"extra_attempts!\",\n            coalesce(history.has_accepted_submission, false) as \"has_accepted_submission!\",\n            coalesce(history.has_pending_submission, false) as \"has_pending_submission!\"\n        from users\n        left join history\n          on history.student_id = users.id\n        left join student_assignment_progress progress\n          on progress.assignment_id = $1\n         and progress.student_id = users.id\n        where users.role = 'student'\n          and users.student_group_id = $2\n        order by users.display_name, users.id\n        limit $3 offset $4\n        ",
   "describe": {
     "columns": [
       {
@@ -97,7 +97,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid"
+        "Uuid",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -113,5 +115,5 @@
       null
     ]
   },
-  "hash": "b23839f37c421828d1492a19ad7f9f84741b25e952ad7341bfa5de06f72c3c96"
+  "hash": "2550f247475a502aee9a9fd1237a27552612e2e47fc5487be1303101ec57196b"
 }

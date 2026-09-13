@@ -26,10 +26,7 @@ pub(super) struct FileTransfer {
 }
 
 impl FileTransfer {
-    pub async fn run<T>(
-        &self,
-        future: impl Future<Output = HandlerResult<T>>,
-    ) -> HandlerResult<T> {
+    pub async fn run<T>(&self, future: impl Future<Output = HandlerResult<T>>) -> HandlerResult<T> {
         tokio::time::timeout_at(self.deadline, future)
             .await
             .context("file transfer deadline exceeded")?

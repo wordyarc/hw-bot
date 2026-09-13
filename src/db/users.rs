@@ -1,3 +1,4 @@
+use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
@@ -74,6 +75,7 @@ pub(crate) async fn list_students_with_assignment_history<'e, E>(
     executor: E,
     assignment_id: AssignmentId,
     student_group_id: StudentGroupId,
+    page: PageRequest,
 ) -> DbResult<Vec<AssignmentStudentCard>>
 where
     E: PgExecutor<'e>,
@@ -113,15 +115,57 @@ where
         where users.role = 'student'
           and users.student_group_id = $2
         order by users.display_name, users.id
+        limit $3 offset $4
         "#,
         assignment_id.as_uuid(),
         student_group_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
     )
     .fetch_all(executor)
     .await?
     .into_iter()
     .map(AssignmentStudentCard::try_from)
     .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct StudentName {
+    pub student_id: UserId,
+    pub display_name: String,
+}
+
+pub async fn profile_statistics<'e, E: PgExecutor<'e>>(
+    executor: E,
+    user: &User,
+) -> DbResult<(u32, u32, u32)> {
+    let row = sqlx::query!(
+        r#"select
+        (select count(*) from assignments where student_group_id = $2 and status = 'published') as "assignments!",
+        (select count(*) from submissions where student_id = $1 and status = 'pending_review') as "pending!",
+        (select count(*) from teaching_courses c where $3 or exists (
+            select 1 from teaching_course_teachers t where t.teaching_course_id = c.id and t.teacher_id = $1
+        )) as "courses!""#,
+        user.id().as_uuid(), user.student_group_id().map(StudentGroupId::as_uuid), user.role().can_manage_all_teaching_courses(),
+    ).fetch_one(executor).await?;
+    Ok((
+        checked_num_cast("profile.assignments", row.assignments)?,
+        checked_num_cast("profile.pending", row.pending)?,
+        checked_num_cast("profile.courses", row.courses)?,
+    ))
+}
+
+pub async fn list_student_names<'e, E: PgExecutor<'e>>(
+    executor: E,
+    group_id: StudentGroupId,
+    page: PageRequest,
+) -> DbResult<Vec<StudentName>> {
+    Ok(sqlx::query!(
+        "select id, display_name from users where student_group_id = $1 and role = 'student' order by display_name, id limit $2 offset $3",
+        group_id.as_uuid(), page.fetch_limit(), page.offset(),
+    ).fetch_all(executor).await?.into_iter().map(|row| StudentName {
+        student_id: UserId::from_uuid(row.id), display_name: row.display_name,
+    }).collect())
 }
 
 #[derive(Clone, Debug)]

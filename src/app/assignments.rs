@@ -1,7 +1,8 @@
+use crate::pagination::{Page, PageRequest};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::app::access::{load_managing_teacher, load_student};
+use crate::app::access::{load_managing_teacher, load_managing_teacher_on, load_student};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -59,6 +60,13 @@ pub struct StudentAssignmentDetails {
     pub assignment: StudentAssignment,
     pub files: Vec<StoredFileMetadata>,
     pub submissions: Vec<Submission>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssignmentSubmissionHistory {
+    pub subject_name: String,
+    pub assignment_title: String,
+    pub submissions: Page<Submission>,
 }
 
 #[derive(Clone, Debug)]
@@ -193,23 +201,34 @@ impl AssignmentService {
         Ok(progress)
     }
 
-    pub async fn list_for_student(&self, actor: Actor) -> AppResult<Vec<StudentAssignment>> {
+    pub async fn list_for_student(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+    ) -> AppResult<Page<StudentAssignment>> {
         let student = self.student(actor).await?;
         let group_id = student.student_group_id().required("student group")?;
 
-        let assignments = db::assignments::list_published_for_group(&self.pool, group_id).await?;
-        self.with_student_histories(assignments, student.id()).await
+        let assignments =
+            db::assignments::list_published_for_group(&self.pool, group_id, page).await?;
+        self.with_student_histories(assignments, student.id())
+            .await
+            .map(|items| Page::from_rows(items, page))
     }
 
     pub async fn list_archived_for_student(
         &self,
         actor: Actor,
-    ) -> AppResult<Vec<StudentAssignment>> {
+        page: PageRequest,
+    ) -> AppResult<Page<StudentAssignment>> {
         let student = self.student(actor).await?;
         let group_id = student.student_group_id().required("student group")?;
 
-        let assignments = db::assignments::list_archived_for_group(&self.pool, group_id).await?;
-        self.with_student_histories(assignments, student.id()).await
+        let assignments =
+            db::assignments::list_archived_for_group(&self.pool, group_id, page).await?;
+        self.with_student_histories(assignments, student.id())
+            .await
+            .map(|items| Page::from_rows(items, page))
     }
 
     async fn with_student_histories(
@@ -244,7 +263,10 @@ impl AssignmentService {
         let history =
             db::submissions::load_history(&self.pool, assignment.id(), student.id()).await?;
         let submissions =
-            db::submissions::list_for_student(&self.pool, assignment.id(), student.id()).await?;
+            db::submissions::latest_for_student(&self.pool, assignment.id(), student.id())
+                .await?
+                .into_iter()
+                .collect();
         let files = db::files::list_for_assignment(&self.pool, assignment.id()).await?;
         let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
             .await?
@@ -270,24 +292,52 @@ impl AssignmentService {
             .await
     }
 
+    pub async fn submission_history(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+        page: PageRequest,
+    ) -> AppResult<AssignmentSubmissionHistory> {
+        let (student, assignment) =
+            load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
+        let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
+            .await?
+            .required("subject")?;
+        let submissions = Page::from_rows(
+            db::submissions::list_for_student(&self.pool, assignment.id(), student.id(), page)
+                .await?,
+            page,
+        );
+        Ok(AssignmentSubmissionHistory {
+            subject_name: subject.name().as_str().to_owned(),
+            assignment_title: assignment.title().as_str().to_owned(),
+            submissions,
+        })
+    }
+
     pub async fn list_students_for_assignment(
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
-    ) -> AppResult<Vec<AssignmentStudentSummary>> {
+        page: PageRequest,
+    ) -> AppResult<Page<AssignmentStudentSummary>> {
         let assignment = self
             .load_managed_assignment(actor, assignment_id, "list assignment students")
             .await?;
 
-        Ok(db::users::list_students_with_assignment_history(
-            &self.pool,
-            assignment.id(),
-            assignment.student_group_id(),
-        )
-        .await?
-        .into_iter()
-        .map(AssignmentStudentSummary::from)
-        .collect())
+        Ok(Page::from_rows(
+            db::users::list_students_with_assignment_history(
+                &self.pool,
+                assignment.id(),
+                assignment.student_group_id(),
+                page,
+            )
+            .await?
+            .into_iter()
+            .map(AssignmentStudentSummary::from)
+            .collect(),
+            page,
+        ))
     }
 
     /// Экран курса у преподавателя: черновики и архив тоже его, в отличие от студенческого списка.
@@ -295,7 +345,8 @@ impl AssignmentService {
         &self,
         actor: Actor,
         teaching_course_id: TeachingCourseId,
-    ) -> AppResult<Vec<Assignment>> {
+        page: PageRequest,
+    ) -> AppResult<Page<Assignment>> {
         load_managing_teacher(
             &self.pool,
             actor,
@@ -304,7 +355,10 @@ impl AssignmentService {
         )
         .await?;
 
-        Ok(db::assignments::list_for_course(&self.pool, teaching_course_id).await?)
+        Ok(Page::from_rows(
+            db::assignments::list_for_course(&self.pool, teaching_course_id, page).await?,
+            page,
+        ))
     }
 
     async fn student(&self, actor: Actor) -> AppResult<User> {
@@ -340,18 +394,19 @@ impl AssignmentService {
     {
         let mut tx = self.pool.begin().await?;
 
-        let actor = load_actor(&mut *tx, actor, "teacher").await?;
-
         let stored = db::assignments::find_versioned_by_id(&mut *tx, assignment_id)
             .await?
             .required("assignment")?;
         let revision = stored.revision();
         let mut assignment = stored.into_assignment();
 
-        let teaching_course =
-            db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
+        let (actor, teaching_course) = load_managing_teacher_on(
+            &mut tx,
+            actor,
+            assignment.teaching_course_id(),
+            "change assignment",
+        )
+        .await?;
 
         apply(&mut assignment, &teaching_course, &actor)?;
 

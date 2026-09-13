@@ -412,13 +412,13 @@ async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
     let telegram = telegram_server(updates).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
 
-    wait_for_sent_message_count(&telegram, 4).await;
+    wait_for_sent_message_count(&telegram, 3).await;
     stop_bot(cancellation, &mut task).await;
     let requests = recorded_requests(&telegram).await;
 
     assert!(
-        requests.contains("👤 Student · 4 из 5"),
-        "the list carries the total; requests:\n{requests}"
+        requests.contains("Итого: 4 из 5"),
+        "the student card carries the total; requests:\n{requests}"
     );
     assert!(
         requests.contains("Rust traits · 4 из 5"),

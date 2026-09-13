@@ -46,7 +46,7 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Role) {
         })
         .await
     {
-        tracing::warn!(error = ?error, "failed to publish role command hints");
+        crate::bot::errors::log_request_error("set_role_commands", &error);
     }
 }
 
@@ -148,12 +148,12 @@ pub(super) async fn show_home(
                 Role::Student { .. } => {
                     let pending = optional_stat(
                         services
-                            .submissions
-                            .pending_queue(Actor::new(registered.user.id()))
+                            .users
+                            .statistics(Actor::new(registered.user.id()))
                             .await,
                         "student_pending_queue",
                     )
-                    .map(|places| places.len());
+                    .map(|stats| stats.pending);
                     match pending {
                         Some(pending) if pending > 0 => format!(
                             "👋 Здравствуйте, {name}!\n⏳ На проверке ваших работ: {pending}\nВыберите пункт меню ниже 👇"
@@ -212,25 +212,18 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
     text.push_str(&format!("🕒 Часовой пояс: {}\n", timezone.suffix()));
     match role {
         Role::Student { .. } => {
-            if let Some(assignments) = optional_stat(
-                services.assignments.list_for_student(actor).await,
-                "student_assignments",
-            ) {
-                text.push_str(&format!("\n📚 Активных заданий: {}\n", assignments.len()));
-            }
-            if let Some(places) = optional_stat(
-                services.submissions.pending_queue(actor).await,
-                "student_pending_queue",
-            ) {
-                text.push_str(&format!("⏳ Работ на проверке: {}\n", places.len()));
+            if let Some(stats) =
+                optional_stat(services.users.statistics(actor).await, "student_statistics")
+            {
+                text.push_str(&format!("\n📚 Активных заданий: {}\n", stats.assignments));
+                text.push_str(&format!("⏳ Работ на проверке: {}\n", stats.pending));
             }
         }
         Role::Teacher | Role::Admin => {
-            if let Some(courses) = optional_stat(
-                services.courses.list_for_teacher(actor).await,
-                "teacher_courses",
-            ) {
-                text.push_str(&format!("\n📘 Курсов: {}\n", courses.len()));
+            if let Some(stats) =
+                optional_stat(services.users.statistics(actor).await, "teacher_statistics")
+            {
+                text.push_str(&format!("\n📘 Курсов: {}\n", stats.courses));
             }
             if let Some(pending) = optional_stat(
                 services.reviews.queue_size(actor).await,

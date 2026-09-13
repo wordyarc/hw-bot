@@ -107,6 +107,30 @@ impl TelegramScenario {
         self.button_after(user, data, 0).await
     }
 
+    pub async fn button_with_text(&self, user: i64, text: &str) -> Button {
+        wait_for_some(Duration::from_secs(5), || async {
+            let state = self.state.lock().unwrap();
+            state.messages.iter().rev().find_map(|message| {
+                if message["chat"]["id"] != user {
+                    return None;
+                }
+                message["reply_markup"]["inline_keyboard"]
+                    .as_array()?
+                    .iter()
+                    .flat_map(|row| row.as_array().unwrap())
+                    .find_map(|button| {
+                        (button["text"] == text).then(|| Button {
+                            message_id: message["message_id"].as_i64().unwrap() as i32,
+                            data: button["callback_data"].as_str().unwrap().to_owned(),
+                            message: message.clone(),
+                        })
+                    })
+            })
+        })
+        .await
+        .unwrap_or_else(|| panic!("button {text} was not sent to {user}"))
+    }
+
     pub async fn button_after(&self, user: i64, data: &str, previous: i32) -> Button {
         wait_for_some(Duration::from_secs(5), || async {
             let state = self.state.lock().unwrap();

@@ -7,25 +7,38 @@ use super::HandlerResult;
 
 pub(super) fn log_handler_error(error: &anyhow::Error) {
     if let Some(request) = error.downcast_ref::<teloxide::RequestError>() {
-        let kind = match request {
-            teloxide::RequestError::RetryAfter(retry_after) => {
-                tracing::warn!(
-                    kind = "telegram_rate_limit",
-                    retry_after_seconds = retry_after.seconds(),
-                    "Telegram update failed"
-                );
-                return;
-            }
-            teloxide::RequestError::Network(_) => "telegram_network",
-            teloxide::RequestError::Io(_) => "telegram_io_or_deadline",
-            teloxide::RequestError::InvalidJson { .. } => "telegram_invalid_response",
-            teloxide::RequestError::Api(_) => "telegram_api",
-            teloxide::RequestError::MigrateToChatId(_) => "telegram_chat_migrated",
-        };
-        tracing::error!(kind, "Telegram update failed");
+        log_request_error("update", request);
     } else {
         tracing::error!(error = ?error, "Telegram update failed");
     }
+}
+
+pub(super) fn request_error_kind(error: &teloxide::RequestError) -> &'static str {
+    use teloxide::{ApiError, RequestError};
+    match error {
+        RequestError::RetryAfter(_) => "telegram_rate_limit",
+        RequestError::Network(_) => "telegram_network",
+        RequestError::Io(_) => "telegram_io_or_deadline",
+        RequestError::InvalidJson { .. } => "telegram_invalid_response",
+        RequestError::Api(ApiError::InvalidToken) => "telegram_invalid_credentials",
+        RequestError::Api(ApiError::BotBlocked) => "telegram_bot_blocked",
+        RequestError::Api(ApiError::MessageNotModified) => "telegram_message_not_modified",
+        RequestError::Api(_) => "telegram_api",
+        RequestError::MigrateToChatId(_) => "telegram_chat_migrated",
+    }
+}
+
+pub(super) fn log_request_error(operation: &'static str, error: &teloxide::RequestError) {
+    let retry_after_seconds = match error {
+        teloxide::RequestError::RetryAfter(delay) => Some(delay.seconds()),
+        _ => None,
+    };
+    tracing::warn!(
+        operation,
+        kind = request_error_kind(error),
+        retry_after_seconds,
+        "Telegram request failed"
+    );
 }
 
 pub(super) async fn send_app_error(bot: &Bot, chat_id: ChatId, error: AppError) -> HandlerResult {
@@ -106,13 +119,25 @@ mod tests {
                 chat_id = 42,
                 action = "review"
             )
-            .in_scope(|| log_handler_error(&error.into()));
+            .in_scope(|| {
+                log_handler_error(&error.clone().into());
+                log_request_error("get_updates", &error);
+                log_request_error("set_my_commands", &error);
+                let startup = super::super::map_startup_error(error);
+                assert!(!format!("{startup:?}: {startup}").contains("private-comment-and-token"));
+            });
         });
         let bytes = buffer.0.lock().unwrap();
-        let event: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(event["span"]["update_id"], 7);
-        assert_eq!(event["span"]["action"], "review");
-        assert_eq!(event["fields"]["kind"], "telegram_invalid_response");
+        let events: Vec<_> = serde_json::Deserializer::from_slice(&bytes)
+            .into_iter::<serde_json::Value>()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(events.len(), 4);
+        for event in events {
+            assert_eq!(event["span"]["update_id"], 7);
+            assert_eq!(event["span"]["action"], "review");
+            assert_eq!(event["fields"]["kind"], "telegram_invalid_response");
+        }
         assert!(!String::from_utf8_lossy(&bytes).contains("private-comment-and-token"));
     }
 

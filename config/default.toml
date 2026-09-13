@@ -53,7 +53,7 @@ shutdown_grace_ms = 20000
 [notification_worker]
 enabled = false
 poll_interval_ms = 500
-lease_duration_ms = 15000
+lease_duration_ms = 25000
 max_attempts = 10
 retry_initial_ms = 1000
 retry_max_ms = 300000

@@ -1,4 +1,8 @@
+use crate::bot::callbacks::PageTarget;
+use crate::bot::views::paginated_keyboard;
+use crate::pagination::{Page, PageRequest};
 use teloxide::payloads::SendMessageSetters;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::domain::{TeachingCourseId, UserId};
 
@@ -6,31 +10,39 @@ use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
 use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
-use crate::bot::views::{gradebook_students_keyboard, send_message_chunks, send_stale_button};
+use crate::bot::views::{gradebook_students_keyboard, send_message_chunks};
 
 pub(in crate::bot::handlers) async fn show_gradebook(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
 ) -> HandlerResult {
-    let gradebook = match screen
+    show_gradebook_page(screen, course_id, PageRequest::default()).await
+}
+
+pub(in crate::bot::handlers) async fn show_gradebook_page(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    page: PageRequest,
+) -> HandlerResult {
+    let students = match screen
         .services
         .courses
-        .gradebook(screen.actor, course_id)
+        .list_students(screen.actor, course_id, page)
         .await
     {
         Ok(gradebook) => gradebook,
         Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
     };
 
-    render_gradebook(screen, course_id, &gradebook).await
+    render_gradebook(screen, course_id, &students).await
 }
 
 async fn render_gradebook(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
-    gradebook: &crate::app::CourseGradebook,
+    students: &Page<crate::app::CourseStudent>,
 ) -> HandlerResult {
-    if gradebook.students.is_empty() {
+    if students.items.is_empty() && students.page == 0 {
         screen
             .bot
             .send_message(screen.chat_id, "В группе пока нет студентов.")
@@ -41,15 +53,20 @@ async fn render_gradebook(
     let message = screen
         .bot
         .send_message(screen.chat_id, "📊 Оценки курса. Выберите студента:")
-        .reply_markup(gradebook_students_keyboard(course_id, &gradebook.students))
+        .reply_markup(paginated_keyboard(
+            gradebook_students_keyboard(course_id, &students.items),
+            PageTarget::Gradebook(course_id),
+            students.page,
+            students.next_page,
+        ))
         .await?;
     screen
         .dialogue
         .update(BotState::Flow(FlowState::ChoosingStudent {
             message_id: message.id,
             purpose: StudentChoice::Grades { course_id },
-            student_ids: gradebook
-                .students
+            student_ids: students
+                .items
                 .iter()
                 .map(|student| student.student_id)
                 .collect(),
@@ -63,22 +80,23 @@ pub(super) async fn show_student_grades(
     course_id: TeachingCourseId,
     student_id: UserId,
 ) -> HandlerResult {
-    let gradebook = match screen
+    show_student_grades_page(screen, course_id, student_id, PageRequest::default()).await
+}
+
+pub(in crate::bot::handlers) async fn show_student_grades_page(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    student_id: UserId,
+    page: PageRequest,
+) -> HandlerResult {
+    let student = match screen
         .services
         .courses
-        .gradebook(screen.actor, course_id)
+        .student_grades(screen.actor, course_id, student_id, page)
         .await
     {
         Ok(gradebook) => gradebook,
         Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
-    };
-
-    let Some(student) = gradebook
-        .students
-        .iter()
-        .find(|student| student.student_id == student_id)
-    else {
-        return send_stale_button(screen.bot, screen.chat_id).await;
     };
 
     let mut text = format!(
@@ -101,6 +119,20 @@ pub(super) async fn show_student_grades(
         ));
     }
 
-    send_message_chunks(screen.bot, screen.chat_id, text, None).await?;
-    render_gradebook(screen, course_id, &gradebook).await
+    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "⬅️ К студентам курса",
+        PageTarget::Gradebook(course_id).callback(0),
+    )]]);
+    send_message_chunks(
+        screen.bot,
+        screen.chat_id,
+        text,
+        Some(paginated_keyboard(
+            keyboard,
+            PageTarget::StudentGrades(course_id, student_id),
+            student.grade_page,
+            student.next_grade_page,
+        )),
+    )
+    .await
 }

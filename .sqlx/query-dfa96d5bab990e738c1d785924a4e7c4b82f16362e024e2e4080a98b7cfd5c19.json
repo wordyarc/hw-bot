@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, final_score\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number",
+  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, final_score\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit 1",
   "describe": {
     "columns": [
       {
@@ -193,5 +193,5 @@
       true
     ]
   },
-  "hash": "964558acf28f12ca972ca0461baa49f6733c2721e4d3539b8068aaa143720110"
+  "hash": "dfa96d5bab990e738c1d785924a4e7c4b82f16362e024e2e4080a98b7cfd5c19"
 }

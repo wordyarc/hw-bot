@@ -1,10 +1,13 @@
 use super::input::{ensure_text_limit, require_text};
 use super::{reset_dialogue, resolve_actor};
 use crate::app::SubmitHomework;
+use crate::bot::callbacks::PageTarget;
 use crate::bot::context::{Deps, Screen, TextStep};
 use crate::bot::texts;
+use crate::bot::views::paginated_keyboard;
 use crate::bot::views::student_keyboard;
 use crate::domain::USER_TEXT_MAX_LEN;
+use crate::pagination::PageRequest;
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
@@ -19,6 +22,10 @@ use crate::bot::views::{
 use crate::bot::{FileTransfers, HandlerResult};
 
 pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
+    show_queue_page(screen, PageRequest::default()).await
+}
+
+pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen {
         bot,
         chat_id,
@@ -27,7 +34,7 @@ pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
         timezone,
         ..
     } = screen;
-    let places = match services.submissions.pending_queue(actor).await {
+    let places = match services.submissions.pending_queue(actor, page).await {
         Ok(places) => places,
         Err(error) => {
             send_app_error(bot, chat_id, error).await?;
@@ -35,7 +42,7 @@ pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
         }
     };
 
-    if places.is_empty() {
+    if places.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, crate::bot::texts::STUDENT_QUEUE_EMPTY)
             .reply_markup(student_menu())
             .await?;
@@ -43,7 +50,7 @@ pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
     }
 
     let mut text = String::from("⏳ Ваши работы на проверке:\n");
-    for place in &places {
+    for place in &places.items {
         text.push_str(&format!(
             "\n📘 {} · {}\nотправлено {} · {}\n",
             place.subject_name,
@@ -53,7 +60,18 @@ pub(super) async fn show_queue(screen: Screen<'_>) -> HandlerResult {
         ));
     }
 
-    send_message_chunks(bot, chat_id, text, Some(student_menu())).await
+    send_message_chunks(
+        bot,
+        chat_id,
+        text,
+        Some(paginated_keyboard(
+            student_menu(),
+            PageTarget::Queue,
+            places.page,
+            places.next_page,
+        )),
+    )
+    .await
 }
 
 fn queue_place(position: u32, total: u32) -> String {
@@ -80,6 +98,10 @@ impl SubjectHeadings {
 }
 
 pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
+    show_assignments_page(screen, PageRequest::default()).await
+}
+
+pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen {
         bot,
         chat_id,
@@ -88,7 +110,7 @@ pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
         timezone,
         ..
     } = screen;
-    let assignments = match services.assignments.list_for_student(actor).await {
+    let assignments = match services.assignments.list_for_student(actor, page).await {
         Ok(assignments) => assignments,
         Err(error) => {
             send_app_error(bot, chat_id, error).await?;
@@ -96,7 +118,7 @@ pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
         }
     };
 
-    if assignments.is_empty() {
+    if assignments.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, "📚 Опубликованных заданий пока нет.")
             .reply_markup(student_menu())
             .await?;
@@ -105,9 +127,9 @@ pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
 
     let now = Utc::now();
     let mut text = String::from("📚 Ваши задания:\n");
-    let mut rows = Vec::with_capacity(assignments.len());
+    let mut rows = Vec::with_capacity(assignments.items.len());
     let mut subjects = SubjectHeadings::default();
-    for item in assignments {
+    for item in &assignments.items {
         let assignment = &item.assignment;
         let subject = item.subject.name().as_str();
         let remaining = item.history.remaining_attempts_for(assignment);
@@ -136,10 +158,25 @@ pub(super) async fn show_assignments(screen: Screen<'_>) -> HandlerResult {
         )]);
     }
 
-    send_message_chunks(bot, chat_id, text, Some(InlineKeyboardMarkup::new(rows))).await
+    send_message_chunks(
+        bot,
+        chat_id,
+        text,
+        Some(paginated_keyboard(
+            InlineKeyboardMarkup::new(rows),
+            PageTarget::Assignments,
+            assignments.page,
+            assignments.next_page,
+        )),
+    )
+    .await
 }
 
 pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
+    show_archive_page(screen, PageRequest::default()).await
+}
+
+pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen {
         bot,
         chat_id,
@@ -147,7 +184,11 @@ pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
         services,
         ..
     } = screen;
-    let assignments = match services.assignments.list_archived_for_student(actor).await {
+    let assignments = match services
+        .assignments
+        .list_archived_for_student(actor, page)
+        .await
+    {
         Ok(assignments) => assignments,
         Err(error) => {
             send_app_error(bot, chat_id, error).await?;
@@ -155,7 +196,7 @@ pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
         }
     };
 
-    if assignments.is_empty() {
+    if assignments.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, "🗄 Архив заданий пока пуст.")
             .reply_markup(student_menu())
             .await?;
@@ -163,9 +204,9 @@ pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
     }
 
     let mut text = String::from("🗄 Архив заданий:\n");
-    let mut rows = Vec::with_capacity(assignments.len());
+    let mut rows = Vec::with_capacity(assignments.items.len());
     let mut subjects = SubjectHeadings::default();
-    for item in assignments {
+    for item in &assignments.items {
         let assignment = &item.assignment;
         let subject = item.subject.name().as_str();
         subjects.push(&mut text, subject);
@@ -184,7 +225,18 @@ pub(super) async fn show_archive(screen: Screen<'_>) -> HandlerResult {
         )]);
     }
 
-    send_message_chunks(bot, chat_id, text, Some(InlineKeyboardMarkup::new(rows))).await
+    send_message_chunks(
+        bot,
+        chat_id,
+        text,
+        Some(paginated_keyboard(
+            InlineKeyboardMarkup::new(rows),
+            PageTarget::Archive,
+            assignments.page,
+            assignments.next_page,
+        )),
+    )
+    .await
 }
 
 pub(super) async fn show_assignment(
@@ -225,9 +277,9 @@ pub(super) async fn show_assignment(
         history.remaining_attempts_for(assignment),
     );
     if history.has_pending_submission()
-        && let Ok(places) = services
+        && let Ok(Some(place)) = services
             .submissions
-            .pending_queue(actor)
+            .queue_place(actor, assignment_id)
             .await
             .inspect_err(|error| {
                 tracing::warn!(
@@ -235,9 +287,6 @@ pub(super) async fn show_assignment(
                     "student queue position is unavailable"
                 );
             })
-        && let Some(place) = places
-            .iter()
-            .find(|place| place.assignment_id == assignment_id)
     {
         summary.push_str(&format!(
             "\n⏳ Работа на проверке, {}",
@@ -246,6 +295,12 @@ pub(super) async fn show_assignment(
     }
 
     let mut rows = Vec::new();
+    if !details.submissions.is_empty() {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "🕘 История сдач",
+            PageTarget::History(assignment_id).callback(0),
+        )]);
+    }
     if assignment.status() == AssignmentStatus::Published {
         rows.push(vec![InlineKeyboardButton::callback(
             "📤 Сдать работу",
@@ -292,29 +347,87 @@ pub(super) async fn show_assignment(
         }
     }
     for submission in &details.submissions {
-        bot.send_message(
-            chat_id,
-            format!(
-                "Попытка {}: {}{}",
-                submission.attempt_number(),
-                submission_status(submission.status()),
-                submission
-                    .grade()
-                    .map(|grade| format!("\n{}", grade_line(grade)))
-                    .unwrap_or_default(),
-            ),
-        )
-        .await?;
-        bot.send_message(chat_id, submission.content().as_str())
-            .await?;
-        if let Some(comment) = submission.review_comment() {
-            bot.send_message(chat_id, "💬 Комментарий преподавателя:")
-                .await?;
-            bot.send_message(chat_id, comment.as_str()).await?;
-        }
+        send_submission(screen, submission).await?;
     }
     bot.send_message(chat_id, "Выберите действие:")
         .reply_markup(InlineKeyboardMarkup::new(rows))
+        .await?;
+    Ok(())
+}
+
+async fn send_submission(
+    screen: Screen<'_>,
+    submission: &crate::domain::Submission,
+) -> HandlerResult {
+    let Screen { bot, chat_id, .. } = screen;
+    bot.send_message(
+        chat_id,
+        format!(
+            "Попытка {}: {}{}",
+            submission.attempt_number(),
+            submission_status(submission.status()),
+            submission
+                .grade()
+                .map(|grade| format!("\n{}", grade_line(grade)))
+                .unwrap_or_default(),
+        ),
+    )
+    .await?;
+    bot.send_message(chat_id, submission.content().as_str())
+        .await?;
+    if let Some(comment) = submission.review_comment() {
+        bot.send_message(chat_id, "💬 Комментарий преподавателя:")
+            .await?;
+        bot.send_message(chat_id, comment.as_str()).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn show_history(
+    screen: Screen<'_>,
+    assignment_id: AssignmentId,
+    page: PageRequest,
+) -> HandlerResult {
+    let history = match screen
+        .services
+        .assignments
+        .submission_history(screen.actor, assignment_id, page)
+        .await
+    {
+        Ok(submissions) => submissions,
+        Err(error) => return send_app_error(screen.bot, screen.chat_id, error).await,
+    };
+    screen
+        .bot
+        .send_message(
+            screen.chat_id,
+            format!(
+                "📘 {} · {}\n🕘 История сдач: от новых к старым",
+                history.subject_name, history.assignment_title
+            ),
+        )
+        .await?;
+    let submissions = history.submissions;
+    for submission in &submissions.items {
+        send_submission(screen, submission).await?;
+    }
+    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "⬅️ К заданию",
+        format!(
+            "{}{}",
+            crate::bot::callbacks::ASSIGNMENT_PREFIX,
+            assignment_id.as_uuid()
+        ),
+    )]]);
+    screen
+        .bot
+        .send_message(screen.chat_id, "Выберите действие:")
+        .reply_markup(paginated_keyboard(
+            keyboard,
+            PageTarget::History(assignment_id),
+            submissions.page,
+            submissions.next_page,
+        ))
         .await?;
     Ok(())
 }

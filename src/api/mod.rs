@@ -13,6 +13,8 @@ mod courses;
 mod error;
 mod health;
 mod json;
+mod pagination;
+mod path;
 mod review;
 mod state;
 mod submissions;
@@ -21,6 +23,7 @@ mod users;
 pub use actor::{ACTOR_HEADER, Actor, TelegramIdentity};
 pub use error::ApiError;
 pub use json::JsonBody;
+pub use path::ApiPath;
 pub use state::AppState;
 
 pub const REQUEST_BODY_LIMIT: usize = 64 * 1024;
@@ -77,6 +80,14 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
         )
         .route("/me/courses", get(courses::list_my_courses))
         .route(
+            "/me/assignments/{assignment_id}/submissions",
+            get(assignments::submission_history),
+        )
+        .route(
+            "/me/courses/{course_id}/gradebook/{student_id}",
+            get(courses::student_grades),
+        )
+        .route(
             "/me/courses/{teaching_course_id}/gradebook",
             get(courses::course_gradebook),
         )
@@ -86,6 +97,14 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             "/submissions/{submission_id}/review",
             post(review::review_submission),
         )
+        .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not_found", "route not found") })
+        .method_not_allowed_fallback(|| async {
+            ApiError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "method not allowed",
+            )
+        })
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             request_timeout,

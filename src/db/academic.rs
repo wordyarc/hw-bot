@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
@@ -171,6 +172,7 @@ where
 pub(crate) async fn list_teaching_courses_for_teacher<'e, E>(
     executor: E,
     teacher: &User,
+    page: PageRequest,
 ) -> DbResult<Vec<TeachingCourseCard>>
 where
     E: PgExecutor<'e>,
@@ -206,10 +208,13 @@ where
         )
         group by teaching_courses.id, subjects.name, student_groups.code,
                  student_groups.education_level, student_groups.study_year
-        order by subjects.name, student_groups.code
+        order by subjects.name, student_groups.code, teaching_courses.id
+        limit $3 offset $4
         "#,
         sees_every_course,
         teacher.id().as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
     )
     .fetch_all(executor)
     .await?

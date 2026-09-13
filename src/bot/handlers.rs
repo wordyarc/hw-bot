@@ -381,6 +381,25 @@ async fn handle_replayable_action(
     transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
+        ReplayableAction::Page(target, page) => {
+            use super::callbacks::PageTarget;
+            let page = crate::pagination::PageRequest::new(page);
+            match target {
+                PageTarget::Assignments => student::show_assignments_page(screen, page).await,
+                PageTarget::Archive => student::show_archive_page(screen, page).await,
+                PageTarget::Queue => student::show_queue_page(screen, page).await,
+                PageTarget::Courses => teacher::show_courses_page(screen, page).await,
+                PageTarget::Course(id) => {
+                    teacher::show_course_assignments_page(screen, id, page).await
+                }
+                PageTarget::Students(id) => teacher::show_students_page(screen, id, page).await,
+                PageTarget::Gradebook(id) => teacher::show_gradebook_page(screen, id, page).await,
+                PageTarget::History(id) => student::show_history(screen, id, page).await,
+                PageTarget::StudentGrades(course, student) => {
+                    teacher::show_student_grades_page(screen, course, student, page).await
+                }
+            }
+        }
         ReplayableAction::StudentAssignments => student::show_assignments(screen).await,
         ReplayableAction::StudentArchive => student::show_archive(screen).await,
         ReplayableAction::StudentQueue => student::show_queue(screen).await,

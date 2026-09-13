@@ -40,7 +40,11 @@ async fn unrelated_teacher_cannot_list_assignment_students() {
 
     let error = application
         .assignments
-        .list_students_for_assignment(Actor::new(outsider.id()), app.fixture.assignment.id())
+        .list_students_for_assignment(
+            Actor::new(outsider.id()),
+            app.fixture.assignment.id(),
+            Default::default(),
+        )
         .await
         .unwrap_err();
 
@@ -59,9 +63,14 @@ async fn assignment_student_list_includes_only_its_group_with_default_progress()
 
     let students = application
         .assignments
-        .list_students_for_assignment(app.teacher_actor(), app.fixture.assignment.id())
+        .list_students_for_assignment(
+            app.teacher_actor(),
+            app.fixture.assignment.id(),
+            Default::default(),
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .items;
 
     let ids: Vec<_> = students.iter().map(|item| item.student.id()).collect();
     assert!(ids.contains(&app.fixture.student.id()));
@@ -95,9 +104,14 @@ async fn assignment_student_list_contains_submission_and_extra_attempt_facts() {
 
     let students = application
         .assignments
-        .list_students_for_assignment(app.teacher_actor(), app.fixture.assignment.id())
+        .list_students_for_assignment(
+            app.teacher_actor(),
+            app.fixture.assignment.id(),
+            Default::default(),
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .items;
     let student = students
         .iter()
         .find(|item| item.student.id() == app.fixture.student.id())
@@ -120,9 +134,14 @@ async fn assignment_student_list_contains_accepted_submission_facts() {
 
     let students = application
         .assignments
-        .list_students_for_assignment(app.teacher_actor(), app.fixture.assignment.id())
+        .list_students_for_assignment(
+            app.teacher_actor(),
+            app.fixture.assignment.id(),
+            Default::default(),
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .items;
     let student = students
         .iter()
         .find(|item| item.student.id() == app.fixture.student.id())

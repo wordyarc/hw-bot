@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use sqlx::{Postgres, Transaction};
@@ -273,14 +274,17 @@ pub async fn list_for_student<'e, E>(
     executor: E,
     assignment_id: AssignmentId,
     student_id: UserId,
+    page: PageRequest,
 ) -> DbResult<Vec<Submission>>
 where
     E: PgExecutor<'e>,
 {
     select_submissions!(
-        "where assignment_id = $1 and student_id = $2 order by attempt_number",
+        "where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
         assignment_id.as_uuid(),
         student_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
     )
     .fetch_all(executor)
     .await?
@@ -289,11 +293,29 @@ where
     .collect()
 }
 
+pub async fn latest_for_student<'e, E: PgExecutor<'e>>(
+    executor: E,
+    assignment_id: AssignmentId,
+    student_id: UserId,
+) -> DbResult<Option<Submission>> {
+    select_submissions!(
+        "where assignment_id = $1 and student_id = $2 order by attempt_number desc limit 1",
+        assignment_id.as_uuid(),
+        student_id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?
+    .map(Submission::try_from)
+    .transpose()
+}
+
 #[derive(Clone, Debug)]
 pub struct CourseGradeRow {
     pub student_id: UserId,
     pub display_name: String,
     pub assignment: Option<CourseAssignmentGrade>,
+    pub total: u32,
+    pub max_total: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -311,33 +333,58 @@ pub async fn course_grades<'e, E>(
     executor: E,
     teaching_course_id: TeachingCourseId,
     student_group_id: StudentGroupId,
+    student_page: PageRequest,
+    student_id: Option<UserId>,
+    grade_page: PageRequest,
 ) -> DbResult<Vec<CourseGradeRow>>
 where
     E: PgExecutor<'e>,
 {
     sqlx::query!(
         r#"
+        with students_page as (
+            select id, display_name from users
+            where role = 'student' and student_group_id = $2
+              and ($5::uuid is null or id = $5)
+            order by display_name, id limit $3 offset $4
+        )
         select
             students.id as "student_id!",
             students.display_name as "display_name!",
-            assignments.id as "assignment_id?",
-            assignments.title as "assignment_title?",
-            coalesce(submissions.grade_max_score, assignments.max_score) as "max_score?",
-            submissions.final_score as "final_score?"
-        from users students
-        left join assignments
-          on assignments.teaching_course_id = $1
-         and assignments.published_at is not null
-        left join submissions
-          on submissions.assignment_id = assignments.id
-         and submissions.student_id = students.id
-         and submissions.status = 'accepted'
-        where students.role = 'student'
-          and students.student_group_id = $2
-        order by students.display_name, students.id, assignments.deadline_at, assignments.id
+            grades.id as "assignment_id?",
+            grades.title as "assignment_title?",
+            grades.max_score as "max_score?",
+            grades.final_score as "final_score?",
+            coalesce(totals.total, 0)::bigint as "total!",
+            coalesce(totals.max_total, 0)::bigint as "max_total!"
+        from students_page students
+        cross join lateral (
+            select sum(s.final_score) as total,
+                   sum(coalesce(s.grade_max_score, a.max_score)) as max_total
+            from assignments a
+            left join submissions s on s.assignment_id = a.id
+                and s.student_id = students.id and s.status = 'accepted'
+            where a.teaching_course_id = $1 and a.published_at is not null
+        ) totals
+        left join lateral (
+            select a.id, a.title, a.deadline_at,
+                   coalesce(s.grade_max_score, a.max_score) as max_score, s.final_score
+            from assignments a
+            left join submissions s on s.assignment_id = a.id
+                and s.student_id = students.id and s.status = 'accepted'
+            where a.teaching_course_id = $1 and a.published_at is not null
+              and coalesce(s.grade_max_score, a.max_score) is not null
+            order by a.deadline_at, a.id limit $6 offset $7
+        ) grades on true
+        order by students.display_name, students.id, grades.deadline_at, grades.id
         "#,
         teaching_course_id.as_uuid(),
         student_group_id.as_uuid(),
+        student_page.fetch_limit(),
+        student_page.offset(),
+        student_id.map(UserId::as_uuid),
+        grade_page.fetch_limit(),
+        grade_page.offset(),
     )
     .fetch_all(executor)
     .await?
@@ -357,6 +404,8 @@ where
             student_id: UserId::from_uuid(row.student_id),
             display_name: row.display_name,
             assignment,
+            total: checked_num_cast("gradebook.total", row.total)?,
+            max_total: checked_num_cast("gradebook.max_total", row.max_total)?,
         })
     })
     .collect()
@@ -378,18 +427,24 @@ pub struct PendingQueuePlace {
 pub async fn pending_queue_places<'e, E>(
     executor: E,
     student_id: UserId,
+    page: PageRequest,
+    assignment_id: Option<AssignmentId>,
 ) -> DbResult<Vec<PendingQueuePlace>>
 where
     E: PgExecutor<'e>,
 {
     sqlx::query!(
         r#"
-        with visible as (
+        with mine_page as (
+            select * from submissions where student_id = $1 and status = 'pending_review'
+              and ($4::uuid is null or assignment_id = $4)
+            order by submitted_at, id limit $2 offset $3
+        ), visible as (
             select
                 mine.id as mine_id,
                 other.id as other_id,
                 other.submitted_at as other_submitted_at
-            from submissions mine
+            from mine_page mine
             join assignments mine_assignment
               on mine_assignment.id = mine.assignment_id
             join assignments other_assignment
@@ -417,7 +472,7 @@ where
                    <= (submissions.submitted_at, submissions.id)
             ) as "position!",
             count(visible.other_id) as "total!"
-        from submissions
+        from mine_page submissions
         join assignments
           on assignments.id = submissions.assignment_id
         join subjects
@@ -431,6 +486,9 @@ where
         order by submissions.submitted_at, submissions.id
         "#,
         student_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
+        assignment_id.map(AssignmentId::as_uuid),
     )
     .fetch_all(executor)
     .await?

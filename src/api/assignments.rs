@@ -1,5 +1,8 @@
+use super::ApiPath as Path;
+use super::pagination::{Pagination, page_headers};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -237,27 +240,35 @@ impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
 pub async fn list_student_assignments(
     State(state): State<AppState>,
     actor: Actor,
-) -> Result<Json<Vec<StudentAssignmentResponse>>, ApiError> {
+    Pagination(page): Pagination,
+) -> Result<(HeaderMap, Json<Vec<StudentAssignmentResponse>>), ApiError> {
     let assignments = state
         .application
         .assignments
-        .list_for_student(actor)
+        .list_for_student(actor, page)
         .await?;
 
-    Ok(Json(assignments.iter().map(Into::into).collect()))
+    Ok((
+        page_headers(&assignments),
+        Json(assignments.items.iter().map(Into::into).collect()),
+    ))
 }
 
 pub async fn list_archived_student_assignments(
     State(state): State<AppState>,
     actor: Actor,
-) -> Result<Json<Vec<StudentAssignmentResponse>>, ApiError> {
+    Pagination(page): Pagination,
+) -> Result<(HeaderMap, Json<Vec<StudentAssignmentResponse>>), ApiError> {
     let assignments = state
         .application
         .assignments
-        .list_archived_for_student(actor)
+        .list_archived_for_student(actor, page)
         .await?;
 
-    Ok(Json(assignments.iter().map(Into::into).collect()))
+    Ok((
+        page_headers(&assignments),
+        Json(assignments.items.iter().map(Into::into).collect()),
+    ))
 }
 
 pub async fn find_student_assignment(
@@ -278,14 +289,36 @@ pub async fn list_course_assignments(
     State(state): State<AppState>,
     actor: Actor,
     Path(teaching_course_id): Path<Uuid>,
-) -> Result<Json<Vec<AssignmentResponse>>, ApiError> {
+    Pagination(page): Pagination,
+) -> Result<(HeaderMap, Json<Vec<AssignmentResponse>>), ApiError> {
     let assignments = state
         .application
         .assignments
-        .list_for_course(actor, TeachingCourseId::from_uuid(teaching_course_id))
+        .list_for_course(actor, TeachingCourseId::from_uuid(teaching_course_id), page)
         .await?;
 
-    Ok(Json(assignments.iter().map(Into::into).collect()))
+    Ok((
+        page_headers(&assignments),
+        Json(assignments.items.iter().map(Into::into).collect()),
+    ))
+}
+
+pub async fn submission_history(
+    State(state): State<AppState>,
+    actor: Actor,
+    Path(id): Path<Uuid>,
+    Pagination(page): Pagination,
+) -> Result<(HeaderMap, Json<Vec<SubmissionResponse>>), ApiError> {
+    let submissions = state
+        .application
+        .assignments
+        .submission_history(actor, AssignmentId::from_uuid(id), page)
+        .await?
+        .submissions;
+    Ok((
+        page_headers(&submissions),
+        Json(submissions.items.iter().map(Into::into).collect()),
+    ))
 }
 
 pub async fn create_assignment(

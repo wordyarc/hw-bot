@@ -5,7 +5,10 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
 use crate::app::GrantExtraAttempts;
+use crate::bot::callbacks::PageTarget;
+use crate::bot::views::paginated_keyboard;
 use crate::domain::{AssignmentId, MAX_ATTEMPTS, UserId};
+use crate::pagination::PageRequest;
 
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX};
@@ -22,6 +25,14 @@ pub(in crate::bot::handlers) async fn show_students(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
 ) -> HandlerResult {
+    show_students_page(screen, assignment_id, PageRequest::default()).await
+}
+
+pub(in crate::bot::handlers) async fn show_students_page(
+    screen: Screen<'_>,
+    assignment_id: AssignmentId,
+    page: PageRequest,
+) -> HandlerResult {
     let Screen {
         bot,
         chat_id,
@@ -32,7 +43,7 @@ pub(in crate::bot::handlers) async fn show_students(
     } = screen;
     let students = match services
         .assignments
-        .list_students_for_assignment(actor, assignment_id)
+        .list_students_for_assignment(actor, assignment_id, page)
         .await
     {
         Ok(students) => students,
@@ -42,12 +53,12 @@ pub(in crate::bot::handlers) async fn show_students(
         }
     };
 
-    if students.is_empty() {
+    if students.items.is_empty() {
         bot.send_message(chat_id, "В группе пока нет студентов.")
             .await?;
     } else {
         let mut text = String::from("👥 Студенты группы:\n");
-        for student in &students {
+        for student in &students.items {
             let pending = if student.history.has_pending_submission() {
                 " · ⏳ сдача на проверке"
             } else {
@@ -72,13 +83,22 @@ pub(in crate::bot::handlers) async fn show_students(
 
     let message = bot
         .send_message(chat_id, "Выберите студента:")
-        .reply_markup(assignment_students_keyboard(assignment_id, &students))
+        .reply_markup(paginated_keyboard(
+            assignment_students_keyboard(assignment_id, &students.items),
+            PageTarget::Students(assignment_id),
+            students.page,
+            students.next_page,
+        ))
         .await?;
     dialogue
         .update(BotState::Flow(FlowState::ChoosingStudent {
             message_id: message.id,
             purpose: StudentChoice::ExtraAttempts { assignment_id },
-            student_ids: students.iter().map(|item| item.student.id()).collect(),
+            student_ids: students
+                .items
+                .iter()
+                .map(|item| item.student.id())
+                .collect(),
         }))
         .await?;
     Ok(())

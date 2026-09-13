@@ -43,12 +43,29 @@ pub struct RegisteredUser {
     pub student_group: Option<StudentGroup>,
 }
 
+pub struct UserStatistics {
+    pub assignments: u32,
+    pub pending: u32,
+    pub courses: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct UserService {
     pool: PgPool,
 }
 
 impl UserService {
+    pub async fn statistics(&self, actor: Actor) -> AppResult<UserStatistics> {
+        let user = load_actor(&self.pool, actor, "user").await?;
+        let (assignments, pending, courses) =
+            db::users::profile_statistics(&self.pool, &user).await?;
+        Ok(UserStatistics {
+            assignments,
+            pending,
+            courses,
+        })
+    }
+
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }

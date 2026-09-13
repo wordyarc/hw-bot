@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            teaching_courses.id,\n            teaching_courses.subject_id,\n            teaching_courses.student_group_id,\n            teaching_courses.created_at,\n            array_remove(array_agg(teaching_course_teachers.teacher_id), null)\n                as \"teacher_ids!: Vec<Uuid>\",\n            subjects.name as subject_name,\n            student_groups.code as group_code,\n            student_groups.education_level,\n            student_groups.study_year\n        from teaching_courses\n        join subjects\n          on subjects.id = teaching_courses.subject_id\n        join student_groups\n          on student_groups.id = teaching_courses.student_group_id\n        left join teaching_course_teachers\n          on teaching_course_teachers.teaching_course_id = teaching_courses.id\n        where $1 or exists (\n            select 1\n            from teaching_course_teachers mine\n            where mine.teaching_course_id = teaching_courses.id\n              and mine.teacher_id = $2\n        )\n        group by teaching_courses.id, subjects.name, student_groups.code,\n                 student_groups.education_level, student_groups.study_year\n        order by subjects.name, student_groups.code\n        ",
+  "query": "\n        select\n            teaching_courses.id,\n            teaching_courses.subject_id,\n            teaching_courses.student_group_id,\n            teaching_courses.created_at,\n            array_remove(array_agg(teaching_course_teachers.teacher_id), null)\n                as \"teacher_ids!: Vec<Uuid>\",\n            subjects.name as subject_name,\n            student_groups.code as group_code,\n            student_groups.education_level,\n            student_groups.study_year\n        from teaching_courses\n        join subjects\n          on subjects.id = teaching_courses.subject_id\n        join student_groups\n          on student_groups.id = teaching_courses.student_group_id\n        left join teaching_course_teachers\n          on teaching_course_teachers.teaching_course_id = teaching_courses.id\n        where $1 or exists (\n            select 1\n            from teaching_course_teachers mine\n            where mine.teaching_course_id = teaching_courses.id\n              and mine.teacher_id = $2\n        )\n        group by teaching_courses.id, subjects.name, student_groups.code,\n                 student_groups.education_level, student_groups.study_year\n        order by subjects.name, student_groups.code, teaching_courses.id\n        limit $3 offset $4\n        ",
   "describe": {
     "columns": [
       {
@@ -101,7 +101,9 @@
     "parameters": {
       "Left": [
         "Bool",
-        "Uuid"
+        "Uuid",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -116,5 +118,5 @@
       false
     ]
   },
-  "hash": "342d99965f8b09893eb48501efed893b25b78a8219e45b568e84307a30edaed0"
+  "hash": "e13be915727ef36732f048337788d038d80471d545ead72678f28e2fd42cb671"
 }

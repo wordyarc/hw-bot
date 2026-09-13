@@ -1,3 +1,4 @@
+use crate::pagination::{Page, PageRequest};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -76,15 +77,38 @@ impl SubmissionService {
         Ok(submission)
     }
 
-    pub async fn pending_queue(&self, actor: Actor) -> AppResult<Vec<QueuePlace>> {
+    pub async fn pending_queue(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+    ) -> AppResult<Page<QueuePlace>> {
         let student = load_student(&self.pool, actor, "read own review queue").await?;
 
-        Ok(
-            db::submissions::pending_queue_places(&self.pool, student.id())
+        Ok(Page::from_rows(
+            db::submissions::pending_queue_places(&self.pool, student.id(), page, None)
                 .await?
                 .into_iter()
                 .map(QueuePlace::from)
                 .collect(),
+            page,
+        ))
+    }
+
+    pub async fn queue_place(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+    ) -> AppResult<Option<QueuePlace>> {
+        let student = load_student(&self.pool, actor, "read own review queue").await?;
+        Ok(db::submissions::pending_queue_places(
+            &self.pool,
+            student.id(),
+            PageRequest::default(),
+            Some(assignment_id),
         )
+        .await?
+        .into_iter()
+        .next()
+        .map(QueuePlace::from))
     }
 }
