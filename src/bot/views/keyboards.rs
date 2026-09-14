@@ -1,19 +1,13 @@
-use super::Bot;
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
-use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::ChatId;
-use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup, KeyboardRemove,
-};
+use chrono::{Datelike, NaiveDate, Utc};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup};
 
 use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
 use crate::domain::{
-    Assignment, AssignmentStatus, Grade, Grading, LatePolicy, MaxScore, Role, StoredFileMetadata,
-    SubmissionId, SubmissionStatus, TeachingCourseId,
+    Assignment, AssignmentStatus, Role, StoredFileMetadata, SubmissionId, TeachingCourseId,
 };
 
-use super::HandlerResult;
-use super::callbacks::{
+use super::render::{assignment_status_icon, button_label};
+use crate::bot::callbacks::{
     ARCHIVE_PREFIX, ATTEMPTS_PREFIX, CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX,
     COURSE_PREFIX, CREATE_PREFIX, DEADLINE_CALENDAR, DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL,
     DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS, DEADLINE_PREFIX, FILE_ADD, FILE_CANCEL_DELETE,
@@ -23,27 +17,25 @@ use super::callbacks::{
     MENU_PROFILE, MENU_QUEUE, NEXT_REVIEW, PUBLISH_PREFIX, REVIEW_ACCEPT_PREFIX,
     REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, STUDENT_PREFIX,
 };
-use super::callbacks::{
+use crate::bot::callbacks::{
     LATE_PERIODS_PREFIX, PENALTY_PERIOD, PENALTY_PREFIX, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
     TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS,
     TERMS_POLICY, TERMS_SAVE,
 };
-use super::state::{AssignmentTerms, TermsForm, TermsStep, TermsTarget};
-use super::texts;
-use super::timezone::BotTimezone;
+use crate::bot::state::{AssignmentTerms, InputMode, TermsForm, TermsStep, TermsTarget};
+use crate::bot::texts;
+use crate::bot::timezone::BotTimezone;
 
-use crate::telegram::text::{MESSAGE_LIMIT, truncate};
-
-pub(super) const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
-pub(super) const BUTTON_ARCHIVE: &str = "🗄 Архив";
-pub(super) const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
-pub(super) const BUTTON_REVIEW: &str = "✅ Проверить работы";
-pub(super) const BUTTON_COURSES: &str = "📘 Мои курсы";
-pub(super) const BUTTON_PROFILE: &str = "👤 Профиль";
-pub(super) const BUTTON_HELP: &str = "❓ Помощь";
+pub(in crate::bot) const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
+pub(in crate::bot) const BUTTON_ARCHIVE: &str = "🗄 Архив";
+pub(in crate::bot) const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
+pub(in crate::bot) const BUTTON_REVIEW: &str = "✅ Проверить работы";
+pub(in crate::bot) const BUTTON_COURSES: &str = "📘 Мои курсы";
+pub(in crate::bot) const BUTTON_PROFILE: &str = "👤 Профиль";
+pub(in crate::bot) const BUTTON_HELP: &str = "❓ Помощь";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MenuAction {
+pub(in crate::bot) enum MenuAction {
     Assignments,
     Archive,
     Queue,
@@ -53,7 +45,7 @@ pub(super) enum MenuAction {
     Help,
 }
 
-pub(super) fn menu_action(text: &str) -> Option<MenuAction> {
+pub(in crate::bot) fn menu_action(text: &str) -> Option<MenuAction> {
     match text.trim() {
         BUTTON_ASSIGNMENTS => Some(MenuAction::Assignments),
         BUTTON_ARCHIVE => Some(MenuAction::Archive),
@@ -66,14 +58,21 @@ pub(super) fn menu_action(text: &str) -> Option<MenuAction> {
     }
 }
 
-pub(super) fn main_keyboard(role: Role) -> KeyboardMarkup {
+pub(in crate::bot) fn main_keyboard(role: Role) -> KeyboardMarkup {
     match role {
         Role::Student { .. } => student_keyboard(),
         Role::Teacher | Role::Admin => teacher_keyboard(),
     }
 }
 
-pub(super) fn student_keyboard() -> KeyboardMarkup {
+pub(in crate::bot) fn main_menu(role: Role, pending: Option<u32>) -> InlineKeyboardMarkup {
+    match role {
+        Role::Student { .. } => student_menu(),
+        Role::Teacher | Role::Admin => teacher_menu(pending),
+    }
+}
+
+pub(in crate::bot) fn student_keyboard() -> KeyboardMarkup {
     bottom_menu(vec![
         vec![
             KeyboardButton::new(BUTTON_ASSIGNMENTS),
@@ -87,7 +86,7 @@ pub(super) fn student_keyboard() -> KeyboardMarkup {
     ])
 }
 
-pub(super) fn teacher_keyboard() -> KeyboardMarkup {
+pub(in crate::bot) fn teacher_keyboard() -> KeyboardMarkup {
     bottom_menu(vec![
         vec![KeyboardButton::new(BUTTON_REVIEW)],
         vec![
@@ -105,7 +104,7 @@ fn bottom_menu(rows: Vec<Vec<KeyboardButton>>) -> KeyboardMarkup {
         .input_field_placeholder("Выберите пункт меню")
 }
 
-pub(super) fn student_menu() -> InlineKeyboardMarkup {
+pub(in crate::bot) fn student_menu() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             BUTTON_ASSIGNMENTS,
@@ -119,7 +118,7 @@ pub(super) fn student_menu() -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
     let review_label = pending.map_or_else(
         || BUTTON_REVIEW.to_owned(),
         |pending| format!("✅ Проверить работы ({pending})"),
@@ -131,7 +130,7 @@ pub(super) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback(
             "✅ Принять",
@@ -144,7 +143,7 @@ pub(super) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMark
     ]])
 }
 
-pub(super) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(
         courses
             .iter()
@@ -162,7 +161,7 @@ pub(super) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeybo
     )
 }
 
-pub(super) fn course_assignments_keyboard(
+pub(in crate::bot) fn course_assignments_keyboard(
     course_id: TeachingCourseId,
     assignments: &[Assignment],
 ) -> InlineKeyboardMarkup {
@@ -199,7 +198,7 @@ pub(super) fn course_assignments_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
     let assignment_id = assignment.id().as_uuid();
     let mut rows = Vec::new();
 
@@ -249,7 +248,7 @@ pub(super) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     let mut preset = |label: &str, date: Option<NaiveDate>, callback: &str| {
         if let Some(date) = date {
@@ -312,12 +311,14 @@ fn duration_options_keyboard(
         let Some(at) = timezone.end_of(date) else {
             continue;
         };
-        let policy = LatePolicy::new(terms.period_days, terms.penalty.unwrap_or(1), 1)
-            .expect("valid period and penalty");
+        let Ok(policy) = terms.preview_policy(1) else {
+            continue;
+        };
         let Ok(periods) = u16::try_from(policy.periods_until(deadline, at)) else {
             continue;
         };
-        if LatePolicy::new(policy.period_days(), policy.penalty(), periods)
+        if terms
+            .preview_policy(periods)
             .and_then(|policy| policy.validate_horizon(deadline))
             .is_err()
         {
@@ -354,7 +355,10 @@ const MONTHS: [&str; 12] = [
     "Декабрь",
 ];
 
-pub(super) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn calendar_keyboard(
+    month: NaiveDate,
+    today: NaiveDate,
+) -> InlineKeyboardMarkup {
     let blank = || InlineKeyboardButton::callback("·", CALENDAR_NOOP);
     let first = month.with_day(1).unwrap_or(month);
     let previous = first.checked_sub_months(chrono::Months::new(1));
@@ -429,7 +433,7 @@ fn month_key(date: NaiveDate) -> String {
     date.format("%Y-%m").to_string()
 }
 
-pub(super) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
     let button = |amount: u16| {
         InlineKeyboardButton::callback(amount.to_string(), format!("{prefix}{amount}"))
     };
@@ -444,7 +448,7 @@ pub(super) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn grading_keyboard() -> InlineKeyboardMarkup {
+pub(in crate::bot) fn grading_keyboard() -> InlineKeyboardMarkup {
     let preset = |max_score: u16| {
         InlineKeyboardButton::callback(
             format!("{max_score}-балльная"),
@@ -465,7 +469,7 @@ pub(super) fn grading_keyboard() -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn late_policy_keyboard() -> InlineKeyboardMarkup {
+pub(in crate::bot) fn late_policy_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             texts::BUTTON_STRICT,
@@ -478,7 +482,7 @@ pub(super) fn late_policy_keyboard() -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         [1, 2]
             .into_iter()
@@ -500,7 +504,7 @@ pub(super) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn terms_keyboard(
+pub(in crate::bot) fn terms_keyboard(
     terms: &AssignmentTerms,
     timezone: &BotTimezone,
 ) -> InlineKeyboardMarkup {
@@ -523,10 +527,13 @@ pub(super) fn terms_keyboard(
         ),
         TERMS_DEADLINE,
     )]);
-    if terms.allow_late {
+    if let Some(policy) = terms
+        .committed_policy()
+        .expect("summary requires complete policy")
+    {
         rows.push(vec![
             InlineKeyboardButton::callback(
-                format!("{} −{}", texts::PENALTY_LABEL, terms.penalty.unwrap_or(0)),
+                format!("{} −{}", texts::PENALTY_LABEL, policy.penalty()),
                 TERMS_PENALTY,
             ),
             InlineKeyboardButton::callback(
@@ -538,7 +545,7 @@ pub(super) fn terms_keyboard(
             format!(
                 "{} {}",
                 texts::LATENESS_LABEL,
-                texts::lateness_duration(terms.period_days, terms.max_periods.unwrap_or(0))
+                texts::lateness_duration(policy.period_days(), policy.max_periods())
             ),
             TERMS_PERIODS,
         )]);
@@ -564,8 +571,8 @@ pub(super) fn terms_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
-    use super::callbacks::{TERMS_EXIT, TERMS_STAY};
+pub(in crate::bot) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
+    use crate::bot::callbacks::{TERMS_EXIT, TERMS_STAY};
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             texts::BUTTON_STAY,
@@ -578,29 +585,15 @@ pub(super) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
     ])
 }
 
-pub(super) fn terms_form_view(
+pub(super) fn terms_form_keyboard(
     form: &TermsForm,
     timezone: &BotTimezone,
-) -> (String, InlineKeyboardMarkup) {
+) -> InlineKeyboardMarkup {
     let terms = &form.terms;
     let button = |label: &str, data: &str| InlineKeyboardButton::callback(label, data);
     let empty = || InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new());
-    let context = terms
-        .deadline_at
-        .map(|deadline| {
-            format!(
-                "{} {}.\n",
-                if terms.allow_late {
-                    texts::NO_PENALTY_UNTIL
-                } else {
-                    texts::SUBMIT_UNTIL
-                },
-                timezone.format(deadline)
-            )
-        })
-        .unwrap_or_default();
     let date_keyboard = || {
-        if let Some(month) = form.calendar_month {
+        if let InputMode::Calendar(month) = form.mode {
             let after = if form.step == TermsStep::DurationDate {
                 terms.deadline_at.expect("duration follows deadline")
             } else {
@@ -617,45 +610,18 @@ pub(super) fn terms_form_view(
             deadline_options_keyboard(timezone)
         }
     };
-    let (text, mut keyboard) = match form.step {
-        TermsStep::Policy => (
-            texts::LATE_POLICY_QUESTION.to_owned(),
-            late_policy_keyboard(),
-        ),
-        TermsStep::Deadline | TermsStep::DurationDate => {
-            let question = if form.step == TermsStep::DurationDate {
-                texts::DURATION_DATE_QUESTION
-            } else if terms.allow_late {
-                texts::NO_PENALTY_QUESTION
-            } else {
-                texts::DEADLINE_QUESTION
-            };
-            (
-                format!(
-                    "{context}{question}\nВремя по умолчанию — {} ({}). Можно прислать дату сообщением.\n{}",
-                    timezone.deadline_time().format("%H:%M"),
-                    timezone.suffix(),
-                    texts::DATE_FORMAT
-                ),
-                date_keyboard(),
-            )
-        }
-        TermsStep::Penalty => (
-            format!(
-                "{context}{}\nРазмер штрафа в баллах за каждые начавшиеся {} дн. Пришлите число от 1 до 100 сообщением.",
-                texts::penalty_question(terms.period_days),
-                terms.period_days
-            ),
-            penalty_keyboard(terms.period_days),
-        ),
-        TermsStep::Period => (format!("{context}{}", texts::PERIOD_PROMPT), empty()),
+    let mut keyboard = match form.step {
+        TermsStep::Policy => late_policy_keyboard(),
+        TermsStep::Deadline | TermsStep::DurationDate => date_keyboard(),
+        TermsStep::Penalty => penalty_keyboard(terms.period_days),
+        TermsStep::Period => empty(),
         TermsStep::Periods => {
             let mut rows = Vec::new();
             if let Some(deadline) = terms.deadline_at {
                 for periods in [1, 2, 4] {
-                    let policy =
-                        LatePolicy::new(terms.period_days, terms.penalty.unwrap_or(1), periods)
-                            .expect("valid preset");
+                    let Ok(policy) = terms.preview_policy(periods) else {
+                        continue;
+                    };
                     if policy.validate_horizon(deadline).is_ok() {
                         let date = policy.closes_at(deadline).expect("validated horizon");
                         rows.push(vec![InlineKeyboardButton::callback(
@@ -676,142 +642,24 @@ pub(super) fn terms_form_view(
                 ),
                 button("Выбрать дату", TERMS_DURATION_DATE),
             ]);
-            (
-                format!(
-                    "{context}{}\n{}",
-                    texts::penalty_rule(terms.period_days, terms.penalty.unwrap_or(0)),
-                    texts::periods_question(terms.period_days)
-                ),
-                InlineKeyboardMarkup::new(rows),
-            )
+            InlineKeyboardMarkup::new(rows)
         }
-        TermsStep::DurationConfirm { selected, periods } => {
-            let policy = LatePolicy::new(terms.period_days, terms.penalty.unwrap_or(1), periods)
-                .expect("validated duration");
-            let closing = policy
-                .closes_at(terms.deadline_at.expect("duration follows deadline"))
-                .expect("validated duration");
-            (
-                format!(
-                    "{} — это {}.\n{} {} включительно. Применить?",
-                    timezone.format(selected),
-                    texts::lateness_duration(terms.period_days, periods),
-                    texts::SUBMISSIONS_CLOSE_LABEL,
-                    timezone.format(closing)
-                ),
-                InlineKeyboardMarkup::new(vec![vec![button(
-                    "Применить число периодов",
-                    TERMS_DURATION_APPLY,
-                )]]),
-            )
-        }
-        TermsStep::Summary => {
-            let deadline = terms.deadline_at.expect("summary requires deadline");
-            let policy = terms
-                .late_policy()
-                .expect("summary requires complete policy");
-            let closing = policy.map_or(deadline, |policy| {
-                policy.closes_at(deadline).expect("validated horizon")
-            });
-            let mut text = format!(
-                "{}\n{}",
-                texts::TERMS_CONFIRM,
-                terms_lines(terms.grading(), deadline, policy, timezone)
-            );
-            if let (Some(policy), Grading::Score { max_score }) = (policy, terms.grading()) {
-                text.push_str(&format!(
-                    "\n{}",
-                    penalty_schedule(deadline, policy, max_score, timezone)
-                ));
-            }
-            let previous = match terms.target {
-                TermsTarget::Edit {
-                    original_closes_at, ..
-                } => Some(original_closes_at),
-                _ => form.previous_closes_at,
-            };
-            if let Some(previous) = previous
-                && closing != previous
-            {
-                text.push_str(&format!(
-                    "\n{}",
-                    texts::closing_change(&timezone.format(previous), &timezone.format(closing))
-                ));
-            }
-            if matches!(terms.target, TermsTarget::Edit { .. }) && deadline <= Utc::now() {
-                text.push_str(&format!(
-                    "\n{}",
-                    if policy.is_some() {
-                        texts::PAST_PENALTY_WARNING
-                    } else {
-                        texts::PAST_STRICT_WARNING
-                    }
-                ));
-            }
-            (text, terms_keyboard(terms, timezone))
-        }
+        TermsStep::DurationConfirm { .. } => InlineKeyboardMarkup::new(vec![vec![button(
+            "Применить число периодов",
+            TERMS_DURATION_APPLY,
+        )]]),
+        TermsStep::Summary => terms_keyboard(terms, timezone),
     };
-    if !form.manual && form.can_go_back() {
+    if form.mode != InputMode::Manual && form.can_go_back() {
         keyboard
             .inline_keyboard
             .push(vec![button(texts::BUTTON_BACK, TERMS_BACK)]);
     }
-    (text, keyboard)
-}
-
-const SCHEDULE_ROWS: u16 = 5;
-
-fn schedule_periods(policy: LatePolicy, max_score: MaxScore) -> Vec<u16> {
-    let last = (1..=policy.max_periods())
-        .find(|&periods| policy.possible_score(max_score, u32::from(periods)) == 0)
-        .unwrap_or_else(|| policy.max_periods());
-    let head = last.min(SCHEDULE_ROWS);
-    let mut periods: Vec<_> = (1..=head).collect();
-    if last > head {
-        periods.push(last);
-    }
-    periods
-}
-
-fn penalty_schedule(
-    deadline_at: DateTime<Utc>,
-    policy: LatePolicy,
-    max_score: MaxScore,
-    timezone: &BotTimezone,
-) -> String {
-    let max = max_score.get();
-    let mut lines = vec![
-        texts::SCHEDULE_HEADER.to_owned(),
-        texts::schedule_free_row(&timezone.format_date_time(deadline_at), max),
-    ];
-
-    let mut previous = 0;
-    for periods in schedule_periods(policy, max_score) {
-        if periods > previous + 1 {
-            lines.push(texts::schedule_skipped(u32::from(periods - previous - 1)));
-        }
-        let score = policy.possible_score(max_score, u32::from(periods));
-        let until = policy
-            .period_end(deadline_at, periods)
-            .expect("validated horizon");
-        lines.push(texts::schedule_penalty_row(
-            &timezone.format_date_time(until),
-            max - score,
-            score,
-            max,
-        ));
-        previous = periods;
-    }
-
-    let closes_at = policy.closes_at(deadline_at).expect("validated horizon");
-    lines.push(texts::schedule_closed(
-        &timezone.format_date_time(closes_at),
-    ));
-    lines.join("\n")
+    keyboard
 }
 
 /// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
-pub(super) fn review_score_keyboard(
+pub(in crate::bot) fn review_score_keyboard(
     submission_id: SubmissionId,
     max_score: u16,
 ) -> InlineKeyboardMarkup {
@@ -835,7 +683,7 @@ pub(super) fn review_score_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn assignment_files_keyboard(
+pub(in crate::bot) fn assignment_files_keyboard(
     assignment: &Assignment,
     files: &[StoredFileMetadata],
     can_add: bool,
@@ -872,14 +720,14 @@ pub(super) fn assignment_files_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
+pub(in crate::bot) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback("🗑 Удалить", FILE_CONFIRM_DELETE),
         InlineKeyboardButton::callback("↩️ Отмена", FILE_CANCEL_DELETE),
     ]])
 }
 
-pub(super) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
+pub(in crate::bot) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             "♻️ Перевыпустить ссылку",
@@ -892,24 +740,14 @@ pub(super) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboa
     ])
 }
 
-pub(super) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
+pub(in crate::bot) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback("♻️ Перевыпустить", INVITE_CONFIRM_ROTATE),
         InlineKeyboardButton::callback("↩️ Отмена", INVITE_CANCEL_ROTATE),
     ]])
 }
 
-pub(super) fn format_file_size(size_bytes: u64) -> String {
-    if size_bytes < 1024 {
-        format!("{size_bytes} Б")
-    } else if size_bytes < 1024 * 1024 {
-        format!("{:.1} КиБ", size_bytes as f64 / 1024.0)
-    } else {
-        format!("{:.1} МиБ", size_bytes as f64 / (1024.0 * 1024.0))
-    }
-}
-
-pub(super) fn gradebook_students_keyboard(
+pub(in crate::bot) fn gradebook_students_keyboard(
     course_id: TeachingCourseId,
     students: &[CourseStudent],
 ) -> InlineKeyboardMarkup {
@@ -930,9 +768,9 @@ pub(super) fn gradebook_students_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn paginated_keyboard(
+pub(in crate::bot) fn paginated_keyboard(
     mut keyboard: InlineKeyboardMarkup,
-    target: super::callbacks::PageTarget,
+    target: crate::bot::callbacks::PageTarget,
     page: u32,
     next: Option<u32>,
 ) -> InlineKeyboardMarkup {
@@ -955,7 +793,7 @@ pub(super) fn paginated_keyboard(
     keyboard
 }
 
-pub(super) fn assignment_students_keyboard(
+pub(in crate::bot) fn assignment_students_keyboard(
     assignment_id: crate::domain::AssignmentId,
     students: &[AssignmentStudentSummary],
 ) -> InlineKeyboardMarkup {
@@ -976,186 +814,10 @@ pub(super) fn assignment_students_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(super) fn deadline_left(deadline: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -> String {
-    let left = deadline - now;
-
-    if left.num_seconds() <= 0 {
-        return "дедлайн прошёл".to_owned();
-    }
-
-    let days = left.num_days();
-    let hours = left.num_hours() % 24;
-    if days > 0 {
-        format!("осталось {days} д {hours} ч")
-    } else if left.num_hours() > 0 {
-        format!("осталось {} ч", left.num_hours())
-    } else {
-        format!("осталось {} мин", left.num_minutes().max(1))
-    }
-}
-
-pub(super) fn grading_lines(
-    assignment: &Assignment,
-    now: DateTime<Utc>,
-    timezone: &BotTimezone,
-) -> String {
-    let mut lines = format!(
-        "\n{}",
-        terms_lines(
-            assignment.grading(),
-            assignment.deadline_at(),
-            assignment.late_policy(),
-            timezone
-        )
-    );
-    if now > assignment.closes_at() {
-        lines.push_str(&format!(
-            "\n{} {}.",
-            texts::CLOSED_ON,
-            timezone.format(assignment.closes_at())
-        ));
-    }
-
-    let penalty = assignment.penalty_at(now);
-    if penalty > 0 && now <= assignment.closes_at() {
-        lines.push_str(&format!(
-            "\n{} −{penalty}",
-            super::texts::LATE_PENALTY_LABEL
-        ));
-    }
-
-    lines
-}
-
-pub(super) fn terms_lines(
-    grading: Grading,
-    deadline_at: DateTime<Utc>,
-    late_policy: Option<LatePolicy>,
-    timezone: &BotTimezone,
-) -> String {
-    let scale = match grading.max_score() {
-        Some(max) => format!("{} {}", texts::MAX_SCORE_LABEL, texts::points(max)),
-        None => texts::PASS_FAIL_LABEL.to_owned(),
-    };
-    match late_policy {
-        Some(policy) => format!(
-            "{scale}\n{} {}.\n{}\n{} {}.\n{} {} включительно.",
-            texts::NO_PENALTY_UNTIL,
-            timezone.format(deadline_at),
-            texts::penalty_rule(policy.period_days(), policy.penalty()),
-            texts::LATENESS_LABEL,
-            texts::lateness_duration(policy.period_days(), policy.max_periods()),
-            texts::SUBMISSIONS_CLOSE_LABEL,
-            timezone.format(policy.closes_at(deadline_at).expect("validated horizon"))
-        ),
-        None => format!(
-            "{scale}\n{} {}. {}",
-            texts::SUBMIT_UNTIL,
-            timezone.format(deadline_at),
-            texts::STRICT_AFTER_DEADLINE
-        ),
-    }
-}
-
-pub(super) fn grade_line(grade: Grade) -> String {
-    if grade.penalty() == 0 {
-        return format!("🏅 Балл: {} из {}", grade.final_score(), grade.max_score());
-    }
-
-    format!(
-        "🏅 Балл: {} − {} = {} из {} (штраф за опоздание)",
-        grade.raw_score(),
-        grade.penalty(),
-        grade.final_score(),
-        grade.max_score(),
-    )
-}
-
-pub(super) fn submission_status(status: SubmissionStatus) -> &'static str {
-    match status {
-        SubmissionStatus::PendingReview => "⏳ на проверке",
-        SubmissionStatus::Accepted => "✅ принята",
-        SubmissionStatus::Rejected => "❌ отклонена",
-    }
-}
-
-pub(super) fn assignment_status(status: AssignmentStatus) -> &'static str {
-    match status {
-        AssignmentStatus::Draft => "⚪️ черновик",
-        AssignmentStatus::Published => "🟢 опубликовано",
-        AssignmentStatus::Archived => "📦 архив",
-    }
-}
-
-fn assignment_status_icon(status: AssignmentStatus) -> &'static str {
-    match status {
-        AssignmentStatus::Draft => "⚪️",
-        AssignmentStatus::Published => "🟢",
-        AssignmentStatus::Archived => "📦",
-    }
-}
-
-pub(super) fn role_name(role: Role) -> &'static str {
-    match role {
-        Role::Student { .. } => "🎓 студент",
-        Role::Teacher => "👨‍🏫 преподаватель",
-        Role::Admin => "🛠 администратор",
-    }
-}
-
-pub(super) fn button_label(label: &str) -> String {
-    truncate(label, 60, true)
-}
-
-fn message_chunks(text: String) -> Vec<String> {
-    text.chars()
-        .collect::<Vec<_>>()
-        .chunks(MESSAGE_LIMIT)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
-}
-
-pub(super) async fn send_message_chunks(
-    bot: &Bot,
-    chat_id: ChatId,
-    text: String,
-    keyboard: Option<InlineKeyboardMarkup>,
-) -> HandlerResult {
-    let chunks = message_chunks(text);
-    let last = chunks.len().saturating_sub(1);
-
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        if index == last
-            && let Some(keyboard) = keyboard.clone()
-        {
-            bot.send_message(chat_id, chunk)
-                .reply_markup(keyboard)
-                .await?;
-        } else {
-            bot.send_message(chat_id, chunk).await?;
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {
-    bot.send_message(chat_id, super::texts::input_prompt(prompt))
-        .reply_markup(KeyboardRemove::new())
-        .await?;
-    Ok(())
-}
-
-/// Остаётся только там, где кнопка не может сработать: у мутаций и у кнопок, чей смысл
-/// лежит в стейте диалога
-pub(super) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
-    bot.send_message(chat_id, super::texts::STALE_BUTTON)
-        .await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::render::{deadline_left, penalty_schedule, terms_form_view};
+    use crate::domain::{Grading, LatePolicy, MaxScore};
     use chrono::{DateTime, FixedOffset, NaiveTime};
 
     use super::*;
@@ -1225,7 +887,7 @@ mod tests {
             original_closes_at: terms.deadline_at.unwrap(),
         };
         let mut form = TermsForm::new(terms, TermsStep::Deadline);
-        form.calendar_month = Some(timezone.local_date(created_at));
+        form.mode = InputMode::Calendar(timezone.local_date(created_at));
         let (_, keyboard) = terms_form_view(&form, &timezone);
         let json = serde_json::to_string(&keyboard).unwrap();
         assert!(!json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-20")));
@@ -1310,7 +972,7 @@ mod tests {
     #[test]
     fn calendar_return_and_previous_step_have_distinct_labels_and_actions() {
         let mut form = TermsForm::new(scored_terms(), TermsStep::Deadline);
-        form.calendar_month = Some(timezone().today());
+        form.mode = InputMode::Calendar(timezone().today());
         let (_, keyboard) = terms_form_view(&form, &timezone());
         let json = serde_json::to_value(keyboard).unwrap();
         let rows = json["inline_keyboard"].as_array().unwrap();
@@ -1325,20 +987,6 @@ mod tests {
             FixedOffset::east_opt(10 * 3600).unwrap(),
             NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
         )
-    }
-
-    #[test]
-    fn long_messages_are_split_without_losing_content() {
-        let source = "я".repeat(MESSAGE_LIMIT * 2 + 1);
-        let chunks = message_chunks(source.clone());
-
-        assert_eq!(chunks.len(), 3);
-        assert!(
-            chunks
-                .iter()
-                .all(|chunk| chunk.chars().count() <= MESSAGE_LIMIT)
-        );
-        assert_eq!(chunks.concat(), source);
     }
 
     #[test]

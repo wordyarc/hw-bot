@@ -14,6 +14,7 @@ pub(in crate::bot::handlers) async fn show_group_invite(
     course_id: TeachingCourseId,
 ) -> HandlerResult {
     let invite = screen
+        .deps
         .context
         .services
         .courses
@@ -43,6 +44,7 @@ async fn send_group_invite(
         .send_message(
             screen.chat_id,
             screen
+                .deps
                 .context
                 .invites
                 .link(invite.group.id(), invite.generation),
@@ -58,6 +60,7 @@ async fn send_group_invite(
         .await?;
 
     screen
+        .deps
         .dialogue
         .update(BotState::Screen(ScreenState::GroupInvite {
             message_id: sent.id,
@@ -87,6 +90,7 @@ pub(in crate::bot::handlers) async fn ask_invite_rotation(
         .reply_markup(confirm_invite_rotation_keyboard())
         .await?;
     screen
+        .deps
         .dialogue
         .update(BotState::Flow(FlowState::ConfirmingInviteRotation {
             message_id: sent.id,
@@ -127,6 +131,7 @@ pub(in crate::bot::handlers) async fn confirm_invite_rotation(
         .await?;
 
     match screen
+        .deps
         .context
         .services
         .courses

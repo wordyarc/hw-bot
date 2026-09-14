@@ -34,7 +34,7 @@ pub(in crate::bot::handlers) async fn handle_max_attempts(
             .await;
     };
     ask_grading(
-        screen.chat(),
+        screen.chat,
         DraftAssignment::new(course_id, title, body, max_attempts),
     )
     .await
@@ -73,6 +73,7 @@ pub(in crate::bot::handlers) async fn handle_grading(
         },
         GradingChoice::Manual => {
             screen
+                .deps
                 .dialogue
                 .update(BotState::Flow(FlowState::AwaitingGradingText { draft }))
                 .await?;
@@ -86,7 +87,7 @@ pub(in crate::bot::handlers) async fn handle_grading(
         .bot
         .edit_message_reply_markup(screen.chat_id, message_id)
         .await?;
-    apply_grading(screen.chat(), draft, grading).await
+    apply_grading(screen.chat, draft, grading).await
 }
 
 pub(super) async fn apply_grading(

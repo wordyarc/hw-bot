@@ -21,13 +21,9 @@ use crate::bot::views::{
 use crate::bot::{FileTransfers, HandlerResult};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let context = deps.context;
     let services = &context.services;
     let timezone = &context.timezone;
     let places = services.submissions.pending_queue(actor, page).await?;
@@ -80,14 +76,15 @@ impl SubjectHeadings {
 }
 
 pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
-    let Screen { actor, context, .. } = screen;
+    let actor = screen.actor;
+    let context = screen.deps.context;
     let services = &context.services;
     let timezone = &context.timezone;
     let assignments = services.assignments.list_for_student(actor, page).await?;
 
     let now = Utc::now();
     show_assignment_list(
-        screen.chat(),
+        screen.chat,
         assignments,
         "📚 Ваши задания:\n",
         "📚 Опубликованных заданий пока нет.",
@@ -128,7 +125,8 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
 }
 
 pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
-    let Screen { actor, context, .. } = screen;
+    let actor = screen.actor;
+    let context = screen.deps.context;
     let services = &context.services;
     let assignments = services
         .assignments
@@ -136,7 +134,7 @@ pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> 
         .await?;
 
     show_assignment_list(
-        screen.chat(),
+        screen.chat,
         assignments,
         "🗄 Архив заданий:\n",
         "🗄 Архив заданий пока пуст.",
@@ -205,13 +203,9 @@ pub(super) async fn show_assignment(
     assignment_id: AssignmentId,
     transfers: &FileTransfers,
 ) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let context = deps.context;
     let services = &context.services;
     let timezone = &context.timezone;
     let details = services
@@ -306,7 +300,7 @@ async fn send_submission(
     screen: Screen<'_>,
     submission: &crate::domain::Submission,
 ) -> HandlerResult {
-    let Screen { bot, chat_id, .. } = screen;
+    let Chat { bot, chat_id, .. } = screen.chat;
     bot.send_message(
         chat_id,
         format!(
@@ -336,6 +330,7 @@ pub(super) async fn show_history(
     page: PageRequest,
 ) -> HandlerResult {
     let history = screen
+        .deps
         .context
         .services
         .assignments

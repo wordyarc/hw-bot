@@ -8,7 +8,7 @@ use teloxide::types::MessageId;
 use crate::domain::{AssignmentId, TeachingCourseId};
 
 use crate::bot::HandlerResult;
-use crate::bot::context::Screen;
+use crate::bot::context::{Chat, Deps, Screen};
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::views::{
@@ -20,14 +20,9 @@ pub(in crate::bot::handlers) async fn show_courses_page(
     screen: Screen<'_>,
     page: PageRequest,
 ) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        dialogue,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let Deps { context, dialogue } = deps;
     let services = &context.services;
     let courses = services.courses.list_for_teacher(actor, page).await?;
     if courses.items.is_empty() && page.page == 0 {
@@ -54,14 +49,9 @@ pub(in crate::bot::handlers) async fn show_course_assignments_page(
     course_id: TeachingCourseId,
     page: PageRequest,
 ) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        dialogue,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let Deps { context, dialogue } = deps;
     let services = &context.services;
     let timezone = &context.timezone;
     let assignments = services
@@ -100,14 +90,9 @@ pub(in crate::bot::handlers) async fn show_assignment(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
 ) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        dialogue,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let Deps { context, dialogue } = deps;
     let services = &context.services;
     let timezone = &context.timezone;
     let assignment = services
@@ -154,6 +139,7 @@ pub(in crate::bot::handlers) async fn publish_assignment(
         return screen.stale().await;
     }
     screen
+        .deps
         .context
         .services
         .assignments
@@ -179,6 +165,7 @@ pub(in crate::bot::handlers) async fn archive_assignment(
         return screen.stale().await;
     }
     screen
+        .deps
         .context
         .services
         .assignments

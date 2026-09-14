@@ -17,7 +17,7 @@ use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button};
 
 pub(super) mod home;
-mod input;
+pub(super) mod input;
 mod registration;
 mod review;
 mod student;
@@ -52,21 +52,6 @@ pub(super) enum Command {
 }
 
 impl Command {
-    fn action(&self) -> &'static str {
-        match self {
-            Self::Start(_) => "start",
-            Self::Menu => "menu",
-            Self::Tasks => "tasks",
-            Self::Queue => "queue",
-            Self::Archive => "archive",
-            Self::Review => "review",
-            Self::Courses => "courses",
-            Self::Profile => "profile",
-            Self::Cancel => "cancel",
-            Self::Help => "help",
-        }
-    }
-
     fn visible_to(&self, role: Option<Role>) -> bool {
         match self {
             Self::Start(_) => role.is_none(),
@@ -103,7 +88,17 @@ pub(super) async fn handle_command(
         deps,
     };
     let result = async {
-        tracing::Span::current().record("action", command.action());
+        let action = message
+            .text()
+            .unwrap_or_default()
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('/')
+            .split('@')
+            .next()
+            .unwrap_or_default();
+        tracing::Span::current().record("action", action);
         if !ensure_private_message(&bot, &message).await? {
             return Ok(());
         }
@@ -456,6 +451,7 @@ async fn handle_replayable_action(
         }
         ReplayableAction::StartAssignmentCreation(course_id) => {
             screen
+                .deps
                 .dialogue
                 .update(BotState::Flow(FlowState::AwaitingAssignmentTitle {
                     course_id,
@@ -465,6 +461,7 @@ async fn handle_replayable_action(
         }
         ReplayableAction::StartSubmission(assignment_id) => {
             screen
+                .deps
                 .dialogue
                 .update(BotState::Flow(FlowState::AwaitingSubmission {
                     assignment_id,

@@ -149,7 +149,9 @@ impl BotState {
     pub(super) fn terms_form(self, message_id: MessageId, step: TermsStep) -> Option<TermsForm> {
         match self {
             Self::Flow(FlowState::ConfiguringTerms(form))
-                if form.message_id == Some(message_id) && form.step == step && !form.manual =>
+                if form.message_id == Some(message_id)
+                    && form.step == step
+                    && form.mode != InputMode::Manual =>
             {
                 Some(form)
             }
@@ -221,16 +223,12 @@ pub(super) struct AssignmentTerms {
 }
 
 impl AssignmentTerms {
-    pub fn next_step(&self) -> TermsStep {
-        if self.deadline_at.is_none() {
-            TermsStep::Deadline
-        } else if self.allow_late && self.penalty.is_none() {
-            TermsStep::Penalty
-        } else if self.allow_late && self.max_periods.is_none() {
-            TermsStep::Periods
-        } else {
-            TermsStep::Summary
+    pub fn first_incomplete_step(&self) -> TermsStep {
+        let mut step = TermsStep::Deadline;
+        while step.is_complete(self) {
+            step = step.next(self);
         }
+        step
     }
 
     pub fn creating(draft: DraftAssignment) -> Self {
@@ -244,15 +242,22 @@ impl AssignmentTerms {
         }
     }
 
-    pub fn late_policy(&self) -> crate::domain::DomainResult<Option<LatePolicy>> {
+    pub fn committed_policy(&self) -> crate::domain::DomainResult<Option<LatePolicy>> {
         if !self.allow_late {
             return Ok(None);
         }
-        Ok(Some(LatePolicy::new(
-            self.period_days,
-            self.penalty.unwrap_or(0),
-            self.max_periods.unwrap_or(0),
-        )?))
+        self.policy(self.penalty.unwrap_or(0), self.max_periods.unwrap_or(0))
+            .map(Some)
+    }
+
+    pub fn preview_policy(&self, max_periods: u16) -> crate::domain::DomainResult<LatePolicy> {
+        // Превью нужно до ввода штрафа; при сохранении этот дефолт не используется.
+        const PREVIEW_PENALTY: u16 = 1;
+        self.policy(self.penalty.unwrap_or(PREVIEW_PENALTY), max_periods)
+    }
+
+    fn policy(&self, penalty: u16, max_periods: u16) -> crate::domain::DomainResult<LatePolicy> {
+        LatePolicy::new(self.period_days, penalty, max_periods)
     }
 
     pub fn grading(&self) -> Grading {
@@ -263,7 +268,7 @@ impl AssignmentTerms {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TermsStep {
     Policy,
     Deadline,
@@ -278,25 +283,119 @@ pub(super) enum TermsStep {
     Summary,
 }
 
+impl TermsStep {
+    pub fn next(self, terms: &AssignmentTerms) -> Self {
+        match self {
+            Self::Policy => terms.first_incomplete_step(),
+            Self::Deadline if terms.allow_late => Self::Penalty,
+            Self::Deadline => Self::Summary,
+            Self::Period => Self::Penalty,
+            Self::Penalty => Self::Periods,
+            Self::Periods | Self::DurationConfirm { .. } | Self::Summary => Self::Summary,
+            Self::DurationDate => Self::DurationDate,
+        }
+    }
+
+    pub fn previous(self, terms: &AssignmentTerms) -> Option<Self> {
+        match self {
+            Self::Policy => None,
+            Self::Deadline => terms.grading().is_scored().then_some(Self::Policy),
+            Self::Penalty => Some(Self::Deadline),
+            Self::Period | Self::Periods => Some(Self::Penalty),
+            Self::DurationDate => Some(Self::Periods),
+            Self::DurationConfirm { .. } => Some(Self::DurationDate),
+            Self::Summary if matches!(terms.target, TermsTarget::Edit { .. }) => None,
+            Self::Summary if terms.allow_late => Some(Self::Periods),
+            Self::Summary => Some(Self::Deadline),
+        }
+    }
+
+    fn is_complete(self, terms: &AssignmentTerms) -> bool {
+        match self {
+            Self::Deadline => terms.deadline_at.is_some(),
+            Self::Penalty => terms.penalty.is_some(),
+            Self::Periods => terms.max_periods.is_some(),
+            Self::Policy
+            | Self::Period
+            | Self::DurationDate
+            | Self::DurationConfirm { .. }
+            | Self::Summary => false,
+        }
+    }
+
+    pub fn summary_edit(
+        action: crate::bot::callbacks::TermsAction,
+        terms: &AssignmentTerms,
+    ) -> Option<Self> {
+        use crate::bot::callbacks::TermsAction;
+        match action {
+            TermsAction::Deadline => Some(Self::Deadline),
+            TermsAction::Policy if terms.grading().is_scored() => Some(Self::Policy),
+            TermsAction::Penalty if terms.allow_late => Some(Self::Penalty),
+            TermsAction::Period if terms.allow_late => Some(Self::Period),
+            TermsAction::Periods if terms.allow_late => Some(Self::Periods),
+            _ => None,
+        }
+    }
+
+    fn input_mode(self) -> InputMode {
+        match self {
+            Self::Period => InputMode::Manual,
+            _ => InputMode::Buttons,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InputMode {
+    Buttons,
+    Manual,
+    Calendar(chrono::NaiveDate),
+}
+
 #[derive(Clone)]
 pub(super) struct TermsForm {
     pub terms: AssignmentTerms,
     pub step: TermsStep,
     pub message_id: Option<MessageId>,
-    pub manual: bool,
+    pub mode: InputMode,
     pub return_to_summary: bool,
-    pub calendar_month: Option<chrono::NaiveDate>,
     pub previous_closes_at: Option<DateTime<Utc>>,
 }
 
 impl TermsForm {
     pub fn can_go_back(&self) -> bool {
-        match self.step {
-            TermsStep::Summary => false,
-            TermsStep::Policy => self.return_to_summary,
-            TermsStep::Deadline => self.terms.grading().is_scored() || self.return_to_summary,
-            _ => true,
+        // На итоге есть отдельная отмена формы, а /cancel по-прежнему возвращает шаг.
+        self.step != TermsStep::Summary && self.previous_step().is_some()
+    }
+
+    pub fn previous_step(&self) -> Option<TermsStep> {
+        if self.return_to_summary && self.step != TermsStep::Summary {
+            Some(TermsStep::Summary)
+        } else {
+            self.step.previous(&self.terms)
         }
+    }
+
+    pub fn go(&mut self, step: TermsStep) {
+        self.step = if step == TermsStep::Summary {
+            self.terms.first_incomplete_step()
+        } else {
+            step
+        };
+        if self.step == TermsStep::Summary {
+            self.return_to_summary = false;
+        }
+        self.mode = self.step.input_mode();
+    }
+
+    pub fn advance(&mut self) {
+        let step = if self.return_to_summary {
+            TermsStep::Summary
+        } else {
+            self.step.next(&self.terms)
+        };
+        self.go(step);
     }
 
     pub fn new(terms: AssignmentTerms, step: TermsStep) -> Self {
@@ -304,9 +403,8 @@ impl TermsForm {
             terms,
             step,
             message_id: None,
-            manual: false,
+            mode: step.input_mode(),
             return_to_summary: false,
-            calendar_month: None,
             previous_closes_at: None,
         }
     }
@@ -425,6 +523,31 @@ pub(super) enum FlowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_defaults_never_complete_the_policy_for_saving() {
+        let draft = DraftAssignment::new(TeachingCourseId::new(), "Title".into(), "Body".into(), 1);
+        let mut terms = AssignmentTerms::creating(draft);
+        terms.allow_late = true;
+
+        assert_eq!(
+            terms.preview_policy(4).unwrap(),
+            LatePolicy::new(7, 1, 4).unwrap()
+        );
+        assert!(terms.committed_policy().is_err());
+        assert_eq!(terms.penalty, None);
+        assert_eq!(terms.max_periods, None);
+
+        terms.penalty = Some(2);
+        assert!(terms.committed_policy().is_err());
+        terms.max_periods = Some(3);
+        assert_eq!(
+            terms.committed_policy().unwrap(),
+            Some(terms.preview_policy(3).unwrap())
+        );
+        terms.allow_late = false;
+        assert_eq!(terms.committed_policy().unwrap(), None);
+    }
 
     #[test]
     fn assignment_action_requires_current_keyboard_and_assignment() {

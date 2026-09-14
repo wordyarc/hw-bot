@@ -3,7 +3,7 @@ use super::input::{ensure_text_limit, parse_number, require_text};
 use super::reset_dialogue;
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
 use crate::bot::Bot;
-use crate::bot::context::{Deps, Screen, TextStep};
+use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::views::teacher_keyboard;
 use crate::domain::{DomainError, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
 use chrono::Utc;
@@ -18,14 +18,9 @@ use crate::bot::texts;
 use crate::bot::views::{ask_input, review_keyboard, review_score_keyboard, teacher_menu};
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        dialogue,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let Deps { context, dialogue } = deps;
     let services = &context.services;
     let item = services.reviews.take_next_from_queue(actor).await?;
     let Some(item) = item else {
@@ -40,12 +35,8 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
 }
 
 async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        dialogue,
-        ..
-    } = screen;
+    let Chat { bot, chat_id, deps } = screen.chat;
+    let dialogue = deps.dialogue;
     dialogue
         .update(BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id: item.submission.id(),
@@ -185,6 +176,7 @@ pub(super) async fn submit_comment(
 
 async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> HandlerResult {
     match screen
+        .deps
         .context
         .services
         .reviews
@@ -205,7 +197,7 @@ async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> Hand
                     | ErrorCode::NotFound
                     | ErrorCode::PermissionDenied
             ) {
-                reset_dialogue(screen.dialogue).await?;
+                reset_dialogue(screen.deps.dialogue).await?;
             }
             Err(error.into())
         }
@@ -237,7 +229,7 @@ pub(super) async fn handle_decision(
                 submission_id,
                 max_score,
                 penalty,
-                screen.dialogue,
+                screen.deps.dialogue,
             )
             .await
         }
@@ -248,7 +240,7 @@ pub(super) async fn handle_decision(
                 submission_id,
                 decision,
                 None,
-                screen.dialogue,
+                screen.deps.dialogue,
             )
             .await
         }
@@ -363,7 +355,7 @@ pub(super) async fn handle_review_score(
         submission_id,
         ReviewDecision::Accept,
         Some(score),
-        screen.dialogue,
+        screen.deps.dialogue,
     )
     .await
 }

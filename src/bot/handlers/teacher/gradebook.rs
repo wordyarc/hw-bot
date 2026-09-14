@@ -17,6 +17,7 @@ pub(in crate::bot::handlers) async fn show_gradebook_page(
     page: PageRequest,
 ) -> HandlerResult {
     let students = screen
+        .deps
         .context
         .services
         .courses
@@ -50,6 +51,7 @@ async fn render_gradebook(
         ))
         .await?;
     screen
+        .deps
         .dialogue
         .update(BotState::Flow(FlowState::ChoosingStudent {
             message_id: message.id,
@@ -71,6 +73,7 @@ pub(in crate::bot::handlers) async fn show_student_grades_page(
     page: PageRequest,
 ) -> HandlerResult {
     let student = screen
+        .deps
         .context
         .services
         .courses

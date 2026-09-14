@@ -1,4 +1,4 @@
-use crate::bot::context::{Screen, TextStep};
+use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::handlers::input::{parse_positive_attempts, require_text};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
@@ -23,14 +23,9 @@ pub(in crate::bot::handlers) async fn show_students_page(
     assignment_id: AssignmentId,
     page: PageRequest,
 ) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        dialogue,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let Deps { context, dialogue } = deps;
     let services = &context.services;
     let students = services
         .assignments
@@ -111,6 +106,7 @@ pub(in crate::bot::handlers) async fn select_student(
         .reply_markup(attempts_keyboard(EXTRA_ATTEMPTS_PREFIX))
         .await?;
     screen
+        .deps
         .dialogue
         .update(BotState::Flow(FlowState::AwaitingAttemptAmount {
             message_id: sent.id,
@@ -152,6 +148,7 @@ pub(super) async fn grant_attempts(
     amount: u16,
 ) -> HandlerResult {
     let progress = screen
+        .deps
         .context
         .services
         .assignments
@@ -162,7 +159,7 @@ pub(super) async fn grant_attempts(
             amount,
         })
         .await?;
-    crate::bot::handlers::reset_dialogue(screen.dialogue).await?;
+    crate::bot::handlers::reset_dialogue(screen.deps.dialogue).await?;
     screen
         .bot
         .send_message(

@@ -109,6 +109,7 @@ pub(super) async fn ask_upload(
         return screen.stale().await;
     };
     screen
+        .deps
         .dialogue
         .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
             assignment_id,
@@ -133,6 +134,7 @@ pub(super) async fn open(
     transfer
         .run(async {
             let file = screen
+                .deps
                 .context
                 .services
                 .files
@@ -169,6 +171,7 @@ pub(super) async fn request_deletion(
             .reply_markup(confirm_file_deletion_keyboard())
             .await?;
         screen
+            .deps
             .dialogue
             .update(BotState::Flow(
                 FlowState::ConfirmingAssignmentFileDeletion {
@@ -223,14 +226,9 @@ pub(super) async fn show(
     assignment_id: AssignmentId,
     creation_flow: bool,
 ) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        dialogue,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let super::context::Chat { bot, chat_id, deps } = chat;
+    let super::context::Deps { context, dialogue } = deps;
     let services = &context.services;
     let card = services
         .files
@@ -287,6 +285,7 @@ async fn delete(
     creation_flow: bool,
 ) -> HandlerResult {
     match screen
+        .deps
         .context
         .services
         .files

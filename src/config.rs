@@ -230,11 +230,36 @@ pub struct ValidatedAppConfig {
     raw: AppConfig,
 }
 
-impl std::ops::Deref for ValidatedAppConfig {
-    type Target = AppConfig;
-
-    fn deref(&self) -> &Self::Target {
-        &self.raw
+impl ValidatedAppConfig {
+    pub fn app(&self) -> &AppInfoConfig {
+        &self.raw.app
+    }
+    pub fn server(&self) -> &ServerConfig {
+        &self.raw.server
+    }
+    pub fn database(&self) -> &DatabaseConfig {
+        &self.raw.database
+    }
+    pub fn logging(&self) -> &LoggingConfig {
+        &self.raw.logging
+    }
+    pub fn files(&self) -> &FilesConfig {
+        &self.raw.files
+    }
+    pub fn ui(&self) -> &UiConfig {
+        &self.raw.ui
+    }
+    pub fn telegram(&self) -> &TelegramConfig {
+        &self.raw.telegram
+    }
+    pub fn notification_worker(&self) -> &NotificationWorkerConfig {
+        &self.raw.notification_worker
+    }
+    pub fn group_invites(&self) -> &GroupInvitesConfig {
+        &self.raw.group_invites
+    }
+    pub fn shutdown_grace(&self) -> Duration {
+        self.raw.shutdown_grace()
     }
 }
 

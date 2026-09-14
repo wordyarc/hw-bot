@@ -29,7 +29,7 @@ impl<'a> Chat<'a> {
             .resolve_actor(telegram_user_id)
             .await
         {
-            Ok(actor) => Ok(Some(Screen::new(self.bot, self.chat_id, actor, self.deps))),
+            Ok(actor) => Ok(Some(Screen { chat: self, actor })),
             Err(error) if error.code() == ErrorCode::NotFound => {
                 super::handlers::home::open_guest(self).await?;
                 Ok(None)
@@ -66,49 +66,15 @@ pub(super) struct Deps<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct Screen<'a> {
-    pub bot: &'a Bot,
-    pub chat_id: ChatId,
+    pub chat: Chat<'a>,
     pub actor: Actor,
-    pub context: &'a BotContext,
-    pub dialogue: &'a BotDialogue,
 }
 
-impl<'a> Screen<'a> {
-    pub fn chat(self) -> Chat<'a> {
-        Chat {
-            bot: self.bot,
-            chat_id: self.chat_id,
-            deps: self.deps(),
-        }
-    }
+impl<'a> std::ops::Deref for Screen<'a> {
+    type Target = Chat<'a>;
 
-    pub async fn stale(self) -> HandlerResult {
-        self.chat().stale().await
-    }
-
-    pub async fn ask(self, prompt: &str) -> HandlerResult {
-        self.chat().ask(prompt).await
-    }
-
-    pub async fn fail(self, error: AppError) -> HandlerResult {
-        self.chat().fail(error).await
-    }
-
-    pub fn new(bot: &'a Bot, chat_id: ChatId, actor: Actor, deps: Deps<'a>) -> Self {
-        Self {
-            bot,
-            chat_id,
-            actor,
-            context: deps.context,
-            dialogue: deps.dialogue,
-        }
-    }
-
-    pub fn deps(self) -> Deps<'a> {
-        Deps {
-            context: self.context,
-            dialogue: self.dialogue,
-        }
+    fn deref(&self) -> &Self::Target {
+        &self.chat
     }
 }
 

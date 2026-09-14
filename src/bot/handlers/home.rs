@@ -9,9 +9,7 @@ use crate::bot::HandlerResult;
 use crate::bot::context::{Chat, Screen};
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
-use crate::bot::views::{
-    main_keyboard, role_name, send_message_chunks, student_menu, teacher_menu,
-};
+use crate::bot::views::{main_keyboard, main_menu, role_name, send_message_chunks};
 use crate::domain::{Role, TelegramUserId};
 
 pub(in crate::bot) fn default_commands() -> Vec<BotCommand> {
@@ -22,13 +20,12 @@ fn scoped_commands(role: Option<Role>) -> Vec<BotCommand> {
     Command::bot_commands()
         .into_iter()
         .filter_map(|mut command| {
-            let parsed =
-                Command::parse(&format!("/{}", command.command.trim_start_matches('/')), "")
-                    .expect("declared bot command must be parseable without arguments");
+            let parsed = Command::parse(&command.command, "")
+                .expect("declared bot command must be parseable without arguments");
             if !parsed.visible_to(role) {
                 return None;
             }
-            command.command = parsed.action().to_owned();
+            command.command = command.command.trim_start_matches('/').to_owned();
             if role.is_none() {
                 command.description = match parsed {
                     Command::Start(_) => texts::GUEST_START_DESCRIPTION.to_owned(),
@@ -177,13 +174,9 @@ pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerR
 }
 
 pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
-    let Screen {
-        bot,
-        chat_id,
-        actor,
-        context,
-        ..
-    } = screen;
+    let Screen { chat, actor } = screen;
+    let Chat { bot, chat_id, deps } = chat;
+    let context = deps.context;
     let services = &context.services;
     let timezone = &context.timezone;
     let registered = services.users.find_by_actor(actor).await?;
@@ -220,10 +213,7 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
             }
         }
     }
-    let keyboard = match role {
-        Role::Student { .. } => student_menu(),
-        Role::Teacher | Role::Admin => teacher_menu(None),
-    };
+    let keyboard = main_menu(role, None);
     send_message_chunks(bot, chat_id, text, Some(keyboard)).await
 }
 

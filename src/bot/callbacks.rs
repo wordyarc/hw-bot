@@ -1,3 +1,4 @@
+use super::handlers::input::parse_u16;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::NaiveDate;
 
@@ -65,7 +66,6 @@ pub const DEADLINE_OPTIONS: &str = "dl:options";
 pub const DEADLINE_DAYS_PREFIX: &str = "dl:days:";
 pub const DEADLINE_MONTHS_PREFIX: &str = "dl:months:";
 pub const CALENDAR_PICK_PREFIX: &str = "cal:pick:";
-/// Разбирается последним из семейства `cal:`, иначе съел бы `cal:pick:` и `cal:noop`
 pub const CALENDAR_MONTH_PREFIX: &str = "cal:";
 pub const CALENDAR_NOOP: &str = "cal:noop";
 
@@ -247,10 +247,10 @@ pub(super) enum DeadlineAction {
     Pick(NaiveDate),
 }
 
-type ReplayableFamily = (&'static str, fn(uuid::Uuid) -> ReplayableAction);
+type UuidFamily<T> = (&'static str, fn(uuid::Uuid) -> T);
 
 // Порядок значим: выигрывает первый подошедший префикс.
-const REPLAYABLE_FAMILIES: [ReplayableFamily; 9] = [
+const REPLAYABLE_FAMILIES: [UuidFamily<ReplayableAction>; 9] = [
     (COURSE_PREFIX, |id| {
         ReplayableAction::Course(TeachingCourseId::from_uuid(id))
     }),
@@ -280,121 +280,135 @@ const REPLAYABLE_FAMILIES: [ReplayableFamily; 9] = [
     }),
 ];
 
+const SCREEN_FAMILIES: [UuidFamily<ScreenAction>; 3] = [
+    (PUBLISH_PREFIX, |id| {
+        ScreenAction::Publish(AssignmentId::from_uuid(id))
+    }),
+    (ARCHIVE_PREFIX, |id| {
+        ScreenAction::Archive(AssignmentId::from_uuid(id))
+    }),
+    (DEADLINE_PREFIX, |id| {
+        ScreenAction::ChangeDeadline(AssignmentId::from_uuid(id))
+    }),
+];
+
+const FLOW_FAMILIES: [UuidFamily<FlowAction>; 3] = [
+    (REVIEW_ACCEPT_PREFIX, |id| FlowAction::Review {
+        decision: ReviewDecision::Accept,
+        submission_id: SubmissionId::from_uuid(id),
+    }),
+    (REVIEW_REJECT_PREFIX, |id| FlowAction::Review {
+        decision: ReviewDecision::Reject,
+        submission_id: SubmissionId::from_uuid(id),
+    }),
+    (STUDENT_PREFIX, |id| {
+        FlowAction::SelectStudent(UserId::from_uuid(id))
+    }),
+];
+
+const AMOUNT_FAMILIES: [(&str, fn(AmountChoice) -> FlowAction); 4] = [
+    (MAX_ATTEMPTS_PREFIX, FlowAction::MaxAttempts),
+    (EXTRA_ATTEMPTS_PREFIX, FlowAction::ExtraAttempts),
+    (PENALTY_PREFIX, FlowAction::Penalty),
+    (LATE_PERIODS_PREFIX, FlowAction::Periods),
+];
+
 pub(super) fn parse(data: &str) -> Option<CallbackAction> {
+    use CallbackAction::{Flow, Replayable, Screen};
+    let literal = match data {
+        MENU_ASSIGNMENTS => Replayable(ReplayableAction::StudentAssignments),
+        MENU_ARCHIVE => Replayable(ReplayableAction::StudentArchive),
+        MENU_QUEUE => Replayable(ReplayableAction::StudentQueue),
+        MENU_PROFILE => Replayable(ReplayableAction::Profile),
+        MENU_COURSES => Replayable(ReplayableAction::Courses),
+        NEXT_REVIEW => Replayable(ReplayableAction::NextReview),
+        FILE_ADD => Screen(ScreenAction::AddFile),
+        FILE_FINISH => Screen(ScreenAction::FinishFileCreation),
+        INVITE_ROTATE => Screen(ScreenAction::RotateGroupInvite),
+        FILE_CONFIRM_DELETE => Flow(FlowAction::ConfirmFileDeletion),
+        FILE_CANCEL_DELETE => Flow(FlowAction::CancelFileDeletion),
+        INVITE_CONFIRM_ROTATE => Flow(FlowAction::ConfirmInviteRotation),
+        INVITE_CANCEL_ROTATE => Flow(FlowAction::CancelInviteRotation),
+        PENALTY_PERIOD => Flow(FlowAction::PenaltyPeriod),
+        TERMS_SAVE => Flow(FlowAction::Terms(TermsAction::Save)),
+        TERMS_DEADLINE => Flow(FlowAction::Terms(TermsAction::Deadline)),
+        TERMS_PENALTY => Flow(FlowAction::Terms(TermsAction::Penalty)),
+        TERMS_PERIOD => Flow(FlowAction::Terms(TermsAction::Period)),
+        TERMS_PERIODS => Flow(FlowAction::Terms(TermsAction::Periods)),
+        TERMS_POLICY => Flow(FlowAction::Terms(TermsAction::Policy)),
+        TERMS_BACK => Flow(FlowAction::Terms(TermsAction::Back)),
+        TERMS_DURATION_DATE => Flow(FlowAction::Terms(TermsAction::DurationDate)),
+        TERMS_DURATION_APPLY => Flow(FlowAction::Terms(TermsAction::DurationApply)),
+        TERMS_EXIT => Flow(FlowAction::Terms(TermsAction::Exit)),
+        TERMS_STAY => Flow(FlowAction::Terms(TermsAction::Stay)),
+        TERMS_CANCEL => Flow(FlowAction::Terms(TermsAction::Cancel)),
+        DEADLINE_CALENDAR => Flow(FlowAction::Deadline(DeadlineAction::Calendar)),
+        DEADLINE_MANUAL => Flow(FlowAction::Deadline(DeadlineAction::Manual)),
+        DEADLINE_OPTIONS => Flow(FlowAction::Deadline(DeadlineAction::Options)),
+        CALENDAR_NOOP => CallbackAction::Noop,
+        _ => return parse_prefixed(data),
+    };
+    Some(literal)
+}
+
+fn parse_prefixed(data: &str) -> Option<CallbackAction> {
     if data.starts_with(PAGE_PREFIX) {
         return parse_page(data).map(CallbackAction::Replayable);
     }
-    let replayable = match data {
-        MENU_ASSIGNMENTS => Some(ReplayableAction::StudentAssignments),
-        MENU_ARCHIVE => Some(ReplayableAction::StudentArchive),
-        MENU_QUEUE => Some(ReplayableAction::StudentQueue),
-        MENU_PROFILE => Some(ReplayableAction::Profile),
-        MENU_COURSES => Some(ReplayableAction::Courses),
-        NEXT_REVIEW => Some(ReplayableAction::NextReview),
-        _ => REPLAYABLE_FAMILIES
-            .iter()
-            .find_map(|(prefix, action)| parse_uuid(data, prefix).map(action)),
-    };
-    if let Some(action) = replayable {
+    if let Some(action) = parse_uuid_family(data, &REPLAYABLE_FAMILIES) {
         return Some(CallbackAction::Replayable(action));
     }
-
-    let screen = parse_uuid(data, PUBLISH_PREFIX)
-        .map(AssignmentId::from_uuid)
-        .map(ScreenAction::Publish)
-        .or_else(|| {
-            parse_uuid(data, ARCHIVE_PREFIX)
-                .map(AssignmentId::from_uuid)
-                .map(ScreenAction::Archive)
-        })
-        .or_else(|| {
-            parse_uuid(data, DEADLINE_PREFIX)
-                .map(AssignmentId::from_uuid)
-                .map(ScreenAction::ChangeDeadline)
-        })
-        .or_else(|| match data {
-            FILE_ADD => Some(ScreenAction::AddFile),
-            FILE_FINISH => Some(ScreenAction::FinishFileCreation),
-            INVITE_ROTATE => Some(ScreenAction::RotateGroupInvite),
-            _ => data
-                .strip_prefix(FILE_OPEN_PREFIX)
-                .and_then(|index| index.parse().ok())
-                .map(ScreenAction::OpenFile)
-                .or_else(|| {
-                    data.strip_prefix(FILE_DELETE_PREFIX)
-                        .and_then(|index| index.parse().ok())
-                        .map(ScreenAction::DeleteFile)
-                }),
-        });
-    if let Some(action) = screen {
+    if let Some(action) = parse_uuid_family(data, &SCREEN_FAMILIES) {
         return Some(CallbackAction::Screen(action));
     }
-
-    let flow = parse_review(data)
-        .or_else(|| parse_amount(data, MAX_ATTEMPTS_PREFIX).map(FlowAction::MaxAttempts))
-        .or_else(|| parse_grading(data).map(FlowAction::Grading))
-        .or_else(|| parse_late_policy(data).map(FlowAction::LatePolicy))
-        .or_else(|| parse_amount(data, PENALTY_PREFIX).map(FlowAction::Penalty))
-        .or_else(|| parse_amount(data, LATE_PERIODS_PREFIX).map(FlowAction::Periods))
-        .or_else(|| parse_review_score(data))
-        .or_else(|| parse_deadline(data).map(FlowAction::Deadline))
-        .or_else(|| {
-            parse_uuid(data, STUDENT_PREFIX)
-                .map(UserId::from_uuid)
-                .map(FlowAction::SelectStudent)
-        })
-        .or_else(|| parse_amount(data, EXTRA_ATTEMPTS_PREFIX).map(FlowAction::ExtraAttempts))
-        .or(match data {
-            FILE_CONFIRM_DELETE => Some(FlowAction::ConfirmFileDeletion),
-            FILE_CANCEL_DELETE => Some(FlowAction::CancelFileDeletion),
-            INVITE_CONFIRM_ROTATE => Some(FlowAction::ConfirmInviteRotation),
-            INVITE_CANCEL_ROTATE => Some(FlowAction::CancelInviteRotation),
-            PENALTY_PERIOD => Some(FlowAction::PenaltyPeriod),
-            TERMS_SAVE => Some(FlowAction::Terms(TermsAction::Save)),
-            TERMS_DEADLINE => Some(FlowAction::Terms(TermsAction::Deadline)),
-            TERMS_PENALTY => Some(FlowAction::Terms(TermsAction::Penalty)),
-            TERMS_PERIOD => Some(FlowAction::Terms(TermsAction::Period)),
-            TERMS_PERIODS => Some(FlowAction::Terms(TermsAction::Periods)),
-            TERMS_POLICY => Some(FlowAction::Terms(TermsAction::Policy)),
-            TERMS_BACK => Some(FlowAction::Terms(TermsAction::Back)),
-            TERMS_DURATION_DATE => Some(FlowAction::Terms(TermsAction::DurationDate)),
-            TERMS_DURATION_APPLY => Some(FlowAction::Terms(TermsAction::DurationApply)),
-            TERMS_EXIT => Some(FlowAction::Terms(TermsAction::Exit)),
-            TERMS_STAY => Some(FlowAction::Terms(TermsAction::Stay)),
-            TERMS_CANCEL => Some(FlowAction::Terms(TermsAction::Cancel)),
-            _ => None,
-        });
-    if let Some(action) = flow {
+    if let Some(action) = parse_uuid_family(data, &FLOW_FAMILIES) {
         return Some(CallbackAction::Flow(action));
     }
-
-    (data == CALENDAR_NOOP).then_some(CallbackAction::Noop)
+    for (prefix, action) in AMOUNT_FAMILIES {
+        if data.starts_with(prefix) {
+            return parse_amount(data, prefix)
+                .map(action)
+                .map(CallbackAction::Flow);
+        }
+    }
+    if let Some(index) = data.strip_prefix(FILE_OPEN_PREFIX) {
+        return index
+            .parse()
+            .ok()
+            .map(ScreenAction::OpenFile)
+            .map(CallbackAction::Screen);
+    }
+    if let Some(index) = data.strip_prefix(FILE_DELETE_PREFIX) {
+        return index
+            .parse()
+            .ok()
+            .map(ScreenAction::DeleteFile)
+            .map(CallbackAction::Screen);
+    }
+    let flow = if data.starts_with(GRADING_PREFIX) {
+        parse_grading(data).map(FlowAction::Grading)
+    } else if data.starts_with(LATE_POLICY_PREFIX) {
+        parse_late_policy(data).map(FlowAction::LatePolicy)
+    } else if data.starts_with(REVIEW_SCORE_PREFIX) {
+        parse_review_score(data)
+    } else {
+        parse_deadline(data).map(FlowAction::Deadline)
+    };
+    flow.map(CallbackAction::Flow)
 }
 
-fn parse_uuid(data: &str, prefix: &str) -> Option<uuid::Uuid> {
-    data.strip_prefix(prefix)?.parse().ok()
-}
-
-fn parse_review(data: &str) -> Option<FlowAction> {
-    let (decision, id) = data
-        .strip_prefix(REVIEW_ACCEPT_PREFIX)
-        .map(|id| (ReviewDecision::Accept, id))
-        .or_else(|| {
-            data.strip_prefix(REVIEW_REJECT_PREFIX)
-                .map(|id| (ReviewDecision::Reject, id))
-        })?;
-
-    Some(FlowAction::Review {
-        decision,
-        submission_id: SubmissionId::from_uuid(id.parse().ok()?),
-    })
+fn parse_uuid_family<T>(data: &str, families: &[UuidFamily<T>]) -> Option<T> {
+    let (prefix, action) = families
+        .iter()
+        .find(|(prefix, _)| data.starts_with(prefix))?;
+    data.strip_prefix(prefix)?.parse().ok().map(action)
 }
 
 fn parse_review_score(data: &str) -> Option<FlowAction> {
     let value = data.strip_prefix(REVIEW_SCORE_PREFIX)?;
     let (submission_id, choice) = value.split_once(':')?;
     let submission_id = SubmissionId::from_uuid(submission_id.parse().ok()?);
-    let choice = parse_amount(choice, "")?;
+    let choice = parse_amount_value(choice)?;
 
     Some(FlowAction::ReviewScore {
         submission_id,
@@ -420,46 +434,32 @@ fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
 }
 
 fn parse_amount(data: &str, prefix: &str) -> Option<AmountChoice> {
-    let value = data.strip_prefix(prefix)?;
+    parse_amount_value(data.strip_prefix(prefix)?)
+}
+
+fn parse_amount_value(value: &str) -> Option<AmountChoice> {
     if value == "manual" {
         return Some(AmountChoice::Manual);
     }
     parse_u16(value).map(AmountChoice::Preset)
 }
 
-pub(super) fn parse_u16(value: &str) -> Option<u16> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-
-    value.parse().ok()
-}
-
 fn parse_deadline(data: &str) -> Option<DeadlineAction> {
-    match data {
-        DEADLINE_CALENDAR => Some(DeadlineAction::Calendar),
-        DEADLINE_MANUAL => Some(DeadlineAction::Manual),
-        DEADLINE_OPTIONS => Some(DeadlineAction::Options),
-        _ => data
-            .strip_prefix(DEADLINE_DAYS_PREFIX)
-            .and_then(|days| days.parse().ok())
-            .map(DeadlineAction::Days)
-            .or_else(|| {
-                data.strip_prefix(DEADLINE_MONTHS_PREFIX)
-                    .and_then(|months| months.parse().ok())
-                    .map(DeadlineAction::Months)
-            })
-            .or_else(|| {
-                data.strip_prefix(CALENDAR_PICK_PREFIX)
-                    .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
-                    .map(DeadlineAction::Pick)
-            })
-            .or_else(|| {
-                data.strip_prefix(CALENDAR_MONTH_PREFIX)
-                    .and_then(parse_month)
-                    .map(DeadlineAction::Month)
-            }),
+    if let Some(days) = data.strip_prefix(DEADLINE_DAYS_PREFIX) {
+        return days.parse().ok().map(DeadlineAction::Days);
     }
+    if let Some(months) = data.strip_prefix(DEADLINE_MONTHS_PREFIX) {
+        return months.parse().ok().map(DeadlineAction::Months);
+    }
+    // Более узкий cal:pick: проверяется раньше cal:.
+    if let Some(date) = data.strip_prefix(CALENDAR_PICK_PREFIX) {
+        return NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .ok()
+            .map(DeadlineAction::Pick);
+    }
+    data.strip_prefix(CALENDAR_MONTH_PREFIX)
+        .and_then(parse_month)
+        .map(DeadlineAction::Month)
 }
 
 fn parse_month(value: &str) -> Option<NaiveDate> {
