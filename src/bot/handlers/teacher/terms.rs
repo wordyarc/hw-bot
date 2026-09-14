@@ -344,6 +344,7 @@ pub(in crate::bot::handlers) async fn handle_terms(
     message_id: MessageId,
     action: TermsAction,
     state: BotState,
+    transfers: &crate::bot::FileTransfers,
 ) -> HandlerResult {
     if let BotState::Flow(FlowState::ConfirmingTermsExit {
         message_id: current,
@@ -363,7 +364,7 @@ pub(in crate::bot::handlers) async fn handle_terms(
             TermsAction::Exit => {
                 abandon(screen.bot, screen.chat_id, &form).await?;
                 reset_dialogue(screen.deps.dialogue).await?;
-                run_menu_action(screen.chat, telegram_user_id, menu).await
+                run_menu_action(screen.chat, telegram_user_id, menu, transfers).await
             }
             _ => screen.stale().await,
         };

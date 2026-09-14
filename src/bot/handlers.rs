@@ -9,7 +9,9 @@ use teloxide::utils::command::BotCommands;
 
 use super::HandlerResult;
 use super::assignment_files;
-use super::callbacks::{self, CallbackAction, FlowAction, ReplayableAction, ScreenAction};
+use super::callbacks::{
+    self, CallbackAction, FlowAction, PageTarget, ReplayableAction, ScreenAction,
+};
 use super::context::{BotContext, Chat, Deps, Screen, TextStep};
 use super::errors::finish_handler;
 use super::state::{BotDialogue, BotState, FlowState, ScreenState};
@@ -76,6 +78,7 @@ pub(super) async fn handle_command(
     dialogue: BotDialogue,
     state: BotState,
     context: BotContext,
+    transfers: super::FileTransfers,
 ) -> HandlerResult {
     let deps = Deps {
         context: &context,
@@ -118,6 +121,7 @@ pub(super) async fn handle_command(
                         *message_id,
                         callbacks::TermsAction::Stay,
                         state,
+                        &transfers,
                     )
                     .await;
                 }
@@ -129,7 +133,7 @@ pub(super) async fn handle_command(
 
         if let Some(action) = menu_action_for(&command) {
             reset_dialogue(&dialogue).await?;
-            return run_menu_action(chat, telegram_user_id, action).await;
+            return run_menu_action(chat, telegram_user_id, action, &transfers).await;
         }
         match command {
             Command::Start(payload) => {
@@ -201,7 +205,7 @@ pub(super) async fn handle_message(
                 return teacher::confirm_exit(screen, form.clone(), action, actor).await;
             }
             reset_dialogue(&dialogue).await?;
-            return run_menu_action(step.chat(), actor, action).await;
+            return run_menu_action(step.chat(), actor, action, &transfers).await;
         }
 
         match state {
@@ -293,27 +297,30 @@ async fn run_menu_action(
     chat: Chat<'_>,
     telegram_user_id: TelegramUserId,
     action: MenuAction,
+    transfers: &super::FileTransfers,
 ) -> HandlerResult {
     tracing::Span::current().record("action", tracing::field::debug(action));
-    if action == MenuAction::Help {
+    let Some(target) = menu_target(action) else {
         return send_help(chat, telegram_user_id).await;
-    }
+    };
 
     let Some(screen) = chat.resolve(telegram_user_id).await? else {
         return Ok(());
     };
 
-    match action {
-        MenuAction::Assignments => {
-            student::show_assignments_page(screen, PageRequest::default()).await
-        }
-        MenuAction::Archive => student::show_archive_page(screen, PageRequest::default()).await,
-        MenuAction::Queue => student::show_queue_page(screen, PageRequest::default()).await,
-        MenuAction::Review => review::show_next(screen).await,
-        MenuAction::Courses => teacher::show_courses_page(screen, PageRequest::default()).await,
-        MenuAction::Profile => show_profile(screen).await,
-        MenuAction::Help => Ok(()),
-    }
+    handle_replayable_action(screen, target, transfers).await
+}
+
+fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
+    Some(match action {
+        MenuAction::Assignments => ReplayableAction::Page(PageTarget::Assignments, 0),
+        MenuAction::Archive => ReplayableAction::Page(PageTarget::Archive, 0),
+        MenuAction::Queue => ReplayableAction::Page(PageTarget::Queue, 0),
+        MenuAction::Review => ReplayableAction::NextReview,
+        MenuAction::Courses => ReplayableAction::Page(PageTarget::Courses, 0),
+        MenuAction::Profile => ReplayableAction::Profile,
+        MenuAction::Help => return None,
+    })
 }
 
 pub(super) async fn handle_callback(
@@ -392,7 +399,7 @@ pub(super) async fn handle_callback(
                 handle_screen_action(screen, message.id, action, state, &transfers).await
             }
             CallbackAction::Flow(action) => {
-                handle_flow_action(screen, message.id, action, state).await
+                handle_flow_action(screen, message.id, action, state, &transfers).await
             }
             CallbackAction::Noop => Ok(()),
         }
@@ -408,8 +415,7 @@ async fn handle_replayable_action(
 ) -> HandlerResult {
     match action {
         ReplayableAction::Page(target, page) => {
-            use super::callbacks::PageTarget;
-            let page = crate::pagination::PageRequest::new(page);
+            let page = PageRequest::new(page);
             match target {
                 PageTarget::Assignments => student::show_assignments_page(screen, page).await,
                 PageTarget::Archive => student::show_archive_page(screen, page).await,
@@ -426,19 +432,7 @@ async fn handle_replayable_action(
                 }
             }
         }
-        ReplayableAction::StudentAssignments => {
-            student::show_assignments_page(screen, PageRequest::default()).await
-        }
-        ReplayableAction::StudentArchive => {
-            student::show_archive_page(screen, PageRequest::default()).await
-        }
-        ReplayableAction::StudentQueue => {
-            student::show_queue_page(screen, PageRequest::default()).await
-        }
         ReplayableAction::Profile => show_profile(screen).await,
-        ReplayableAction::Courses => {
-            teacher::show_courses_page(screen, PageRequest::default()).await
-        }
         ReplayableAction::NextReview => review::show_next(screen).await,
         ReplayableAction::Course(course_id) => {
             teacher::show_course_assignments_page(screen, course_id, PageRequest::default()).await
@@ -500,10 +494,13 @@ async fn handle_screen_action(
             assignment_files::request_deletion(screen, message_id, &state, index).await
         }
         ScreenAction::FinishFileCreation => {
-            let Some((assignment_id, _, true)) = state.managing_assignment_files(message_id) else {
+            let Some(files) = state
+                .files_screen(message_id)
+                .filter(|files| files.creation_flow)
+            else {
                 return screen.stale().await;
             };
-            teacher::show_assignment(screen, assignment_id).await
+            teacher::show_assignment(screen, files.assignment_id).await
         }
         ScreenAction::Publish(id) => {
             teacher::publish_assignment(screen, message_id, id, &state).await
@@ -525,6 +522,7 @@ async fn handle_flow_action(
     message_id: MessageId,
     action: FlowAction,
     state: BotState,
+    transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
         FlowAction::ConfirmFileDeletion => {
@@ -553,7 +551,7 @@ async fn handle_flow_action(
         }
         FlowAction::PenaltyPeriod => teacher::handle_period(screen, message_id, state).await?,
         FlowAction::Terms(action) => {
-            teacher::handle_terms(screen, message_id, action, state).await?
+            teacher::handle_terms(screen, message_id, action, state, transfers).await?
         }
         FlowAction::ReviewScore {
             submission_id,
@@ -687,6 +685,26 @@ mod tests {
         ] {
             let action = menu_action_for(&Command::parse(input, "test_bot").unwrap());
             assert_eq!(action, Some(expected), "{input}");
+        }
+    }
+
+    #[test]
+    fn legacy_menu_buttons_commands_and_first_pages_share_a_route() {
+        for (command, legacy, target) in [
+            (
+                "/tasks",
+                callbacks::MENU_ASSIGNMENTS,
+                PageTarget::Assignments,
+            ),
+            ("/archive", callbacks::MENU_ARCHIVE, PageTarget::Archive),
+            ("/queue", callbacks::MENU_QUEUE, PageTarget::Queue),
+            ("/courses", callbacks::MENU_COURSES, PageTarget::Courses),
+        ] {
+            let menu = menu_action_for(&Command::parse(command, "test_bot").unwrap()).unwrap();
+            let expected = menu_target(menu).map(CallbackAction::Replayable);
+            assert_eq!(callbacks::parse(legacy), expected, "{legacy}");
+            assert_eq!(callbacks::parse(&target.callback(0)), expected, "{command}");
+            assert_eq!(menu_target(menu).unwrap().callback(), legacy);
         }
     }
 

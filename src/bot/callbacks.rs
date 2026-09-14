@@ -80,11 +80,7 @@ pub(super) enum CallbackAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReplayableAction {
     Page(PageTarget, u32),
-    StudentAssignments,
-    StudentArchive,
-    StudentQueue,
     Profile,
-    Courses,
     NextReview,
     Course(TeachingCourseId),
     Assignment(AssignmentId),
@@ -95,6 +91,29 @@ pub(super) enum ReplayableAction {
     GrantAttempts(AssignmentId),
     GroupInvite(TeachingCourseId),
     Gradebook(TeachingCourseId),
+}
+
+impl ReplayableAction {
+    pub fn callback(self) -> String {
+        match self {
+            Self::Page(PageTarget::Assignments, 0) => MENU_ASSIGNMENTS.to_owned(),
+            Self::Page(PageTarget::Archive, 0) => MENU_ARCHIVE.to_owned(),
+            Self::Page(PageTarget::Queue, 0) => MENU_QUEUE.to_owned(),
+            Self::Page(PageTarget::Courses, 0) => MENU_COURSES.to_owned(),
+            Self::Page(target, page) => target.callback(page),
+            Self::Profile => MENU_PROFILE.to_owned(),
+            Self::NextReview => NEXT_REVIEW.to_owned(),
+            Self::Course(id) => format!("{COURSE_PREFIX}{}", id.as_uuid()),
+            Self::Assignment(id) => format!("{ASSIGNMENT_PREFIX}{}", id.as_uuid()),
+            Self::ManageAssignment(id) => format!("{MANAGE_PREFIX}{}", id.as_uuid()),
+            Self::StartAssignmentCreation(id) => format!("{CREATE_PREFIX}{}", id.as_uuid()),
+            Self::StartSubmission(id) => format!("{SUBMIT_PREFIX}{}", id.as_uuid()),
+            Self::AssignmentFiles(id) => format!("{FILES_PREFIX}{}", id.as_uuid()),
+            Self::GrantAttempts(id) => format!("{ATTEMPTS_PREFIX}{}", id.as_uuid()),
+            Self::GroupInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
+            Self::Gradebook(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,6 +194,21 @@ pub(super) enum ScreenAction {
     RotateGroupInvite,
 }
 
+impl ScreenAction {
+    pub fn callback(self) -> String {
+        match self {
+            Self::Publish(id) => format!("{PUBLISH_PREFIX}{}", id.as_uuid()),
+            Self::Archive(id) => format!("{ARCHIVE_PREFIX}{}", id.as_uuid()),
+            Self::ChangeDeadline(id) => format!("{DEADLINE_PREFIX}{}", id.as_uuid()),
+            Self::AddFile => FILE_ADD.to_owned(),
+            Self::OpenFile(index) => format!("{FILE_OPEN_PREFIX}{index}"),
+            Self::DeleteFile(index) => format!("{FILE_DELETE_PREFIX}{index}"),
+            Self::FinishFileCreation => FILE_FINISH.to_owned(),
+            Self::RotateGroupInvite => INVITE_ROTATE.to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FlowAction {
     Review {
@@ -247,80 +281,14 @@ pub(super) enum DeadlineAction {
     Pick(NaiveDate),
 }
 
-type UuidFamily<T> = (&'static str, fn(uuid::Uuid) -> T);
-
-// Порядок значим: выигрывает первый подошедший префикс.
-const REPLAYABLE_FAMILIES: [UuidFamily<ReplayableAction>; 9] = [
-    (COURSE_PREFIX, |id| {
-        ReplayableAction::Course(TeachingCourseId::from_uuid(id))
-    }),
-    (ASSIGNMENT_PREFIX, |id| {
-        ReplayableAction::Assignment(AssignmentId::from_uuid(id))
-    }),
-    (MANAGE_PREFIX, |id| {
-        ReplayableAction::ManageAssignment(AssignmentId::from_uuid(id))
-    }),
-    (CREATE_PREFIX, |id| {
-        ReplayableAction::StartAssignmentCreation(TeachingCourseId::from_uuid(id))
-    }),
-    (SUBMIT_PREFIX, |id| {
-        ReplayableAction::StartSubmission(AssignmentId::from_uuid(id))
-    }),
-    (FILES_PREFIX, |id| {
-        ReplayableAction::AssignmentFiles(AssignmentId::from_uuid(id))
-    }),
-    (ATTEMPTS_PREFIX, |id| {
-        ReplayableAction::GrantAttempts(AssignmentId::from_uuid(id))
-    }),
-    (INVITE_PREFIX, |id| {
-        ReplayableAction::GroupInvite(TeachingCourseId::from_uuid(id))
-    }),
-    (GRADES_PREFIX, |id| {
-        ReplayableAction::Gradebook(TeachingCourseId::from_uuid(id))
-    }),
-];
-
-const SCREEN_FAMILIES: [UuidFamily<ScreenAction>; 3] = [
-    (PUBLISH_PREFIX, |id| {
-        ScreenAction::Publish(AssignmentId::from_uuid(id))
-    }),
-    (ARCHIVE_PREFIX, |id| {
-        ScreenAction::Archive(AssignmentId::from_uuid(id))
-    }),
-    (DEADLINE_PREFIX, |id| {
-        ScreenAction::ChangeDeadline(AssignmentId::from_uuid(id))
-    }),
-];
-
-const FLOW_FAMILIES: [UuidFamily<FlowAction>; 3] = [
-    (REVIEW_ACCEPT_PREFIX, |id| FlowAction::Review {
-        decision: ReviewDecision::Accept,
-        submission_id: SubmissionId::from_uuid(id),
-    }),
-    (REVIEW_REJECT_PREFIX, |id| FlowAction::Review {
-        decision: ReviewDecision::Reject,
-        submission_id: SubmissionId::from_uuid(id),
-    }),
-    (STUDENT_PREFIX, |id| {
-        FlowAction::SelectStudent(UserId::from_uuid(id))
-    }),
-];
-
-const AMOUNT_FAMILIES: [(&str, fn(AmountChoice) -> FlowAction); 4] = [
-    (MAX_ATTEMPTS_PREFIX, FlowAction::MaxAttempts),
-    (EXTRA_ATTEMPTS_PREFIX, FlowAction::ExtraAttempts),
-    (PENALTY_PREFIX, FlowAction::Penalty),
-    (LATE_PERIODS_PREFIX, FlowAction::Periods),
-];
-
 pub(super) fn parse(data: &str) -> Option<CallbackAction> {
     use CallbackAction::{Flow, Replayable, Screen};
     let literal = match data {
-        MENU_ASSIGNMENTS => Replayable(ReplayableAction::StudentAssignments),
-        MENU_ARCHIVE => Replayable(ReplayableAction::StudentArchive),
-        MENU_QUEUE => Replayable(ReplayableAction::StudentQueue),
+        MENU_ASSIGNMENTS => Replayable(ReplayableAction::Page(PageTarget::Assignments, 0)),
+        MENU_ARCHIVE => Replayable(ReplayableAction::Page(PageTarget::Archive, 0)),
+        MENU_QUEUE => Replayable(ReplayableAction::Page(PageTarget::Queue, 0)),
         MENU_PROFILE => Replayable(ReplayableAction::Profile),
-        MENU_COURSES => Replayable(ReplayableAction::Courses),
+        MENU_COURSES => Replayable(ReplayableAction::Page(PageTarget::Courses, 0)),
         NEXT_REVIEW => Replayable(ReplayableAction::NextReview),
         FILE_ADD => Screen(ScreenAction::AddFile),
         FILE_FINISH => Screen(ScreenAction::FinishFileCreation),
@@ -352,24 +320,99 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
 }
 
 fn parse_prefixed(data: &str) -> Option<CallbackAction> {
+    use CallbackAction::{Flow, Replayable, Screen};
+
     if data.starts_with(PAGE_PREFIX) {
         return parse_page(data).map(CallbackAction::Replayable);
     }
-    if let Some(action) = parse_uuid_family(data, &REPLAYABLE_FAMILIES) {
-        return Some(CallbackAction::Replayable(action));
+    if let Some(id) = data.strip_prefix(COURSE_PREFIX) {
+        return Some(Replayable(ReplayableAction::Course(
+            TeachingCourseId::from_uuid(id.parse().ok()?),
+        )));
     }
-    if let Some(action) = parse_uuid_family(data, &SCREEN_FAMILIES) {
-        return Some(CallbackAction::Screen(action));
+    if let Some(id) = data.strip_prefix(ASSIGNMENT_PREFIX) {
+        return Some(Replayable(ReplayableAction::Assignment(
+            AssignmentId::from_uuid(id.parse().ok()?),
+        )));
     }
-    if let Some(action) = parse_uuid_family(data, &FLOW_FAMILIES) {
-        return Some(CallbackAction::Flow(action));
+    if let Some(id) = data.strip_prefix(MANAGE_PREFIX) {
+        return Some(Replayable(ReplayableAction::ManageAssignment(
+            AssignmentId::from_uuid(id.parse().ok()?),
+        )));
     }
-    for (prefix, action) in AMOUNT_FAMILIES {
-        if data.starts_with(prefix) {
-            return parse_amount(data, prefix)
-                .map(action)
-                .map(CallbackAction::Flow);
-        }
+    if let Some(id) = data.strip_prefix(CREATE_PREFIX) {
+        return Some(Replayable(ReplayableAction::StartAssignmentCreation(
+            TeachingCourseId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(SUBMIT_PREFIX) {
+        return Some(Replayable(ReplayableAction::StartSubmission(
+            AssignmentId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(FILES_PREFIX) {
+        return Some(Replayable(ReplayableAction::AssignmentFiles(
+            AssignmentId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(ATTEMPTS_PREFIX) {
+        return Some(Replayable(ReplayableAction::GrantAttempts(
+            AssignmentId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(INVITE_PREFIX) {
+        return Some(Replayable(ReplayableAction::GroupInvite(
+            TeachingCourseId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(GRADES_PREFIX) {
+        return Some(Replayable(ReplayableAction::Gradebook(
+            TeachingCourseId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(PUBLISH_PREFIX) {
+        return Some(Screen(ScreenAction::Publish(AssignmentId::from_uuid(
+            id.parse().ok()?,
+        ))));
+    }
+    if let Some(id) = data.strip_prefix(ARCHIVE_PREFIX) {
+        return Some(Screen(ScreenAction::Archive(AssignmentId::from_uuid(
+            id.parse().ok()?,
+        ))));
+    }
+    if let Some(id) = data.strip_prefix(DEADLINE_PREFIX) {
+        return Some(Screen(ScreenAction::ChangeDeadline(
+            AssignmentId::from_uuid(id.parse().ok()?),
+        )));
+    }
+    if let Some(id) = data.strip_prefix(REVIEW_ACCEPT_PREFIX) {
+        return Some(Flow(FlowAction::Review {
+            decision: ReviewDecision::Accept,
+            submission_id: SubmissionId::from_uuid(id.parse().ok()?),
+        }));
+    }
+    if let Some(id) = data.strip_prefix(REVIEW_REJECT_PREFIX) {
+        return Some(Flow(FlowAction::Review {
+            decision: ReviewDecision::Reject,
+            submission_id: SubmissionId::from_uuid(id.parse().ok()?),
+        }));
+    }
+    if let Some(id) = data.strip_prefix(STUDENT_PREFIX) {
+        return Some(Flow(FlowAction::SelectStudent(UserId::from_uuid(
+            id.parse().ok()?,
+        ))));
+    }
+    if let Some(value) = data.strip_prefix(MAX_ATTEMPTS_PREFIX) {
+        return Some(Flow(FlowAction::MaxAttempts(parse_amount_value(value)?)));
+    }
+    if let Some(value) = data.strip_prefix(EXTRA_ATTEMPTS_PREFIX) {
+        return Some(Flow(FlowAction::ExtraAttempts(parse_amount_value(value)?)));
+    }
+    if let Some(value) = data.strip_prefix(PENALTY_PREFIX) {
+        return Some(Flow(FlowAction::Penalty(parse_amount_value(value)?)));
+    }
+    if let Some(value) = data.strip_prefix(LATE_PERIODS_PREFIX) {
+        return Some(Flow(FlowAction::Periods(parse_amount_value(value)?)));
     }
     if let Some(index) = data.strip_prefix(FILE_OPEN_PREFIX) {
         return index
@@ -395,13 +438,6 @@ fn parse_prefixed(data: &str) -> Option<CallbackAction> {
         parse_deadline(data).map(FlowAction::Deadline)
     };
     flow.map(CallbackAction::Flow)
-}
-
-fn parse_uuid_family<T>(data: &str, families: &[UuidFamily<T>]) -> Option<T> {
-    let (prefix, action) = families
-        .iter()
-        .find(|(prefix, _)| data.starts_with(prefix))?;
-    data.strip_prefix(prefix)?.parse().ok().map(action)
 }
 
 fn parse_review_score(data: &str) -> Option<FlowAction> {
@@ -431,10 +467,6 @@ fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
         "penalty" => Some(LatePolicyChoice::Penalty),
         _ => None,
     }
-}
-
-fn parse_amount(data: &str, prefix: &str) -> Option<AmountChoice> {
-    parse_amount_value(data.strip_prefix(prefix)?)
 }
 
 fn parse_amount_value(value: &str) -> Option<AmountChoice> {

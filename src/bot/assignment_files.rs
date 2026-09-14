@@ -103,18 +103,16 @@ pub(super) async fn ask_upload(
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
-    let Some((assignment_id, revision, creation_flow)) =
-        state.managing_assignment_files(message_id)
-    else {
+    let Some(files) = state.files_screen(message_id) else {
         return screen.stale().await;
     };
     screen
         .deps
         .dialogue
         .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
-            assignment_id,
-            expected_revision: revision,
-            creation_flow,
+            assignment_id: files.assignment_id,
+            expected_revision: files.revision,
+            creation_flow: files.creation_flow,
         }))
         .await?;
     screen.ask("Пришлите файл или фотографию.").await
@@ -127,7 +125,10 @@ pub(super) async fn open(
     index: usize,
     transfers: &FileTransfers,
 ) -> HandlerResult {
-    let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
+    let Some(files) = state.files_screen(message_id) else {
+        return screen.stale().await;
+    };
+    let Some(file_id) = files.file_ids.get(index).copied() else {
         return screen.stale().await;
     };
     let transfer = transfers.acquire().await?;
@@ -138,7 +139,7 @@ pub(super) async fn open(
                 .context
                 .services
                 .files
-                .open_assignment_file_for_teacher(screen.actor, assignment_id, file_id)
+                .open_assignment_file_for_teacher(screen.actor, files.assignment_id, file_id)
                 .await?;
             transfers.send(screen.chat_id, file).await?;
             Ok(())
@@ -152,19 +153,13 @@ pub(super) async fn request_deletion(
     state: &BotState,
     index: usize,
 ) -> HandlerResult {
-    let Some((assignment_id, file_id)) = current_file(index, message_id, state) else {
+    let Some(files) = state.files_screen(message_id) else {
         return screen.stale().await;
     };
-    let BotState::Screen(ScreenState::ManagingAssignmentFiles {
-        revision,
-        deletion_requires_confirmation,
-        creation_flow,
-        ..
-    }) = state
-    else {
-        unreachable!();
+    let Some(file_id) = files.file_ids.get(index).copied() else {
+        return screen.stale().await;
     };
-    if *deletion_requires_confirmation {
+    if files.requires_confirmation {
         let confirmation = screen
             .bot
             .send_message(screen.chat_id, crate::bot::texts::FILE_DELETE_CONFIRM)
@@ -176,15 +171,22 @@ pub(super) async fn request_deletion(
             .update(BotState::Flow(
                 FlowState::ConfirmingAssignmentFileDeletion {
                     message_id: confirmation.id,
-                    assignment_id,
+                    assignment_id: files.assignment_id,
                     file_id,
-                    expected_revision: *revision,
-                    creation_flow: *creation_flow,
+                    expected_revision: files.revision,
+                    creation_flow: files.creation_flow,
                 },
             ))
             .await?;
     } else {
-        delete(screen, assignment_id, file_id, *revision, *creation_flow).await?;
+        delete(
+            screen,
+            files.assignment_id,
+            file_id,
+            files.revision,
+            files.creation_flow,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -306,24 +308,4 @@ async fn delete(
         Err(error) => screen.fail(error).await?,
     }
     show(screen, assignment_id, creation_flow).await
-}
-
-fn current_file(
-    index: usize,
-    message_id: MessageId,
-    state: &BotState,
-) -> Option<(AssignmentId, StoredFileId)> {
-    let BotState::Screen(ScreenState::ManagingAssignmentFiles {
-        message_id: current_message_id,
-        assignment_id,
-        file_ids,
-        ..
-    }) = state
-    else {
-        return None;
-    };
-    (*current_message_id == message_id)
-        .then(|| file_ids.get(index).copied())
-        .flatten()
-        .map(|file_id| (*assignment_id, file_id))
 }

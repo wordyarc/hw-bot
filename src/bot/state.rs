@@ -10,6 +10,14 @@ use crate::invites::VerifiedInvite;
 
 pub(super) type BotDialogue = Dialogue<BotState, InMemStorage<BotState>>;
 
+pub(super) struct FilesScreen<'a> {
+    pub assignment_id: AssignmentId,
+    pub revision: i64,
+    pub creation_flow: bool,
+    pub requires_confirmation: bool,
+    pub file_ids: &'a [StoredFileId],
+}
+
 /// Разбор состояния под нажатую кнопку. У каждого метода один и тот же инвариант: диалог обязан
 /// быть в ожидаемом состоянии, а нажатие - прийти из того самого сообщения.
 impl BotState {
@@ -57,18 +65,22 @@ impl BotState {
         }
     }
 
-    pub(super) fn managing_assignment_files(
-        &self,
-        message_id: MessageId,
-    ) -> Option<(AssignmentId, i64, bool)> {
+    pub(super) fn files_screen(&self, message_id: MessageId) -> Option<FilesScreen<'_>> {
         match self {
             Self::Screen(ScreenState::ManagingAssignmentFiles {
                 message_id: current,
                 assignment_id,
                 revision,
                 creation_flow,
-                ..
-            }) if *current == message_id => Some((*assignment_id, *revision, *creation_flow)),
+                deletion_requires_confirmation,
+                file_ids,
+            }) if *current == message_id => Some(FilesScreen {
+                assignment_id: *assignment_id,
+                revision: *revision,
+                creation_flow: *creation_flow,
+                requires_confirmation: *deletion_requires_confirmation,
+                file_ids,
+            }),
             _ => None,
         }
     }
@@ -523,6 +535,30 @@ pub(super) enum FlowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_screen_requires_current_keyboard_and_preserves_file_order() {
+        let assignment_id = AssignmentId::new();
+        let file_ids = vec![StoredFileId::new(), StoredFileId::new()];
+        let state = BotState::Screen(ScreenState::ManagingAssignmentFiles {
+            message_id: MessageId(10),
+            assignment_id,
+            revision: 7,
+            creation_flow: true,
+            deletion_requires_confirmation: true,
+            file_ids: file_ids.clone(),
+        });
+
+        let files = state.files_screen(MessageId(10)).unwrap();
+        assert_eq!(files.assignment_id, assignment_id);
+        assert_eq!(files.revision, 7);
+        assert!(files.creation_flow);
+        assert!(files.requires_confirmation);
+        assert_eq!(files.file_ids, file_ids);
+        assert!(files.file_ids.get(2).is_none());
+        assert!(state.files_screen(MessageId(11)).is_none());
+        assert!(BotState::Idle.files_screen(MessageId(10)).is_none());
+    }
 
     #[test]
     fn preview_defaults_never_complete_the_policy_for_saving() {

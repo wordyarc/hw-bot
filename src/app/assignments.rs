@@ -11,8 +11,8 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    NewAssignment, StoredFileMetadata, StudentAssignmentProgress, Subject, Submission,
-    SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
+    NewAssignment, StoredFileMetadata, StudentAssignmentProgress, StudentGroupId, Subject,
+    Submission, SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
 };
 use crate::read_models::AssignmentStudentSummary;
 
@@ -221,14 +221,10 @@ impl AssignmentService {
         actor: Actor,
         page: PageRequest,
     ) -> AppResult<Page<StudentAssignment>> {
-        let student = self.student(actor).await?;
-        let group_id = student.student_group_id().required("student group")?;
-
-        let assignments =
-            db::assignments::list_published_for_group(&self.pool, group_id, page).await?;
-        self.with_student_histories(assignments, student.id())
-            .await
-            .map(|items| Page::from_rows(items, page))
+        self.list_for_group(actor, page, |group_id| {
+            db::assignments::list_published_for_group(&self.pool, group_id, page)
+        })
+        .await
     }
 
     pub async fn list_archived_for_student(
@@ -236,11 +232,25 @@ impl AssignmentService {
         actor: Actor,
         page: PageRequest,
     ) -> AppResult<Page<StudentAssignment>> {
+        self.list_for_group(actor, page, |group_id| {
+            db::assignments::list_archived_for_group(&self.pool, group_id, page)
+        })
+        .await
+    }
+
+    async fn list_for_group<F>(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+        fetch: impl FnOnce(StudentGroupId) -> F,
+    ) -> AppResult<Page<StudentAssignment>>
+    where
+        F: Future<Output = db::DbResult<Vec<db::assignments::StudentAssignmentCard>>>,
+    {
         let student = self.student(actor).await?;
         let group_id = student.student_group_id().required("student group")?;
 
-        let assignments =
-            db::assignments::list_archived_for_group(&self.pool, group_id, page).await?;
+        let assignments = fetch(group_id).await?;
         self.with_student_histories(assignments, student.id())
             .await
             .map(|items| Page::from_rows(items, page))

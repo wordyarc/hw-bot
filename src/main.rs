@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let config = AppConfig::load()
         .context("failed to load application config")?
         .validate()?;
-    let _log_guard = init_logging(config.logging())?;
+    let _log_guard = init_logging(&config.logging)?;
 
     if let Err(error) = run(config).await {
         tracing::error!(error = ?error, "application failed");
@@ -35,16 +35,16 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
-    let files = config.files();
-    let database = config.database();
-    let server = config.server();
+    let files = &config.files;
+    let database = &config.database;
+    let server = &config.server;
     let file_policy = FilePolicy {
         max_file_size_bytes: usize::try_from(files.max_file_size_bytes.get())
             .expect("validated file size fits usize"),
         max_files_per_assignment: files.max_files_per_assignment.get(),
         max_files_per_submission: files.max_files_per_submission.get(),
     };
-    tracing::info!(app = %config.app().name, "starting application");
+    tracing::info!(app = %config.app.name, "starting application");
     tracing::info!(
         max_connections = database.max_connections.get(),
         run_migrations = database.run_migrations,
@@ -103,12 +103,9 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     .context("failed to initialize runtime database pool")?;
 
     let cancellation = CancellationToken::new();
-    let health = HealthState::new(
-        config.telegram().enabled,
-        config.notification_worker().enabled,
-    );
+    let health = HealthState::new(config.telegram.enabled, config.notification_worker.enabled);
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
-    let invites = GroupInviteCodec::new(config.group_invites().invite_signing_secret.clone());
+    let invites = GroupInviteCodec::new(config.group_invites.invite_signing_secret.clone());
     let telegram_bot = build_telegram_bot(&config, application.clone(), invites.clone())?;
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
@@ -168,15 +165,15 @@ fn build_telegram_bot(
     application: ApplicationContainer,
     invites: GroupInviteCodec,
 ) -> anyhow::Result<Option<TelegramBot>> {
-    let telegram = config.telegram();
-    let files = config.files();
+    let telegram = &config.telegram;
+    let files = &config.files;
     if !telegram.enabled {
         tracing::info!("Telegram bot disabled");
         return Ok(None);
     }
 
-    let utc_offset = config.ui().utc_offset;
-    let deadline_time = config.ui().deadline_time;
+    let utc_offset = config.ui.utc_offset;
+    let deadline_time = config.ui.deadline_time;
 
     let bot = TelegramBot::new(
         application,
@@ -203,25 +200,25 @@ fn build_notification_worker(
     config: &ValidatedAppConfig,
     pool: sqlx::PgPool,
 ) -> anyhow::Result<Option<NotificationWorker>> {
-    if !config.notification_worker().enabled {
+    if !config.notification_worker.enabled {
         tracing::info!("review notification worker disabled");
         return Ok(None);
     }
 
-    let worker = config.notification_worker();
+    let worker = &config.notification_worker;
     let bot_token = required_bot_token(config)?;
 
     let telegram = new_bot(
         bot_token,
-        &config.telegram().api_base_url,
-        Duration::from_millis(config.telegram().request_timeout_ms.get()),
+        &config.telegram.api_base_url,
+        Duration::from_millis(config.telegram.request_timeout_ms.get()),
     )
     .context("failed to initialize Telegram client")?;
     let worker = NotificationWorker::new(
         pool,
         telegram,
         NotificationWorkerSettings {
-            request_timeout: Duration::from_millis(config.telegram().request_timeout_ms.get()),
+            request_timeout: Duration::from_millis(config.telegram.request_timeout_ms.get()),
             poll_interval: Duration::from_millis(worker.poll_interval_ms.get()),
             lease_duration: Duration::from_millis(worker.lease_duration_ms.get()),
             max_attempts: worker.max_attempts.get(),
@@ -236,7 +233,7 @@ fn build_notification_worker(
 
 fn required_bot_token(config: &ValidatedAppConfig) -> anyhow::Result<&str> {
     config
-        .telegram()
+        .telegram
         .bot_token
         .as_deref()
         .filter(|token| !token.trim().is_empty())

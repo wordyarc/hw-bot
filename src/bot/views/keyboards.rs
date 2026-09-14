@@ -8,14 +8,11 @@ use crate::domain::{
 
 use super::render::{assignment_status_icon, button_label};
 use crate::bot::callbacks::{
-    ARCHIVE_PREFIX, ATTEMPTS_PREFIX, CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX,
-    COURSE_PREFIX, CREATE_PREFIX, DEADLINE_CALENDAR, DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL,
-    DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS, DEADLINE_PREFIX, FILE_ADD, FILE_CANCEL_DELETE,
-    FILE_CONFIRM_DELETE, FILE_DELETE_PREFIX, FILE_FINISH, FILE_OPEN_PREFIX, FILES_PREFIX,
-    GRADES_PREFIX, GRADING_PREFIX, INVITE_CANCEL_ROTATE, INVITE_CONFIRM_ROTATE, INVITE_PREFIX,
-    INVITE_ROTATE, LATE_POLICY_PREFIX, MANAGE_PREFIX, MENU_ARCHIVE, MENU_ASSIGNMENTS, MENU_COURSES,
-    MENU_PROFILE, MENU_QUEUE, NEXT_REVIEW, PUBLISH_PREFIX, REVIEW_ACCEPT_PREFIX,
-    REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, STUDENT_PREFIX,
+    CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX, DEADLINE_CALENDAR,
+    DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL, DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS,
+    FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GRADING_PREFIX, INVITE_CANCEL_ROTATE,
+    INVITE_CONFIRM_ROTATE, LATE_POLICY_PREFIX, PageTarget, REVIEW_ACCEPT_PREFIX,
+    REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, ReplayableAction, STUDENT_PREFIX, ScreenAction,
 };
 use crate::bot::callbacks::{
     LATE_PERIODS_PREFIX, PENALTY_PERIOD, PENALTY_PREFIX, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
@@ -108,13 +105,22 @@ pub(in crate::bot) fn student_menu() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             BUTTON_ASSIGNMENTS,
-            MENU_ASSIGNMENTS,
+            ReplayableAction::Page(PageTarget::Assignments, 0).callback(),
         )],
         vec![
-            InlineKeyboardButton::callback(BUTTON_QUEUE, MENU_QUEUE),
-            InlineKeyboardButton::callback(BUTTON_ARCHIVE, MENU_ARCHIVE),
+            InlineKeyboardButton::callback(
+                BUTTON_QUEUE,
+                ReplayableAction::Page(PageTarget::Queue, 0).callback(),
+            ),
+            InlineKeyboardButton::callback(
+                BUTTON_ARCHIVE,
+                ReplayableAction::Page(PageTarget::Archive, 0).callback(),
+            ),
         ],
-        vec![InlineKeyboardButton::callback(BUTTON_PROFILE, MENU_PROFILE)],
+        vec![InlineKeyboardButton::callback(
+            BUTTON_PROFILE,
+            ReplayableAction::Profile.callback(),
+        )],
     ])
 }
 
@@ -124,9 +130,18 @@ pub(in crate::bot) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup
         |pending| format!("✅ Проверить работы ({pending})"),
     );
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback(review_label, NEXT_REVIEW)],
-        vec![InlineKeyboardButton::callback(BUTTON_COURSES, MENU_COURSES)],
-        vec![InlineKeyboardButton::callback(BUTTON_PROFILE, MENU_PROFILE)],
+        vec![InlineKeyboardButton::callback(
+            review_label,
+            ReplayableAction::NextReview.callback(),
+        )],
+        vec![InlineKeyboardButton::callback(
+            BUTTON_COURSES,
+            ReplayableAction::Page(PageTarget::Courses, 0).callback(),
+        )],
+        vec![InlineKeyboardButton::callback(
+            BUTTON_PROFILE,
+            ReplayableAction::Profile.callback(),
+        )],
     ])
 }
 
@@ -154,7 +169,7 @@ pub(in crate::bot) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> Inl
                         course.subject.name().as_str(),
                         course.group.code().as_str()
                     )),
-                    format!("{COURSE_PREFIX}{}", course.course.id().as_uuid()),
+                    ReplayableAction::Course(course.course.id()).callback(),
                 )]
             })
             .collect::<Vec<_>>(),
@@ -174,75 +189,72 @@ pub(in crate::bot) fn course_assignments_keyboard(
                     assignment_status_icon(assignment.status()),
                     assignment.title().as_str(),
                 )),
-                format!("{MANAGE_PREFIX}{}", assignment.id().as_uuid()),
+                ReplayableAction::ManageAssignment(assignment.id()).callback(),
             )]
         })
         .collect();
     rows.push(vec![InlineKeyboardButton::callback(
         "➕ Создать задание",
-        format!("{CREATE_PREFIX}{}", course_id.as_uuid()),
+        ReplayableAction::StartAssignmentCreation(course_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "📊 Оценки",
-        format!("{GRADES_PREFIX}{}", course_id.as_uuid()),
+        ReplayableAction::Gradebook(course_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "🔗 Ссылка для группы",
-        format!("{INVITE_PREFIX}{}", course_id.as_uuid()),
+        ReplayableAction::GroupInvite(course_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "⬅️ К списку курсов",
-        MENU_COURSES,
+        ReplayableAction::Page(PageTarget::Courses, 0).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)
 }
 
 pub(in crate::bot) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
-    let assignment_id = assignment.id().as_uuid();
+    let assignment_id = assignment.id();
     let mut rows = Vec::new();
 
     match assignment.status() {
         AssignmentStatus::Draft => {
             rows.push(vec![InlineKeyboardButton::callback(
                 "🚀 Опубликовать",
-                format!("{PUBLISH_PREFIX}{assignment_id}"),
+                ScreenAction::Publish(assignment_id).callback(),
             )]);
             rows.push(vec![InlineKeyboardButton::callback(
                 "📦 Архивировать",
-                format!("{ARCHIVE_PREFIX}{assignment_id}"),
+                ScreenAction::Archive(assignment_id).callback(),
             )]);
         }
         AssignmentStatus::Published => rows.push(vec![InlineKeyboardButton::callback(
             "📦 Архивировать",
-            format!("{ARCHIVE_PREFIX}{assignment_id}"),
+            ScreenAction::Archive(assignment_id).callback(),
         )]),
         AssignmentStatus::Archived => rows.push(vec![InlineKeyboardButton::callback(
             "🚀 Опубликовать снова",
-            format!("{PUBLISH_PREFIX}{assignment_id}"),
+            ScreenAction::Publish(assignment_id).callback(),
         )]),
     }
 
     if assignment.status() != AssignmentStatus::Archived {
         rows.push(vec![InlineKeyboardButton::callback(
             texts::BUTTON_EDIT_DATES,
-            format!("{DEADLINE_PREFIX}{assignment_id}"),
+            ScreenAction::ChangeDeadline(assignment_id).callback(),
         )]);
     }
     rows.push(vec![InlineKeyboardButton::callback(
         "📎 Вложения",
-        format!("{FILES_PREFIX}{assignment_id}"),
+        ReplayableAction::AssignmentFiles(assignment_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "🎁 Выдать попытки",
-        format!("{ATTEMPTS_PREFIX}{assignment_id}"),
+        ReplayableAction::GrantAttempts(assignment_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
         "⬅️ К заданиям курса",
-        format!(
-            "{COURSE_PREFIX}{}",
-            assignment.teaching_course_id().as_uuid()
-        ),
+        ReplayableAction::Course(assignment.teaching_course_id()).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)
@@ -694,26 +706,26 @@ pub(in crate::bot) fn assignment_files_keyboard(
         rows.push(vec![
             InlineKeyboardButton::callback(
                 button_label(&format!("📄 {}", file.filename().as_str())),
-                format!("{FILE_OPEN_PREFIX}{index}"),
+                ScreenAction::OpenFile(index).callback(),
             ),
-            InlineKeyboardButton::callback("🗑", format!("{FILE_DELETE_PREFIX}{index}")),
+            InlineKeyboardButton::callback("🗑", ScreenAction::DeleteFile(index).callback()),
         ]);
     }
     if can_add {
         rows.push(vec![InlineKeyboardButton::callback(
             "📎 Добавить вложение",
-            FILE_ADD,
+            ScreenAction::AddFile.callback(),
         )]);
     }
     if creation_flow {
         rows.push(vec![InlineKeyboardButton::callback(
             "✅ Завершить создание",
-            FILE_FINISH,
+            ScreenAction::FinishFileCreation.callback(),
         )]);
     } else {
         rows.push(vec![InlineKeyboardButton::callback(
             "⬅️ К заданию",
-            format!("{MANAGE_PREFIX}{}", assignment.id().as_uuid()),
+            ReplayableAction::ManageAssignment(assignment.id()).callback(),
         )]);
     }
 
@@ -731,11 +743,11 @@ pub(in crate::bot) fn group_invite_keyboard(course_id: TeachingCourseId) -> Inli
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             "♻️ Перевыпустить ссылку",
-            INVITE_ROTATE,
+            ScreenAction::RotateGroupInvite.callback(),
         )],
         vec![InlineKeyboardButton::callback(
             "⬅️ К курсу",
-            format!("{COURSE_PREFIX}{}", course_id.as_uuid()),
+            ReplayableAction::Course(course_id).callback(),
         )],
     ])
 }
@@ -762,7 +774,7 @@ pub(in crate::bot) fn gradebook_students_keyboard(
         .collect::<Vec<_>>();
     rows.push(vec![InlineKeyboardButton::callback(
         "⬅️ К курсу",
-        format!("{COURSE_PREFIX}{}", course_id.as_uuid()),
+        ReplayableAction::Course(course_id).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)
@@ -808,7 +820,7 @@ pub(in crate::bot) fn assignment_students_keyboard(
         .collect::<Vec<_>>();
     rows.push(vec![InlineKeyboardButton::callback(
         "⬅️ К заданию",
-        format!("{MANAGE_PREFIX}{}", assignment_id.as_uuid()),
+        ReplayableAction::ManageAssignment(assignment_id).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)

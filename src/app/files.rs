@@ -130,7 +130,7 @@ impl FileService {
                 max_files: self.policy.max_files_per_assignment,
             });
         }
-        let position = first_free_position(&files)?;
+        let position = first_free_position(&files);
         let metadata = metadata.with_position(position);
         db::files::insert_assignment_file(&mut *tx, &metadata, &command.content).await?;
         tx.commit().await?;
@@ -220,18 +220,14 @@ async fn advance_revision(
     )
 }
 
-fn first_free_position(files: &[StoredFileMetadata]) -> AppResult<u64> {
+fn first_free_position(files: &[StoredFileMetadata]) -> u64 {
     let mut position = 1_u64;
     for file in files {
         if file.position() == position {
-            position = position
-                .checked_add(1)
-                .ok_or(AppError::AssignmentFileLimitReached {
-                    max_files: files.len(),
-                })?;
+            position += 1;
         } else if file.position() > position {
             break;
         }
     }
-    Ok(position)
+    position
 }

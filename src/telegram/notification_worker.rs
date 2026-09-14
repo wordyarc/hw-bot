@@ -245,9 +245,7 @@ fn render_review_notification(
 }
 
 fn retry_delay(settings: &NotificationWorkerSettings, attempt_count: u32) -> Duration {
-    let multiplier = 1_u32
-        .checked_shl(attempt_count.saturating_sub(1).min(31))
-        .unwrap_or(u32::MAX);
+    let multiplier = 1_u32 << attempt_count.saturating_sub(1).min(31);
 
     settings
         .retry_initial

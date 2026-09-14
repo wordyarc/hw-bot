@@ -1,7 +1,7 @@
 use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
 use crate::app::{StudentAssignment, SubmitHomework};
-use crate::bot::callbacks::{MENU_ARCHIVE, MENU_ASSIGNMENTS, PageTarget};
+use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::texts;
 use crate::bot::views::paginated_keyboard;
@@ -58,21 +58,6 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
         )),
     )
     .await
-}
-
-#[derive(Default)]
-struct SubjectHeadings {
-    current: Option<String>,
-}
-
-impl SubjectHeadings {
-    fn push(&mut self, text: &mut String, subject: &str) {
-        if self.current.as_deref() == Some(subject) {
-            return;
-        }
-        text.push_str(&format!("\n📘 {subject}\n"));
-        self.current = Some(subject.to_owned());
-    }
 }
 
 pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -168,19 +153,18 @@ async fn show_assignment_list(
 
     let mut text = String::from(title);
     let mut rows = Vec::with_capacity(assignments.items.len());
-    let mut subjects = SubjectHeadings::default();
+    let mut current: Option<&str> = None;
     for item in &assignments.items {
         let assignment = &item.assignment;
         let subject = item.subject.name().as_str();
-        subjects.push(&mut text, subject);
+        if current != Some(subject) {
+            text.push_str(&format!("\n📘 {subject}\n"));
+            current = Some(subject);
+        }
         text.push_str(&describe(item));
         rows.push(vec![InlineKeyboardButton::callback(
             button_label(&format!("{subject} · {}", assignment.title().as_str())),
-            format!(
-                "{}{}",
-                crate::bot::callbacks::ASSIGNMENT_PREFIX,
-                assignment.id().as_uuid()
-            ),
+            ReplayableAction::Assignment(assignment.id()).callback(),
         )]);
     }
 
@@ -251,21 +235,17 @@ pub(super) async fn show_assignment(
     if assignment.status() == AssignmentStatus::Published {
         rows.push(vec![InlineKeyboardButton::callback(
             "📤 Сдать работу",
-            format!(
-                "{}{}",
-                crate::bot::callbacks::SUBMIT_PREFIX,
-                assignment.id().as_uuid()
-            ),
+            ReplayableAction::StartSubmission(assignment.id()).callback(),
         )]);
     }
-    let (back_label, back_callback) = if assignment.status() == AssignmentStatus::Archived {
-        ("⬅️ К архиву", MENU_ARCHIVE)
+    let (back_label, back_target) = if assignment.status() == AssignmentStatus::Archived {
+        ("⬅️ К архиву", PageTarget::Archive)
     } else {
-        ("⬅️ К списку заданий", MENU_ASSIGNMENTS)
+        ("⬅️ К списку заданий", PageTarget::Assignments)
     };
     rows.push(vec![InlineKeyboardButton::callback(
         back_label,
-        back_callback,
+        ReplayableAction::Page(back_target, 0).callback(),
     )]);
 
     bot.send_message(chat_id, summary).await?;
@@ -352,11 +332,7 @@ pub(super) async fn show_history(
     }
     let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
         "⬅️ К заданию",
-        format!(
-            "{}{}",
-            crate::bot::callbacks::ASSIGNMENT_PREFIX,
-            assignment_id.as_uuid()
-        ),
+        ReplayableAction::Assignment(assignment_id).callback(),
     )]]);
     screen
         .bot
