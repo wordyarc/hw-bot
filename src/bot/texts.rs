@@ -73,6 +73,7 @@ pub const TERMS_EXIT_QUESTION: &str =
 pub const DRAFT_DISCARDED: &str =
     "Создание отменено. Введённые данные не сохранены, задание не создано.";
 pub const TERMS_DISCARDED: &str = "Правка отменена. У задания остались прежние условия.";
+pub const TERMS_CONFLICT: &str = "Пока вы меняли условия, задание изменил другой преподаватель. Правка не сохранена, ниже актуальные условия.";
 pub const DATE_FORMAT: &str = "Пришлите дату в формате ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ.";
 pub const TIMEZONE_LABEL: &str = "🕒 Часовой пояс:";
 

@@ -1,7 +1,7 @@
-use super::handlers::input::parse_u16;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::NaiveDate;
 
+use super::handlers::input::parse_u16;
 use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId, UserId};
 
 pub const MENU_ASSIGNMENTS: &str = "menu:assignments";

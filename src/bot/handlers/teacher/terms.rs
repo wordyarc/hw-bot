@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
 use teloxide::types::{ChatId, MessageId};
 
+use super::courses::show_assignment;
 use crate::app::{ChangeTerms, CreateAssignment, ErrorCode};
 use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, TermsAction};
 use crate::bot::context::{Chat, Screen, TextStep};
@@ -14,8 +15,6 @@ use crate::bot::state::{
 use crate::bot::views::{MenuAction, teacher_keyboard, terms_form_view};
 use crate::bot::{Bot, HandlerResult, assignment_files, texts};
 use crate::domain::{AssignmentId, AssignmentStatus, DomainError, DomainResult, LatePolicy};
-
-use super::courses::show_assignment;
 
 pub(in crate::bot::handlers) async fn begin_edit(
     screen: Screen<'_>,
@@ -491,6 +490,10 @@ async fn save(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
         }
     };
     let creating = matches!(terms.target, TermsTarget::Create(_));
+    let edited = match terms.target {
+        TermsTarget::Edit { assignment_id, .. } => Some(assignment_id),
+        TermsTarget::Create(_) => None,
+    };
     let result = match &terms.target {
         TermsTarget::Create(draft) => {
             screen
@@ -533,7 +536,14 @@ async fn save(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
     };
     let assignment = match result {
         Ok(value) => value,
-        Err(error) => return screen.fail(error).await,
+        Err(error) => {
+            return match edited {
+                Some(assignment_id) if error.code() == ErrorCode::ConcurrentModification => {
+                    conflict(screen, form, assignment_id).await
+                }
+                _ => screen.fail(error).await,
+            };
+        }
     };
     reset_dialogue(screen.deps.dialogue).await?;
     let mut form = form;
@@ -555,6 +565,21 @@ async fn save(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
     } else {
         show_assignment(screen, assignment.id()).await
     }
+}
+
+async fn conflict(
+    screen: Screen<'_>,
+    mut form: TermsForm,
+    assignment_id: AssignmentId,
+) -> HandlerResult {
+    reset_dialogue(screen.deps.dialogue).await?;
+    detach(screen.bot, screen.chat_id, &mut form).await?;
+    screen
+        .bot
+        .send_message(screen.chat_id, texts::TERMS_CONFLICT)
+        .reply_markup(teacher_keyboard())
+        .await?;
+    show_assignment(screen, assignment_id).await
 }
 
 #[cfg(test)]

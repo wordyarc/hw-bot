@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 
+use teloxide::types::InlineKeyboardMarkup;
+
 use crate::bot::state::{TermsForm, TermsStep, TermsTarget};
 use crate::bot::{texts, timezone::BotTimezone};
 use crate::domain::{
     Assignment, AssignmentStatus, Grade, Grading, LatePolicy, MaxScore, Role, SubmissionStatus,
 };
 use crate::telegram::text::truncate;
-use teloxide::types::InlineKeyboardMarkup;
 
 pub(in crate::bot) fn terms_form_view(
     form: &TermsForm,

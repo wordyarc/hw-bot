@@ -1253,17 +1253,25 @@ async fn a_penalty_edit_does_not_overwrite_a_concurrent_scale_change() {
     app.change_grading(id, app.teacher(), Some(10)).await.ok();
     telegram.click(app.teacher(), &save);
     telegram.flush(app.teacher()).await;
+    telegram.click(app.teacher(), &save);
+    telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
     assert_eq!(
         stored_assignment(&app, id).await.grading().max_score(),
         Some(10)
     );
-    assert!(
-        recorded_requests(&telegram.server)
+    let requests = recorded_requests(&telegram.server).await;
+    assert!(requests.contains(texts::TERMS_CONFLICT), "{requests}");
+    assert!(requests.contains(texts::STALE_BUTTON), "{requests}");
+    let card_button = cb(callbacks::DEADLINE_PREFIX, id);
+    assert_eq!(
+        sent_callbacks(&telegram.server)
             .await
-            .contains(hw_bot::bot::app_error_message(
-                hw_bot::app::ErrorCode::ConcurrentModification
-            ))
+            .iter()
+            .filter(|data| **data == card_button)
+            .count(),
+        2,
+        "the card is shown again after the lost race"
     );
 }
 

@@ -1,4 +1,6 @@
-use chrono::{DateTime, Days, Months, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
+use chrono::{
+    DateTime, Days, LocalResult, Months, NaiveDate, NaiveTime, Offset, TimeDelta, TimeZone, Utc,
+};
 use chrono_tz::Tz;
 
 /// Границы сроков исключительные, как у интервалов RFC 5545: «до конца дня 21.09» хранится как
@@ -131,10 +133,19 @@ impl BotTimezone {
     }
 
     fn instant(&self, date: NaiveDate, time: NaiveTime) -> Option<DateTime<Utc>> {
-        self.tz
-            .from_local_datetime(&date.and_time(time))
-            .single()
-            .map(|instant| instant.with_timezone(&Utc))
+        let local = date.and_time(time);
+        let resolved = match self.tz.from_local_datetime(&local) {
+            LocalResult::Single(instant) | LocalResult::Ambiguous(instant, _) => instant,
+            LocalResult::None => {
+                let before = self
+                    .tz
+                    .from_local_datetime(&(local - TimeDelta::hours(1)))
+                    .earliest()?;
+                let offset = i64::from(before.offset().fix().local_minus_utc());
+                return Some(Utc.from_utc_datetime(&(local - TimeDelta::seconds(offset))));
+            }
+        };
+        Some(resolved.with_timezone(&Utc))
     }
 }
 
@@ -211,6 +222,29 @@ mod tests {
         assert!(timezone.parse_deadline("20.08.2026 23:59 UTC").is_none());
         assert!(timezone.parse_deadline("31.02.2026 10:00").is_none());
         assert!(timezone.parse_deadline("завтра").is_none());
+    }
+
+    #[test]
+    fn a_clock_jump_at_midnight_still_closes_the_day() {
+        let santiago = BotTimezone::new(Tz::America__Santiago);
+        let date = NaiveDate::from_ymd_opt(2025, 9, 6).unwrap();
+
+        assert_eq!(santiago.end_of(date), Some(at("2025-09-07T04:00:00Z")));
+        assert_eq!(santiago.parse_deadline("06.09.2025"), santiago.end_of(date));
+    }
+
+    #[test]
+    fn skipped_times_move_forward_and_repeated_times_take_the_first_pass() {
+        let berlin = BotTimezone::new(Tz::Europe__Berlin);
+
+        assert_eq!(
+            berlin.parse_deadline("29.03.2026 02:30"),
+            Some(at("2026-03-29T01:30:00Z"))
+        );
+        assert_eq!(
+            berlin.parse_deadline("25.10.2026 02:30"),
+            Some(at("2026-10-25T00:30:00Z"))
+        );
     }
 
     #[test]

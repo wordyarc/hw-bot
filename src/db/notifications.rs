@@ -1,8 +1,8 @@
-use super::error::ensure_updated;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
+use super::error::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     Assignment, Subject, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User,
@@ -17,7 +17,6 @@ const LOST_LEASE: DbError = DbError::Conflict {
 };
 
 #[derive(Clone, Debug)]
-
 pub struct ClaimedReviewNotification {
     pub id: Uuid,
     pub submission_id: SubmissionId,

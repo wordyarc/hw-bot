@@ -2,13 +2,12 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
 use crate::app::{ErrorCode, GroupInviteState};
-use crate::domain::TeachingCourseId;
-
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{confirm_invite_rotation_keyboard, group_invite_keyboard};
+use crate::domain::TeachingCourseId;
 
 pub(in crate::bot::handlers) async fn show_group_invite(
     screen: Screen<'_>,

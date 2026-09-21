@@ -11,7 +11,9 @@ pub struct NonEmptyString(String);
 
 impl NonEmptyString {
     pub fn new(field: &'static str, value: impl Into<String>) -> DomainResult<Self> {
-        let value = value.into().trim().to_owned();
+        let mut value = value.into();
+        value.truncate(value.trim_end().len());
+        value.replace_range(..value.len() - value.trim_start().len(), "");
 
         if value.is_empty() {
             return Err(DomainError::EmptyField { field });

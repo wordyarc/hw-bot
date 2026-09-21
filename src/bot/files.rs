@@ -1,17 +1,17 @@
-use anyhow::{Context, anyhow};
-use futures::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::{Context, anyhow};
+use futures::StreamExt;
 use teloxide::net::Download;
 use teloxide::prelude::{Bot, ChatId, Requester};
 use teloxide::types::{FileId, InputFile, Message};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
+use super::HandlerResult;
 use crate::app::OpenedFile;
 use crate::domain::{FILE_NAME_MAX_LEN, FilePresentation};
-
-use super::HandlerResult;
 
 #[derive(Clone)]
 pub(super) struct FileTransfers {

@@ -1,10 +1,10 @@
-use crate::bot::Bot;
 use teloxide::payloads::{SendMessageSetters, SetMyCommandsSetters};
 use teloxide::types::{BotCommand, BotCommandScope, ChatId, KeyboardRemove, Recipient};
 use teloxide::utils::command::BotCommands;
 
 use super::Command;
 use crate::app::{Actor, AppResult, ErrorCode};
+use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::context::{Chat, Screen};
 use crate::bot::state::{BotState, ScreenState};

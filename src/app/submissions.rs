@@ -1,4 +1,3 @@
-use crate::pagination::{Page, PageRequest};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -7,6 +6,7 @@ use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{AssignmentId, Submission, SubmissionId};
+use crate::pagination::{Page, PageRequest};
 use crate::read_models::QueuePlace;
 
 #[derive(Clone, Debug)]

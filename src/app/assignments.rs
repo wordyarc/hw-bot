@@ -1,4 +1,3 @@
-use crate::pagination::{Page, PageRequest};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -14,6 +13,7 @@ use crate::domain::{
     NewAssignment, StoredFileMetadata, StudentAssignmentProgress, StudentGroupId, Subject,
     Submission, SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
 };
+use crate::pagination::{Page, PageRequest};
 use crate::read_models::AssignmentStudentSummary;
 
 #[derive(Clone, Debug)]
@@ -74,7 +74,7 @@ pub struct StudentAssignment {
 pub struct StudentAssignmentDetails {
     pub assignment: StudentAssignment,
     pub files: Vec<StoredFileMetadata>,
-    pub submissions: Vec<Submission>,
+    pub latest_submission: Option<Submission>,
 }
 
 #[derive(Clone, Debug)]
@@ -290,11 +290,8 @@ impl AssignmentService {
                 .await?
                 .remove(&assignment.id())
                 .unwrap_or_default();
-        let submissions =
-            db::submissions::latest_for_student(&self.pool, assignment.id(), student.id())
-                .await?
-                .into_iter()
-                .collect();
+        let latest_submission =
+            db::submissions::latest_for_student(&self.pool, assignment.id(), student.id()).await?;
         let files = db::files::list_for_assignment(&self.pool, assignment.id()).await?;
         let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
             .await?
@@ -307,7 +304,7 @@ impl AssignmentService {
                 history,
             },
             files,
-            submissions,
+            latest_submission,
         })
     }
 

@@ -1,9 +1,8 @@
-use super::Bot;
 use teloxide::prelude::ChatId;
 
-use crate::app::{AppError, ErrorCode};
-
+use super::Bot;
 use super::HandlerResult;
+use crate::app::{AppError, ErrorCode};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum BotError {

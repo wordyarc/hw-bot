@@ -1,20 +1,19 @@
-use crate::bot::callbacks::PageTarget;
-use crate::bot::views::paginated_keyboard;
-use crate::pagination::PageRequest;
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
-use crate::domain::{AssignmentId, TeachingCourseId};
-
 use crate::bot::HandlerResult;
+use crate::bot::callbacks::PageTarget;
 use crate::bot::context::{Chat, Deps, Screen};
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
+use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{
     assignment_actions_keyboard, assignment_status, course_assignments_keyboard, courses_keyboard,
     grading_lines, send_message_chunks, teacher_menu,
 };
+use crate::domain::{AssignmentId, TeachingCourseId};
+use crate::pagination::PageRequest;
 
 pub(in crate::bot::handlers) async fn show_courses_page(
     screen: Screen<'_>,

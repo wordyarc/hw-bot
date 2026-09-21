@@ -1,6 +1,6 @@
-use crate::bot::Bot;
 use teloxide::types::{ChatId, Message};
 
+use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::texts;
 use crate::domain::{Grading, MAX_ATTEMPTS};

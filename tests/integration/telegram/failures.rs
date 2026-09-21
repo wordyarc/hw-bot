@@ -9,11 +9,12 @@ use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+use hw_bot::app::ErrorCode;
+use hw_bot::bot::app_error_message;
+
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
-use hw_bot::app::ErrorCode;
-use hw_bot::bot::app_error_message;
 
 #[tokio::test]
 async fn a_command_reports_an_application_error_to_the_user_once() {

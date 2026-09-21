@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 use axum::Router;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use std::time::Duration;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
@@ -141,11 +142,12 @@ async fn normalize_transport_error(response: Response) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app::AppError;
     use axum::body::{Body, Bytes, to_bytes};
     use axum::http::Request;
     use tower::ServiceExt;
+
+    use super::*;
+    use crate::app::AppError;
 
     #[tokio::test]
     async fn normalization_preserves_the_file_size_error() {

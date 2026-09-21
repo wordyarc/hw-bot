@@ -1,4 +1,3 @@
-use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
@@ -9,6 +8,7 @@ use crate::domain::{
     Assignment, AssignmentId, AssignmentParts, AssignmentStatus, Grading, LatePolicy,
     StudentGroupId, Subject, SubjectId, TeachingCourseId, UserId,
 };
+use crate::pagination::PageRequest;
 
 const MAX_ATTEMPTS: &str = "assignments.max_attempts";
 const MAX_SCORE: &str = "assignments.max_score";

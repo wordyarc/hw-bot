@@ -1,4 +1,3 @@
-use super::ApiPath as Path;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -7,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::ApiPath as Path;
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{ReviewQueueItem, ReviewSubmission};

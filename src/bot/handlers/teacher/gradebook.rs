@@ -1,15 +1,14 @@
-use crate::bot::callbacks::PageTarget;
-use crate::bot::views::paginated_keyboard;
-use crate::pagination::{Page, PageRequest};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-use crate::domain::{TeachingCourseId, UserId};
-
 use crate::bot::HandlerResult;
+use crate::bot::callbacks::PageTarget;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
+use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{gradebook_students_keyboard, send_message_chunks};
+use crate::domain::{TeachingCourseId, UserId};
+use crate::pagination::{Page, PageRequest};
 
 pub(in crate::bot::handlers) async fn show_gradebook_page(
     screen: Screen<'_>,

@@ -1,5 +1,6 @@
-use crate::domain::{DomainError, DomainResult};
 use uuid::Uuid;
+
+use crate::domain::{DomainError, DomainResult};
 
 macro_rules! uuid_id {
     ($name:ident, $generator:expr) => {

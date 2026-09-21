@@ -1,12 +1,8 @@
 use chrono::{Datelike, NaiveDate, Utc};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup};
 
-use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
-use crate::domain::{
-    Assignment, AssignmentStatus, Role, StoredFileMetadata, SubmissionId, TeachingCourseId,
-};
-
 use super::render::{assignment_status_icon, button_label};
+use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
 use crate::bot::callbacks::{
     CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX, DEADLINE_CALENDAR,
     DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL, DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS,
@@ -22,6 +18,9 @@ use crate::bot::callbacks::{
 use crate::bot::state::{AssignmentTerms, InputMode, TermsForm, TermsStep, TermsTarget};
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
+use crate::domain::{
+    Assignment, AssignmentStatus, Role, StoredFileMetadata, SubmissionId, TeachingCourseId,
+};
 
 pub(in crate::bot) const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
 pub(in crate::bot) const BUTTON_ARCHIVE: &str = "🗄 Архив";
@@ -828,12 +827,12 @@ pub(in crate::bot) fn assignment_students_keyboard(
 
 #[cfg(test)]
 mod tests {
-    use super::super::render::{deadline_left, penalty_schedule, terms_form_view};
-    use crate::domain::{Grading, LatePolicy, MaxScore};
     use chrono::DateTime;
     use chrono_tz::Tz;
 
+    use super::super::render::{deadline_left, penalty_schedule, terms_form_view};
     use super::*;
+    use crate::domain::{Grading, LatePolicy, MaxScore};
 
     fn scored_terms() -> AssignmentTerms {
         let mut draft = crate::bot::state::DraftAssignment::new(

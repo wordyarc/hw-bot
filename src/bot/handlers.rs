@@ -1,12 +1,10 @@
-use super::Bot;
-use crate::domain::{Role, TelegramUserId};
-use crate::pagination::PageRequest;
 use anyhow::{Context, anyhow};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
 use teloxide::types::{CallbackQuery, Message, MessageId, User};
 use teloxide::utils::command::BotCommands;
 
+use super::Bot;
 use super::HandlerResult;
 use super::assignment_files;
 use super::callbacks::{
@@ -17,6 +15,8 @@ use super::errors::finish_handler;
 use super::state::{BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button};
+use crate::domain::{Role, TelegramUserId};
+use crate::pagination::PageRequest;
 
 pub(super) mod home;
 pub(super) mod input;
@@ -54,6 +54,21 @@ pub(super) enum Command {
 }
 
 impl Command {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Start(_) => "start",
+            Self::Menu => "menu",
+            Self::Tasks => "tasks",
+            Self::Queue => "queue",
+            Self::Archive => "archive",
+            Self::Review => "review",
+            Self::Courses => "courses",
+            Self::Profile => "profile",
+            Self::Cancel => "cancel",
+            Self::Help => "help",
+        }
+    }
+
     fn visible_to(&self, role: Option<Role>) -> bool {
         match self {
             Self::Start(_) => role.is_none(),
@@ -91,17 +106,7 @@ pub(super) async fn handle_command(
         deps,
     };
     let result = async {
-        let action = message
-            .text()
-            .unwrap_or_default()
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .trim_start_matches('/')
-            .split('@')
-            .next()
-            .unwrap_or_default();
-        tracing::Span::current().record("action", action);
+        tracing::Span::current().record("action", command.name());
         if !ensure_private_message(&bot, &message).await? {
             return Ok(());
         }
@@ -647,20 +652,29 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+    use chrono_tz::Tz;
+
     use super::input::parse_positive_attempts;
+    use super::*;
     use crate::bot::BotTimezone;
     use crate::bot::callbacks::{EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX};
     use crate::bot::views::{
         assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
     };
     use crate::domain::SubmissionId;
-    use chrono::Utc;
-    use chrono_tz::Tz;
-
-    use super::*;
 
     fn timezone() -> BotTimezone {
         BotTimezone::new(Tz::Asia__Vladivostok)
+    }
+
+    #[test]
+    fn command_names_match_the_declared_bot_commands() {
+        for declared in Command::bot_commands() {
+            let parsed = Command::parse(&declared.command, "test_bot").unwrap();
+
+            assert_eq!(declared.command.trim_start_matches('/'), parsed.name());
+        }
     }
 
     #[test]

@@ -1,11 +1,10 @@
 use teloxide::types::MessageId;
 
+use super::terms::{apply_date, render};
 use crate::bot::callbacks::DeadlineAction;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, InputMode, TermsStep};
 use crate::bot::{HandlerResult, texts};
-
-use super::terms::{apply_date, render};
 
 pub(in crate::bot::handlers) async fn handle_deadline(
     screen: Screen<'_>,

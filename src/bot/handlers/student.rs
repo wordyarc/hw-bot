@@ -1,24 +1,20 @@
+use chrono::Utc;
+use teloxide::payloads::SendMessageSetters;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
 use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
 use crate::app::{ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::texts;
-use crate::bot::views::paginated_keyboard;
-use crate::bot::views::student_keyboard;
-use crate::domain::USER_TEXT_MAX_LEN;
-use crate::pagination::{Page, PageRequest};
-use chrono::Utc;
-use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
-
-use crate::domain::{AssignmentId, AssignmentStatus};
-
 use crate::bot::views::{
-    button_label, deadline_left, grade_line, grading_lines, send_message_chunks, student_menu,
-    submission_status,
+    button_label, deadline_left, grade_line, grading_lines, paginated_keyboard,
+    send_message_chunks, student_keyboard, student_menu, submission_status,
 };
 use crate::bot::{FileTransfers, HandlerResult};
+use crate::domain::{AssignmentId, AssignmentStatus, USER_TEXT_MAX_LEN};
+use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
     let Screen { chat, actor } = screen;
@@ -226,7 +222,7 @@ pub(super) async fn show_assignment(
     }
 
     let mut rows = Vec::new();
-    if !details.submissions.is_empty() {
+    if details.latest_submission.is_some() {
         rows.push(vec![InlineKeyboardButton::callback(
             "🕘 История сдач",
             PageTarget::History(assignment_id).callback(0),
@@ -267,7 +263,7 @@ pub(super) async fn show_assignment(
                 .await?;
         }
     }
-    for submission in &details.submissions {
+    if let Some(submission) = &details.latest_submission {
         send_submission(screen, submission).await?;
     }
     bot.send_message(chat_id, "Выберите действие:")

@@ -1,12 +1,13 @@
-use anyhow::Context;
-use futures::{Stream, StreamExt, future};
-use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use anyhow::Context;
+use futures::{Stream, StreamExt, future};
+use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use teloxide::dispatching::UpdateHandler;
 use teloxide::dispatching::dialogue::{self, InMemStorage};
 use teloxide::prelude::*;
@@ -465,6 +466,7 @@ fn schema(force_stop: CancellationToken) -> UpdateHandler<BotError> {
 
 fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<BotError> {
     use std::ops::ControlFlow;
+
     use tracing::Instrument;
 
     dptree::from_fn(

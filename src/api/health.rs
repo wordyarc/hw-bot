@@ -1,7 +1,8 @@
-use crate::api::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+
+use crate::api::AppState;
 
 pub async fn liveness() -> StatusCode {
     StatusCode::OK

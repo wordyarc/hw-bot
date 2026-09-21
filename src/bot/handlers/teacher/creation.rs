@@ -1,22 +1,20 @@
+use teloxide::payloads::SendMessageSetters;
+use teloxide::types::MessageId;
+
+use super::attempts::chosen_amount;
+use crate::bot::HandlerResult;
+use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::handlers::input::{
     ensure_text_limit, parse_max_score, parse_positive_attempts, require_text,
 };
-use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, USER_TEXT_MAX_LEN};
-use teloxide::payloads::SendMessageSetters;
-use teloxide::types::MessageId;
-
-use crate::domain::{Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
-
-use crate::bot::HandlerResult;
-use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::state::{
     AssignmentTerms, BotState, DraftAssignment, FlowState, TermsForm, TermsStep,
 };
 use crate::bot::texts;
 use crate::bot::views::{attempts_keyboard, grading_keyboard};
-
-use super::attempts::chosen_amount;
+use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, USER_TEXT_MAX_LEN};
+use crate::domain::{Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
 
 pub(in crate::bot::handlers) async fn handle_max_attempts(
     screen: Screen<'_>,

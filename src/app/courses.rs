@@ -1,4 +1,3 @@
-use crate::pagination::{Page, PageRequest};
 use sqlx::PgPool;
 
 use crate::app::access::load_managing_teacher;
@@ -6,6 +5,7 @@ use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{DomainError, InviteGeneration, StudentGroup, TeachingCourseId, UserId};
+use crate::pagination::{Page, PageRequest};
 use crate::read_models::{AssignmentGrade, CourseStudent, TeachingCourseSummary};
 
 #[derive(Clone, Debug)]

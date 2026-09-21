@@ -1,4 +1,3 @@
-use crate::harness::TestApp;
 use axum::http::StatusCode;
 use hw_bot::app::Actor;
 use hw_bot::domain::UserId;
@@ -7,10 +6,13 @@ use hw_bot::{
     pagination::{PAGE_SIZE, PageRequest},
 };
 
+use crate::harness::TestApp;
+
 #[tokio::test]
 async fn telegram_opens_the_next_assignment_page_using_a_real_navigation_button() {
-    use crate::harness::{telegram::*, telegram_scenario::TelegramScenario};
     use hw_bot::bot::callbacks;
+
+    use crate::harness::{telegram::*, telegram_scenario::TelegramScenario};
     let app = TestApp::start().await;
     for index in 0..PAGE_SIZE {
         app.add_published_assignment(
@@ -191,11 +193,10 @@ async fn the_card_reads_only_the_latest_attempt_and_history_is_paged_newest_firs
         .find_for_student(app.student_actor(), assignment.id())
         .await
         .unwrap();
-    assert_eq!(details.submissions.len(), 1);
-    assert_eq!(
-        details.submissions[0].attempt_number() as usize,
-        PAGE_SIZE + 1
-    );
+    let latest = details
+        .latest_submission
+        .expect("the newest attempt is on the card");
+    assert_eq!(latest.attempt_number() as usize, PAGE_SIZE + 1);
     let page = app
         .application
         .assignments

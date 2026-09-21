@@ -1,13 +1,12 @@
-use super::Bot;
 use teloxide::types::{ChatId, Message};
 
-use crate::app::{Actor, AppError, ApplicationContainer, ErrorCode};
-use crate::domain::TelegramUserId;
-
+use super::Bot;
 use super::HandlerResult;
 use super::invites::BotInvites;
 use super::state::BotDialogue;
 use super::timezone::BotTimezone;
+use crate::app::{Actor, AppError, ApplicationContainer, ErrorCode};
+use crate::domain::TelegramUserId;
 
 #[derive(Clone, Copy)]
 pub(super) struct Chat<'a> {

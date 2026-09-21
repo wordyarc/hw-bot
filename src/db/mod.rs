@@ -1,8 +1,9 @@
+use std::str::FromStr;
+use std::time::Duration;
+
 use sqlx::PgPool;
 use sqlx::migrate::{Migrate, MigrateError, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use std::str::FromStr;
-use std::time::Duration;
 
 pub mod academic;
 pub mod assignments;

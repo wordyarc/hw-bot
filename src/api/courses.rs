@@ -1,5 +1,3 @@
-use super::ApiPath as Path;
-use super::pagination::{Pagination, page_headers, page_json};
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -7,6 +5,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use super::ApiPath as Path;
+use super::pagination::{Pagination, page_headers, page_json};
 use crate::api::users::StudentGroupResponse;
 use crate::api::{Actor, ApiError, AppState};
 use crate::app::{StudentGrades, TeachingCourseSummary};

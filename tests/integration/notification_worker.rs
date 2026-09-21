@@ -213,6 +213,7 @@ async fn permanent_telegram_error_fails_notification() {
 #[tokio::test]
 async fn flood_control_pauses_the_worker_before_the_next_ready_notification() {
     use std::sync::{Arc, Mutex};
+
     use tokio::time::Instant;
     let app = TestApp::start().await;
     for content in ["pull/1", "pull/2"] {

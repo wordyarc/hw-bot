@@ -1,4 +1,3 @@
-use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
@@ -7,6 +6,7 @@ use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     AssignmentId, Role, StudentGroupId, SubmissionHistory, TelegramUserId, User, UserId,
 };
+use crate::pagination::PageRequest;
 use crate::read_models::{AssignmentStudentSummary, CourseStudent};
 
 pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>

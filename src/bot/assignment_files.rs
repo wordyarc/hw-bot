@@ -1,5 +1,3 @@
-use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
-use crate::domain::{AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
@@ -13,6 +11,8 @@ use super::views::{
     assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
     send_message_chunks, teacher_keyboard,
 };
+use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
+use crate::domain::{AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata};
 
 pub(super) async fn submit_file(
     step: TextStep<'_>,

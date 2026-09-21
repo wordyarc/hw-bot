@@ -1,5 +1,3 @@
-use super::ApiPath as Path;
-use super::pagination::{Pagination, page_json};
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -8,6 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::ApiPath as Path;
+use super::pagination::{Pagination, page_json};
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{
@@ -174,6 +174,7 @@ pub struct StudentAssignmentDetailsResponse {
     #[serde(flatten)]
     assignment: StudentAssignmentResponse,
     files: Vec<StoredFileResponse>,
+    /// Только последняя попытка: полная история отдаётся отдельной страницей.
     submissions: Vec<SubmissionResponse>,
 }
 
@@ -232,7 +233,7 @@ impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
         Self {
             assignment: StudentAssignmentResponse::from(&details.assignment),
             files: details.files.iter().map(Into::into).collect(),
-            submissions: details.submissions.iter().map(Into::into).collect(),
+            submissions: details.latest_submission.iter().map(Into::into).collect(),
         }
     }
 }

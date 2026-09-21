@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use crate::pagination::PageRequest;
 use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
@@ -11,6 +10,7 @@ use crate::domain::{
     EducationLevel, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, TeachingCourse,
     TeachingCourseId, User, UserId,
 };
+use crate::pagination::PageRequest;
 use crate::read_models::TeachingCourseSummary;
 
 const EDUCATION_LEVEL: &str = "student_groups.education_level";
@@ -20,7 +20,6 @@ pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> D
 where
     E: PgExecutor<'e>,
 {
-    // экран ссылки только читает состояние и не включает регистрацию скрытой мутацией.
     sqlx::query!(
         r#"
         with created as (
