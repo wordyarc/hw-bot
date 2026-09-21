@@ -303,7 +303,7 @@ fn duration_options_keyboard(
     timezone: &BotTimezone,
 ) -> InlineKeyboardMarkup {
     let deadline = terms.deadline_at.expect("duration follows deadline");
-    let base = timezone.local_date(deadline);
+    let base = timezone.local_date(deadline - chrono::Duration::nanoseconds(1));
     let mut rows = Vec::new();
     for (label, date) in [
         (
@@ -326,7 +326,7 @@ fn duration_options_keyboard(
         let Ok(policy) = terms.preview_policy(1) else {
             continue;
         };
-        let Ok(periods) = u16::try_from(policy.periods_until(deadline, at)) else {
+        let Ok(periods) = u16::try_from(policy.periods_to_close_at(deadline, at)) else {
             continue;
         };
         if terms
@@ -534,7 +534,7 @@ pub(in crate::bot) fn terms_keyboard(
             texts::SUBMIT_UNTIL,
             terms
                 .deadline_at
-                .map(|date| timezone.format_short(date))
+                .map(|date| format!("до {}", timezone.format_until_short(date)))
                 .unwrap_or_default()
         ),
         TERMS_DEADLINE,
@@ -614,7 +614,7 @@ pub(super) fn terms_form_keyboard(
                     _ => Utc::now(),
                 }
             };
-            let earliest = timezone.first_date_after(after).unwrap_or(NaiveDate::MAX);
+            let earliest = timezone.first_date_ending_after(after);
             calendar_keyboard(month, earliest)
         } else if form.step == TermsStep::DurationDate {
             duration_options_keyboard(terms, timezone)
@@ -640,7 +640,7 @@ pub(super) fn terms_form_keyboard(
                             format!(
                                 "{} · до {}",
                                 texts::lateness_duration(terms.period_days, periods),
-                                timezone.format_short(date)
+                                timezone.format_until_short(date)
                             ),
                             format!("{LATE_PERIODS_PREFIX}{periods}"),
                         )]);
@@ -830,7 +830,7 @@ pub(in crate::bot) fn assignment_students_keyboard(
 mod tests {
     use super::super::render::{deadline_left, penalty_schedule, terms_form_view};
     use crate::domain::{Grading, LatePolicy, MaxScore};
-    use chrono::{DateTime, FixedOffset, NaiveTime};
+    use chrono::{DateTime, FixedOffset};
 
     use super::*;
 
@@ -857,10 +857,10 @@ mod tests {
         use crate::bot::callbacks::{CallbackAction, DeadlineAction, FlowAction};
         let timezone = timezone();
         let mut terms = scored_terms();
-        terms.deadline_at = timezone.parse_deadline("20.08.2027 23:59");
-        terms.period_days = 365;
+        terms.deadline_at = timezone.parse_deadline("20.08.2027");
+        terms.period_days = 7;
         let deadline = terms.deadline_at.unwrap();
-        let policy = LatePolicy::new(365, 1, 1).unwrap();
+        let policy = LatePolicy::new(7, 1, 1).unwrap();
         let keyboard = duration_options_keyboard(&terms, &timezone);
         let mut dates = Vec::new();
         for button in keyboard.inline_keyboard.iter().flatten() {
@@ -871,19 +871,20 @@ mod tests {
             if let CallbackAction::Flow(FlowAction::Deadline(DeadlineAction::Pick(date))) = action {
                 let at = timezone.end_of(date).unwrap();
                 assert!(at > deadline);
-                let periods = u16::try_from(policy.periods_until(deadline, at)).unwrap();
-                LatePolicy::new(365, 1, periods)
+                let periods = u16::try_from(policy.periods_to_close_at(deadline, at)).unwrap();
+                LatePolicy::new(7, 1, periods)
                     .unwrap()
                     .validate_horizon(deadline)
                     .unwrap();
-                dates.push(date);
+                dates.push((date, periods));
             }
         }
         assert_eq!(dates.len(), 3);
         assert_eq!(
             dates[0],
-            timezone.local_date(deadline) + chrono::Days::new(7)
+            (chrono::NaiveDate::from_ymd_opt(2027, 8, 27).unwrap(), 1)
         );
+        assert_eq!(dates[1].1, 2);
     }
 
     #[test]
@@ -995,10 +996,7 @@ mod tests {
     }
 
     fn timezone() -> BotTimezone {
-        BotTimezone::new(
-            FixedOffset::east_opt(10 * 3600).unwrap(),
-            NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
-        )
+        BotTimezone::new(FixedOffset::east_opt(10 * 3600).unwrap())
     }
 
     #[test]

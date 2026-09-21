@@ -654,15 +654,12 @@ mod tests {
         assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
     };
     use crate::domain::SubmissionId;
-    use chrono::{FixedOffset, NaiveTime, Utc};
+    use chrono::{FixedOffset, Utc};
 
     use super::*;
 
     fn timezone() -> BotTimezone {
-        BotTimezone::new(
-            FixedOffset::east_opt(10 * 3600).unwrap(),
-            NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
-        )
+        BotTimezone::new(FixedOffset::east_opt(10 * 3600).unwrap())
     }
 
     #[test]

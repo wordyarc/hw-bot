@@ -34,7 +34,6 @@ max_concurrent_transfers = 4
 
 [ui]
 utc_offset = "+10:00"
-deadline_time = "23:59"
 
 [telegram]
 enabled = false

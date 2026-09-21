@@ -316,10 +316,7 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         "test-token",
         &telegram.server.uri(),
         bot_settings_with(|_| {}),
-        BotTimezone::new(
-            chrono::FixedOffset::east_opt(36000).unwrap(),
-            chrono::NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
-        ),
+        BotTimezone::new(chrono::FixedOffset::east_opt(36000).unwrap()),
         crate::harness::invite_codec(),
     )
     .unwrap();

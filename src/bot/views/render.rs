@@ -38,8 +38,8 @@ pub(in crate::bot) fn terms_form_view(
                 texts::DEADLINE_QUESTION
             };
             format!(
-                "{context}{question}\nВремя по умолчанию — {} ({}). Можно прислать дату сообщением.\n{}",
-                timezone.deadline_time().format("%H:%M"),
+                "{context}{question}\n{} Пояс {}.\n{}",
+                texts::WHOLE_DAY_HINT,
                 timezone.suffix(),
                 texts::DATE_FORMAT,
             )
@@ -66,7 +66,7 @@ pub(in crate::bot) fn terms_form_view(
                 .closes_at(terms.deadline_at.expect("duration follows deadline"))
                 .expect("validated duration");
             format!(
-                "{} — это {}.\n{} {} включительно. Применить?",
+                "Приём {} — это {}.\n{} {}. Применить?",
                 timezone.format(selected),
                 texts::lateness_duration(terms.period_days, periods),
                 texts::SUBMISSIONS_CLOSE_LABEL,
@@ -148,7 +148,7 @@ pub(super) fn penalty_schedule(
     let max = max_score.get();
     let mut lines = vec![
         texts::SCHEDULE_HEADER.to_owned(),
-        texts::schedule_free_row(&timezone.format_date_time(deadline_at), max),
+        texts::schedule_free_row(&timezone.format_until(deadline_at), max),
     ];
     let mut previous = 0;
     for periods in schedule_periods(policy, max_score) {
@@ -160,7 +160,7 @@ pub(super) fn penalty_schedule(
             .period_end(deadline_at, periods)
             .expect("validated horizon");
         lines.push(texts::schedule_penalty_row(
-            &timezone.format_date_time(until),
+            &timezone.format_until(until),
             max - score,
             score,
             max,
@@ -168,9 +168,7 @@ pub(super) fn penalty_schedule(
         previous = periods;
     }
     let closes_at = policy.closes_at(deadline_at).expect("validated horizon");
-    lines.push(texts::schedule_closed(
-        &timezone.format_date_time(closes_at),
-    ));
+    lines.push(texts::schedule_closed(&timezone.format_since(closes_at)));
     lines.join("\n")
 }
 
@@ -214,15 +212,15 @@ pub(in crate::bot) fn grading_lines(
             timezone,
         )
     );
-    if now > assignment.closes_at() {
+    if now >= assignment.closes_at() {
         lines.push_str(&format!(
             "\n{} {}.",
             texts::CLOSED_ON,
-            timezone.format(assignment.closes_at())
+            timezone.format_closed_since(assignment.closes_at())
         ));
     }
     let penalty = assignment.penalty_at(now);
-    if penalty > 0 && now <= assignment.closes_at() {
+    if penalty > 0 && now < assignment.closes_at() {
         lines.push_str(&format!("\n{} −{penalty}", texts::LATE_PENALTY_LABEL));
     }
     lines
@@ -240,7 +238,7 @@ pub(in crate::bot) fn terms_lines(
     };
     match late_policy {
         Some(policy) => format!(
-            "{scale}\n{} {}.\n{}\n{} {}.\n{} {} включительно.",
+            "{scale}\n{} {}.\n{}\n{} {}.\n{} {}.",
             texts::NO_PENALTY_UNTIL,
             timezone.format(deadline_at),
             texts::penalty_rule(policy.period_days(), policy.penalty()),

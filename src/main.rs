@@ -173,7 +173,6 @@ fn build_telegram_bot(
     }
 
     let utc_offset = config.ui.utc_offset;
-    let deadline_time = config.ui.deadline_time;
 
     let bot = TelegramBot::new(
         application,
@@ -188,7 +187,7 @@ fn build_telegram_bot(
             file_transfer_timeout: Duration::from_millis(files.transfer_timeout_ms.get()),
             max_concurrent_file_transfers: files.max_concurrent_transfers.get(),
         },
-        BotTimezone::new(utc_offset, deadline_time),
+        BotTimezone::new(utc_offset),
         invites,
     )?;
 

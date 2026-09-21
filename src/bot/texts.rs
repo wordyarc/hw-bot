@@ -22,7 +22,7 @@ pub const STALE_BUTTON: &str =
 
 pub const FILE_DELETE_CONFIRM: &str = "Удалить вложение из уже выданного задания?";
 pub const LATE_POLICY_QUESTION: &str = "После срока принимать работы?";
-pub const SUBMISSIONS_CLOSE_LABEL: &str = "Последний день приёма:";
+pub const SUBMISSIONS_CLOSE_LABEL: &str = "Приём работ:";
 pub const LATE_PENALTY_LABEL: &str = "При отправке сейчас штраф:";
 pub const DEADLINE_QUESTION: &str =
     "До какого числа нужно сдать работу? После этого приём закрывается.";
@@ -57,6 +57,8 @@ pub const PENALTY_LABEL: &str = "Штраф:";
 pub const PERIOD_LABEL: &str = "Период:";
 pub const LATENESS_LABEL: &str = "Опоздание:";
 pub const CLOSED_ON: &str = "Приём работ закрыт";
+pub const WHOLE_DAY_HINT: &str =
+    "Дата без времени означает конец этого дня. Можно прислать дату сообщением.";
 pub const MAX_SCORE_LABEL: &str = "🏅 Максимум:";
 pub const PASS_FAIL_LABEL: &str = "🏅 Оценивание: зачёт/незачёт";
 pub const BUTTON_OTHER_NUMBER: &str = "Другое число";
@@ -128,8 +130,8 @@ pub fn schedule_skipped(periods: u32) -> String {
     )
 }
 
-pub fn schedule_closed(at: &str) -> String {
-    format!("• после {at} — приём закрыт")
+pub fn schedule_closed(since: &str) -> String {
+    format!("• с {since} — приём закрыт")
 }
 
 pub fn closing_change(before: &str, after: &str) -> String {

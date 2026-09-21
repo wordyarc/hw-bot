@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::{FixedOffset, NaiveTime};
+use chrono::FixedOffset;
 use serde::{Deserialize, Deserializer};
 
 use crate::bot::MAX_CONCURRENT_UPDATES;
@@ -93,8 +93,6 @@ pub struct FilesConfig {
 pub struct UiConfig {
     #[serde(deserialize_with = "deserialize_utc_offset")]
     pub utc_offset: FixedOffset,
-    #[serde(deserialize_with = "deserialize_deadline_time")]
-    pub deadline_time: NaiveTime,
 }
 
 fn deserialize_utc_offset<'de, D: Deserializer<'de>>(
@@ -104,13 +102,6 @@ fn deserialize_utc_offset<'de, D: Deserializer<'de>>(
         .trim()
         .parse()
         .map_err(|_| serde::de::Error::custom("ui.utc_offset must look like +10:00"))
-}
-
-fn deserialize_deadline_time<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<NaiveTime, D::Error> {
-    NaiveTime::parse_from_str(String::deserialize(deserializer)?.trim(), "%H:%M")
-        .map_err(|_| serde::de::Error::custom("ui.deadline_time must use HH:MM"))
 }
 
 #[derive(Clone, Deserialize)]
@@ -379,7 +370,6 @@ mod tests {
 
                 [ui]
                 utc_offset = "+10:00"
-                deadline_time = "23:59"
 
                 [telegram]
                 enabled = false
@@ -446,10 +436,6 @@ mod tests {
         assert_eq!(
             config.ui.utc_offset,
             FixedOffset::east_opt(10 * 3600).unwrap()
-        );
-        assert_eq!(
-            config.ui.deadline_time,
-            NaiveTime::from_hms_opt(23, 59, 0).unwrap()
         );
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
@@ -549,22 +535,6 @@ mod tests {
                 "offset {offset}"
             );
         }
-    }
-
-    #[test]
-    fn deserialization_rejects_an_unparsable_deadline_time() {
-        let error = config_builder()
-            .set_override("ui.deadline_time", "24:00")
-            .unwrap()
-            .set_override("group_invites.invite_signing_secret", TEST_SECRET)
-            .unwrap()
-            .build()
-            .unwrap()
-            .try_deserialize::<AppConfig>()
-            .err()
-            .expect("config must be rejected");
-
-        assert!(error.to_string().contains("ui.deadline_time"));
     }
 
     #[test]

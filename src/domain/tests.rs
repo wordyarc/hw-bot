@@ -497,14 +497,17 @@ fn weekly_penalty_assignment(
 }
 
 #[test]
-fn a_submission_at_the_deadline_is_not_late() {
+fn the_deadline_moment_itself_is_already_late() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);
     let course = course_for(&group, &teacher);
     let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
 
-    assert_eq!(assignment.late_periods_at(deadline_at), 0);
-    assert_eq!(assignment.penalty_at(deadline_at), 0);
+    let just_before = deadline_at - Duration::nanoseconds(1);
+    assert_eq!(assignment.late_periods_at(just_before), 0);
+    assert_eq!(assignment.penalty_at(just_before), 0);
+    assert_eq!(assignment.late_periods_at(deadline_at), 1);
+    assert_eq!(assignment.penalty_at(deadline_at), 1);
 }
 
 #[test]
@@ -640,10 +643,11 @@ fn zero_possible_score_does_not_close_submissions_early() {
         .late_policy(7, 1, 4)
         .published()
         .build();
-    assert_eq!(work.penalty_at(work.closes_at()), 4);
+    let last_moment = work.closes_at() - Duration::nanoseconds(1);
+    assert_eq!(work.penalty_at(last_moment), 4);
     assert!(
         submission(&work, &student)
-            .submitted_at(work.closes_at())
+            .submitted_at(last_moment)
             .try_build()
             .is_ok()
     );
@@ -656,17 +660,17 @@ fn the_second_period_starts_exactly_one_week_after_the_first() {
     let course = course_for(&group, &teacher);
     let (assignment, _) = weekly_penalty_assignment(&course, &teacher);
 
-    let last_of_the_first = Utc.with_ymd_and_hms(2026, 8, 31, 23, 59, 0).unwrap();
+    let second_period = Utc.with_ymd_and_hms(2026, 8, 31, 23, 59, 0).unwrap();
 
-    assert_eq!(assignment.late_periods_at(last_of_the_first), 1);
     assert_eq!(
-        assignment.late_periods_at(last_of_the_first + Duration::seconds(1)),
-        2
+        assignment.late_periods_at(second_period - Duration::nanoseconds(1)),
+        1
     );
+    assert_eq!(assignment.late_periods_at(second_period), 2);
 }
 
 #[test]
-fn fractional_seconds_after_each_period_boundary_count_as_the_next_period() {
+fn each_period_boundary_belongs_to_the_next_period_down_to_a_fraction_of_a_second() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);
     let course = course_for(&group, &teacher);
@@ -674,18 +678,18 @@ fn fractional_seconds_after_each_period_boundary_count_as_the_next_period() {
 
     for period in 0..4 {
         let boundary = deadline_at + Duration::weeks(period);
-        assert_eq!(assignment.late_periods_at(boundary), period as u32);
+        assert_eq!(assignment.late_periods_at(boundary), period as u32 + 1);
         for fraction in [Duration::nanoseconds(1), Duration::milliseconds(500)] {
             assert_eq!(
-                assignment.late_periods_at(boundary + fraction),
-                period as u32 + 1
+                assignment.late_periods_at(boundary - fraction),
+                period as u32
             );
         }
     }
 }
 
 #[test]
-fn the_horizon_is_open_at_its_own_moment_and_closed_after_it() {
+fn the_horizon_is_closed_at_its_own_moment_and_open_just_before_it() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);
     let course = course_for(&group, &teacher);
@@ -694,15 +698,16 @@ fn the_horizon_is_open_at_its_own_moment_and_closed_after_it() {
     let closes_at = Utc.with_ymd_and_hms(2026, 9, 21, 23, 59, 0).unwrap();
     assert_eq!(assignment.closes_at(), closes_at);
 
-    assignment.ensure_open_for_submission(closes_at).unwrap();
-    assert_eq!(assignment.late_periods_at(closes_at), 4);
+    let last_moment = closes_at - Duration::nanoseconds(1);
+    assignment.ensure_open_for_submission(last_moment).unwrap();
+    assert_eq!(assignment.late_periods_at(last_moment), 4);
     assert_eq!(
         assignment
-            .ensure_open_for_submission(closes_at + Duration::seconds(1))
+            .ensure_open_for_submission(closes_at)
             .unwrap_err(),
         DomainError::SubmissionWindowClosed {
             closes_at,
-            submitted_at: closes_at + Duration::seconds(1),
+            submitted_at: closes_at,
         }
     );
 }
@@ -763,7 +768,7 @@ fn a_penalty_larger_than_the_score_leaves_an_accepted_submission_with_zero() {
     let student = student(2, &group);
     let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
     let mut submission = submission(&assignment, &student)
-        .submitted_at(deadline_at + Duration::days(28))
+        .submitted_at(deadline_at + Duration::days(28) - Duration::nanoseconds(1))
         .build();
 
     submission
@@ -799,7 +804,7 @@ fn an_effective_penalty_is_capped_at_the_global_score_limit() {
         .published()
         .build();
     let mut submission = submission(&assignment, &student)
-        .submitted_at(deadline_at + Duration::days(2))
+        .submitted_at(deadline_at + Duration::days(2) - Duration::nanoseconds(1))
         .build();
 
     submission
@@ -853,7 +858,7 @@ fn a_late_policy_needs_a_scored_scale() {
 }
 
 #[test]
-fn nonweekly_closing_is_an_exact_inclusive_cutoff() {
+fn nonweekly_closing_is_an_exact_exclusive_cutoff() {
     let teacher = teacher(1);
     let course = course_for(&student_group(GROUP_CODE), &teacher);
     let deadline = t0() + Duration::days(7);
@@ -864,10 +869,13 @@ fn nonweekly_closing_is_an_exact_inclusive_cutoff() {
         .late_policy(5, 1, 2)
         .build();
     assert_eq!(work.closes_at(), closing);
-    assert_eq!(work.penalty_at(closing), 2);
-    assert!(work.ensure_open_for_submission(closing).is_ok());
+    assert_eq!(work.penalty_at(closing - Duration::nanoseconds(1)), 2);
+    assert!(
+        work.ensure_open_for_submission(closing - Duration::nanoseconds(1))
+            .is_ok()
+    );
     assert!(matches!(
-        work.ensure_open_for_submission(closing + Duration::nanoseconds(1)),
+        work.ensure_open_for_submission(closing),
         Err(DomainError::SubmissionWindowClosed { .. })
     ));
 }
@@ -1226,7 +1234,7 @@ fn a_new_attempt_is_offered_only_where_submit_would_succeed() {
     assert!(
         !history()
             .build()
-            .accepts_new_attempt_for(&assignment, assignment.closes_at() + Duration::seconds(1))
+            .accepts_new_attempt_for(&assignment, assignment.closes_at())
     );
 }
 

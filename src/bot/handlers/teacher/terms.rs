@@ -248,7 +248,7 @@ pub(super) async fn apply_date(
             .terms
             .preview_policy(1)
             .map_err(crate::app::AppError::from)?;
-        let periods = policy.periods_until(deadline, at);
+        let periods = policy.periods_to_close_at(deadline, at);
         if periods == 0 || periods > u32::from(crate::domain::MAX_LATE_PERIODS) {
             return render(screen.chat, form, Some(texts::INVALID_DURATION_DATE)).await;
         }

@@ -178,11 +178,23 @@ impl LatePolicy {
     }
 
     pub fn periods_until(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u32 {
-        if at <= deadline_at {
+        if at < deadline_at {
             return 0;
         }
 
         let lateness = at - deadline_at;
+        let period = i64::from(self.period_days) * 24 * 60 * 60;
+        let periods = lateness.num_seconds() / period + 1;
+
+        u32::try_from(periods).expect("chrono's date range fits in u32 days")
+    }
+
+    pub fn periods_to_close_at(self, deadline_at: DateTime<Utc>, closes_at: DateTime<Utc>) -> u32 {
+        if closes_at <= deadline_at {
+            return 0;
+        }
+
+        let lateness = closes_at - deadline_at;
         let period = i64::from(self.period_days) * 24 * 60 * 60;
         let whole_periods = lateness.num_seconds() / period;
         let periods =
@@ -518,7 +530,7 @@ impl Assignment {
 
     pub fn ensure_open_for_submission(&self, at: DateTime<Utc>) -> DomainResult<()> {
         let closes_at = self.closes_at();
-        if at <= closes_at {
+        if at < closes_at {
             return Ok(());
         }
 
@@ -677,6 +689,25 @@ mod tests {
                 max_score: MaxScore::new(5).unwrap()
             }
         );
+    }
+
+    #[test]
+    fn closing_exactly_one_period_later_needs_one_period_and_a_moment_more_needs_two() {
+        let policy = LatePolicy::new(7, 1, 4).unwrap();
+        let deadline = t0();
+        let week = Duration::weeks(1);
+
+        assert_eq!(policy.periods_to_close_at(deadline, deadline), 0);
+        assert_eq!(
+            policy.periods_to_close_at(deadline, deadline + Duration::days(1)),
+            1
+        );
+        assert_eq!(policy.periods_to_close_at(deadline, deadline + week), 1);
+        assert_eq!(
+            policy.periods_to_close_at(deadline, deadline + week + Duration::milliseconds(500)),
+            2
+        );
+        assert_eq!(policy.periods_until(deadline, deadline + week), 2);
     }
 
     #[test]

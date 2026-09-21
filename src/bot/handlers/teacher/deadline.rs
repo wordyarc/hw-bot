@@ -34,12 +34,9 @@ pub(in crate::bot::handlers) async fn handle_deadline(
         }
         DeadlineAction::Calendar => {
             form.mode = InputMode::Calendar(if step == TermsStep::DurationDate {
-                screen
-                    .deps
-                    .context
-                    .timezone
-                    .first_date_after(form.terms.deadline_at.expect("duration follows deadline"))
-                    .unwrap_or(chrono::NaiveDate::MAX)
+                screen.deps.context.timezone.first_date_ending_after(
+                    form.terms.deadline_at.expect("duration follows deadline"),
+                )
             } else {
                 screen.deps.context.timezone.today()
             });

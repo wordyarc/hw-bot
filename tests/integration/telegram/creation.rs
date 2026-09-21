@@ -208,16 +208,16 @@ async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
     assert_eq!(created.max_score, None, "the skipped scale means pass/fail");
     let local = deadline.with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap());
     assert_eq!(
-        local.date_naive(),
+        local.time(),
+        chrono::NaiveTime::MIN,
+        "presets end at the local midnight that closes the day"
+    );
+    assert_eq!(
+        local.date_naive().pred_opt().unwrap(),
         (Utc::now() + chrono::Duration::days(7))
             .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
             .date_naive(),
         "«через неделю» is a week from today in the configured timezone"
-    );
-    assert_eq!(
-        local.format("%H:%M").to_string(),
-        "23:59",
-        "presets expire at the end of the local day"
     );
 }
 
@@ -285,11 +285,12 @@ async fn teacher_picks_a_deadline_from_the_calendar() {
     let deadline = created
         .unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"))
         .deadline_at;
+    let local = deadline.with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap());
+    assert_eq!(local.time(), chrono::NaiveTime::MIN);
     assert_eq!(
-        deadline
-            .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
-            .date_naive(),
-        picked
+        local.date_naive().pred_opt().unwrap(),
+        picked,
+        "a picked day closes at the midnight that ends it"
     );
     assert!(
         requests.contains("EditMessageText"),
@@ -361,7 +362,7 @@ async fn calendar_month_navigation_keeps_deadline_selection_active() {
         serde_json::from_value(details["assignment"]["deadline_at"].clone()).unwrap();
     assert_eq!(
         actual,
-        expected_deadline(&format!("{} 23:59", next_month.format("%d.%m.%Y")))
+        expected_deadline(&next_month.format("%d.%m.%Y").to_string())
     );
 }
 
@@ -720,7 +721,14 @@ async fn the_summary_lists_one_penalty_step_per_chosen_period() {
         .collect();
 
     assert_eq!(rows.len(), 6, "{summary}");
-    assert!(rows[5].starts_with("• после"), "{summary}");
+    let timezone = bot_timezone();
+    let closing =
+        timezone.end_of(timezone.in_days(7).unwrap()).unwrap() + chrono::Duration::weeks(4);
+    assert_eq!(
+        rows[5],
+        texts::schedule_closed(&timezone.format_since(closing)),
+        "{summary}"
+    );
     stop_bot(cancellation, &mut task).await;
 }
 
@@ -733,12 +741,12 @@ async fn duration_presets_are_relative_to_a_deadline_thirty_days_away() {
     telegram
         .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
         .await;
-    let deadline = expected_deadline(&format!(
-        "{} 23:59",
-        (Utc::now() + chrono::Duration::days(30))
+    let deadline = expected_deadline(
+        &(Utc::now() + chrono::Duration::days(30))
             .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
             .format("%d.%m.%Y")
-    ));
+            .to_string(),
+    );
     telegram.message(app.teacher(), &deadline_input(deadline));
     telegram
         .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 1))
@@ -746,7 +754,7 @@ async fn duration_presets_are_relative_to_a_deadline_thirty_days_away() {
     telegram
         .click_button(app.teacher(), callbacks::TERMS_DURATION_DATE)
         .await;
-    let selected = (deadline + chrono::Duration::weeks(1))
+    let selected = (deadline + chrono::Duration::weeks(1) - chrono::Duration::nanoseconds(1))
         .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
         .date_naive();
     telegram
@@ -1363,16 +1371,8 @@ async fn a_due_date_beyond_the_old_closing_shows_the_new_computed_date() {
         recorded_requests(&telegram.server)
             .await
             .contains(&texts::closing_change(
-                &hw_bot::bot::BotTimezone::new(
-                    FixedOffset::east_opt(10 * 3600).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(23, 59, 0).unwrap()
-                )
-                .format(assignment.closes_at()),
-                &hw_bot::bot::BotTimezone::new(
-                    FixedOffset::east_opt(10 * 3600).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(23, 59, 0).unwrap()
-                )
-                .format(expected_deadline(&deadline) + chrono::Duration::weeks(4))
+                &bot_timezone().format(assignment.closes_at()),
+                &bot_timezone().format(expected_deadline(&deadline) + chrono::Duration::weeks(4))
             ))
     );
     telegram

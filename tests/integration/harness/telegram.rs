@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, NaiveTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use hw_bot::app::ApplicationContainer;
 use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings, callbacks};
 use hw_bot::health::{CriticalComponent, HealthState};
@@ -141,10 +141,7 @@ pub(crate) fn file_upload_updates(app: &TestApp, assignment: Uuid, file: Value) 
 }
 
 pub(crate) fn bot_timezone() -> BotTimezone {
-    BotTimezone::new(
-        FixedOffset::east_opt(10 * 3600).unwrap(),
-        NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
-    )
+    BotTimezone::new(FixedOffset::east_opt(10 * 3600).unwrap())
 }
 
 pub(crate) fn deadline_input(deadline: DateTime<Utc>) -> String {
@@ -155,11 +152,9 @@ pub(crate) fn deadline_input(deadline: DateTime<Utc>) -> String {
 }
 
 pub(crate) fn expected_deadline(input: &str) -> DateTime<Utc> {
-    chrono::NaiveDateTime::parse_from_str(input, "%d.%m.%Y %H:%M")
-        .unwrap()
-        .and_local_timezone(FixedOffset::east_opt(10 * 3600).unwrap())
-        .unwrap()
-        .with_timezone(&Utc)
+    bot_timezone()
+        .parse_deadline(input)
+        .unwrap_or_else(|| panic!("{input} is a valid deadline"))
 }
 
 pub(crate) fn bot_settings_with(
