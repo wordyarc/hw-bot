@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use hw_bot::bot::{BotTimezone, TelegramBot, callbacks};
+use hw_bot::bot::{BotTimezone, TelegramBot, callbacks, texts};
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use serde_json::json;
@@ -34,12 +34,23 @@ async fn a_command_reports_an_application_error_to_the_user_once() {
     );
 }
 
-#[tokio::test]
-async fn a_submission_error_preserves_the_input_step_for_retry() {
-    let app = TestApp::start().await;
-    let pending = app.queued_submission(app.student(), "pull/first").await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+fn offers_submission(telegram: &TelegramScenario, user: i64) -> bool {
+    telegram.messages(user).iter().any(|message| {
+        message["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .is_some_and(|rows| {
+                rows.iter()
+                    .flat_map(|row| row.as_array().unwrap())
+                    .any(|button| {
+                        button["callback_data"]
+                            .as_str()
+                            .is_some_and(|data| data.starts_with(callbacks::SUBMIT_PREFIX))
+                    })
+            })
+    })
+}
+
+async fn open_assignment(app: &TestApp, telegram: &TelegramScenario) {
     telegram.message(app.student(), "/tasks");
     telegram
         .click_button(
@@ -47,6 +58,21 @@ async fn a_submission_error_preserves_the_input_step_for_retry() {
             &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
         )
         .await;
+}
+
+#[tokio::test]
+async fn the_submit_button_returns_only_after_the_pending_work_is_rejected() {
+    let app = TestApp::start().await;
+    let pending = app.queued_submission(app.student(), "pull/first").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_assignment(&app, &telegram).await;
+    assert!(!offers_submission(&telegram, app.student()));
+
+    app.review(pending, app.teacher(), "reject", "Retry")
+        .await
+        .ok();
+    open_assignment(&app, &telegram).await;
     telegram
         .click_button(
             app.student(),
@@ -55,28 +81,45 @@ async fn a_submission_error_preserves_the_input_step_for_retry() {
         .await;
     telegram.message(app.student(), "pull/retry");
     telegram.flush(app.student()).await;
-    assert_eq!(
-        telegram
-            .messages(app.student())
-            .iter()
-            .filter(
-                |message| message["text"] == app_error_message(ErrorCode::SubmissionPendingReview)
-            )
-            .count(),
-        1
-    );
-
-    app.review(pending, app.teacher(), "reject", "Retry")
-        .await
-        .ok();
-    telegram.message(app.student(), "pull/retry");
-    telegram.flush(app.student()).await;
     stop_bot(cancellation, &mut task).await;
     let count: i64 = sqlx::query_scalar("select count(*) from submissions")
         .fetch_one(&app.pool)
         .await
         .unwrap();
     assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn a_refused_submission_closes_the_input_step() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_assignment(&app, &telegram).await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    // Сдача с другого устройства пока студент печатает: доменный отказ на уже открытом шаге.
+    app.queued_submission(app.student(), "pull/first").await;
+    telegram.message(app.student(), "pull/retry");
+    telegram.message(app.student(), "pull/again");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let messages = telegram.messages(app.student());
+    let count = |text: &str| messages.iter().filter(|m| m["text"] == text).count();
+    assert_eq!(
+        count(app_error_message(ErrorCode::SubmissionPendingReview)),
+        1
+    );
+    assert_eq!(count(texts::USE_THE_MENU), 1);
+    let stored: i64 = sqlx::query_scalar("select count(*) from submissions")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 1);
 }
 
 async fn open_course(app: &TestApp, telegram: &TelegramScenario) {

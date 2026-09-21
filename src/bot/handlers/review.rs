@@ -15,7 +15,10 @@ use crate::bot::callbacks::AmountChoice;
 use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::texts;
-use crate::bot::views::{ask_input, review_keyboard, review_score_keyboard, teacher_menu};
+use crate::bot::views::{
+    ask_input, review_keyboard, review_score_keyboard, send_message_chunks, submission_status,
+    teacher_menu,
+};
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let Screen { chat, actor } = screen;
@@ -44,16 +47,34 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
             penalty: item.assignment.penalty_at(item.submission.submitted_at()),
         }))
         .await?;
-    let summary = format!(
-        "{}\n👤 Студент: {}",
+    let penalty = item.assignment.penalty_at(item.submission.submitted_at());
+    let mut summary = format!(
+        "📘 {} · {}\n👤 Студент: {}\n🔁 Попытка {}",
+        item.subject.name().as_str(),
         item.assignment.title().as_str(),
         item.student.display_name().as_str(),
+        item.submission.attempt_number(),
     );
+    if penalty > 0 {
+        summary.push_str(&format!("\n⏳ Сдана с опозданием, штраф −{penalty}"));
+    }
     let keyboard = review_keyboard(item.submission.id());
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, "📄 Текст задания:").await?;
     bot.send_message(chat_id, item.assignment.body().as_str())
         .await?;
+    for attempt in &item.previous_attempts {
+        let mut text = format!(
+            "🕘 Попытка {}: {}\n{}",
+            attempt.attempt_number(),
+            submission_status(attempt.status()),
+            attempt.content().as_str(),
+        );
+        if let Some(comment) = attempt.review_comment() {
+            text.push_str(&format!("\n💬 {}", comment.as_str()));
+        }
+        send_message_chunks(bot, chat_id, text, None).await?;
+    }
     bot.send_message(chat_id, "📤 Сдача студента:").await?;
     bot.send_message(chat_id, item.submission.content().as_str())
         .reply_markup(keyboard)

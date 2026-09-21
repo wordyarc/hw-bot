@@ -5,7 +5,10 @@ use sqlx::{PgConnection, PgPool};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
-use crate::domain::{Assignment, DomainError, ReviewDecision, Submission, SubmissionId, User};
+use crate::domain::{
+    Assignment, DomainError, ReviewDecision, Subject, Submission, SubmissionId, User,
+};
+use crate::pagination::PageRequest;
 
 async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
 where
@@ -37,7 +40,9 @@ pub struct ReviewSubmission {
 pub struct ReviewQueueItem {
     pub submission: Submission,
     pub assignment: Assignment,
+    pub subject: Subject,
     pub student: User,
+    pub previous_attempts: Vec<Submission>,
 }
 
 #[derive(Clone, Debug)]
@@ -171,12 +176,28 @@ async fn load_queue_item(
     let assignment = db::assignments::find_by_id(&mut *connection, submission.assignment_id())
         .await?
         .required("assignment")?;
+    let subject = db::academic::find_subject_by_id(&mut *connection, assignment.subject_id())
+        .await?
+        .required("subject")?;
     let student = db::users::find_by_id(&mut *connection, submission.student_id())
         .await?
         .required("student")?;
+    let mut previous_attempts: Vec<_> = db::submissions::list_for_student(
+        &mut *connection,
+        assignment.id(),
+        student.id(),
+        PageRequest::default(),
+    )
+    .await?
+    .into_iter()
+    .filter(|attempt| attempt.attempt_number() < submission.attempt_number())
+    .collect();
+    previous_attempts.reverse();
     Ok(ReviewQueueItem {
         submission,
         assignment,
+        subject,
         student,
+        previous_attempts,
     })
 }

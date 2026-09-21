@@ -1,6 +1,6 @@
 use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
-use crate::app::{StudentAssignment, SubmitHomework};
+use crate::app::{ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Deps, Screen, TextStep};
 use crate::bot::texts;
@@ -232,7 +232,7 @@ pub(super) async fn show_assignment(
             PageTarget::History(assignment_id).callback(0),
         )]);
     }
-    if assignment.status() == AssignmentStatus::Published {
+    if history.accepts_new_attempt_for(assignment, Utc::now()) {
         rows.push(vec![InlineKeyboardButton::callback(
             "📤 Сдать работу",
             ReplayableAction::StartSubmission(assignment.id()).callback(),
@@ -374,7 +374,7 @@ pub(super) async fn submit_homework_text(
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
-    services
+    let result = services
         .submissions
         .submit_homework(SubmitHomework {
             assignment_id,
@@ -382,7 +382,17 @@ pub(super) async fn submit_homework_text(
             content: text.to_owned(),
             submitted_at: Utc::now(),
         })
-        .await?;
+        .await;
+
+    if let Err(error) = &result
+        && !matches!(
+            error.code(),
+            ErrorCode::InternalError | ErrorCode::Overloaded
+        )
+    {
+        reset_dialogue(dialogue).await?;
+    }
+    result?;
 
     reset_dialogue(dialogue).await?;
     bot.send_message(message.chat.id, texts::submission_queued())

@@ -425,3 +425,39 @@ async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
         "the drill-down carries the per-assignment score; requests:\n{requests}"
     );
 }
+
+#[tokio::test]
+async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
+    let app = TestApp::start().await;
+    let first = app.queued_submission(app.student(), "pull/first").await;
+    app.review(first, app.teacher(), "reject", "Fix the tests")
+        .await
+        .ok();
+    app.queued_submission(app.student(), "pull/second").await;
+    let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let messages: Vec<String> = telegram
+        .messages(app.teacher())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    let previous = messages
+        .iter()
+        .position(|text| text.contains("pull/first") && text.contains("Fix the tests"))
+        .expect("the rejected attempt is shown with its comment");
+    let current = messages
+        .iter()
+        .position(|text| text == "pull/second")
+        .expect("the pending attempt is shown");
+    assert!(previous < current);
+    assert!(
+        messages[..current]
+            .iter()
+            .any(|text| text.contains(app.fixture.subject.name().as_str()) && text.contains('2')),
+        "the summary names the subject and the attempt number"
+    );
+}

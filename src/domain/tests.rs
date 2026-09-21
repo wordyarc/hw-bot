@@ -1186,6 +1186,51 @@ fn remaining_attempts_stop_at_zero() {
 }
 
 #[test]
+fn a_new_attempt_is_offered_only_where_submit_would_succeed() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let draft = assignment(&course, &teacher).max_attempts(2).build();
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(2)
+        .published()
+        .build();
+    let at = t0();
+
+    assert!(!history().build().accepts_new_attempt_for(&draft, at));
+    assert!(history().build().accepts_new_attempt_for(&assignment, at));
+    assert!(
+        history()
+            .used(1)
+            .build()
+            .accepts_new_attempt_for(&assignment, at)
+    );
+    assert!(
+        !history()
+            .used(2)
+            .build()
+            .accepts_new_attempt_for(&assignment, at)
+    );
+    assert!(
+        !history()
+            .pending()
+            .build()
+            .accepts_new_attempt_for(&assignment, at)
+    );
+    assert!(
+        !history()
+            .accepted()
+            .build()
+            .accepts_new_attempt_for(&assignment, at)
+    );
+    assert!(
+        !history()
+            .build()
+            .accepts_new_attempt_for(&assignment, assignment.closes_at() + Duration::seconds(1))
+    );
+}
+
+#[test]
 fn extra_attempts_of_another_assignment_are_refused() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);

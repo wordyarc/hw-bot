@@ -55,6 +55,14 @@ impl SubmissionHistory {
         self.allowed_attempts_for(assignment)
             .saturating_sub(self.used_attempts)
     }
+
+    pub fn accepts_new_attempt_for(self, assignment: &Assignment, at: DateTime<Utc>) -> bool {
+        assignment.is_published()
+            && assignment.ensure_open_for_submission(at).is_ok()
+            && !self.has_accepted_submission
+            && !self.has_pending_submission
+            && self.remaining_attempts_for(assignment) > 0
+    }
 }
 
 str_enum! {
