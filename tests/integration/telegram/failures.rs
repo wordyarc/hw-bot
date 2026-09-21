@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use hw_bot::bot::{BotTimezone, TelegramBot, callbacks, texts};
+use hw_bot::bot::{TelegramBot, callbacks, texts};
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use serde_json::json;
@@ -316,7 +316,7 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         "test-token",
         &telegram.server.uri(),
         bot_settings_with(|_| {}),
-        BotTimezone::new(chrono::FixedOffset::east_opt(36000).unwrap()),
+        bot_timezone(),
         crate::harness::invite_codec(),
     )
     .unwrap();

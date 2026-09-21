@@ -38,9 +38,10 @@ pub(in crate::bot) fn terms_form_view(
                 texts::DEADLINE_QUESTION
             };
             format!(
-                "{context}{question}\n{} Часовой пояс: {}.\n{}",
+                "{context}{question}\n{} {} {}.\n{}",
                 texts::WHOLE_DAY_HINT,
-                timezone.suffix(),
+                texts::TIMEZONE_LABEL,
+                timezone.label(),
                 texts::DATE_FORMAT,
             )
         }

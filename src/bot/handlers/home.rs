@@ -87,9 +87,9 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
         Err(error) => return Err(error.into()),
     };
     let text = format!(
-        "{}\n\n🕒 Все даты и время — по {}. При вводе используйте этот же часовой пояс.\n\n{}",
+        "{}\n\n{}\n\n{}",
         help_for(role),
-        timezone.suffix(),
+        texts::timezone_note(&timezone.label()),
         help_commands(role),
     );
     send_message_chunks(bot, chat_id, text, None).await
@@ -191,7 +191,7 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
     if let Some(group) = &registered.student_group {
         text.push_str(&format!("Группа: {}\n", group.code().as_str()));
     }
-    text.push_str(&format!("🕒 Часовой пояс: {}\n", timezone.suffix()));
+    text.push_str(&format!("{} {}\n", texts::TIMEZONE_LABEL, timezone.label()));
     match role {
         Role::Student { .. } => {
             if let Some(stats) =

@@ -1,10 +1,11 @@
-use chrono::{DateTime, Days, FixedOffset, Months, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Days, Months, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
+use chrono_tz::Tz;
 
 /// Границы сроков исключительные, как у интервалов RFC 5545: «до конца дня 21.09» хранится как
 /// 22.09 00:00 в поясе установки, и в этот момент приём уже закрыт.
 #[derive(Clone, Copy, Debug)]
 pub struct BotTimezone {
-    offset: FixedOffset,
+    tz: Tz,
 }
 
 const DATE: &str = "%d.%m.%Y";
@@ -13,21 +14,36 @@ const SHORT_DATE: &str = "%d.%m";
 const SHORT_DATE_TIME: &str = "%d.%m %H:%M";
 
 impl BotTimezone {
-    pub fn new(offset: FixedOffset) -> Self {
-        Self { offset }
+    pub fn new(tz: Tz) -> Self {
+        Self { tz }
     }
 
-    /// `UTC+10`
-    pub fn suffix(&self) -> String {
-        let total_minutes = self.offset.local_minus_utc() / 60;
+    pub fn label(&self) -> String {
+        self.label_at(Utc::now())
+    }
+
+    fn label_at(&self, instant: DateTime<Utc>) -> String {
+        let city = self
+            .tz
+            .name()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .replace('_', " ");
+        let total_minutes = instant
+            .with_timezone(&self.tz)
+            .offset()
+            .fix()
+            .local_minus_utc()
+            / 60;
         let sign = if total_minutes < 0 { '-' } else { '+' };
         let hours = total_minutes.abs() / 60;
         let minutes = total_minutes.abs() % 60;
 
         if minutes == 0 {
-            format!("UTC{sign}{hours}")
+            format!("{city} (UTC{sign}{hours})")
         } else {
-            format!("UTC{sign}{hours}:{minutes:02}")
+            format!("{city} (UTC{sign}{hours}:{minutes:02})")
         }
     }
 
@@ -36,7 +52,7 @@ impl BotTimezone {
     }
 
     pub fn local_date(&self, instant: DateTime<Utc>) -> NaiveDate {
-        instant.with_timezone(&self.offset).date_naive()
+        instant.with_timezone(&self.tz).date_naive()
     }
 
     pub fn first_date_ending_after(&self, instant: DateTime<Utc>) -> NaiveDate {
@@ -44,11 +60,11 @@ impl BotTimezone {
     }
 
     pub fn format(&self, instant: DateTime<Utc>) -> String {
-        format!("до {} ({})", self.format_until(instant), self.suffix())
+        format!("до {}", self.format_until(instant))
     }
 
     pub fn format_closed_since(&self, instant: DateTime<Utc>) -> String {
-        format!("с {} ({})", self.format_since(instant), self.suffix())
+        format!("с {}", self.format_since(instant))
     }
 
     pub fn format_until(&self, instant: DateTime<Utc>) -> String {
@@ -60,7 +76,7 @@ impl BotTimezone {
     }
 
     pub fn format_since(&self, instant: DateTime<Utc>) -> String {
-        let local = instant.with_timezone(&self.offset);
+        let local = instant.with_timezone(&self.tz);
         if local.time() == NaiveTime::MIN {
             local.format(DATE).to_string()
         } else {
@@ -69,7 +85,7 @@ impl BotTimezone {
     }
 
     fn end_label(&self, instant: DateTime<Utc>, date: &str, date_time: &str) -> String {
-        let local = instant.with_timezone(&self.offset);
+        let local = instant.with_timezone(&self.tz);
         match local.date_naive().pred_opt() {
             Some(day) if local.time() == NaiveTime::MIN => {
                 format!("конца дня {}", day.format(date))
@@ -80,7 +96,7 @@ impl BotTimezone {
 
     pub fn format_short(&self, instant: DateTime<Utc>) -> String {
         instant
-            .with_timezone(&self.offset)
+            .with_timezone(&self.tz)
             .format(SHORT_DATE_TIME)
             .to_string()
     }
@@ -115,7 +131,7 @@ impl BotTimezone {
     }
 
     fn instant(&self, date: NaiveDate, time: NaiveTime) -> Option<DateTime<Utc>> {
-        self.offset
+        self.tz
             .from_local_datetime(&date.and_time(time))
             .single()
             .map(|instant| instant.with_timezone(&Utc))
@@ -127,7 +143,11 @@ mod tests {
     use super::*;
 
     fn vladivostok() -> BotTimezone {
-        BotTimezone::new(FixedOffset::east_opt(10 * 3600).unwrap())
+        BotTimezone::new(Tz::Asia__Vladivostok)
+    }
+
+    fn at(rfc3339: &str) -> DateTime<Utc> {
+        rfc3339.parse().unwrap()
     }
 
     #[test]
@@ -163,17 +183,11 @@ mod tests {
         let timezone = vladivostok();
         let deadline = timezone.parse_deadline("20.08.2026").unwrap();
 
-        assert_eq!(
-            timezone.format(deadline),
-            "до конца дня 20.08.2026 (UTC+10)"
-        );
+        assert_eq!(timezone.format(deadline), "до конца дня 20.08.2026");
         assert_eq!(timezone.format_until(deadline), "конца дня 20.08.2026");
         assert_eq!(timezone.format_until_short(deadline), "конца дня 20.08");
         assert_eq!(timezone.format_since(deadline), "21.08.2026");
-        assert_eq!(
-            timezone.format_closed_since(deadline),
-            "с 21.08.2026 (UTC+10)"
-        );
+        assert_eq!(timezone.format_closed_since(deadline), "с 21.08.2026");
     }
 
     #[test]
@@ -185,7 +199,7 @@ mod tests {
             deadline,
             "2026-08-20T05:00:00Z".parse::<DateTime<Utc>>().unwrap()
         );
-        assert_eq!(timezone.format(deadline), "до 20.08.2026 15:00 (UTC+10)");
+        assert_eq!(timezone.format(deadline), "до 20.08.2026 15:00");
         assert_eq!(timezone.format_until_short(deadline), "20.08 15:00");
         assert_eq!(timezone.format_since(deadline), "20.08.2026 15:00");
     }
@@ -200,16 +214,32 @@ mod tests {
     }
 
     #[test]
-    fn half_hour_offsets_keep_their_minutes_in_the_suffix() {
-        let timezone = BotTimezone::new(FixedOffset::east_opt(5 * 3600 + 1800).unwrap());
-
-        assert_eq!(timezone.suffix(), "UTC+5:30");
+    fn the_label_names_the_city_and_the_offset() {
+        assert_eq!(
+            vladivostok().label_at(at("2026-08-20T00:00:00Z")),
+            "Vladivostok (UTC+10)"
+        );
+        assert_eq!(
+            BotTimezone::new(Tz::Asia__Kolkata).label_at(at("2026-08-20T00:00:00Z")),
+            "Kolkata (UTC+5:30)"
+        );
+        assert_eq!(
+            BotTimezone::new(Tz::America__New_York).label_at(at("2026-01-20T00:00:00Z")),
+            "New York (UTC-5)"
+        );
     }
 
     #[test]
-    fn western_offsets_keep_their_sign() {
-        let timezone = BotTimezone::new(FixedOffset::west_opt(5 * 3600).unwrap());
+    fn the_label_follows_daylight_saving_time() {
+        let berlin = BotTimezone::new(Tz::Europe__Berlin);
 
-        assert_eq!(timezone.suffix(), "UTC-5");
+        assert_eq!(
+            berlin.label_at(at("2026-01-20T00:00:00Z")),
+            "Berlin (UTC+1)"
+        );
+        assert_eq!(
+            berlin.label_at(at("2026-07-20T00:00:00Z")),
+            "Berlin (UTC+2)"
+        );
     }
 }

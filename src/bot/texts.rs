@@ -74,6 +74,11 @@ pub const DRAFT_DISCARDED: &str =
     "Создание отменено. Введённые данные не сохранены, задание не создано.";
 pub const TERMS_DISCARDED: &str = "Правка отменена. У задания остались прежние условия.";
 pub const DATE_FORMAT: &str = "Пришлите дату в формате ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ.";
+pub const TIMEZONE_LABEL: &str = "🕒 Часовой пояс:";
+
+pub fn timezone_note(timezone: &str) -> String {
+    format!("{TIMEZONE_LABEL} {timezone}. Все сроки показываются и вводятся в нём.")
+}
 pub const INTEGER_REQUIRED: &str = "Напишите целое число, без дробной части.";
 pub const INVALID_TERMS: &str =
     "С такими условиями продолжить нельзя. Проверьте срок и настройки опоздания.";

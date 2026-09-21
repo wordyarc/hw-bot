@@ -33,7 +33,7 @@ transfer_timeout_ms = 20000
 max_concurrent_transfers = 4
 
 [ui]
-utc_offset = "+10:00"
+timezone = "Asia/Vladivostok"
 
 [telegram]
 enabled = false

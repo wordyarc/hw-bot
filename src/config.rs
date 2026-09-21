@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::FixedOffset;
+use chrono_tz::Tz;
 use serde::{Deserialize, Deserializer};
 
 use crate::bot::MAX_CONCURRENT_UPDATES;
@@ -91,17 +91,17 @@ pub struct FilesConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiConfig {
-    #[serde(deserialize_with = "deserialize_utc_offset")]
-    pub utc_offset: FixedOffset,
+    #[serde(deserialize_with = "deserialize_timezone")]
+    pub timezone: Tz,
 }
 
-fn deserialize_utc_offset<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<FixedOffset, D::Error> {
+fn deserialize_timezone<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Tz, D::Error> {
     String::deserialize(deserializer)?
         .trim()
         .parse()
-        .map_err(|_| serde::de::Error::custom("ui.utc_offset must look like +10:00"))
+        .map_err(|_| {
+            serde::de::Error::custom("ui.timezone must be an IANA name like Asia/Vladivostok")
+        })
 }
 
 #[derive(Clone, Deserialize)]
@@ -369,7 +369,7 @@ mod tests {
                 max_concurrent_transfers = 4
 
                 [ui]
-                utc_offset = "+10:00"
+                timezone = "Asia/Vladivostok"
 
                 [telegram]
                 enabled = false
@@ -433,10 +433,7 @@ mod tests {
         assert_eq!(config.files.max_files_per_submission.get(), 1);
         assert_eq!(config.files.transfer_timeout_ms.get(), 20_000);
         assert_eq!(config.files.max_concurrent_transfers.get(), 4);
-        assert_eq!(
-            config.ui.utc_offset,
-            FixedOffset::east_opt(10 * 3600).unwrap()
-        );
+        assert_eq!(config.ui.timezone, Tz::Asia__Vladivostok);
         assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
         assert!(config.telegram.bot_token.is_none());
         assert!(!config.telegram.enabled);
@@ -517,10 +514,10 @@ mod tests {
     }
 
     #[test]
-    fn deserialization_rejects_an_unparsable_utc_offset() {
-        for offset in ["UTC+10", "+10", "10:00", ""] {
+    fn deserialization_rejects_an_unknown_timezone() {
+        for timezone in ["UTC+10", "+10:00", "Vladivostok", ""] {
             let error = config_builder()
-                .set_override("ui.utc_offset", offset)
+                .set_override("ui.timezone", timezone)
                 .unwrap()
                 .set_override("group_invites.invite_signing_secret", TEST_SECRET)
                 .unwrap()
@@ -528,20 +525,20 @@ mod tests {
                 .unwrap()
                 .try_deserialize::<AppConfig>()
                 .err()
-                .unwrap_or_else(|| panic!("offset {offset} must be rejected"));
+                .unwrap_or_else(|| panic!("timezone {timezone:?} must be rejected"));
 
             assert!(
-                error.to_string().contains("ui.utc_offset"),
-                "offset {offset}"
+                error.to_string().contains("ui.timezone"),
+                "timezone {timezone:?}"
             );
         }
     }
 
     #[test]
-    fn the_installation_timezone_defaults_to_utc_plus_ten() {
+    fn the_installation_timezone_defaults_to_vladivostok() {
         let config = app_config();
 
-        assert_eq!(config.ui.utc_offset.local_minus_utc(), 10 * 3600);
+        assert_eq!(config.ui.timezone, Tz::Asia__Vladivostok);
     }
 
     #[test]

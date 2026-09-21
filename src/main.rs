@@ -172,7 +172,7 @@ fn build_telegram_bot(
         return Ok(None);
     }
 
-    let utc_offset = config.ui.utc_offset;
+    let timezone = BotTimezone::new(config.ui.timezone);
 
     let bot = TelegramBot::new(
         application,
@@ -187,11 +187,11 @@ fn build_telegram_bot(
             file_transfer_timeout: Duration::from_millis(files.transfer_timeout_ms.get()),
             max_concurrent_file_transfers: files.max_concurrent_transfers.get(),
         },
-        BotTimezone::new(utc_offset),
+        timezone,
         invites,
     )?;
 
-    tracing::info!(utc_offset = %utc_offset, "Telegram bot enabled");
+    tracing::info!(timezone = %config.ui.timezone, "Telegram bot enabled");
     Ok(Some(bot))
 }
 

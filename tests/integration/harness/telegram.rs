@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use hw_bot::app::ApplicationContainer;
 use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings, callbacks};
 use hw_bot::health::{CriticalComponent, HealthState};
@@ -141,12 +142,12 @@ pub(crate) fn file_upload_updates(app: &TestApp, assignment: Uuid, file: Value) 
 }
 
 pub(crate) fn bot_timezone() -> BotTimezone {
-    BotTimezone::new(FixedOffset::east_opt(10 * 3600).unwrap())
+    BotTimezone::new(Tz::Asia__Vladivostok)
 }
 
 pub(crate) fn deadline_input(deadline: DateTime<Utc>) -> String {
     deadline
-        .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
+        .with_timezone(&Tz::Asia__Vladivostok)
         .format("%d.%m.%Y %H:%M")
         .to_string()
 }

@@ -830,7 +830,8 @@ pub(in crate::bot) fn assignment_students_keyboard(
 mod tests {
     use super::super::render::{deadline_left, penalty_schedule, terms_form_view};
     use crate::domain::{Grading, LatePolicy, MaxScore};
-    use chrono::{DateTime, FixedOffset};
+    use chrono::DateTime;
+    use chrono_tz::Tz;
 
     use super::*;
 
@@ -996,7 +997,7 @@ mod tests {
     }
 
     fn timezone() -> BotTimezone {
-        BotTimezone::new(FixedOffset::east_opt(10 * 3600).unwrap())
+        BotTimezone::new(Tz::Asia__Vladivostok)
     }
 
     #[test]
