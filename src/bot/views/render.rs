@@ -38,14 +38,14 @@ pub(in crate::bot) fn terms_form_view(
                 texts::DEADLINE_QUESTION
             };
             format!(
-                "{context}{question}\n{} Пояс {}.\n{}",
+                "{context}{question}\n{} Часовой пояс: {}.\n{}",
                 texts::WHOLE_DAY_HINT,
                 timezone.suffix(),
                 texts::DATE_FORMAT,
             )
         }
         TermsStep::Penalty => format!(
-            "{context}{}\nРазмер штрафа в баллах за каждые начавшиеся {} дн. Пришлите число от 1 до 100 сообщением.",
+            "{context}{}\nШтраф начисляется за каждые начавшиеся {} дн. Напишите целое число баллов от 1 до 100:",
             texts::penalty_question(terms.period_days),
             terms.period_days,
         ),
@@ -66,7 +66,7 @@ pub(in crate::bot) fn terms_form_view(
                 .closes_at(terms.deadline_at.expect("duration follows deadline"))
                 .expect("validated duration");
             format!(
-                "Приём {} — это {}.\n{} {}. Применить?",
+                "Вы выбрали приём {}. После округления опоздание составит {}.\n{} {}. Использовать эту дату?",
                 timezone.format(selected),
                 texts::lateness_duration(terms.period_days, periods),
                 texts::SUBMISSIONS_CLOSE_LABEL,
@@ -185,7 +185,7 @@ pub(in crate::bot) fn format_file_size(size_bytes: u64) -> String {
 pub(in crate::bot) fn deadline_left(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let left = deadline - now;
     if left.num_seconds() <= 0 {
-        return "дедлайн прошёл".to_owned();
+        return texts::DEADLINE_PASSED.to_owned();
     }
     let days = left.num_days();
     let hours = left.num_hours() % 24;

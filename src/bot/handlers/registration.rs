@@ -8,6 +8,7 @@ use crate::bot::HandlerResult;
 use crate::bot::context::{Chat, Deps, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::state::{BotState, FlowState};
+use crate::bot::texts;
 use crate::bot::views::ask_input;
 use crate::domain::{DISPLAY_NAME_MAX_LEN, TelegramUserId};
 use crate::invites::VerifiedInvite;
@@ -46,10 +47,7 @@ pub(super) async fn start_registration(
     ask_input(
         bot,
         chat_id,
-        &format!(
-            "Регистрация в группу {}.\n\nКак вас называть?",
-            group.code().as_str()
-        ),
+        &texts::registration_prompt(group.code().as_str()),
     )
     .await
 }
@@ -68,7 +66,7 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
         return Ok(());
     };
     if text.trim().is_empty() {
-        bot.send_message(message.chat.id, "Имя не должно быть пустым.")
+        bot.send_message(message.chat.id, texts::NAME_REQUIRED)
             .await?;
         return Ok(());
     }
@@ -86,7 +84,7 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
         })
         .await?;
     reset_dialogue(dialogue).await?;
-    bot.send_message(message.chat.id, "🎉 Регистрация завершена.")
+    bot.send_message(message.chat.id, texts::REGISTRATION_COMPLETE)
         .await?;
     show_home(step.chat(), telegram_user_id).await?;
 

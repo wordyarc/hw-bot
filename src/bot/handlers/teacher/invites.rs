@@ -7,6 +7,7 @@ use crate::domain::TeachingCourseId;
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, ScreenState};
+use crate::bot::texts;
 use crate::bot::views::{confirm_invite_rotation_keyboard, group_invite_keyboard};
 
 pub(in crate::bot::handlers) async fn show_group_invite(
@@ -52,10 +53,7 @@ async fn send_group_invite(
         .await?;
     let sent = screen
         .bot
-        .send_message(
-            screen.chat_id,
-            "Ссылка многоразовая: её можно отправить всей группе.",
-        )
+        .send_message(screen.chat_id, texts::INVITE_REUSE_HINT)
         .reply_markup(group_invite_keyboard(course_id))
         .await?;
 
@@ -81,12 +79,7 @@ pub(in crate::bot::handlers) async fn ask_invite_rotation(
     };
     let sent = screen
         .bot
-        .send_message(
-            screen.chat_id,
-            "Перевыпустить ссылку? Прежняя сразу перестанет работать — в том числе у \
-             других курсов этой же группы. Уже зарегистрированных студентов это не \
-             затрагивает.",
-        )
+        .send_message(screen.chat_id, texts::INVITE_ROTATION_CONFIRM)
         .reply_markup(confirm_invite_rotation_keyboard())
         .await?;
     screen

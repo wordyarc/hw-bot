@@ -75,7 +75,7 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
         }
         send_message_chunks(bot, chat_id, text, None).await?;
     }
-    bot.send_message(chat_id, "📤 Сдача студента:").await?;
+    bot.send_message(chat_id, "📤 Работа студента:").await?;
     bot.send_message(chat_id, item.submission.content().as_str())
         .reply_markup(keyboard)
         .await?;
@@ -169,10 +169,7 @@ pub(super) async fn submit_comment(
             });
             bot.send_message(
                 message.chat.id,
-                format!(
-                    "✅ Решение сохранено, студент получит уведомление.{}",
-                    saved.unwrap_or_default()
-                ),
+                format!("{}{}", texts::REVIEW_SAVED, saved.unwrap_or_default()),
             )
             .reply_markup(teacher_keyboard())
             .await?;
@@ -293,7 +290,7 @@ async fn ask_review_score(
         .await?;
     }
     if max_score <= SCORE_BUTTONS_LIMIT {
-        bot.send_message(chat_id, format!("Какой балл ставите из {max_score}?"))
+        bot.send_message(chat_id, texts::review_score_question(max_score))
             .reply_markup(review_score_keyboard(submission_id, max_score))
             .await?;
         return Ok(());
@@ -301,7 +298,10 @@ async fn ask_review_score(
     ask_input(
         bot,
         chat_id,
-        &format!("Какой балл ставите? Введите число от 0 до {max_score}:"),
+        &format!(
+            "{} Введите целое число от 0 до {max_score}:",
+            texts::review_score_question(max_score)
+        ),
     )
     .await
 }

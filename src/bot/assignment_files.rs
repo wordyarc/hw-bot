@@ -5,8 +5,10 @@ use teloxide::types::MessageId;
 
 use super::HandlerResult;
 use super::context::{Screen, TextStep};
+use super::errors::send_error_code;
 use super::files::{FileTransfers, incoming_file};
 use super::state::{BotState, FlowState, ScreenState};
+use super::texts;
 use super::views::{
     assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
     send_message_chunks, teacher_keyboard,
@@ -33,8 +35,7 @@ pub(super) async fn submit_file(
         .declared_size
         .is_some_and(|size| size > policy.max_file_size_bytes)
     {
-        bot.send_message(message.chat.id, "Файл превышает допустимый размер.")
-            .await?;
+        send_error_code(bot, message.chat.id, ErrorCode::FileTooLarge).await?;
         return Ok(());
     }
     let transfer_permit = transfers.acquire().await?;
@@ -57,11 +58,8 @@ pub(super) async fn submit_file(
         .declared_size
         .is_some_and(|declared| declared != content.len())
     {
-        bot.send_message(
-            message.chat.id,
-            "Telegram передал файл с неверным размером. Попробуйте ещё раз.",
-        )
-        .await?;
+        bot.send_message(message.chat.id, texts::FILE_SIZE_MISMATCH)
+            .await?;
         return Ok(());
     }
     let Some(screen) = step.resolve().await? else {

@@ -1062,7 +1062,7 @@ mod tests {
     fn passed_deadlines_are_not_reported_as_time_left() {
         let past: DateTime<Utc> = Utc::now() - chrono::Duration::hours(1);
 
-        assert_eq!(deadline_left(past, Utc::now()), "дедлайн прошёл");
+        assert_eq!(deadline_left(past, Utc::now()), texts::DEADLINE_PASSED);
     }
 
     #[test]

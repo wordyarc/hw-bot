@@ -79,10 +79,7 @@ async fn a_valid_link_names_the_group_and_registers_the_student() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": guest,
-            "text": format!(
-                "Регистрация в группу {}.\n\nКак вас называть?\n\n/cancel — отменить",
-                app.fixture.group.code().as_str()
-            ),
+            "text": texts::input_prompt(&texts::registration_prompt(app.fixture.group.code().as_str())),
             "reply_markup": { "remove_keyboard": true }
         })))
         .respond_with(telegram_message_response())
@@ -342,12 +339,7 @@ async fn a_stale_confirm_button_does_not_rotate_twice() {
         ),
     ])
     .await;
-    let stale = expect_text(
-        &telegram,
-        app.teacher(),
-        "Эта кнопка из старого сообщения, действие не выполнено. Откройте /menu.",
-    )
-    .await;
+    let stale = expect_text(&telegram, app.teacher(), texts::STALE_BUTTON).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
 
     let observed = tokio::time::timeout(Duration::from_secs(5), stale.wait_until_satisfied()).await;

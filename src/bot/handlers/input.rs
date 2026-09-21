@@ -2,6 +2,7 @@ use crate::bot::Bot;
 use teloxide::types::{ChatId, Message};
 
 use crate::bot::HandlerResult;
+use crate::bot::texts;
 use crate::domain::{Grading, MAX_ATTEMPTS};
 
 pub(super) async fn ensure_text_limit(
@@ -14,11 +15,8 @@ pub(super) async fn ensure_text_limit(
     if text.trim().chars().count() <= max_len {
         return Ok(true);
     }
-    bot.send_message(
-        chat_id,
-        format!("{field} не должно быть длиннее {max_len} символов."),
-    )
-    .await?;
+    bot.send_message(chat_id, texts::text_too_long(field, max_len))
+        .await?;
     Ok(false)
 }
 
@@ -27,7 +25,7 @@ pub(super) async fn require_text<'a>(
     message: &'a Message,
 ) -> HandlerResult<Option<&'a str>> {
     let Some(text) = message.text() else {
-        bot.send_message(message.chat.id, "Пришлите текстовое сообщение.")
+        bot.send_message(message.chat.id, texts::TEXT_REQUIRED)
             .await?;
         return Ok(None);
     };

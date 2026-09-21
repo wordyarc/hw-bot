@@ -13,6 +13,7 @@ use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::state::{
     AssignmentTerms, BotState, DraftAssignment, FlowState, TermsForm, TermsStep,
 };
+use crate::bot::texts;
 use crate::bot::views::{attempts_keyboard, grading_keyboard};
 
 use super::attempts::chosen_amount;
@@ -145,7 +146,7 @@ pub(in crate::bot::handlers) async fn submit_title(
         return Ok(());
     };
     if text.trim().is_empty() {
-        bot.send_message(message.chat.id, "Название не должно быть пустым.")
+        bot.send_message(message.chat.id, texts::TITLE_REQUIRED)
             .await?;
         return Ok(());
     }
@@ -184,7 +185,7 @@ pub(in crate::bot::handlers) async fn submit_body(
         return Ok(());
     };
     if text.trim().is_empty() {
-        bot.send_message(message.chat.id, "Текст задания не должен быть пустым.")
+        bot.send_message(message.chat.id, texts::BODY_REQUIRED)
             .await?;
         return Ok(());
     }

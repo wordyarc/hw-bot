@@ -87,7 +87,7 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
         Err(error) => return Err(error.into()),
     };
     let text = format!(
-        "{}\n\n🕒 Даты показываются и вводятся в поясе {}.\n\n{}",
+        "{}\n\n🕒 Все даты и время — по {}. При вводе используйте этот же часовой пояс.\n\n{}",
         help_for(role),
         timezone.suffix(),
         help_commands(role),
@@ -146,9 +146,10 @@ pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerR
                     .map(|stats| stats.pending);
                     match pending {
                         Some(pending) if pending > 0 => format!(
-                            "👋 Здравствуйте, {name}!\n⏳ На проверке ваших работ: {pending}\nВыберите пункт меню ниже 👇"
+                            "{}\n\n⏳ Ваших работ на проверке: {pending}",
+                            texts::home_greeting(name)
                         ),
-                        _ => format!("👋 Здравствуйте, {name}!\nВыберите пункт меню ниже 👇"),
+                        _ => texts::home_greeting(name),
                     }
                 }
                 Role::Teacher | Role::Admin => {
@@ -157,7 +158,8 @@ pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerR
                         .queue_size(Actor::new(registered.user.id()))
                         .await?;
                     format!(
-                        "👋 Здравствуйте, {name}!\n⏳ Ждут проверки: {pending}\nВыберите пункт меню ниже 👇"
+                        "{}\n\n⏳ Работ в очереди на проверку: {pending}",
+                        texts::home_greeting(name)
                     )
                 }
             };

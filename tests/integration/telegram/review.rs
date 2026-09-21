@@ -279,7 +279,7 @@ async fn review_confirmation_uses_the_grade_saved_after_a_deadline_change() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_partial_json(json!({
             "chat_id": app.teacher(),
-            "text": "Какой балл ставите из 5?"
+            "text": texts::review_score_question(5)
         })))
         .respond_with(telegram_message_response().set_delay(Duration::from_secs(2)))
         .expect(1)

@@ -190,7 +190,7 @@ async fn the_first_start_in_a_fresh_chat_answers_with_the_menu() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": app.student(),
-            "text": "👋 Здравствуйте, Student!\nВыберите пункт меню ниже 👇",
+            "text": texts::home_greeting("Student"),
             "reply_markup": {
                 "keyboard": [
                     [{ "text": "📚 Мои задания" }, { "text": "⏳ Очередь проверки" }],
