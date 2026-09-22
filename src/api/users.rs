@@ -107,7 +107,6 @@ pub async fn register_staff(
     Ok((StatusCode::CREATED, Json(UserResponse::from(&registered))))
 }
 
-/// 404 - предложи регистрацию.
 pub async fn me(
     State(state): State<AppState>,
     TelegramIdentity(telegram_user_id): TelegramIdentity,

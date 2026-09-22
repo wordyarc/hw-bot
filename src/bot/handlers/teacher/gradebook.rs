@@ -83,7 +83,6 @@ pub(crate) async fn show_student_grades_page(
         lines.push(texts::NO_SCORED_ASSIGNMENTS.to_owned());
     }
     for grade in &student.grades {
-        // Непроверенная сдача и выставленный ноль - разные вещи
         let score = grade
             .final_score
             .map_or_else(|| "—".to_owned(), |score| score.to_string());

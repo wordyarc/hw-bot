@@ -3,8 +3,8 @@ use chrono::{
 };
 use chrono_tz::Tz;
 
-/// Границы сроков исключительные, как у интервалов RFC 5545: «до конца дня 21.09» хранится как
-/// 22.09 00:00 в поясе установки, и в этот момент приём уже закрыт.
+/// «До конца дня 21.09» переводится в 22.09 00:00 по времени установки.
+/// Сам момент границы уже закрыт для сдач, как исключительный конец интервала в RFC 5545.
 #[derive(Clone, Copy, Debug)]
 pub struct BotTimezone {
     tz: Tz,
@@ -107,7 +107,7 @@ impl BotTimezone {
         date.format(DATE).to_string()
     }
 
-    /// Конец дня - это 00:00 следующего дня
+    /// Возвращает полночь после указанного дня.
     pub fn end_of(&self, date: NaiveDate) -> Option<DateTime<Utc>> {
         self.instant(date.succ_opt()?, NaiveTime::MIN)
     }

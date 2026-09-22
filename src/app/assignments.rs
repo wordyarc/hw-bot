@@ -362,7 +362,7 @@ impl AssignmentService {
         ))
     }
 
-    /// Экран курса у преподавателя: черновики и архив тоже его, в отличие от студенческого списка.
+    /// Преподавателю нужны и черновики, и архив; ограничения студенческого списка здесь не действуют.
     pub async fn list_for_course(
         &self,
         actor: Actor,
@@ -459,7 +459,7 @@ pub(crate) async fn load_visible_assignment_for_student(
         .await?
         .required("assignment")?;
 
-    // Никогда не опубликованного задания для студента не существует, поэтому 404, а не 403
+    // Возвращаем 404, чтобы не раскрывать студенту задание, которое никогда не публиковалось.
     if assignment.status() == AssignmentStatus::Draft
         || (assignment.status() == AssignmentStatus::Archived
             && assignment.published_at().is_none())

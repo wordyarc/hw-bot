@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::domain::{InviteGeneration, StudentGroupId};
 
-/// Telegram ограничивает `/start` payload 64 символами.
+/// В payload команды `/start` Telegram допускает не больше 64 символов.
 pub const MAX_PAYLOAD_LEN: usize = 64;
 
 const PAYLOAD_PREFIX: &str = "gi_";
@@ -18,8 +18,9 @@ const TAG_LEN: usize = 16;
 const GROUP_LEN: usize = 16;
 const GENERATION_LEN: usize = 4;
 const BODY_LEN: usize = GROUP_LEN + GENERATION_LEN + TAG_LEN;
-/// Разделителя между полями нет: `-` и `_` входят в алфавит base64url, а других символов
-/// Telegram в `/start` payload не принимает. Поля фиксированной длины и режутся по смещениям.
+/// Фиксированная длина полей позволяет читать их по смещениям без разделителя.
+/// Для разделителя нет свободного символа: `-` и `_` уже заняты в base64url,
+/// а расширить алфавит payload команды `/start` Telegram не разрешает.
 const ENCODED_BODY_LEN: usize = BODY_LEN / 3 * 4;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -188,8 +189,7 @@ mod tests {
         assert!(payload.len() <= MAX_PAYLOAD_LEN, "{payload}");
     }
 
-    /// Фиксирует wire-формат: расхождение здесь означает, что уже розданные ссылки перестанут
-    /// работать после выкладки.
+    /// Новый релиз должен читать прежний wire-формат, иначе выданные ссылки сломаются.
     #[test]
     fn wire_format_stays_compatible_between_versions() {
         assert_eq!(
@@ -205,8 +205,8 @@ mod tests {
         assert_eq!(codec(OTHER_SECRET).decode(&payload), Err(InviteDecodeError));
     }
 
-    /// Мутирует уже подписанный payload побайтово, а не через `encode`: иначе тест проверял бы
-    /// не подпись, а сам кодек.
+    /// Побайтовая правка готового payload проверяет подпись. Повторный вызов `encode`
+    /// вместо такой правки проверял бы только работу кодека.
     fn resign(payload: &str, mutate: impl FnOnce(&mut [u8; BODY_LEN])) -> String {
         let mut body: [u8; BODY_LEN] = URL_SAFE_NO_PAD
             .decode(payload.strip_prefix(PAYLOAD_PREFIX).unwrap())

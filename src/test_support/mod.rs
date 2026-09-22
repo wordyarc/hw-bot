@@ -14,7 +14,6 @@ pub const ASSIGNMENT_TITLE: &str = "Rust ownership";
 pub const ASSIGNMENT_BODY: &str = "Send a pull request link.";
 pub const PULL_REQUEST_URL: &str = "https://github.com/course/hw/pull/1";
 
-/// Фиксированная точка отсчёта вместо `Utc::now()` в каждом билдере
 pub fn t0() -> DateTime<Utc> {
     DateTime::from_timestamp(1_767_225_600, 0).expect("2026-01-01T00:00:00Z is a valid timestamp")
 }
@@ -160,8 +159,8 @@ impl<'a> AssignmentBuilder<'a> {
         self
     }
 
-    /// Дедлайн хранится смещением, а не абсолютом, чтобы `.created_at()` после `.deadline_in()`
-    /// не оставлял протухшее значение.
+    /// Смещение дедлайна позволяет вызвать `.created_at()` после `.deadline_in()`:
+    /// срок пересчитается относительно новой даты создания.
     pub fn deadline_in(mut self, offset: Duration) -> Self {
         self.deadline_offset = offset;
         self.deadline_at = None;

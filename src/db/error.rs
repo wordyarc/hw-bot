@@ -7,12 +7,11 @@ pub type DbResult<T> = Result<T, DbError>;
 
 const UNIQUE_VIOLATION: &str = "23505";
 
-/// Postgres class 57014: `query_canceled`, в том числе по `statement_timeout`.
+/// Код PostgreSQL 57014 (`query_canceled`) приходит и при срабатывании `statement_timeout`.
 const STATEMENT_TIMEOUT: &str = "57014";
 
-/// Условный `update ... where <прежнее состояние>`: 0 затронутых строк означает, что состояние
-/// уже изменил конкурент. Какой именно ошибкой это назвать, решает вызывающий - у правок задания
-/// это конфликт записи, у проверки сдачи доменное правило.
+/// Если `update ... where <прежнее состояние>` не затронул строк, конкурент успел изменить запись.
+/// Ошибку выбирает вызывающий: правка задания возвращает конфликт, проверка сдачи - доменный отказ.
 pub(crate) fn ensure_updated(result: PgQueryResult, lost: DbError) -> DbResult<()> {
     if result.rows_affected() == 0 {
         return Err(lost);
@@ -29,9 +28,9 @@ pub enum DbError {
     #[error(transparent)]
     RuleViolation(DomainError),
 
-    /// Только для чтения строк: `#[from]` означает, что любой `?` по `DomainError` внутри слоя db
-    /// превращается в 500. Для маппинга строк это и нужно (в БД лежит невалидное состояние), но
-    /// бизнес-проверку так писать нельзя - она должна возвращать `RuleViolation`.
+    /// При восстановлении строки `#[from]` переводит `DomainError` через `?` в 500:
+    /// нарушение инварианта в сохранённых данных считается повреждением БД.
+    /// Для бизнес-отказов нужно явно возвращать `RuleViolation`, иначе они тоже станут 500.
     #[error("invalid domain state from database: {0}")]
     CorruptedState(#[from] DomainError),
 
@@ -122,8 +121,8 @@ fn unique_violation(error: &sqlx::Error) -> Option<DbError> {
         "submissions_one_accepted_per_student_assignment_idx" => {
             rule(DomainError::SubmissionAlreadyAccepted)
         }
-        // Двойной тап: этот ключ проверяется раньше индекса по pending, поэтому конкурентную
-        // вставку ловит он. Соседняя сдача только что вставлена, значит заведомо ждёт проверки.
+        // При двойном тапе первым срабатывает этот ключ, не индекс по pending.
+        // Конкурирующая сдача только что создана и ещё находится на проверке.
         "submissions_assignment_id_student_id_attempt_number_key" => {
             rule(DomainError::SubmissionAlreadyPendingReview)
         }

@@ -7,8 +7,8 @@ use hw_bot::test_support::{
 };
 use sqlx::PgPool;
 
-/// Задания, которые сдают через HTTP, обязаны жить по настенным часам: хендлер подставляет
-/// `submitted_at = Utc::now()`, и дедлайн от фиксированного `t0()` был бы уже просрочен.
+/// HTTP-хендлер выставляет `submitted_at = Utc::now()`. Для таких сдач нужен дедлайн
+/// от текущего времени: срок, отсчитанный от `t0()`, к запуску теста уже мог пройти.
 pub fn wall_clock_assignment<'a>(
     course: &'a TeachingCourse,
     author: &'a User,

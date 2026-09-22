@@ -18,8 +18,8 @@ pub(super) struct FilesScreen<'a> {
     pub file_ids: &'a [StoredFileId],
 }
 
-/// Разбор состояния под нажатую кнопку. У каждого метода один и тот же инвариант: диалог обязан
-/// быть в ожидаемом состоянии, а нажатие - прийти из того самого сообщения.
+/// Кнопка допустима при совпадении двух условий: ожидаемого состояния диалога и ID сообщения.
+/// Оба условия проверяются в каждом методе разбора.
 impl BotState {
     pub(super) fn managing_assignment(
         &self,
@@ -103,7 +103,7 @@ impl BotState {
         }
     }
 
-    /// Студент обязан быть из того же списка, который бот показал: иначе кнопка чужая.
+    /// ID студента принимается только из показанного списка, чтобы отсечь чужие кнопки.
     pub(super) fn choosing_student(
         &self,
         message_id: MessageId,
@@ -263,7 +263,7 @@ impl AssignmentTerms {
     }
 
     pub fn preview_policy(&self, max_periods: u16) -> crate::domain::DomainResult<LatePolicy> {
-        // Превью нужно до ввода штрафа; при сохранении этот дефолт не используется.
+        // Пока штраф не введён, это значение нужно лишь для превью и не попадёт в сохранённые условия.
         const PREVIEW_PENALTY: u16 = 1;
         self.policy(self.penalty.unwrap_or(PREVIEW_PENALTY), max_periods)
     }
@@ -377,7 +377,7 @@ pub(super) struct TermsForm {
 
 impl TermsForm {
     pub fn can_go_back(&self) -> bool {
-        // На итоге есть отдельная отмена формы, а /cancel по-прежнему возвращает шаг.
+        // Из итога /cancel ведёт на шаг назад. Всю форму отменяет отдельная кнопка.
         self.step != TermsStep::Summary && self.previous_step().is_some()
     }
 
@@ -454,7 +454,7 @@ pub(super) enum ScreenState {
 
 #[derive(Clone)]
 pub(super) enum FlowState {
-    /// bearer credential не должен пережить проверку подписи.
+    /// После проверки подписи исходный bearer credential больше не хранится.
     AwaitingRegistrationName {
         invite: VerifiedInvite,
     },

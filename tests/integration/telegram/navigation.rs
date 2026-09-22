@@ -223,7 +223,7 @@ async fn navigation_from_an_older_message_still_opens_the_screen() {
     let updates = vec![
         message_update(1, app.teacher(), 1, "/menu"),
         callback_update(2, app.teacher(), callbacks::MENU_COURSES, BOT_MESSAGE_ID),
-        // Экран курса открыт с более нового сообщения, а жмём кнопки со старого.
+        // После повторного открытия курса используем кнопки прежнего сообщения.
         callback_update(
             3,
             app.teacher(),

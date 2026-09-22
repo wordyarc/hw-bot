@@ -49,8 +49,7 @@ impl SubmissionHistory {
         assignment.max_attempts() + self.extra_attempts
     }
 
-    /// Сколько попыток бот показывает студенту. Принятая сдача и
-    /// сдача на проверке блокируют следующую попытку, даже когда остаток положительный.
+    /// Даже с оставшимися попытками нельзя пересдать принятую или ещё не проверенную работу.
     pub fn remaining_attempts_for(self, assignment: &Assignment) -> u16 {
         self.allowed_attempts_for(assignment)
             .saturating_sub(self.used_attempts)
@@ -98,7 +97,6 @@ impl Grade {
             max_score,
             late_periods,
             penalty,
-            // Штраф может превышать балл: итог зажимается в ноль, а не уходит в минус.
             final_score: raw_score.saturating_sub(penalty),
         }
     }
@@ -419,8 +417,7 @@ impl Submission {
 
         let grade = match status {
             SubmissionStatus::Accepted => {
-                // Опоздание считается по моменту отправки: скорость работы преподавателя не должна
-                // менять оценку студента.
+                // Берём время отправки, чтобы длительность проверки не влияла на штраф студенту.
                 let late_periods = assignment.late_periods_at(self.submitted_at);
                 let penalty = assignment.penalty_at(self.submitted_at);
                 let max_score = assignment.grading().max_score();

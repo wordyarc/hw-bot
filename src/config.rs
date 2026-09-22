@@ -617,7 +617,7 @@ mod tests {
     fn validation_rejects_a_lease_shorter_than_one_delivery() {
         let mut config = app_config();
         config.database.statement_timeout_ms = NonZeroU64::new(10_000).unwrap();
-        // Иначе первым сработает правило про HTTP-timeout, и тест проверит не то правило.
+        // Проверка HTTP-timeout не должна перехватить ошибку, ради которой написан этот тест.
         config.server.request_timeout_ms = NonZeroU64::new(30_000).unwrap();
 
         let error = config.validate().err().expect("config must be rejected");

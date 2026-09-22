@@ -21,7 +21,6 @@ pub(super) struct Deps<'a> {
     pub dialogue: &'a BotDialogue,
 }
 
-/// Чат, в который бот отвечает.
 #[derive(Clone, Copy)]
 pub(super) struct Chat<'a> {
     bot: &'a Bot,
@@ -85,7 +84,6 @@ impl<'a> Chat<'a> {
     }
 }
 
-/// Чат с уже распознанным пользователем.
 #[derive(Clone, Copy)]
 pub(super) struct Screen<'a> {
     chat: Chat<'a>,
@@ -138,7 +136,6 @@ impl<'a> Screen<'a> {
     }
 }
 
-/// Текстовый ответ пользователя на шаге диалога.
 #[derive(Clone, Copy)]
 pub(super) struct TextStep<'a> {
     bot: &'a Bot,

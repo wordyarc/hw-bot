@@ -35,7 +35,7 @@ pub(super) async fn start_registration(
     if payload.is_empty() {
         return super::home::open_guest(chat).await;
     }
-    // Битая подпись и отозванная ссылка обязаны выглядеть для гостя одинаково.
+    // Гость не должен отличать ошибку подписи от отзыва ссылки по ответу бота.
     let Ok(invite) = invites.decode(payload) else {
         return send_error_code(bot, chat_id, ErrorCode::InviteInvalid).await;
     };

@@ -164,8 +164,8 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
     Ok(())
 }
 
-/// Единственный арбитр гонки - условный `update ... where status = 'pending_review'`.
-/// Проигравший обязан получить `SubmissionIsNotPendingReview`
+/// Исход гонки определяет только `update ... where status = 'pending_review'`.
+/// Второму писателю возвращается `SubmissionIsNotPendingReview`.
 #[tokio::test]
 async fn the_loser_of_a_review_race_is_rejected_by_the_conditional_update() -> anyhow::Result<()> {
     let app = TestApp::start().await;

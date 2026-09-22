@@ -403,7 +403,7 @@ async fn accepted_submission_cannot_be_redone_while_attempts_remain() {
 async fn attempts_run_out_after_the_last_rejection() {
     let app = TestApp::start().await;
 
-    // В фикстуре max_attempts = 2, поэтому третья попытка упирается в лимит.
+    // Третья попытка превышает заданный фикстурой max_attempts = 2.
     for attempt in 1..=2 {
         let submission = app
             .queued_submission(app.student(), &format!("pull/{attempt}"))

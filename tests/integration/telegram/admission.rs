@@ -187,8 +187,8 @@ async fn a_server_error_cannot_hold_the_permit_during_teloxides_internal_sleep()
     stop_bot(cancellation, &mut task).await;
 }
 
-/// Фиксируем фактическое поведение teloxide: остаток буферизованного batch дренируется,
-/// финальный polling-запрос уходит с новым offset, `limit = 1` и `timeout = 0`.
+/// teloxide обрабатывает остаток batch из буфера и подтверждает его последним polling-запросом:
+/// новый offset, `limit = 1`, `timeout = 0`. Тест закрепляет это поведение библиотеки.
 #[tokio::test]
 async fn shutdown_finishes_while_an_update_waits_for_admission() {
     let app = TestApp::start().await;

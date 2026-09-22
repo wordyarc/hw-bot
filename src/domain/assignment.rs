@@ -58,7 +58,6 @@ impl Grading {
         })
     }
 
-    /// Отсутствие максимума - это «зачёт/незачёт», поэтому колонка в БД одна и nullable.
     pub fn from_max_score(max_score: Option<u16>) -> DomainResult<Self> {
         max_score.map_or(Ok(Self::PassFail), Self::scored)
     }
@@ -203,7 +202,7 @@ impl LatePolicy {
         u32::try_from(periods).expect("chrono's date range fits in u32 days")
     }
 
-    /// Штраф выше максимума шкалы всё равно даёт ноль, переполнение зажимается
+    /// Увеличивать штраф за пределами MAX_SCORE незачем: итог уже обнулён.
     fn penalty_for(self, late_periods: u32) -> u16 {
         late_periods
             .saturating_mul(u32::from(self.penalty))
@@ -259,7 +258,6 @@ impl Assignment {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
 
-        // Штраф выражен в баллах, поэтому у «зачёт/незачёт» политика опозданий смысла не имеет.
         if parts.late_policy.is_some() && !parts.grading.is_scored() {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
@@ -267,7 +265,7 @@ impl Assignment {
             policy.closes_at(parts.deadline_at)?;
         }
 
-        // В архив можно убрать и черновик, поэтому published_at у архива необязателен.
+        // У архивного задания может не быть published_at, если его убрали туда из черновика.
         match parts.status {
             AssignmentStatus::Draft if parts.published_at.is_some() => {
                 return Err(DomainError::InvalidAssignmentPublishedState);

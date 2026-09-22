@@ -7,7 +7,7 @@ use teloxide::payloads;
 use teloxide::requests::{HasPayload, JsonRequest, Output, Request, Requester, RequesterExt};
 use teloxide::types::{BotCommand, CallbackQueryId, ChatId, MessageId};
 
-// Только интерактивные методы: polling и обмен файлами имеют собственные бюджеты.
+// Бюджет интерактивных запросов. Для polling и передачи файлов таймауты задаются отдельно.
 #[derive(Clone)]
 pub(crate) struct Bot {
     pub inner: CacheMe<teloxide::Bot>,
@@ -132,7 +132,7 @@ async fn with_deadline<T>(
     timeout: Duration,
     future: impl Future<Output = Result<T, teloxide::RequestError>>,
 ) -> Result<T, teloxide::RequestError> {
-    // reqwest не ограничивает sleep внутри teloxide после HTTP 5xx.
+    // После HTTP 5xx teloxide делает sleep, на который таймаут reqwest уже не распространяется.
     tokio::time::timeout(timeout, future)
         .await
         .unwrap_or_else(|_| {

@@ -55,9 +55,9 @@ impl ReviewService {
         Self { pool }
     }
 
-    /// Выдача из очереди не эксклюзивна: блокировка живет до конца транзакции, а HTTP-запрос
-    /// заканчивается раньше решения. Единственный арбитр - условный update в `save_review_result`,
-    /// поэтому проигравший гонку ревьюер получит `SubmissionIsNotPendingReview`.
+    /// Работа не резервируется за ревьюером: к моменту его решения блокировки уже нет.
+    /// При одновременной проверке `save_review_result` условным update запишет первое решение,
+    /// а последующие отклонит с `SubmissionIsNotPendingReview`.
     pub async fn take_next_from_queue(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
         let mut tx = self.pool.begin().await?;
 
@@ -74,8 +74,7 @@ impl ReviewService {
         Ok(Some(item))
     }
 
-    /// Сколько сдач ждёт этого ревьюера. Бот не решает, звать ли
-    /// `take_next`: очередь может опустеть между двумя запросами
+    /// Между подсчётом и `take_next_from_queue` работы могут разобрать; ненулевого счётчика недостаточно.
     pub async fn queue_size(&self, actor: Actor) -> AppResult<u32> {
         let reviewer = load_reviewer(&self.pool, actor).await?;
 

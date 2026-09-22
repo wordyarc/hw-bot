@@ -4,7 +4,7 @@ use crate::db::{DbError, DbResult};
 use crate::domain::{Role, StudentGroupId};
 
 impl Role {
-    /// Роль размазана по двум колонкам, поэтому у нее собственный маппинг, а не `str_enum!`.
+    /// Для роли нужны две колонки. Обычный `str_enum!` здесь не заменяет отдельный маппинг.
     pub(crate) fn from_db_str(value: &str, student_group_id: Option<Uuid>) -> DbResult<Self> {
         let invalid_group = || {
             DbError::invalid_value(

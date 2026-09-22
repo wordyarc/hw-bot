@@ -20,8 +20,7 @@ pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> D
 where
     E: PgExecutor<'e>,
 {
-    // Строка инвайта заводится вместе с группой: экран ссылки только читает состояние и не должен
-    // создавать её скрытой мутацией.
+    // Создаём инвайт при добавлении группы, чтобы открытие экрана ссылки оставалось чтением.
     sqlx::query!(
         r#"
         with created as (
@@ -103,7 +102,7 @@ where
         .map_err(DbError::from)
 }
 
-/// Оба INSERT должны идти в транзакции вызывающего: курс без преподавателей невалиден.
+/// Вызывающий обязан объединить оба INSERT транзакцией: нельзя оставить курс без преподавателей.
 pub async fn insert_teaching_course(
     conn: &mut PgConnection,
     course: &TeachingCourse,
@@ -145,8 +144,7 @@ pub async fn find_teaching_course_by_id<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    // Left join, а не inner: курс без преподавателей должен всплыть как испорченное состояние,
-    // а не притвориться отсутствующим.
+    // Через left join обнаружится курс без преподавателей. Inner join скрыл бы повреждённую запись.
     let row = sqlx::query_as!(
         TeachingCourseRow,
         r#"

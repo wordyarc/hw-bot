@@ -16,8 +16,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::harness::TestApp;
 
-/// Шаг опроса у всех ожиданий один. 10 мс, а не 20: самое узкое окно ожидания - 300 мс на
-/// подтверждение polling offset, и при 20 мс под нагрузкой оно иногда не успевало отсчитаться.
+/// Все ожидания опрашивают состояние раз в 10 мс. При шаге 20 мс под нагрузкой иногда
+/// пропускалось самое короткое окно: 300 мс на подтверждение polling offset.
 const POLL_STEP: Duration = Duration::from_millis(10);
 
 pub(crate) async fn wait_until<F, Fut>(timeout: Duration, mut probe: F) -> bool

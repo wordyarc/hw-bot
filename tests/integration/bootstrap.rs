@@ -64,7 +64,6 @@ async fn bootstrap_gives_every_group_an_invite() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Иначе повторный bootstrap чинил бы уже отозванные ссылки.
 #[tokio::test]
 async fn a_repeated_bootstrap_never_resets_a_rotated_invite() -> anyhow::Result<()> {
     let pool = migrated_database().await;

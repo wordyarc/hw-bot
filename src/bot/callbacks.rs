@@ -471,7 +471,7 @@ fn parse_deadline(data: &str) -> Option<DeadlineAction> {
     if let Some(months) = data.strip_prefix(DEADLINE_MONTHS_PREFIX) {
         return months.parse().ok().map(DeadlineAction::Months);
     }
-    // Более узкий cal:pick: проверяется раньше cal:.
+    // cal: поглотил бы cal:pick:, если разобрать общий префикс первым.
     if let Some(date) = data.strip_prefix(CALENDAR_PICK_PREFIX) {
         return NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .ok()

@@ -326,7 +326,7 @@ pub(crate) async fn back(screen: Screen<'_>, mut form: TermsForm) -> HandlerResu
             let Some(step) = form.previous_step() else {
                 return cancel(screen, form).await;
             };
-            // Отмена недособранного включения штрафа возвращает строгий итог; числа остаются.
+            // Если настройку штрафа прервали, итог снова запрещает опоздание, но введённые числа сохраняет.
             if step == TermsStep::Summary && form.terms.committed_policy().is_err() {
                 form.terms.allow_late = false;
             }

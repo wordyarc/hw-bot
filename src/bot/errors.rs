@@ -84,27 +84,25 @@ pub(super) async fn send_error_code(bot: &Bot, chat_id: ChatId, code: ErrorCode)
 
 pub fn app_error_message(code: ErrorCode) -> &'static str {
     match code {
-        ErrorCode::InternalError => "У бота что-то пошло не так. Попробуйте позже.",
+        ErrorCode::InternalError => "Бот не смог выполнить действие. Повторите попытку позже.",
         ErrorCode::NotFound => "Не удалось найти нужные данные.",
-        ErrorCode::InvalidInput => {
-            "Не удалось выполнить действие. Проверьте данные и попробуйте ещё раз."
-        }
+        ErrorCode::InvalidInput => "Проверьте введённые данные и попробуйте ещё раз.",
         ErrorCode::PermissionDenied => "У вас нет доступа к этому действию.",
-        ErrorCode::AssignmentUnavailable => "Сейчас это действие с заданием выполнить нельзя.",
-        ErrorCode::DeadlineExceeded => "Срок сдачи прошёл. Приём работ по этому заданию закрыт.",
+        ErrorCode::AssignmentUnavailable => "В текущем состоянии задания это действие недоступно.",
+        ErrorCode::DeadlineExceeded => "Приём по этому заданию завершён: срок сдачи истёк.",
         ErrorCode::SubmissionClosed => "Приём работ по этому заданию закрыт.",
         ErrorCode::AttemptsExhausted => "Попыток на сдачу больше не осталось.",
         ErrorCode::SubmissionAlreadyAccepted => "Работа уже принята.",
         ErrorCode::SubmissionPendingReview => "Предыдущая работа ещё на проверке.",
         ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",
         ErrorCode::AlreadyRegistered => "Вы уже зарегистрированы.",
-        ErrorCode::ConcurrentModification => "За это время данные изменились. Попробуйте ещё раз.",
+        ErrorCode::ConcurrentModification => "Данные успели измениться. Повторите действие.",
         ErrorCode::InviteInvalid => {
-            "Эта ссылка-приглашение не работает. Попросите у преподавателя новую."
+            "Регистрация по этой ссылке недоступна. Обратитесь к преподавателю за новой ссылкой."
         }
         ErrorCode::FileTooLarge => "Файл слишком большой. Пришлите файл поменьше.",
         ErrorCode::FileLimitReached => {
-            "Больше вложений добавить нельзя. Сначала удалите одно из имеющихся."
+            "Лимит вложений достигнут. Удалите одно, прежде чем добавить новое."
         }
         ErrorCode::Overloaded => "Бот сейчас перегружен. Попробуйте снова через минуту.",
     }

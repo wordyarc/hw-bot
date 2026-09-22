@@ -639,7 +639,7 @@ pub(super) fn terms_form_keyboard(
     keyboard
 }
 
-/// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
+/// Для длинной шкалы нужен ручной ввод: кнопки на весь диапазон `0..=100` не помещаются.
 pub(crate) fn review_score_keyboard(
     submission_id: SubmissionId,
     max_score: u16,

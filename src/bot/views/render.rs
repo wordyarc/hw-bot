@@ -230,7 +230,6 @@ pub(crate) fn terms_lines(
     }
 }
 
-/// Заголовок и записи списка, разделённые пустой строкой.
 pub(crate) fn list_text(header: &str, entries: impl IntoIterator<Item = String>) -> String {
     std::iter::once(header.to_owned())
         .chain(entries)

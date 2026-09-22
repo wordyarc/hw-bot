@@ -70,8 +70,8 @@ impl UserService {
         Self { pool }
     }
 
-    /// Инвайт перепроверяется под `for share` в той же транзакции, что и вставка студента:
-    /// ссылка, заменённая между `/start` и вводом имени, регистрацию не проводит.
+    /// Проверка под `for share` и добавление студента входят в одну транзакцию.
+    /// Если после `/start` ссылку сменили, ввод имени уже не завершит регистрацию по ней.
     pub async fn register_student(&self, command: RegisterStudent) -> AppResult<RegisteredUser> {
         let mut tx = self.pool.begin().await?;
 

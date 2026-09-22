@@ -377,7 +377,6 @@ pub(super) async fn submit_homework_text(
                 .await?;
             Ok(())
         }
-        // Временный сбой: шаг остаётся открытым, и студент просто отправит работу ещё раз.
         Err(error)
             if matches!(
                 error.code(),

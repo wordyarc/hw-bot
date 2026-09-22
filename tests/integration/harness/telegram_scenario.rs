@@ -93,7 +93,7 @@ impl TelegramScenario {
                     "text": body["text"], "reply_markup": body["reply_markup"],
                 });
                 state.messages.push(message.clone());
-                // ReplyKeyboardMarkup в ответ Message не входит.
+                // Bot API не возвращает ReplyKeyboardMarkup в составе Message.
                 let mut result = message;
                 if result["reply_markup"]["inline_keyboard"].is_null() {
                     result.as_object_mut().unwrap().remove("reply_markup");
@@ -206,7 +206,7 @@ impl TelegramScenario {
     pub async fn click_button(&self, user: i64, data: &str) -> Button {
         let button = self.button(user, data).await;
         self.click(user, &button);
-        // При редактировании сообщения ID не меняется: ждём переход, а не повторно видим старую кнопку.
+        // ID редактируемого сообщения прежний. Ждём смены состояния, чтобы не принять старую кнопку за новую.
         self.flush(user).await;
         button
     }

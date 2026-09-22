@@ -117,8 +117,8 @@ async fn only_one_of_two_concurrent_rotations_wins() {
     );
 }
 
-/// Регистрация, успевшая взять `for share`, коммитится раньше ротации: инвайт нельзя обесценить
-/// задним числом.
+/// Ротация не отзывает инвайт у регистрации, которая уже получила `for share`:
+/// сначала должна завершиться её транзакция.
 #[tokio::test]
 async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
     let app = TestApp::start().await;

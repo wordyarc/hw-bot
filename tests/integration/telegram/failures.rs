@@ -102,7 +102,7 @@ async fn a_refused_submission_closes_the_input_step() {
             &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
         )
         .await;
-    // Сдача с другого устройства пока студент печатает: доменный отказ на уже открытом шаге.
+    // Шаг ввода уже открыт. Имитируем сдачу с другого устройства, чтобы следующая получила доменный отказ.
     app.queued_submission(app.student(), "pull/first").await;
     telegram.message(app.student(), "pull/retry");
     telegram.message(app.student(), "pull/again");

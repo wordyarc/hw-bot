@@ -158,8 +158,6 @@ pub struct StudentAssignmentResponse {
     progress: ProgressResponse,
 }
 
-/// Ответ даёт `Submission::submit`. Второго
-/// источника не заводить, разойдутся.
 #[derive(Debug, Serialize)]
 struct ProgressResponse {
     used_attempts: u16,

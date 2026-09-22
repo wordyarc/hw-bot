@@ -115,7 +115,7 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
 }
 
 async fn normalize_transport_error(response: Response) -> Response {
-    // Tower возвращает голые статусы; готовый API-конверт нельзя затирать по совпадению 413/408.
+    // Оборачиваем пустые ответы Tower. Сам по себе статус 413/408 не повод заменять готовое тело API.
     if response
         .extensions()
         .get::<error::ApiErrorResponse>()

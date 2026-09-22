@@ -242,7 +242,7 @@ impl TelegramBot {
         tokio::select! {
             result = &mut dispatch => result.map_err(map_startup_error)?,
             () = cancellation.cancelled() => {
-                // До запуска dispatcher ещё idle: ждать dispatch при отмене нельзя — он запустится.
+                // Ожидание dispatch запустило бы ещё idle dispatcher даже после отмены.
                 if shutdown.shutdown().is_ok() {
                     dispatch.await.map_err(map_startup_error)?;
                 }
@@ -316,7 +316,7 @@ async fn admit_update(update: &Update, admission: &UpdateAdmission) -> bool {
         return false;
     }
 
-    // Ждём, а не отбрасываем: следующий polling offset подтвердит Telegram весь batch.
+    // Нельзя терять update при ожидании permit: новый polling offset подтвердит весь batch.
     let permit = admission
         .semaphore
         .clone()

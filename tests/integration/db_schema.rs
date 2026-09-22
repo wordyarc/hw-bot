@@ -67,7 +67,7 @@ async fn database_without_migrations_is_not_ready() {
     assert!(db::validate_migrations(&pool).await.is_err());
 }
 
-/// Имена вариантов живут в двух местах: `str_enum!` в домене и CHECK-констрейнты миграции.
+/// CHECK-ограничения миграции должны принимать те же имена, что заданы доменным `str_enum!`.
 #[tokio::test]
 async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<()> {
     let app = TestApp::start().await;
@@ -467,7 +467,7 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Лимиты курсов тоже дублируются: `max_study_year()` в домене и CHECK в миграции.
+/// Верхняя граница курса задана и в `max_study_year()`, и в CHECK миграции; значения должны совпадать.
 #[tokio::test]
 async fn study_year_limits_match_the_domain() -> anyhow::Result<()> {
     let app = TestApp::start().await;

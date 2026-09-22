@@ -21,7 +21,7 @@ async fn telegram_rejects_oversized_input_before_registration() {
     let telegram = telegram_server(updates).await;
     let rejected = Mock::given(method("POST"))
         .and(path("/bottest-token/SendMessage"))
-        // Формулировка не контракт, а вот предел 100 - да: тест шлёт ровно 101 символ
+        // Проверяем предел 100 на вводе из 101 символа; текст пояснения может меняться.
         .and(body_partial_json(json!({ "chat_id": user_id })))
         .and(body_string_contains("100"))
         .respond_with(telegram_message_response())

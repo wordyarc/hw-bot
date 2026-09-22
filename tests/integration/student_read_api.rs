@@ -299,7 +299,6 @@ async fn an_archived_card_keeps_submission_history_and_review_comments() {
     );
 }
 
-/// 404, а не 403: о существовании черновика студент знать не должен.
 #[tokio::test]
 async fn a_draft_card_does_not_exist_for_a_student() {
     let app = TestApp::start().await;

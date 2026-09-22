@@ -100,7 +100,7 @@ impl NotificationWorker {
             return Ok(DeliveryOutcome::Delivered);
         };
         let failure = delivery_failure(&error);
-        // InvalidJson и Unknown могут содержать токен и пользовательский текст.
+        // Из InvalidJson и Unknown берём только категорию: внутри возможны токен и текст пользователя.
         let last_error = request_error_kind(&error);
         if failure == DeliveryFailure::InvalidCredentials {
             db::notifications::release_after_credentials_failure(

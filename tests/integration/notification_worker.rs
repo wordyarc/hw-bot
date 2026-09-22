@@ -103,7 +103,7 @@ async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     drop(held);
     wait_for_worker_request(&telegram, "/bottest-token/SendMessage").await;
-    // Во время Telegram-запроса соединение свободно; подтверждение затем ждёт его заново.
+    // Пока идёт запрос в Telegram, соединение можно занять. Запись подтверждения будет ждать его возврата.
     let held = runtime.acquire().await.unwrap();
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(!delivery.is_finished());

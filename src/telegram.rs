@@ -66,7 +66,7 @@ fn delivery_failure(error: &RequestError) -> DeliveryFailure {
     match error {
         RequestError::Api(ApiError::InvalidToken) => DeliveryFailure::InvalidCredentials,
         RequestError::RetryAfter(delay) => DeliveryFailure::RateLimited(Some(delay.duration())),
-        // Без retry_after teloxide оставляет описание 429 в Unknown.
+        // Ответ 429 без retry_after попадает в teloxide как Unknown с текстовым описанием.
         RequestError::Api(ApiError::Unknown(description)) if is_flood_control(description) => {
             DeliveryFailure::RateLimited(None)
         }

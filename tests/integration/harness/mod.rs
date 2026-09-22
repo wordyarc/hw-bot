@@ -58,8 +58,7 @@ impl TestApp {
         Self::over(migrated_database().await, request_timeout).await
     }
 
-    /// Приложение поверх пула на одно соединение: удержав его, тест получает исчерпание пула
-    /// вместо ожидания.
+    /// В пуле одно соединение. Заняв его, тест воспроизводит ошибку исчерпания пула.
     pub async fn start_saturated() -> Self {
         Self::over(saturated_database().await, StdDuration::from_secs(10)).await
     }
@@ -84,7 +83,7 @@ impl TestApp {
             application,
             invites,
             router,
-            // Выше диапазона, который тесты занимают литералами.
+            // Не пересекается с ID, записанными в тестах литералами.
             next_telegram_id: AtomicI64::new(5000),
         }
     }
@@ -379,8 +378,7 @@ impl TestApp {
         .await
     }
 
-    /// Действующая ссылка группы: generation читается из БД, поэтому после ротации токен
-    /// нужно взять заново.
+    /// Токен подписывается с текущей generation из БД. После ротации нужен новый вызов.
     pub async fn invite_token(&self, group_id: StudentGroupId) -> String {
         let generation = db::group_invites::find_generation(&self.pool, group_id)
             .await
@@ -449,8 +447,8 @@ impl TestApp {
         teacher
     }
 
-    /// Второй преподаватель того же курса. Пишем связку напрямую: отдельного use case «добавить
-    /// ревьюера» ещё нет, а очередь ревью обязана его видеть уже сейчас.
+    /// Очередь должна учитывать второго преподавателя курса, хотя use case его добавления пока нет.
+    /// Поэтому тестовая связка создаётся напрямую в БД.
     pub async fn add_course_teacher(&self, display_name: &str) -> User {
         let teacher = self.add_outsider_teacher(display_name).await;
 
