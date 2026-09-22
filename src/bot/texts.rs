@@ -1,6 +1,15 @@
-use super::views::{
-    BUTTON_ARCHIVE, BUTTON_ASSIGNMENTS, BUTTON_COURSES, BUTTON_QUEUE, BUTTON_REVIEW,
-};
+use chrono::{DateTime, Utc};
+
+use crate::domain::{AssignmentStatus, Grade, Role, SubmissionStatus};
+
+pub const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
+pub const BUTTON_ARCHIVE: &str = "🗄 Архив";
+pub const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
+pub const BUTTON_REVIEW: &str = "✅ Проверить работы";
+pub const BUTTON_COURSES: &str = "📘 Мои курсы";
+pub const BUTTON_PROFILE: &str = "👤 Профиль";
+pub const BUTTON_HELP: &str = "❓ Помощь";
+pub const MENU_PLACEHOLDER: &str = "Выберите пункт меню";
 
 pub const GUEST_NEEDS_INVITE: &str = "Вы ещё не зарегистрированы, поэтому задания пока недоступны.\n\n\
     Если вы студент, попросите у преподавателя ссылку для вашей группы и перейдите по ней.\n\
@@ -76,10 +85,6 @@ pub const TERMS_DISCARDED: &str = "Правка отменена. У задан�
 pub const TERMS_CONFLICT: &str = "Пока вы меняли условия, задание изменил другой преподаватель. Правка не сохранена, ниже актуальные условия.";
 pub const DATE_FORMAT: &str = "Пришлите дату в формате ДД.ММ.ГГГГ или ДД.ММ.ГГГГ ЧЧ:ММ.";
 pub const TIMEZONE_LABEL: &str = "🕒 Часовой пояс:";
-
-pub fn timezone_note(timezone: &str) -> String {
-    format!("{TIMEZONE_LABEL} {timezone}. Все сроки показываются и вводятся в нём.")
-}
 pub const INTEGER_REQUIRED: &str = "Напишите целое число, без дробной части.";
 pub const INVALID_TERMS: &str =
     "С такими условиями продолжить нельзя. Проверьте срок и настройки опоздания.";
@@ -104,6 +109,10 @@ pub const INVITE_REUSE_HINT: &str =
 pub const INVITE_ROTATION_CONFIRM: &str = "Заменить ссылку на новую? Старая сразу перестанет работать во всех курсах этой группы. У тех, кто уже зарегистрировался, доступ сохранится.";
 pub const REVIEW_SAVED: &str =
     "✅ Решение сохранено. Бот отправит студенту результат и ваш комментарий.";
+
+pub fn timezone_note(timezone: &str) -> String {
+    format!("{TIMEZONE_LABEL} {timezone}. Все сроки показываются и вводятся в нём.")
+}
 
 pub fn registration_prompt(group: &str) -> String {
     format!("Вы регистрируетесь в группе {group}.\n\nКак вас зовут?")
@@ -250,4 +259,455 @@ pub fn teacher_help() -> String {
         «{BUTTON_REVIEW}» открывает следующую работу из очереди. Примите или отклоните её и обязательно напишите комментарий. Бот отправит студенту результат.\n\n\
         Чтобы поменять условия, откройте «Сроки и штраф» в задании. Перенос срока сдвигает и конец приёма — проверьте итоговую дату перед сохранением. При настройке /cancel возвращает на предыдущий шаг, а на первом шаге выходит."
     )
+}
+
+// Общие
+pub const CHOOSE_ACTION: &str = "Выберите действие:";
+pub const ACTION_CANCELLED: &str = "Текущее действие отменено.";
+pub const PRIVATE_CHATS_ONLY: &str = "Бот работает только в личных сообщениях.";
+pub const ASSIGNMENT_BODY_HEADER: &str = "📄 Текст задания:";
+pub const FIELD_NAME: &str = "Имя";
+pub const FIELD_TITLE: &str = "Название";
+pub const FIELD_BODY: &str = "Текст задания";
+pub const FIELD_COMMENT: &str = "Комментарий";
+pub const FIELD_SUBMISSION: &str = "Текст работы";
+
+pub fn number_error(max: u16) -> String {
+    format!("Введите целое число от 1 до {max}.")
+}
+
+// Главный экран и профиль
+pub fn student_pending_line(pending: u32) -> String {
+    format!("⏳ Ваших работ на проверке: {pending}")
+}
+
+pub fn review_queue_line(pending: u32) -> String {
+    format!("⏳ Работ в очереди на проверку: {pending}")
+}
+
+pub fn profile_header(name: &str, role: &str) -> String {
+    format!("👤 Профиль\n\nИмя: {name}\nРоль: {role}")
+}
+
+pub fn profile_group(code: &str) -> String {
+    format!("Группа: {code}")
+}
+
+pub fn profile_active_assignments(count: u32) -> String {
+    format!("📚 Активных заданий: {count}")
+}
+
+pub fn profile_pending(count: u32) -> String {
+    format!("⏳ Работ на проверке: {count}")
+}
+
+pub fn profile_courses(count: u32) -> String {
+    format!("📘 Курсов: {count}")
+}
+
+pub fn profile_review_queue(count: u32) -> String {
+    format!("⏳ Ждут проверки: {count}")
+}
+
+// Студент
+pub const STUDENT_QUEUE_HEADER: &str = "⏳ Ваши работы на проверке:";
+pub const ASSIGNMENTS_HEADER: &str = "📚 Ваши задания:";
+pub const NO_ASSIGNMENTS: &str = "📚 Опубликованных заданий пока нет.";
+pub const ARCHIVE_HEADER: &str = "🗄 Архив заданий:";
+pub const ARCHIVE_EMPTY: &str = "🗄 Архив заданий пока пуст.";
+pub const PROGRESS_ACCEPTED: &str = "✅ принято";
+pub const PROGRESS_PENDING: &str = "⏳ на проверке";
+pub const PROGRESS_NOT_SUBMITTED: &str = "✍️ не сдано";
+pub const FILES_ATTACHED_HEADER: &str = "📎 Вложения задания:";
+pub const REVIEW_COMMENT_HEADER: &str = "💬 Комментарий преподавателя:";
+pub const BUTTON_HISTORY: &str = "🕘 История сдач";
+pub const BUTTON_SUBMIT: &str = "📤 Сдать работу";
+pub const BUTTON_BACK_TO_ARCHIVE: &str = "⬅️ К архиву";
+pub const BUTTON_BACK_TO_ASSIGNMENTS: &str = "⬅️ К списку заданий";
+pub const BUTTON_BACK_TO_ASSIGNMENT: &str = "⬅️ К заданию";
+
+pub fn queue_entry(subject: &str, title: &str, sent_at: &str, ahead: &str) -> String {
+    format!("📘 {subject} · {title}\nотправлено {sent_at} · {ahead}")
+}
+
+pub fn subject_header(subject: &str) -> String {
+    format!("📘 {subject}")
+}
+
+pub fn assignment_entry(
+    title: &str,
+    status: &str,
+    until: &str,
+    time_left: &str,
+    closing: Option<&str>,
+    remaining: u16,
+) -> String {
+    let closing = closing
+        .map(|closing| format!("\n{closing}"))
+        .unwrap_or_default();
+    format!("{title}\n{status} · {until} ({time_left}){closing}\nосталось попыток: {remaining}")
+}
+
+pub fn closing_line(closes_at: &str) -> String {
+    format!("{SUBMISSIONS_CLOSE_LABEL} {closes_at}")
+}
+
+pub fn archive_entry(title: &str, used: u16) -> String {
+    format!("{title}\nиспользовано попыток: {used}")
+}
+
+pub fn assignment_card(
+    subject: &str,
+    title: &str,
+    terms: &str,
+    used: u16,
+    allowed: u16,
+    remaining: u16,
+) -> String {
+    format!(
+        "📘 {subject}\n{title}\n{terms}\n🔁 Попытки: использовано {used}, доступно {allowed}, осталось {remaining}"
+    )
+}
+
+pub fn pending_place(ahead: &str) -> String {
+    format!("⏳ Работа на проверке.\n{ahead}")
+}
+
+pub fn attempt_line(number: u16, status: &str, grade: Option<&str>) -> String {
+    let grade = grade.map(|grade| format!("\n{grade}")).unwrap_or_default();
+    format!("Попытка {number}: {status}{grade}")
+}
+
+pub fn history_header(subject: &str, title: &str) -> String {
+    format!("📘 {subject} · {title}\n🕘 История сдач: от новых к старым")
+}
+
+pub fn assignment_button(subject: &str, title: &str) -> String {
+    format!("{subject} · {title}")
+}
+
+// Проверка
+pub const SUBMISSION_HEADER: &str = "📤 Работа студента:";
+pub const BUTTON_ACCEPT: &str = "✅ Принять";
+pub const BUTTON_REJECT: &str = "❌ Отклонить";
+
+pub fn review_button(pending: u32) -> String {
+    format!("{BUTTON_REVIEW} ({pending})")
+}
+
+pub fn review_summary(subject: &str, title: &str, student: &str, attempt: u16) -> String {
+    format!("📘 {subject} · {title}\n👤 Студент: {student}\n🔁 Попытка {attempt}")
+}
+
+pub fn late_submission_line(penalty: u16) -> String {
+    format!("⏳ Сдана с опозданием, штраф −{penalty}")
+}
+
+pub fn late_penalty_notice(penalty: u16) -> String {
+    format!("⏳ Работа сдана с опозданием, штраф — {penalty}.")
+}
+
+pub fn previous_attempt(number: u16, status: &str, content: &str, comment: Option<&str>) -> String {
+    let comment = comment
+        .map(|comment| format!("\n💬 {comment}"))
+        .unwrap_or_default();
+    format!("🕘 Попытка {number}: {status}\n{content}{comment}")
+}
+
+pub fn score_prompt(max_score: u16) -> String {
+    format!("Введите целое число от 0 до {max_score}:")
+}
+
+pub fn score_error(max_score: u16) -> String {
+    format!("Введите целое число от 0 до {max_score}.")
+}
+
+pub fn score_with_penalty(score: u16, penalty: u16, max_score: u16) -> String {
+    format!(
+        "🏅 Итог: {score} − {penalty} = {} из {max_score}.",
+        score.saturating_sub(penalty)
+    )
+}
+
+pub fn grade_saved(grade: Grade) -> String {
+    format!(
+        "🏅 Сохранено: {} − {} = {} из {}.",
+        grade.raw_score(),
+        grade.penalty(),
+        grade.final_score(),
+        grade.max_score(),
+    )
+}
+
+// Курсы и задания преподавателя
+pub const NO_COURSES: &str = "📘 У вас пока нет учебных курсов.";
+pub const CHOOSE_COURSE: &str = "📘 Выберите курс:";
+pub const NO_COURSE_ASSIGNMENTS: &str = "В этом курсе пока нет заданий.";
+pub const COURSE_ASSIGNMENTS_HEADER: &str = "Задания курса:";
+pub const CHOOSE_ASSIGNMENT: &str = "Выберите задание или создайте новое:";
+pub const ASSIGNMENT_PUBLISHED: &str = "🚀 Задание опубликовано.";
+pub const ASSIGNMENT_ARCHIVED: &str = "📦 Задание архивировано.";
+pub const BUTTON_CREATE_ASSIGNMENT: &str = "➕ Создать задание";
+pub const BUTTON_GRADEBOOK: &str = "📊 Оценки";
+pub const BUTTON_GROUP_INVITE: &str = "🔗 Ссылка для группы";
+pub const BUTTON_BACK_TO_COURSES: &str = "⬅️ К списку курсов";
+pub const BUTTON_BACK_TO_COURSE: &str = "⬅️ К курсу";
+pub const BUTTON_BACK_TO_COURSE_ASSIGNMENTS: &str = "⬅️ К заданиям курса";
+pub const BUTTON_PUBLISH: &str = "🚀 Опубликовать";
+pub const BUTTON_PUBLISH_AGAIN: &str = "🚀 Опубликовать снова";
+pub const BUTTON_ARCHIVE_ASSIGNMENT: &str = "📦 Архивировать";
+pub const BUTTON_FILES: &str = "📎 Вложения";
+pub const BUTTON_GRANT_ATTEMPTS: &str = "🎁 Выдать попытки";
+
+pub fn course_button(subject: &str, group: &str) -> String {
+    format!("📘 {subject} · {group}")
+}
+
+pub fn course_assignment_entry(title: &str, status: &str, deadline: &str) -> String {
+    format!("{title} · {status}\n⏰ {deadline}")
+}
+
+pub fn course_assignment_button(status_icon: &str, title: &str) -> String {
+    format!("{status_icon} {title}")
+}
+
+pub fn published_line(at: &str) -> String {
+    format!("🚀 Опубликовано: {at}")
+}
+
+pub fn teacher_assignment_card(
+    title: &str,
+    status: &str,
+    terms: &str,
+    attempts: u16,
+    published: Option<&str>,
+    body: &str,
+) -> String {
+    let published = published
+        .map(|line| format!("\n{line}"))
+        .unwrap_or_default();
+    format!(
+        "{title}\n\nСтатус: {status}{terms}\n🔁 Попыток: {attempts}{published}\n\n{ASSIGNMENT_BODY_HEADER}\n{body}"
+    )
+}
+
+// Создание задания и условия
+pub const BUTTON_OTHER_AMOUNT: &str = "✍️ Другое число";
+pub const BUTTON_OTHER_MAX_SCORE: &str = "✍️ Другой максимум";
+pub const BUTTON_PASS_FAIL: &str = "⏭ Без баллов, зачёт/незачёт";
+pub const BUTTON_CALENDAR: &str = "🗓 Выбрать дату";
+pub const BUTTON_MANUAL: &str = "✍️ Ввести вручную";
+pub const BUTTON_PICK_DATE: &str = "Выбрать дату";
+pub const BUTTON_OTHER_PERIODS: &str = "Другое число периодов";
+pub const BUTTON_APPLY_PERIODS: &str = "Применить число периодов";
+pub const BUTTON_POLICY_PENALTY: &str = "После срока: со штрафом";
+pub const BUTTON_POLICY_STRICT: &str = "После срока: не принимать";
+pub const PRESET_WEEK: &str = "Через неделю";
+pub const PRESET_TWO_WEEKS: &str = "Через 2 недели";
+pub const PRESET_MONTH: &str = "Через месяц";
+pub const PRESET_WEEK_AFTER: &str = "Неделя после срока";
+pub const PRESET_TWO_WEEKS_AFTER: &str = "2 недели после срока";
+pub const PRESET_MONTH_AFTER: &str = "Месяц после срока";
+pub const MONTHS: [&str; 12] = [
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+];
+pub const WEEKDAYS: [&str; 7] = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
+pub fn attempts_prompt(max: u16) -> String {
+    format!("Введите количество попыток от 1 до {max}:")
+}
+
+pub fn max_score_prompt(max: u16) -> String {
+    format!("Введите максимальный балл от 1 до {max}:")
+}
+
+pub fn scale_button(max_score: u16) -> String {
+    format!("{max_score}-балльная")
+}
+
+pub fn penalty_button(points: u16) -> String {
+    format!("На {}", self::points(points))
+}
+
+pub fn period_button(period_days: u16) -> String {
+    format!("Изменить период: {period_days} дн.")
+}
+
+pub fn period_summary(period_days: u16) -> String {
+    format!("{PERIOD_LABEL} {period_days} дн.")
+}
+
+pub fn until_short(date: &str) -> String {
+    format!("до {date}")
+}
+
+pub fn date_preset(label: &str, date: &str) -> String {
+    format!("📅 {label} · {date}")
+}
+
+pub fn periods_option(duration: &str, until: &str) -> String {
+    format!("{duration} · до {until}")
+}
+
+pub fn penalty_step(question: &str, period_days: u16) -> String {
+    format!(
+        "{question}\nШтраф начисляется за каждые начавшиеся {period_days} дн. Напишите целое число баллов от 1 до 100:"
+    )
+}
+
+pub fn duration_confirmation(selected: &str, duration: &str, closing: &str) -> String {
+    format!(
+        "Вы выбрали приём {selected}. После округления опоздание составит {duration}.\n{SUBMISSIONS_CLOSE_LABEL} {closing}. Использовать эту дату?"
+    )
+}
+
+// Вложения
+pub const FILE_PROMPT: &str = "Пришлите файл или фотографию.";
+pub const FILE_ADDED: &str = "Вложение добавлено.";
+pub const FILE_DELETED: &str = "Вложение удалено.";
+pub const NO_FILES: &str = "Вложений нет.";
+pub const FILES_HEADER: &str = "Вложения задания:";
+pub const BUTTON_ADD_FILE: &str = "📎 Добавить вложение";
+pub const BUTTON_FINISH_CREATION: &str = "✅ Завершить создание";
+pub const BUTTON_DELETE: &str = "🗑 Удалить";
+pub const BUTTON_CANCEL: &str = "↩️ Отмена";
+
+pub fn file_entry(position: u64, filename: &str, size: &str) -> String {
+    format!("{position}. {filename} · {size}")
+}
+
+pub fn file_button(filename: &str) -> String {
+    format!("📄 {filename}")
+}
+
+pub fn files_used(used: usize, max: usize) -> String {
+    format!("Использовано: {used} из {max}.")
+}
+
+// Студенты, попытки и оценки
+pub const NO_STUDENTS: &str = "В группе пока нет студентов.";
+pub const STUDENTS_HEADER: &str = "👥 Студенты группы:";
+pub const STUDENT_PENDING_MARK: &str = " · ⏳ сдача на проверке";
+pub const STUDENT_ACCEPTED_MARK: &str = " · ✅ работа принята";
+pub const CHOOSE_STUDENT_PROMPT: &str = "Выберите студента:";
+pub const EXTRA_ATTEMPTS_QUESTION: &str = "Сколько дополнительных попыток выдать?";
+pub const GRADEBOOK_CHOOSE_STUDENT: &str = "📊 Оценки курса. Выберите студента:";
+pub const NO_SCORED_ASSIGNMENTS: &str = "В курсе пока нет оценочных заданий.";
+pub const BUTTON_BACK_TO_STUDENTS: &str = "⬅️ К студентам курса";
+
+pub fn student_entry(name: &str, used: u16, extra: u16, marks: &str) -> String {
+    format!("{name} · использовано {used} · дополнительных {extra}{marks}")
+}
+
+pub fn student_button(name: &str) -> String {
+    format!("👤 {name}")
+}
+
+pub fn attempts_granted(amount: u16, total: u16) -> String {
+    format!("🎁 Добавлено попыток: {amount}. Всего дополнительных: {total}.")
+}
+
+pub fn grades_header(name: &str, total: u32, max_total: u32) -> String {
+    format!("👤 {name}\n🏅 Итого: {total} из {max_total}")
+}
+
+pub fn grade_entry(title: &str, score: &str, max_score: u16) -> String {
+    format!("{title} · {score} из {max_score}")
+}
+
+// Ссылка группы
+pub const INVITE_ROTATED: &str = "♻️ Прежняя ссылка больше не работает.";
+pub const BUTTON_ROTATE_INVITE: &str = "♻️ Перевыпустить ссылку";
+pub const BUTTON_CONFIRM_ROTATE: &str = "♻️ Перевыпустить";
+
+pub fn invite_header(group: &str) -> String {
+    format!("🔗 Ссылка для регистрации в группу {group}:")
+}
+
+// Постраничная навигация
+pub const BUTTON_PREVIOUS_PAGE: &str = "◀️ Назад";
+pub const BUTTON_NEXT_PAGE: &str = "Вперёд ▶️";
+
+// Статусы и величины
+
+pub fn submission_status(status: SubmissionStatus) -> &'static str {
+    match status {
+        SubmissionStatus::PendingReview => "⏳ на проверке",
+        SubmissionStatus::Accepted => "✅ принята",
+        SubmissionStatus::Rejected => "❌ отклонена",
+    }
+}
+
+pub fn assignment_status(status: AssignmentStatus) -> &'static str {
+    match status {
+        AssignmentStatus::Draft => "⚪️ черновик",
+        AssignmentStatus::Published => "🟢 опубликовано",
+        AssignmentStatus::Archived => "📦 архив",
+    }
+}
+
+pub fn assignment_status_icon(status: AssignmentStatus) -> &'static str {
+    match status {
+        AssignmentStatus::Draft => "⚪️",
+        AssignmentStatus::Published => "🟢",
+        AssignmentStatus::Archived => "📦",
+    }
+}
+
+pub fn role_name(role: Role) -> &'static str {
+    match role {
+        Role::Student { .. } => "🎓 студент",
+        Role::Teacher => "👨‍🏫 преподаватель",
+        Role::Admin => "🛠 администратор",
+    }
+}
+
+pub fn grade_line(grade: Grade) -> String {
+    if grade.penalty() == 0 {
+        return format!("🏅 Балл: {} из {}", grade.final_score(), grade.max_score());
+    }
+    format!(
+        "🏅 Балл: {} − {} = {} из {} (штраф за опоздание)",
+        grade.raw_score(),
+        grade.penalty(),
+        grade.final_score(),
+        grade.max_score(),
+    )
+}
+
+pub fn deadline_left(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let left = deadline - now;
+    if left.num_seconds() <= 0 {
+        return DEADLINE_PASSED.to_owned();
+    }
+    let days = left.num_days();
+    let hours = left.num_hours() % 24;
+    if days > 0 {
+        format!("осталось {days} д {hours} ч")
+    } else if left.num_hours() > 0 {
+        format!("осталось {} ч", left.num_hours())
+    } else {
+        format!("осталось {} мин", left.num_minutes().max(1))
+    }
+}
+
+pub fn format_file_size(size_bytes: u64) -> String {
+    if size_bytes < 1024 {
+        format!("{size_bytes} Б")
+    } else if size_bytes < 1024 * 1024 {
+        format!("{:.1} КиБ", size_bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} МиБ", size_bytes as f64 / (1024.0 * 1024.0))
+    }
 }

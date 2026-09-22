@@ -174,7 +174,6 @@ pub struct StudentAssignmentDetailsResponse {
     #[serde(flatten)]
     assignment: StudentAssignmentResponse,
     files: Vec<StoredFileResponse>,
-    /// Только последняя попытка: полная история отдаётся отдельной страницей.
     submissions: Vec<SubmissionResponse>,
 }
 

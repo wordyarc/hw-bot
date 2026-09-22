@@ -13,7 +13,7 @@ fn message_chunks(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-pub(in crate::bot) async fn send_message_chunks(
+pub(crate) async fn send_message_chunks(
     bot: &Bot,
     chat_id: ChatId,
     text: String,
@@ -34,14 +34,14 @@ pub(in crate::bot) async fn send_message_chunks(
     Ok(())
 }
 
-pub(in crate::bot) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {
+pub(crate) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {
     bot.send_message(chat_id, texts::input_prompt(prompt))
         .reply_markup(KeyboardRemove::new())
         .await?;
     Ok(())
 }
 
-pub(in crate::bot) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
+pub(crate) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {
     bot.send_message(chat_id, texts::STALE_BUTTON).await?;
     Ok(())
 }

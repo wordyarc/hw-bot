@@ -9,22 +9,22 @@ use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::AmountChoice;
-use crate::bot::context::{Chat, Deps, Screen, TextStep};
+use crate::bot::context::{Screen, TextStep};
 use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::teacher_keyboard;
 use crate::bot::views::{
-    ask_input, review_keyboard, review_score_keyboard, send_message_chunks, submission_status,
-    teacher_menu,
+    ask_input, review_keyboard, review_score_keyboard, send_message_chunks, teacher_menu,
 };
 use crate::domain::{DomainError, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let Chat { bot, chat_id, deps } = chat;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let services = screen.services();
     let item = services.reviews.take_next_from_queue(actor).await?;
     let Some(item) = item else {
         reset_dialogue(dialogue).await?;
@@ -38,44 +38,43 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
 }
 
 async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
-    let Chat { bot, chat_id, deps } = screen.chat;
-    let dialogue = deps.dialogue;
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let penalty = item.assignment.penalty_at(item.submission.submitted_at());
     dialogue
         .update(BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id: item.submission.id(),
             grading: item.assignment.grading(),
-            penalty: item.assignment.penalty_at(item.submission.submitted_at()),
+            penalty,
         }))
         .await?;
-    let penalty = item.assignment.penalty_at(item.submission.submitted_at());
-    let mut summary = format!(
-        "📘 {} · {}\n👤 Студент: {}\n🔁 Попытка {}",
+    let mut summary = texts::review_summary(
         item.subject.name().as_str(),
         item.assignment.title().as_str(),
         item.student.display_name().as_str(),
         item.submission.attempt_number(),
     );
     if penalty > 0 {
-        summary.push_str(&format!("\n⏳ Сдана с опозданием, штраф −{penalty}"));
+        summary.push('\n');
+        summary.push_str(&texts::late_submission_line(penalty));
     }
     let keyboard = review_keyboard(item.submission.id());
     bot.send_message(chat_id, summary).await?;
-    bot.send_message(chat_id, "📄 Текст задания:").await?;
+    bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
+        .await?;
     bot.send_message(chat_id, item.assignment.body().as_str())
         .await?;
     for attempt in &item.previous_attempts {
-        let mut text = format!(
-            "🕘 Попытка {}: {}\n{}",
+        let text = texts::previous_attempt(
             attempt.attempt_number(),
-            submission_status(attempt.status()),
+            texts::submission_status(attempt.status()),
             attempt.content().as_str(),
+            attempt.review_comment().map(|comment| comment.as_str()),
         );
-        if let Some(comment) = attempt.review_comment() {
-            text.push_str(&format!("\n💬 {}", comment.as_str()));
-        }
         send_message_chunks(bot, chat_id, text, None).await?;
     }
-    bot.send_message(chat_id, "📤 Работа студента:").await?;
+    bot.send_message(chat_id, texts::SUBMISSION_HEADER).await?;
     bot.send_message(chat_id, item.submission.content().as_str())
         .reply_markup(keyboard)
         .await?;
@@ -88,26 +87,23 @@ pub(super) async fn submit_score_text(
     max_score: u16,
     penalty: u16,
 ) -> HandlerResult {
-    let TextStep {
-        bot, message, deps, ..
-    } = step;
-    let Deps { dialogue, .. } = deps;
+    let bot = step.bot();
+    let message = step.message();
+    let chat_id = step.chat_id();
+    let dialogue = step.dialogue();
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
     let Some(score) = parse_score(text, max_score) else {
-        bot.send_message(
-            message.chat.id,
-            format!("Введите целое число от 0 до {max_score}."),
-        )
-        .await?;
+        bot.send_message(chat_id, texts::score_error(max_score))
+            .await?;
         return Ok(());
     };
-    confirm_score(bot, message.chat.id, score, penalty, max_score).await?;
+    confirm_score(bot, chat_id, score, penalty, max_score).await?;
     ask_review_comment(
         bot,
-        message.chat.id,
+        chat_id,
         submission_id,
         ReviewDecision::Accept,
         Some(score),
@@ -124,20 +120,17 @@ pub(super) async fn submit_comment(
     decision: ReviewDecision,
     score: Option<u16>,
 ) -> HandlerResult {
-    let TextStep {
-        bot,
-        message,
-        telegram_user_id,
-        deps,
-    } = step;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
+    let bot = step.bot();
+    let message = step.message();
+    let chat_id = step.chat_id();
+    let telegram_user_id = step.telegram_user_id();
+    let dialogue = step.dialogue();
+    let services = step.services();
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
-    if !ensure_text_limit(bot, message.chat.id, text, USER_TEXT_MAX_LEN, "Комментарий").await?
-    {
+    if !ensure_text_limit(bot, chat_id, text, USER_TEXT_MAX_LEN, texts::FIELD_COMMENT).await? {
         return Ok(());
     }
     let Some(screen) = step.resolve().await? else {
@@ -147,7 +140,7 @@ pub(super) async fn submit_comment(
         .reviews
         .review_submission(ReviewSubmission {
             submission_id,
-            actor: screen.actor,
+            actor: screen.actor(),
             decision,
             score,
             comment: text.to_owned(),
@@ -158,25 +151,17 @@ pub(super) async fn submit_comment(
     match result {
         Ok(submission) => {
             reset_dialogue(dialogue).await?;
-            let saved = submission.grade().map(|grade| {
-                format!(
-                    "\n🏅 Сохранено: {} − {} = {} из {}.",
-                    grade.raw_score(),
-                    grade.penalty(),
-                    grade.final_score(),
-                    grade.max_score(),
-                )
-            });
-            bot.send_message(
-                message.chat.id,
-                format!("{}{}", texts::REVIEW_SAVED, saved.unwrap_or_default()),
-            )
-            .reply_markup(teacher_keyboard())
-            .await?;
+            let saved = submission
+                .grade()
+                .map(|grade| format!("\n{}", texts::grade_saved(grade)))
+                .unwrap_or_default();
+            bot.send_message(chat_id, format!("{}{saved}", texts::REVIEW_SAVED))
+                .reply_markup(teacher_keyboard())
+                .await?;
         }
         Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
             reset_dialogue(dialogue).await?;
-            send_app_error(bot, message.chat.id, error).await?;
+            send_app_error(bot, chat_id, error).await?;
             show_home(step.chat(), telegram_user_id).await?;
         }
         Err(AppError::Domain(
@@ -194,17 +179,15 @@ pub(super) async fn submit_comment(
 
 async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> HandlerResult {
     match screen
-        .deps
-        .context
-        .services
+        .services()
         .reviews
-        .find_for_review(screen.actor, submission_id)
+        .find_for_review(screen.actor(), submission_id)
         .await
     {
         Ok(item) => {
             screen
-                .bot
-                .send_message(screen.chat_id, texts::REVIEW_GRADING_CHANGED)
+                .bot()
+                .send_message(screen.chat_id(), texts::REVIEW_GRADING_CHANGED)
                 .await?;
             show_item(screen, item).await
         }
@@ -215,7 +198,7 @@ async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> Hand
                     | ErrorCode::NotFound
                     | ErrorCode::PermissionDenied
             ) {
-                reset_dialogue(screen.deps.dialogue).await?;
+                reset_dialogue(screen.dialogue()).await?;
             }
             Err(error.into())
         }
@@ -242,23 +225,23 @@ pub(super) async fn handle_decision(
     match (decision, grading.max_score()) {
         (ReviewDecision::Accept, Some(max_score)) => {
             ask_review_score(
-                screen.bot,
-                screen.chat_id,
+                screen.bot(),
+                screen.chat_id(),
                 submission_id,
                 max_score,
                 penalty,
-                screen.deps.dialogue,
+                screen.dialogue(),
             )
             .await
         }
         _ => {
             ask_review_comment(
-                screen.bot,
-                screen.chat_id,
+                screen.bot(),
+                screen.chat_id(),
                 submission_id,
                 decision,
                 None,
-                screen.deps.dialogue,
+                screen.dialogue(),
             )
             .await
         }
@@ -283,11 +266,8 @@ async fn ask_review_score(
         }))
         .await?;
     if penalty > 0 {
-        bot.send_message(
-            chat_id,
-            format!("⏳ Работа сдана с опозданием, штраф — {penalty}."),
-        )
-        .await?;
+        bot.send_message(chat_id, texts::late_penalty_notice(penalty))
+            .await?;
     }
     if max_score <= SCORE_BUTTONS_LIMIT {
         bot.send_message(chat_id, texts::review_score_question(max_score))
@@ -299,8 +279,9 @@ async fn ask_review_score(
         bot,
         chat_id,
         &format!(
-            "{} Введите целое число от 0 до {max_score}:",
-            texts::review_score_question(max_score)
+            "{} {}",
+            texts::review_score_question(max_score),
+            texts::score_prompt(max_score)
         ),
     )
     .await
@@ -334,10 +315,7 @@ async fn confirm_score(
     if penalty > 0 {
         bot.send_message(
             chat_id,
-            format!(
-                "🏅 Итог: {score} − {penalty} = {} из {max_score}.",
-                score.saturating_sub(penalty)
-            ),
+            texts::score_with_penalty(score, penalty, max_score),
         )
         .await?;
     }
@@ -364,19 +342,17 @@ pub(super) async fn handle_review_score(
     let score = match choice {
         AmountChoice::Preset(score) if score <= max_score => score,
         AmountChoice::Preset(_) | AmountChoice::Manual => {
-            return screen
-                .ask(&format!("Введите целое число от 0 до {max_score}:"))
-                .await;
+            return screen.ask(&texts::score_prompt(max_score)).await;
         }
     };
-    confirm_score(screen.bot, screen.chat_id, score, penalty, max_score).await?;
+    confirm_score(screen.bot(), screen.chat_id(), score, penalty, max_score).await?;
     ask_review_comment(
-        screen.bot,
-        screen.chat_id,
+        screen.bot(),
+        screen.chat_id(),
         submission_id,
         ReviewDecision::Accept,
         Some(score),
-        screen.deps.dialogue,
+        screen.dialogue(),
     )
     .await
 }

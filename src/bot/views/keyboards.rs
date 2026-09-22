@@ -1,7 +1,7 @@
 use chrono::{Datelike, NaiveDate, Utc};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup};
 
-use super::render::{assignment_status_icon, button_label};
+use super::render::button_label;
 use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
 use crate::bot::callbacks::{
     CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX, DEADLINE_CALENDAR,
@@ -22,16 +22,8 @@ use crate::domain::{
     Assignment, AssignmentStatus, Role, StoredFileMetadata, SubmissionId, TeachingCourseId,
 };
 
-pub(in crate::bot) const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
-pub(in crate::bot) const BUTTON_ARCHIVE: &str = "🗄 Архив";
-pub(in crate::bot) const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
-pub(in crate::bot) const BUTTON_REVIEW: &str = "✅ Проверить работы";
-pub(in crate::bot) const BUTTON_COURSES: &str = "📘 Мои курсы";
-pub(in crate::bot) const BUTTON_PROFILE: &str = "👤 Профиль";
-pub(in crate::bot) const BUTTON_HELP: &str = "❓ Помощь";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::bot) enum MenuAction {
+pub(crate) enum MenuAction {
     Assignments,
     Archive,
     Queue,
@@ -41,55 +33,55 @@ pub(in crate::bot) enum MenuAction {
     Help,
 }
 
-pub(in crate::bot) fn menu_action(text: &str) -> Option<MenuAction> {
+pub(crate) fn menu_action(text: &str) -> Option<MenuAction> {
     match text.trim() {
-        BUTTON_ASSIGNMENTS => Some(MenuAction::Assignments),
-        BUTTON_ARCHIVE => Some(MenuAction::Archive),
-        BUTTON_QUEUE => Some(MenuAction::Queue),
-        BUTTON_REVIEW => Some(MenuAction::Review),
-        BUTTON_COURSES => Some(MenuAction::Courses),
-        BUTTON_PROFILE => Some(MenuAction::Profile),
-        BUTTON_HELP => Some(MenuAction::Help),
+        texts::BUTTON_ASSIGNMENTS => Some(MenuAction::Assignments),
+        texts::BUTTON_ARCHIVE => Some(MenuAction::Archive),
+        texts::BUTTON_QUEUE => Some(MenuAction::Queue),
+        texts::BUTTON_REVIEW => Some(MenuAction::Review),
+        texts::BUTTON_COURSES => Some(MenuAction::Courses),
+        texts::BUTTON_PROFILE => Some(MenuAction::Profile),
+        texts::BUTTON_HELP => Some(MenuAction::Help),
         _ => None,
     }
 }
 
-pub(in crate::bot) fn main_keyboard(role: Role) -> KeyboardMarkup {
+pub(crate) fn main_keyboard(role: Role) -> KeyboardMarkup {
     match role {
         Role::Student { .. } => student_keyboard(),
         Role::Teacher | Role::Admin => teacher_keyboard(),
     }
 }
 
-pub(in crate::bot) fn main_menu(role: Role, pending: Option<u32>) -> InlineKeyboardMarkup {
+pub(crate) fn main_menu(role: Role, pending: Option<u32>) -> InlineKeyboardMarkup {
     match role {
         Role::Student { .. } => student_menu(),
         Role::Teacher | Role::Admin => teacher_menu(pending),
     }
 }
 
-pub(in crate::bot) fn student_keyboard() -> KeyboardMarkup {
+pub(crate) fn student_keyboard() -> KeyboardMarkup {
     bottom_menu(vec![
         vec![
-            KeyboardButton::new(BUTTON_ASSIGNMENTS),
-            KeyboardButton::new(BUTTON_QUEUE),
+            KeyboardButton::new(texts::BUTTON_ASSIGNMENTS),
+            KeyboardButton::new(texts::BUTTON_QUEUE),
         ],
         vec![
-            KeyboardButton::new(BUTTON_ARCHIVE),
-            KeyboardButton::new(BUTTON_PROFILE),
+            KeyboardButton::new(texts::BUTTON_ARCHIVE),
+            KeyboardButton::new(texts::BUTTON_PROFILE),
         ],
-        vec![KeyboardButton::new(BUTTON_HELP)],
+        vec![KeyboardButton::new(texts::BUTTON_HELP)],
     ])
 }
 
-pub(in crate::bot) fn teacher_keyboard() -> KeyboardMarkup {
+pub(crate) fn teacher_keyboard() -> KeyboardMarkup {
     bottom_menu(vec![
-        vec![KeyboardButton::new(BUTTON_REVIEW)],
+        vec![KeyboardButton::new(texts::BUTTON_REVIEW)],
         vec![
-            KeyboardButton::new(BUTTON_COURSES),
-            KeyboardButton::new(BUTTON_PROFILE),
+            KeyboardButton::new(texts::BUTTON_COURSES),
+            KeyboardButton::new(texts::BUTTON_PROFILE),
         ],
-        vec![KeyboardButton::new(BUTTON_HELP)],
+        vec![KeyboardButton::new(texts::BUTTON_HELP)],
     ])
 }
 
@@ -97,76 +89,73 @@ fn bottom_menu(rows: Vec<Vec<KeyboardButton>>) -> KeyboardMarkup {
     KeyboardMarkup::new(rows)
         .resize_keyboard()
         .persistent()
-        .input_field_placeholder("Выберите пункт меню")
+        .input_field_placeholder(texts::MENU_PLACEHOLDER)
 }
 
-pub(in crate::bot) fn student_menu() -> InlineKeyboardMarkup {
+pub(crate) fn student_menu() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
-            BUTTON_ASSIGNMENTS,
+            texts::BUTTON_ASSIGNMENTS,
             ReplayableAction::Page(PageTarget::Assignments, 0).callback(),
         )],
         vec![
             InlineKeyboardButton::callback(
-                BUTTON_QUEUE,
+                texts::BUTTON_QUEUE,
                 ReplayableAction::Page(PageTarget::Queue, 0).callback(),
             ),
             InlineKeyboardButton::callback(
-                BUTTON_ARCHIVE,
+                texts::BUTTON_ARCHIVE,
                 ReplayableAction::Page(PageTarget::Archive, 0).callback(),
             ),
         ],
         vec![InlineKeyboardButton::callback(
-            BUTTON_PROFILE,
+            texts::BUTTON_PROFILE,
             ReplayableAction::Profile.callback(),
         )],
     ])
 }
 
-pub(in crate::bot) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
-    let review_label = pending.map_or_else(
-        || BUTTON_REVIEW.to_owned(),
-        |pending| format!("✅ Проверить работы ({pending})"),
-    );
+pub(crate) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
+    let review_label =
+        pending.map_or_else(|| texts::BUTTON_REVIEW.to_owned(), texts::review_button);
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             review_label,
             ReplayableAction::NextReview.callback(),
         )],
         vec![InlineKeyboardButton::callback(
-            BUTTON_COURSES,
+            texts::BUTTON_COURSES,
             ReplayableAction::Page(PageTarget::Courses, 0).callback(),
         )],
         vec![InlineKeyboardButton::callback(
-            BUTTON_PROFILE,
+            texts::BUTTON_PROFILE,
             ReplayableAction::Profile.callback(),
         )],
     ])
 }
 
-pub(in crate::bot) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
+pub(crate) fn review_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback(
-            "✅ Принять",
+            texts::BUTTON_ACCEPT,
             format!("{REVIEW_ACCEPT_PREFIX}{}", submission_id.as_uuid()),
         ),
         InlineKeyboardButton::callback(
-            "❌ Отклонить",
+            texts::BUTTON_REJECT,
             format!("{REVIEW_REJECT_PREFIX}{}", submission_id.as_uuid()),
         ),
     ]])
 }
 
-pub(in crate::bot) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
+pub(crate) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(
         courses
             .iter()
             .map(|course| {
                 vec![InlineKeyboardButton::callback(
-                    button_label(&format!(
-                        "📘 {} · {}",
+                    button_label(&texts::course_button(
                         course.subject.name().as_str(),
-                        course.group.code().as_str()
+                        course.group.code().as_str(),
                     )),
                     ReplayableAction::Course(course.course.id()).callback(),
                 )]
@@ -175,7 +164,7 @@ pub(in crate::bot) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> Inl
     )
 }
 
-pub(in crate::bot) fn course_assignments_keyboard(
+pub(crate) fn course_assignments_keyboard(
     course_id: TeachingCourseId,
     assignments: &[Assignment],
 ) -> InlineKeyboardMarkup {
@@ -183,9 +172,8 @@ pub(in crate::bot) fn course_assignments_keyboard(
         .iter()
         .map(|assignment| {
             vec![InlineKeyboardButton::callback(
-                button_label(&format!(
-                    "{} {}",
-                    assignment_status_icon(assignment.status()),
+                button_label(&texts::course_assignment_button(
+                    texts::assignment_status_icon(assignment.status()),
                     assignment.title().as_str(),
                 )),
                 ReplayableAction::ManageAssignment(assignment.id()).callback(),
@@ -193,46 +181,46 @@ pub(in crate::bot) fn course_assignments_keyboard(
         })
         .collect();
     rows.push(vec![InlineKeyboardButton::callback(
-        "➕ Создать задание",
+        texts::BUTTON_CREATE_ASSIGNMENT,
         ReplayableAction::StartAssignmentCreation(course_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "📊 Оценки",
+        texts::BUTTON_GRADEBOOK,
         ReplayableAction::Gradebook(course_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "🔗 Ссылка для группы",
+        texts::BUTTON_GROUP_INVITE,
         ReplayableAction::GroupInvite(course_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "⬅️ К списку курсов",
+        texts::BUTTON_BACK_TO_COURSES,
         ReplayableAction::Page(PageTarget::Courses, 0).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(in crate::bot) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
+pub(crate) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
     let assignment_id = assignment.id();
     let mut rows = Vec::new();
 
     match assignment.status() {
         AssignmentStatus::Draft => {
             rows.push(vec![InlineKeyboardButton::callback(
-                "🚀 Опубликовать",
+                texts::BUTTON_PUBLISH,
                 ScreenAction::Publish(assignment_id).callback(),
             )]);
             rows.push(vec![InlineKeyboardButton::callback(
-                "📦 Архивировать",
+                texts::BUTTON_ARCHIVE_ASSIGNMENT,
                 ScreenAction::Archive(assignment_id).callback(),
             )]);
         }
         AssignmentStatus::Published => rows.push(vec![InlineKeyboardButton::callback(
-            "📦 Архивировать",
+            texts::BUTTON_ARCHIVE_ASSIGNMENT,
             ScreenAction::Archive(assignment_id).callback(),
         )]),
         AssignmentStatus::Archived => rows.push(vec![InlineKeyboardButton::callback(
-            "🚀 Опубликовать снова",
+            texts::BUTTON_PUBLISH_AGAIN,
             ScreenAction::Publish(assignment_id).callback(),
         )]),
     }
@@ -244,53 +232,53 @@ pub(in crate::bot) fn assignment_actions_keyboard(assignment: &Assignment) -> In
         )]);
     }
     rows.push(vec![InlineKeyboardButton::callback(
-        "📎 Вложения",
+        texts::BUTTON_FILES,
         ReplayableAction::AssignmentFiles(assignment_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "🎁 Выдать попытки",
+        texts::BUTTON_GRANT_ATTEMPTS,
         ReplayableAction::GrantAttempts(assignment_id).callback(),
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "⬅️ К заданиям курса",
+        texts::BUTTON_BACK_TO_COURSE_ASSIGNMENTS,
         ReplayableAction::Course(assignment.teaching_course_id()).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(in crate::bot) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
+pub(crate) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     let mut preset = |label: &str, date: Option<NaiveDate>, callback: &str| {
         if let Some(date) = date {
             rows.push(vec![InlineKeyboardButton::callback(
-                format!("📅 {label} · {}", timezone.format_date(date)),
+                texts::date_preset(label, &timezone.format_date(date)),
                 callback.to_owned(),
             )]);
         }
     };
 
     preset(
-        "Через неделю",
+        texts::PRESET_WEEK,
         timezone.in_days(7),
         &format!("{DEADLINE_DAYS_PREFIX}7"),
     );
     preset(
-        "Через 2 недели",
+        texts::PRESET_TWO_WEEKS,
         timezone.in_days(14),
         &format!("{DEADLINE_DAYS_PREFIX}14"),
     );
     preset(
-        "Через месяц",
+        texts::PRESET_MONTH,
         timezone.in_months(1),
         &format!("{DEADLINE_MONTHS_PREFIX}1"),
     );
     rows.push(vec![InlineKeyboardButton::callback(
-        "🗓 Выбрать дату",
+        texts::BUTTON_CALENDAR,
         DEADLINE_CALENDAR,
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "✍️ Ввести вручную",
+        texts::BUTTON_MANUAL,
         DEADLINE_MANUAL,
     )]);
 
@@ -306,15 +294,15 @@ fn duration_options_keyboard(
     let mut rows = Vec::new();
     for (label, date) in [
         (
-            "Неделя после срока",
+            texts::PRESET_WEEK_AFTER,
             base.checked_add_days(chrono::Days::new(7)),
         ),
         (
-            "2 недели после срока",
+            texts::PRESET_TWO_WEEKS_AFTER,
             base.checked_add_days(chrono::Days::new(14)),
         ),
         (
-            "Месяц после срока",
+            texts::PRESET_MONTH_AFTER,
             base.checked_add_months(chrono::Months::new(1)),
         ),
     ] {
@@ -336,40 +324,22 @@ fn duration_options_keyboard(
             continue;
         }
         rows.push(vec![InlineKeyboardButton::callback(
-            format!("📅 {label} · {}", timezone.format_date(date)),
+            texts::date_preset(label, &timezone.format_date(date)),
             format!("{CALENDAR_PICK_PREFIX}{date}"),
         )]);
     }
     rows.push(vec![InlineKeyboardButton::callback(
-        "🗓 Выбрать дату",
+        texts::BUTTON_CALENDAR,
         DEADLINE_CALENDAR,
     )]);
     rows.push(vec![InlineKeyboardButton::callback(
-        "✍️ Ввести вручную",
+        texts::BUTTON_MANUAL,
         DEADLINE_MANUAL,
     )]);
     InlineKeyboardMarkup::new(rows)
 }
 
-const MONTHS: [&str; 12] = [
-    "Январь",
-    "Февраль",
-    "Март",
-    "Апрель",
-    "Май",
-    "Июнь",
-    "Июль",
-    "Август",
-    "Сентябрь",
-    "Октябрь",
-    "Ноябрь",
-    "Декабрь",
-];
-
-pub(in crate::bot) fn calendar_keyboard(
-    month: NaiveDate,
-    today: NaiveDate,
-) -> InlineKeyboardMarkup {
+pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {
     let blank = || InlineKeyboardButton::callback("·", CALENDAR_NOOP);
     let first = month.with_day(1).unwrap_or(month);
     let previous = first.checked_sub_months(chrono::Months::new(1));
@@ -392,12 +362,16 @@ pub(in crate::bot) fn calendar_keyboard(
         vec![
             back,
             InlineKeyboardButton::callback(
-                format!("{} {}", MONTHS[(first.month() - 1) as usize], first.year()),
+                format!(
+                    "{} {}",
+                    texts::MONTHS[(first.month() - 1) as usize],
+                    first.year()
+                ),
                 CALENDAR_NOOP,
             ),
             forward,
         ],
-        ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        texts::WEEKDAYS
             .into_iter()
             .map(|day| InlineKeyboardButton::callback(day, CALENDAR_NOOP))
             .collect(),
@@ -444,7 +418,7 @@ fn month_key(date: NaiveDate) -> String {
     date.format("%Y-%m").to_string()
 }
 
-pub(in crate::bot) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
+pub(crate) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
     let button = |amount: u16| {
         InlineKeyboardButton::callback(amount.to_string(), format!("{prefix}{amount}"))
     };
@@ -453,16 +427,16 @@ pub(in crate::bot) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
         [1, 2, 3].into_iter().map(button).collect(),
         [5, 10].into_iter().map(button).collect(),
         vec![InlineKeyboardButton::callback(
-            "✍️ Другое число",
+            texts::BUTTON_OTHER_AMOUNT,
             format!("{prefix}manual"),
         )],
     ])
 }
 
-pub(in crate::bot) fn grading_keyboard() -> InlineKeyboardMarkup {
+pub(crate) fn grading_keyboard() -> InlineKeyboardMarkup {
     let preset = |max_score: u16| {
         InlineKeyboardButton::callback(
-            format!("{max_score}-балльная"),
+            texts::scale_button(max_score),
             format!("{GRADING_PREFIX}{max_score}"),
         )
     };
@@ -470,17 +444,17 @@ pub(in crate::bot) fn grading_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![preset(5), preset(10)],
         vec![InlineKeyboardButton::callback(
-            "✍️ Другой максимум",
+            texts::BUTTON_OTHER_MAX_SCORE,
             format!("{GRADING_PREFIX}manual"),
         )],
         vec![InlineKeyboardButton::callback(
-            "⏭ Без баллов, зачёт/незачёт",
+            texts::BUTTON_PASS_FAIL,
             format!("{GRADING_PREFIX}passfail"),
         )],
     ])
 }
 
-pub(in crate::bot) fn late_policy_keyboard() -> InlineKeyboardMarkup {
+pub(crate) fn late_policy_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
             texts::BUTTON_STRICT,
@@ -493,13 +467,13 @@ pub(in crate::bot) fn late_policy_keyboard() -> InlineKeyboardMarkup {
     ])
 }
 
-pub(in crate::bot) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
+pub(crate) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         [1, 2]
             .into_iter()
             .map(|n| {
                 InlineKeyboardButton::callback(
-                    format!("На {}", texts::points(n)),
+                    texts::penalty_button(n),
                     format!("{PENALTY_PREFIX}{n}"),
                 )
             })
@@ -509,13 +483,13 @@ pub(in crate::bot) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup
             format!("{PENALTY_PREFIX}manual"),
         )],
         vec![InlineKeyboardButton::callback(
-            format!("Изменить период: {period_days} дн."),
+            texts::period_button(period_days),
             PENALTY_PERIOD,
         )],
     ])
 }
 
-pub(in crate::bot) fn terms_keyboard(
+pub(crate) fn terms_keyboard(
     terms: &AssignmentTerms,
     timezone: &BotTimezone,
 ) -> InlineKeyboardMarkup {
@@ -533,7 +507,7 @@ pub(in crate::bot) fn terms_keyboard(
             texts::SUBMIT_UNTIL,
             terms
                 .deadline_at
-                .map(|date| format!("до {}", timezone.format_until_short(date)))
+                .map(|date| texts::until_short(&timezone.format_until_short(date)))
                 .unwrap_or_default()
         ),
         TERMS_DEADLINE,
@@ -547,10 +521,7 @@ pub(in crate::bot) fn terms_keyboard(
                 format!("{} −{}", texts::PENALTY_LABEL, policy.penalty()),
                 TERMS_PENALTY,
             ),
-            InlineKeyboardButton::callback(
-                format!("{} {} дн.", texts::PERIOD_LABEL, terms.period_days),
-                TERMS_PERIOD,
-            ),
+            InlineKeyboardButton::callback(texts::period_summary(terms.period_days), TERMS_PERIOD),
         ]);
         rows.push(vec![InlineKeyboardButton::callback(
             format!(
@@ -564,9 +535,9 @@ pub(in crate::bot) fn terms_keyboard(
     if terms.grading().is_scored() {
         rows.push(vec![InlineKeyboardButton::callback(
             if terms.allow_late {
-                "После срока: со штрафом"
+                texts::BUTTON_POLICY_PENALTY
             } else {
-                "После срока: не принимать"
+                texts::BUTTON_POLICY_STRICT
             },
             TERMS_POLICY,
         )]);
@@ -582,7 +553,7 @@ pub(in crate::bot) fn terms_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(in crate::bot) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
+pub(crate) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
     use crate::bot::callbacks::{TERMS_EXIT, TERMS_STAY};
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
@@ -636,10 +607,9 @@ pub(super) fn terms_form_keyboard(
                     if policy.validate_horizon(deadline).is_ok() {
                         let date = policy.closes_at(deadline).expect("validated horizon");
                         rows.push(vec![InlineKeyboardButton::callback(
-                            format!(
-                                "{} · до {}",
-                                texts::lateness_duration(terms.period_days, periods),
-                                timezone.format_until_short(date)
+                            texts::periods_option(
+                                &texts::lateness_duration(terms.period_days, periods),
+                                &timezone.format_until_short(date),
                             ),
                             format!("{LATE_PERIODS_PREFIX}{periods}"),
                         )]);
@@ -648,15 +618,15 @@ pub(super) fn terms_form_keyboard(
             }
             rows.push(vec![
                 button(
-                    "Другое число периодов",
+                    texts::BUTTON_OTHER_PERIODS,
                     &format!("{LATE_PERIODS_PREFIX}manual"),
                 ),
-                button("Выбрать дату", TERMS_DURATION_DATE),
+                button(texts::BUTTON_PICK_DATE, TERMS_DURATION_DATE),
             ]);
             InlineKeyboardMarkup::new(rows)
         }
         TermsStep::DurationConfirm { .. } => InlineKeyboardMarkup::new(vec![vec![button(
-            "Применить число периодов",
+            texts::BUTTON_APPLY_PERIODS,
             TERMS_DURATION_APPLY,
         )]]),
         TermsStep::Summary => terms_keyboard(terms, timezone),
@@ -670,7 +640,7 @@ pub(super) fn terms_form_keyboard(
 }
 
 /// Кнопками балл вводится только на короткой шкале: `0..=100` в клавиатуру не помещается.
-pub(in crate::bot) fn review_score_keyboard(
+pub(crate) fn review_score_keyboard(
     submission_id: SubmissionId,
     max_score: u16,
 ) -> InlineKeyboardMarkup {
@@ -687,14 +657,14 @@ pub(in crate::bot) fn review_score_keyboard(
         .map(|chunk| chunk.iter().copied().map(button).collect())
         .collect();
     rows.push(vec![InlineKeyboardButton::callback(
-        "✍️ Другое число",
+        texts::BUTTON_OTHER_AMOUNT,
         format!("{REVIEW_SCORE_PREFIX}{}:manual", submission_id.as_uuid()),
     )]);
 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(in crate::bot) fn assignment_files_keyboard(
+pub(crate) fn assignment_files_keyboard(
     assignment: &Assignment,
     files: &[StoredFileMetadata],
     can_add: bool,
@@ -704,7 +674,7 @@ pub(in crate::bot) fn assignment_files_keyboard(
     for (index, file) in files.iter().enumerate() {
         rows.push(vec![
             InlineKeyboardButton::callback(
-                button_label(&format!("📄 {}", file.filename().as_str())),
+                button_label(&texts::file_button(file.filename().as_str())),
                 ScreenAction::OpenFile(index).callback(),
             ),
             InlineKeyboardButton::callback("🗑", ScreenAction::DeleteFile(index).callback()),
@@ -712,18 +682,18 @@ pub(in crate::bot) fn assignment_files_keyboard(
     }
     if can_add {
         rows.push(vec![InlineKeyboardButton::callback(
-            "📎 Добавить вложение",
+            texts::BUTTON_ADD_FILE,
             ScreenAction::AddFile.callback(),
         )]);
     }
     if creation_flow {
         rows.push(vec![InlineKeyboardButton::callback(
-            "✅ Завершить создание",
+            texts::BUTTON_FINISH_CREATION,
             ScreenAction::FinishFileCreation.callback(),
         )]);
     } else {
         rows.push(vec![InlineKeyboardButton::callback(
-            "⬅️ К заданию",
+            texts::BUTTON_BACK_TO_ASSIGNMENT,
             ReplayableAction::ManageAssignment(assignment.id()).callback(),
         )]);
     }
@@ -731,34 +701,34 @@ pub(in crate::bot) fn assignment_files_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(in crate::bot) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
+pub(crate) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("🗑 Удалить", FILE_CONFIRM_DELETE),
-        InlineKeyboardButton::callback("↩️ Отмена", FILE_CANCEL_DELETE),
+        InlineKeyboardButton::callback(texts::BUTTON_DELETE, FILE_CONFIRM_DELETE),
+        InlineKeyboardButton::callback(texts::BUTTON_CANCEL, FILE_CANCEL_DELETE),
     ]])
 }
 
-pub(in crate::bot) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
+pub(crate) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback(
-            "♻️ Перевыпустить ссылку",
+            texts::BUTTON_ROTATE_INVITE,
             ScreenAction::RotateGroupInvite.callback(),
         )],
         vec![InlineKeyboardButton::callback(
-            "⬅️ К курсу",
+            texts::BUTTON_BACK_TO_COURSE,
             ReplayableAction::Course(course_id).callback(),
         )],
     ])
 }
 
-pub(in crate::bot) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
+pub(crate) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("♻️ Перевыпустить", INVITE_CONFIRM_ROTATE),
-        InlineKeyboardButton::callback("↩️ Отмена", INVITE_CANCEL_ROTATE),
+        InlineKeyboardButton::callback(texts::BUTTON_CONFIRM_ROTATE, INVITE_CONFIRM_ROTATE),
+        InlineKeyboardButton::callback(texts::BUTTON_CANCEL, INVITE_CANCEL_ROTATE),
     ]])
 }
 
-pub(in crate::bot) fn gradebook_students_keyboard(
+pub(crate) fn gradebook_students_keyboard(
     course_id: TeachingCourseId,
     students: &[CourseStudent],
 ) -> InlineKeyboardMarkup {
@@ -766,20 +736,20 @@ pub(in crate::bot) fn gradebook_students_keyboard(
         .iter()
         .map(|student| {
             vec![InlineKeyboardButton::callback(
-                button_label(&format!("👤 {}", student.display_name,)),
+                button_label(&texts::student_button(&student.display_name)),
                 format!("{STUDENT_PREFIX}{}", student.student_id.as_uuid()),
             )]
         })
         .collect::<Vec<_>>();
     rows.push(vec![InlineKeyboardButton::callback(
-        "⬅️ К курсу",
+        texts::BUTTON_BACK_TO_COURSE,
         ReplayableAction::Course(course_id).callback(),
     )]);
 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(in crate::bot) fn paginated_keyboard(
+pub(crate) fn paginated_keyboard(
     mut keyboard: InlineKeyboardMarkup,
     target: crate::bot::callbacks::PageTarget,
     page: u32,
@@ -788,13 +758,13 @@ pub(in crate::bot) fn paginated_keyboard(
     let mut buttons = Vec::new();
     if let Some(previous) = page.checked_sub(1) {
         buttons.push(InlineKeyboardButton::callback(
-            "◀️ Назад",
+            texts::BUTTON_PREVIOUS_PAGE,
             target.callback(previous),
         ));
     }
     if let Some(next) = next {
         buttons.push(InlineKeyboardButton::callback(
-            "Вперёд ▶️",
+            texts::BUTTON_NEXT_PAGE,
             target.callback(next),
         ));
     }
@@ -804,7 +774,7 @@ pub(in crate::bot) fn paginated_keyboard(
     keyboard
 }
 
-pub(in crate::bot) fn assignment_students_keyboard(
+pub(crate) fn assignment_students_keyboard(
     assignment_id: crate::domain::AssignmentId,
     students: &[AssignmentStudentSummary],
 ) -> InlineKeyboardMarkup {
@@ -812,13 +782,15 @@ pub(in crate::bot) fn assignment_students_keyboard(
         .iter()
         .map(|student| {
             vec![InlineKeyboardButton::callback(
-                button_label(&format!("👤 {}", student.student.display_name().as_str())),
+                button_label(&texts::student_button(
+                    student.student.display_name().as_str(),
+                )),
                 format!("{STUDENT_PREFIX}{}", student.student.id().as_uuid()),
             )]
         })
         .collect::<Vec<_>>();
     rows.push(vec![InlineKeyboardButton::callback(
-        "⬅️ К заданию",
+        texts::BUTTON_BACK_TO_ASSIGNMENT,
         ReplayableAction::ManageAssignment(assignment_id).callback(),
     )]);
 
@@ -830,8 +802,9 @@ mod tests {
     use chrono::DateTime;
     use chrono_tz::Tz;
 
-    use super::super::render::{deadline_left, penalty_schedule, terms_form_view};
+    use super::super::render::{penalty_schedule, terms_form_view};
     use super::*;
+    use crate::bot::texts::deadline_left;
     use crate::domain::{Grading, LatePolicy, MaxScore};
 
     fn scored_terms() -> AssignmentTerms {
@@ -1009,11 +982,11 @@ mod tests {
     #[test]
     fn bottom_menu_buttons_route_back_to_their_screens() {
         assert_eq!(
-            menu_action(BUTTON_ASSIGNMENTS),
+            menu_action(texts::BUTTON_ASSIGNMENTS),
             Some(MenuAction::Assignments)
         );
-        assert_eq!(menu_action(BUTTON_QUEUE), Some(MenuAction::Queue));
-        assert_eq!(menu_action(BUTTON_REVIEW), Some(MenuAction::Review));
+        assert_eq!(menu_action(texts::BUTTON_QUEUE), Some(MenuAction::Queue));
+        assert_eq!(menu_action(texts::BUTTON_REVIEW), Some(MenuAction::Review));
         assert_eq!(menu_action("ссылка на pull request"), None);
     }
 

@@ -6,60 +6,58 @@ use crate::app::GrantExtraAttempts;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX};
-use crate::bot::context::{Chat, Deps, Screen, TextStep};
+use crate::bot::context::{Screen, TextStep};
 use crate::bot::handlers::input::{parse_positive_attempts, require_text};
 use crate::bot::state::{BotState, FlowState, StudentChoice};
+use crate::bot::texts;
 use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{
-    assignment_students_keyboard, attempts_keyboard, send_message_chunks, teacher_keyboard,
+    assignment_students_keyboard, attempts_keyboard, list_text, send_message_chunks,
+    teacher_keyboard,
 };
 use crate::domain::{AssignmentId, MAX_ATTEMPTS, UserId};
 use crate::pagination::PageRequest;
 
-pub(in crate::bot::handlers) async fn show_students_page(
+pub(crate) async fn show_students_page(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
     page: PageRequest,
 ) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let Chat { bot, chat_id, deps } = chat;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let services = screen.services();
     let students = services
         .assignments
         .list_students_for_assignment(actor, assignment_id, page)
         .await?;
 
     if students.items.is_empty() {
-        bot.send_message(chat_id, "В группе пока нет студентов.")
-            .await?;
+        bot.send_message(chat_id, texts::NO_STUDENTS).await?;
     } else {
-        let mut text = String::from("👥 Студенты группы:\n");
-        for student in &students.items {
-            let pending = if student.history.has_pending_submission() {
-                " · ⏳ сдача на проверке"
-            } else {
-                ""
-            };
-            let accepted = if student.history.has_accepted_submission() {
-                " · ✅ работа принята"
-            } else {
-                ""
-            };
-            text.push_str(&format!(
-                "\n{} · использовано {} · дополнительных {}{}{}\n",
+        let entries = students.items.iter().map(|student| {
+            let history = student.history;
+            let mut marks = String::new();
+            if history.has_pending_submission() {
+                marks.push_str(texts::STUDENT_PENDING_MARK);
+            }
+            if history.has_accepted_submission() {
+                marks.push_str(texts::STUDENT_ACCEPTED_MARK);
+            }
+            texts::student_entry(
                 student.student.display_name().as_str(),
-                student.history.used_attempts(),
-                student.history.extra_attempts(),
-                pending,
-                accepted,
-            ));
-        }
+                history.used_attempts(),
+                history.extra_attempts(),
+                &marks,
+            )
+        });
+        let text = list_text(texts::STUDENTS_HEADER, entries);
         send_message_chunks(bot, chat_id, text, None).await?;
     }
 
     let message = bot
-        .send_message(chat_id, "Выберите студента:")
+        .send_message(chat_id, texts::CHOOSE_STUDENT_PROMPT)
         .reply_markup(paginated_keyboard(
             assignment_students_keyboard(assignment_id, &students.items),
             PageTarget::Students(assignment_id),
@@ -81,7 +79,7 @@ pub(in crate::bot::handlers) async fn show_students_page(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn select_student(
+pub(crate) async fn select_student(
     screen: Screen<'_>,
     message_id: MessageId,
     student_id: UserId,
@@ -99,13 +97,12 @@ pub(in crate::bot::handlers) async fn select_student(
     };
 
     let sent = screen
-        .bot
-        .send_message(screen.chat_id, "Сколько дополнительных попыток выдать?")
+        .bot()
+        .send_message(screen.chat_id(), texts::EXTRA_ATTEMPTS_QUESTION)
         .reply_markup(attempts_keyboard(EXTRA_ATTEMPTS_PREFIX))
         .await?;
     screen
-        .deps
-        .dialogue
+        .dialogue()
         .update(BotState::Flow(FlowState::AwaitingAttemptAmount {
             message_id: sent.id,
             assignment_id,
@@ -115,7 +112,7 @@ pub(in crate::bot::handlers) async fn select_student(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn handle_extra_attempts(
+pub(crate) async fn handle_extra_attempts(
     screen: Screen<'_>,
     message_id: MessageId,
     choice: AmountChoice,
@@ -125,9 +122,7 @@ pub(in crate::bot::handlers) async fn handle_extra_attempts(
         return screen.stale().await;
     };
     let Some(amount) = chosen_amount(choice) else {
-        return screen
-            .ask(&format!("Введите целое число от 1 до {MAX_ATTEMPTS}:"))
-            .await;
+        return screen.ask(&texts::number_prompt(MAX_ATTEMPTS)).await;
     };
     grant_attempts(screen, assignment_id, student_id, amount).await
 }
@@ -146,26 +141,21 @@ pub(super) async fn grant_attempts(
     amount: u16,
 ) -> HandlerResult {
     let progress = screen
-        .deps
-        .context
-        .services
+        .services()
         .assignments
         .grant_extra_attempts(GrantExtraAttempts {
             assignment_id,
             student_id,
-            actor: screen.actor,
+            actor: screen.actor(),
             amount,
         })
         .await?;
-    crate::bot::handlers::reset_dialogue(screen.deps.dialogue).await?;
+    crate::bot::handlers::reset_dialogue(screen.dialogue()).await?;
     screen
-        .bot
+        .bot()
         .send_message(
-            screen.chat_id,
-            format!(
-                "🎁 Добавлено попыток: {amount}. Всего дополнительных: {}.",
-                progress.extra_attempts()
-            ),
+            screen.chat_id(),
+            texts::attempts_granted(amount, progress.extra_attempts()),
         )
         .reply_markup(teacher_keyboard())
         .await?;
@@ -173,22 +163,21 @@ pub(super) async fn grant_attempts(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn submit_attempt_amount(
+pub(crate) async fn submit_attempt_amount(
     step: TextStep<'_>,
     assignment_id: AssignmentId,
     student_id: UserId,
 ) -> HandlerResult {
-    let TextStep { bot, message, .. } = step;
+    let bot = step.bot();
+    let message = step.message();
+    let chat_id = step.chat_id();
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
     let Some(amount) = parse_positive_attempts(text) else {
-        bot.send_message(
-            message.chat.id,
-            format!("Введите целое число от 1 до {MAX_ATTEMPTS}."),
-        )
-        .await?;
+        bot.send_message(chat_id, texts::number_error(MAX_ATTEMPTS))
+            .await?;
         return Ok(());
     };
     let Some(screen) = step.resolve().await? else {

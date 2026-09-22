@@ -9,10 +9,10 @@ use crate::bot::HandlerResult;
 use crate::bot::context::{Chat, Screen};
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
-use crate::bot::views::{main_keyboard, main_menu, role_name, send_message_chunks};
+use crate::bot::views::{main_keyboard, main_menu, send_message_chunks};
 use crate::domain::{Role, TelegramUserId};
 
-pub(in crate::bot) fn default_commands() -> Vec<BotCommand> {
+pub(crate) fn default_commands() -> Vec<BotCommand> {
     scoped_commands(None)
 }
 
@@ -50,10 +50,11 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Option<Role>) {
     }
 }
 
-pub(in crate::bot) async fn open_guest(chat: Chat<'_>) -> HandlerResult {
-    let Chat { bot, chat_id, deps } = chat;
+pub(crate) async fn open_guest(chat: Chat<'_>) -> HandlerResult {
+    let bot = chat.bot();
+    let chat_id = chat.chat_id();
     show_guest(bot, chat_id).await?;
-    deps.dialogue
+    chat.dialogue()
         .update(BotState::Screen(ScreenState::Guest))
         .await?;
     Ok(())
@@ -72,9 +73,10 @@ pub(super) async fn send_guest_hint(bot: &Bot, chat_id: ChatId) -> HandlerResult
 }
 
 pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) -> HandlerResult {
-    let Chat { bot, chat_id, deps } = chat;
-    let services = &deps.context.services;
-    let timezone = &deps.context.timezone;
+    let bot = chat.bot();
+    let chat_id = chat.chat_id();
+    let services = chat.services();
+    let timezone = chat.timezone();
     let role = match services
         .users
         .find_by_telegram_user_id(telegram_user_id)
@@ -127,8 +129,9 @@ fn optional_stat<T>(result: AppResult<T>, statistic: &'static str) -> Option<T> 
 }
 
 pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerResult {
-    let Chat { bot, chat_id, deps } = chat;
-    let services = &deps.context.services;
+    let bot = chat.bot();
+    let chat_id = chat.chat_id();
+    let services = chat.services();
     match services.users.find_by_telegram_user_id(actor).await {
         Ok(registered) => {
             let role = registered.user.role();
@@ -146,8 +149,9 @@ pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerR
                     .map(|stats| stats.pending);
                     match pending {
                         Some(pending) if pending > 0 => format!(
-                            "{}\n\n⏳ Ваших работ на проверке: {pending}",
-                            texts::home_greeting(name)
+                            "{}\n\n{}",
+                            texts::home_greeting(name),
+                            texts::student_pending_line(pending)
                         ),
                         _ => texts::home_greeting(name),
                     }
@@ -158,8 +162,9 @@ pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerR
                         .queue_size(Actor::new(registered.user.id()))
                         .await?;
                     format!(
-                        "{}\n\n⏳ Работ в очереди на проверку: {pending}",
-                        texts::home_greeting(name)
+                        "{}\n\n{}",
+                        texts::home_greeting(name),
+                        texts::review_queue_line(pending)
                     )
                 }
             };
@@ -176,47 +181,48 @@ pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerR
 }
 
 pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let Chat { bot, chat_id, deps } = chat;
-    let context = deps.context;
-    let services = &context.services;
-    let timezone = &context.timezone;
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let services = screen.services();
+    let timezone = screen.timezone();
     let registered = services.users.find_by_actor(actor).await?;
     let role = registered.user.role();
-    let mut text = format!(
-        "👤 Профиль\n\nИмя: {}\nРоль: {}\n",
+    let mut lines = vec![texts::profile_header(
         registered.user.display_name().as_str(),
-        role_name(role)
-    );
+        texts::role_name(role),
+    )];
     if let Some(group) = &registered.student_group {
-        text.push_str(&format!("Группа: {}\n", group.code().as_str()));
+        lines.push(texts::profile_group(group.code().as_str()));
     }
-    text.push_str(&format!("{} {}\n", texts::TIMEZONE_LABEL, timezone.label()));
+    lines.push(format!("{} {}", texts::TIMEZONE_LABEL, timezone.label()));
     match role {
         Role::Student { .. } => {
             if let Some(stats) =
                 optional_stat(services.users.statistics(actor).await, "student_statistics")
             {
-                text.push_str(&format!("\n📚 Активных заданий: {}\n", stats.assignments));
-                text.push_str(&format!("⏳ Работ на проверке: {}\n", stats.pending));
+                lines.push(String::new());
+                lines.push(texts::profile_active_assignments(stats.assignments));
+                lines.push(texts::profile_pending(stats.pending));
             }
         }
         Role::Teacher | Role::Admin => {
             if let Some(stats) =
                 optional_stat(services.users.statistics(actor).await, "teacher_statistics")
             {
-                text.push_str(&format!("\n📘 Курсов: {}\n", stats.courses));
+                lines.push(String::new());
+                lines.push(texts::profile_courses(stats.courses));
             }
             if let Some(pending) = optional_stat(
                 services.reviews.queue_size(actor).await,
                 "teacher_pending_queue",
             ) {
-                text.push_str(&format!("⏳ Ждут проверки: {pending}\n"));
+                lines.push(texts::profile_review_queue(pending));
             }
         }
     }
     let keyboard = main_menu(role, None);
-    send_message_chunks(bot, chat_id, text, Some(keyboard)).await
+    send_message_chunks(bot, chat_id, lines.join("\n"), Some(keyboard)).await
 }
 
 #[cfg(test)]

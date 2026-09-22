@@ -20,6 +20,8 @@ pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> D
 where
     E: PgExecutor<'e>,
 {
+    // Строка инвайта заводится вместе с группой: экран ссылки только читает состояние и не должен
+    // создавать её скрытой мутацией.
     sqlx::query!(
         r#"
         with created as (

@@ -4,12 +4,10 @@ use teloxide::types::InlineKeyboardMarkup;
 
 use crate::bot::state::{TermsForm, TermsStep, TermsTarget};
 use crate::bot::{texts, timezone::BotTimezone};
-use crate::domain::{
-    Assignment, AssignmentStatus, Grade, Grading, LatePolicy, MaxScore, Role, SubmissionStatus,
-};
+use crate::domain::{Assignment, Grading, LatePolicy, MaxScore};
 use crate::telegram::text::truncate;
 
-pub(in crate::bot) fn terms_form_view(
+pub(crate) fn terms_form_view(
     form: &TermsForm,
     timezone: &BotTimezone,
 ) -> (String, InlineKeyboardMarkup) {
@@ -47,9 +45,11 @@ pub(in crate::bot) fn terms_form_view(
             )
         }
         TermsStep::Penalty => format!(
-            "{context}{}\nШтраф начисляется за каждые начавшиеся {} дн. Напишите целое число баллов от 1 до 100:",
-            texts::penalty_question(terms.period_days),
-            terms.period_days,
+            "{context}{}",
+            texts::penalty_step(
+                &texts::penalty_question(terms.period_days),
+                terms.period_days
+            )
         ),
         TermsStep::Period => format!("{context}{}", texts::PERIOD_PROMPT),
         TermsStep::Periods => {
@@ -67,12 +67,10 @@ pub(in crate::bot) fn terms_form_view(
             let closing = policy
                 .closes_at(terms.deadline_at.expect("duration follows deadline"))
                 .expect("validated duration");
-            format!(
-                "Вы выбрали приём {}. После округления опоздание составит {}.\n{} {}. Использовать эту дату?",
-                timezone.format(selected),
-                texts::lateness_duration(terms.period_days, periods),
-                texts::SUBMISSIONS_CLOSE_LABEL,
-                timezone.format(closing),
+            texts::duration_confirmation(
+                &timezone.format(selected),
+                &texts::lateness_duration(terms.period_days, periods),
+                &timezone.format(closing),
             )
         }
         TermsStep::Summary => terms_summary(form, timezone),
@@ -174,33 +172,7 @@ pub(super) fn penalty_schedule(
     lines.join("\n")
 }
 
-pub(in crate::bot) fn format_file_size(size_bytes: u64) -> String {
-    if size_bytes < 1024 {
-        format!("{size_bytes} Б")
-    } else if size_bytes < 1024 * 1024 {
-        format!("{:.1} КиБ", size_bytes as f64 / 1024.0)
-    } else {
-        format!("{:.1} МиБ", size_bytes as f64 / (1024.0 * 1024.0))
-    }
-}
-
-pub(in crate::bot) fn deadline_left(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let left = deadline - now;
-    if left.num_seconds() <= 0 {
-        return texts::DEADLINE_PASSED.to_owned();
-    }
-    let days = left.num_days();
-    let hours = left.num_hours() % 24;
-    if days > 0 {
-        format!("осталось {days} д {hours} ч")
-    } else if left.num_hours() > 0 {
-        format!("осталось {} ч", left.num_hours())
-    } else {
-        format!("осталось {} мин", left.num_minutes().max(1))
-    }
-}
-
-pub(in crate::bot) fn grading_lines(
+pub(crate) fn grading_lines(
     assignment: &Assignment,
     now: DateTime<Utc>,
     timezone: &BotTimezone,
@@ -228,7 +200,7 @@ pub(in crate::bot) fn grading_lines(
     lines
 }
 
-pub(in crate::bot) fn terms_lines(
+pub(crate) fn terms_lines(
     grading: Grading,
     deadline_at: DateTime<Utc>,
     late_policy: Option<LatePolicy>,
@@ -258,51 +230,14 @@ pub(in crate::bot) fn terms_lines(
     }
 }
 
-pub(in crate::bot) fn grade_line(grade: Grade) -> String {
-    if grade.penalty() == 0 {
-        return format!("🏅 Балл: {} из {}", grade.final_score(), grade.max_score());
-    }
-    format!(
-        "🏅 Балл: {} − {} = {} из {} (штраф за опоздание)",
-        grade.raw_score(),
-        grade.penalty(),
-        grade.final_score(),
-        grade.max_score(),
-    )
+/// Заголовок и записи списка, разделённые пустой строкой.
+pub(crate) fn list_text(header: &str, entries: impl IntoIterator<Item = String>) -> String {
+    std::iter::once(header.to_owned())
+        .chain(entries)
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
-pub(in crate::bot) fn submission_status(status: SubmissionStatus) -> &'static str {
-    match status {
-        SubmissionStatus::PendingReview => "⏳ на проверке",
-        SubmissionStatus::Accepted => "✅ принята",
-        SubmissionStatus::Rejected => "❌ отклонена",
-    }
-}
-
-pub(in crate::bot) fn assignment_status(status: AssignmentStatus) -> &'static str {
-    match status {
-        AssignmentStatus::Draft => "⚪️ черновик",
-        AssignmentStatus::Published => "🟢 опубликовано",
-        AssignmentStatus::Archived => "📦 архив",
-    }
-}
-
-pub(super) fn assignment_status_icon(status: AssignmentStatus) -> &'static str {
-    match status {
-        AssignmentStatus::Draft => "⚪️",
-        AssignmentStatus::Published => "🟢",
-        AssignmentStatus::Archived => "📦",
-    }
-}
-
-pub(in crate::bot) fn role_name(role: Role) -> &'static str {
-    match role {
-        Role::Student { .. } => "🎓 студент",
-        Role::Teacher => "👨‍🏫 преподаватель",
-        Role::Admin => "🛠 администратор",
-    }
-}
-
-pub(in crate::bot) fn button_label(label: &str) -> String {
+pub(crate) fn button_label(label: &str) -> String {
     truncate(label, 60, true)
 }

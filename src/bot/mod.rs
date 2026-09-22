@@ -37,6 +37,7 @@ pub mod texts;
 mod timezone;
 mod views;
 
+use crate::telegram::is_invalid_token;
 use crate::telegram::network::Bot;
 pub use errors::app_error_message;
 use files::FileTransfers;
@@ -152,41 +153,42 @@ impl TelegramBot {
         })
     }
 
+    async fn startup(&self, cancellation: &CancellationToken) -> Result<BotInvites, Interrupted> {
+        let me = required(cancellation, self.bot.get_me().send()).await?;
+        let bot_username = me
+            .user
+            .username
+            .ok_or(Interrupted::Failed(TelegramBotError::MissingBotUsername))?;
+        let webhook = required(cancellation, self.polling_bot.get_webhook_info().send()).await?;
+        if webhook.url.is_some() {
+            required(cancellation, self.polling_bot.delete_webhook().send()).await?;
+        }
+
+        let commands = self.bot.set_my_commands(default_commands()).send();
+        if let Err(error) = attempted(cancellation, commands).await? {
+            errors::log_request_error("set_my_commands", &error);
+        }
+        let menu = self
+            .bot
+            .set_chat_menu_button()
+            .menu_button(teloxide::types::MenuButton::Commands)
+            .send();
+        if let Err(error) = attempted(cancellation, menu).await? {
+            errors::log_request_error("set_chat_menu_button", &error);
+        }
+        Ok(BotInvites::new(self.codec.clone(), bot_username))
+    }
+
     pub async fn run(
         self,
         cancellation: CancellationToken,
         health: ComponentHealth,
     ) -> Result<(), TelegramBotError> {
-        let Some(me) = cancellation
-            .run_until_cancelled(self.bot.get_me().send())
-            .await
-        else {
-            return Ok(());
+        let invites = match self.startup(&cancellation).await {
+            Ok(invites) => invites,
+            Err(Interrupted::Cancelled) => return Ok(()),
+            Err(Interrupted::Failed(error)) => return Err(error),
         };
-        let bot_username = me
-            .map_err(map_startup_error)?
-            .user
-            .username
-            .ok_or(TelegramBotError::MissingBotUsername)?;
-        let invites = BotInvites::new(self.codec, bot_username);
-        let Some(webhook) = cancellation
-            .run_until_cancelled(self.polling_bot.get_webhook_info().send())
-            .await
-        else {
-            return Ok(());
-        };
-        if webhook.map_err(map_startup_error)?.url.is_some() {
-            let Some(result) = cancellation
-                .run_until_cancelled(self.polling_bot.delete_webhook().send())
-                .await
-            else {
-                return Ok(());
-            };
-            result.map_err(map_startup_error)?;
-        }
-        if !announce_commands(&self.bot, &cancellation).await {
-            return Ok(());
-        }
         let _ready = health.ready();
         let storage = InMemStorage::<BotState>::new();
         let force_stop = CancellationToken::new();
@@ -213,12 +215,7 @@ impl TelegramBot {
                 let credentials = handler_credentials.clone();
                 let cancellation = handler_cancellation.clone();
                 async move {
-                    if matches!(
-                        error.request_error(),
-                        Some(teloxide::RequestError::Api(
-                            teloxide::ApiError::InvalidToken
-                        ))
-                    ) {
+                    if error.is_invalid_token() {
                         credentials.store(true, Ordering::Release);
                         cancellation.cancel();
                     }
@@ -263,39 +260,32 @@ impl TelegramBot {
     }
 }
 
-async fn announce_commands(bot: &Bot, cancellation: &CancellationToken) -> bool {
-    let Some(commands) = cancellation
-        .run_until_cancelled(bot.set_my_commands(default_commands()).send())
-        .await
-    else {
-        return false;
-    };
-    if let Err(error) = commands {
-        errors::log_request_error("set_my_commands", &error);
-    }
+enum Interrupted {
+    Cancelled,
+    Failed(TelegramBotError),
+}
 
-    let Some(menu) = cancellation
-        .run_until_cancelled(
-            bot.set_chat_menu_button()
-                .menu_button(teloxide::types::MenuButton::Commands)
-                .send(),
-        )
+async fn attempted<T>(
+    cancellation: &CancellationToken,
+    request: impl Future<Output = Result<T, teloxide::RequestError>>,
+) -> Result<Result<T, teloxide::RequestError>, Interrupted> {
+    cancellation
+        .run_until_cancelled(request)
         .await
-    else {
-        return false;
-    };
-    if let Err(error) = menu {
-        errors::log_request_error("set_chat_menu_button", &error);
-    }
+        .ok_or(Interrupted::Cancelled)
+}
 
-    true
+async fn required<T>(
+    cancellation: &CancellationToken,
+    request: impl Future<Output = Result<T, teloxide::RequestError>>,
+) -> Result<T, Interrupted> {
+    attempted(cancellation, request)
+        .await?
+        .map_err(|error| Interrupted::Failed(map_startup_error(error)))
 }
 
 fn map_startup_error(error: teloxide::RequestError) -> TelegramBotError {
-    if matches!(
-        error,
-        teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)
-    ) {
+    if is_invalid_token(&error) {
         TelegramBotError::InvalidCredentials
     } else {
         errors::log_request_error("startup", &error);
@@ -392,12 +382,7 @@ where
             self.inner
                 .as_stream()
                 .take_while(move |result| {
-                    let keep_polling = !matches!(
-                        result,
-                        Err(teloxide::RequestError::Api(
-                            teloxide::ApiError::InvalidToken
-                        ))
-                    );
+                    let keep_polling = !result.as_ref().is_err_and(is_invalid_token);
                     if !keep_polling {
                         invalid_credentials.store(true, Ordering::Release);
                     }

@@ -5,22 +5,21 @@ use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
+use crate::bot::texts;
 use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{gradebook_students_keyboard, send_message_chunks};
 use crate::domain::{TeachingCourseId, UserId};
 use crate::pagination::{Page, PageRequest};
 
-pub(in crate::bot::handlers) async fn show_gradebook_page(
+pub(crate) async fn show_gradebook_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
     page: PageRequest,
 ) -> HandlerResult {
     let students = screen
-        .deps
-        .context
-        .services
+        .services()
         .courses
-        .list_students(screen.actor, course_id, page)
+        .list_students(screen.actor(), course_id, page)
         .await?;
 
     render_gradebook(screen, course_id, &students).await
@@ -33,15 +32,15 @@ async fn render_gradebook(
 ) -> HandlerResult {
     if students.items.is_empty() && students.page == 0 {
         screen
-            .bot
-            .send_message(screen.chat_id, "В группе пока нет студентов.")
+            .bot()
+            .send_message(screen.chat_id(), texts::NO_STUDENTS)
             .await?;
         return Ok(());
     }
 
     let message = screen
-        .bot
-        .send_message(screen.chat_id, "📊 Оценки курса. Выберите студента:")
+        .bot()
+        .send_message(screen.chat_id(), texts::GRADEBOOK_CHOOSE_STUDENT)
         .reply_markup(paginated_keyboard(
             gradebook_students_keyboard(course_id, &students.items),
             PageTarget::Gradebook(course_id),
@@ -50,8 +49,7 @@ async fn render_gradebook(
         ))
         .await?;
     screen
-        .deps
-        .dialogue
+        .dialogue()
         .update(BotState::Flow(FlowState::ChoosingStudent {
             message_id: message.id,
             purpose: StudentChoice::Grades { course_id },
@@ -65,47 +63,41 @@ async fn render_gradebook(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn show_student_grades_page(
+pub(crate) async fn show_student_grades_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
     student_id: UserId,
     page: PageRequest,
 ) -> HandlerResult {
     let student = screen
-        .deps
-        .context
-        .services
+        .services()
         .courses
-        .student_grades(screen.actor, course_id, student_id, page)
+        .student_grades(screen.actor(), course_id, student_id, page)
         .await?;
 
-    let mut text = format!(
-        "👤 {}\n🏅 Итого: {} из {}\n",
-        student.display_name,
-        student.total(),
-        student.max_total(),
-    );
+    let mut lines = vec![
+        texts::grades_header(&student.display_name, student.total(), student.max_total()),
+        String::new(),
+    ];
     if student.grades.is_empty() {
-        text.push_str("\nВ курсе пока нет оценочных заданий.");
+        lines.push(texts::NO_SCORED_ASSIGNMENTS.to_owned());
     }
     for grade in &student.grades {
         // Непроверенная сдача и выставленный ноль - разные вещи
         let score = grade
             .final_score
             .map_or_else(|| "—".to_owned(), |score| score.to_string());
-        text.push_str(&format!(
-            "\n{} · {} из {}",
-            grade.title, score, grade.max_score
-        ));
+        lines.push(texts::grade_entry(&grade.title, &score, grade.max_score));
     }
+    let text = lines.join("\n");
 
     let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "⬅️ К студентам курса",
+        texts::BUTTON_BACK_TO_STUDENTS,
         PageTarget::Gradebook(course_id).callback(0),
     )]]);
     send_message_chunks(
-        screen.bot,
-        screen.chat_id,
+        screen.bot(),
+        screen.chat_id(),
         text,
         Some(paginated_keyboard(
             keyboard,

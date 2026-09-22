@@ -9,13 +9,9 @@ pub(super) enum BotError {
     #[error(transparent)]
     App(#[from] AppError),
     #[error(transparent)]
+    Telegram(#[from] teloxide::RequestError),
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
-}
-
-impl From<teloxide::RequestError> for BotError {
-    fn from(error: teloxide::RequestError) -> Self {
-        Self::Other(error.into())
-    }
 }
 
 impl From<teloxide::dispatching::dialogue::InMemStorageError> for BotError {
@@ -27,9 +23,14 @@ impl From<teloxide::dispatching::dialogue::InMemStorageError> for BotError {
 impl BotError {
     pub(super) fn request_error(&self) -> Option<&teloxide::RequestError> {
         match self {
-            Self::App(_) => None,
-            Self::Other(error) => error.downcast_ref(),
+            Self::Telegram(error) => Some(error),
+            Self::App(_) | Self::Other(_) => None,
         }
+    }
+
+    pub(super) fn is_invalid_token(&self) -> bool {
+        self.request_error()
+            .is_some_and(crate::telegram::is_invalid_token)
     }
 }
 

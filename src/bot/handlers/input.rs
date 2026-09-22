@@ -40,7 +40,7 @@ pub(super) fn parse_number(text: &str) -> Option<u16> {
     parse_u16(text.trim())
 }
 
-pub(in crate::bot) fn parse_u16(value: &str) -> Option<u16> {
+pub(crate) fn parse_u16(value: &str) -> Option<u16> {
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }

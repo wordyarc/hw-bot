@@ -5,7 +5,7 @@ use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
 use crate::app::{ErrorCode, RegisterStudent};
 use crate::bot::HandlerResult;
-use crate::bot::context::{Chat, Deps, TextStep};
+use crate::bot::context::{Chat, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
@@ -18,10 +18,11 @@ pub(super) async fn start_registration(
     telegram_user_id: TelegramUserId,
     payload: &str,
 ) -> HandlerResult {
-    let Chat { bot, chat_id, deps } = chat;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
-    let invites = &context.invites;
+    let bot = chat.bot();
+    let chat_id = chat.chat_id();
+    let dialogue = chat.dialogue();
+    let services = chat.services();
+    let invites = chat.invites();
     match services
         .users
         .find_by_telegram_user_id(telegram_user_id)
@@ -53,24 +54,21 @@ pub(super) async fn start_registration(
 }
 
 pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> HandlerResult {
-    let TextStep {
-        bot,
-        message,
-        telegram_user_id,
-        deps,
-    } = step;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
+    let bot = step.bot();
+    let message = step.message();
+    let chat_id = step.chat_id();
+    let telegram_user_id = step.telegram_user_id();
+    let dialogue = step.dialogue();
+    let services = step.services();
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
     if text.trim().is_empty() {
-        bot.send_message(message.chat.id, texts::NAME_REQUIRED)
-            .await?;
+        bot.send_message(chat_id, texts::NAME_REQUIRED).await?;
         return Ok(());
     }
-    if !ensure_text_limit(bot, message.chat.id, text, DISPLAY_NAME_MAX_LEN, "Имя").await? {
+    if !ensure_text_limit(bot, chat_id, text, DISPLAY_NAME_MAX_LEN, texts::FIELD_NAME).await? {
         return Ok(());
     }
 
@@ -84,7 +82,7 @@ pub(super) async fn submit_name(step: TextStep<'_>, invite: VerifiedInvite) -> H
         })
         .await?;
     reset_dialogue(dialogue).await?;
-    bot.send_message(message.chat.id, texts::REGISTRATION_COMPLETE)
+    bot.send_message(chat_id, texts::REGISTRATION_COMPLETE)
         .await?;
     show_home(step.chat(), telegram_user_id).await?;
 

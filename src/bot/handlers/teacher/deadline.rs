@@ -6,7 +6,7 @@ use crate::bot::context::Screen;
 use crate::bot::state::{BotState, InputMode, TermsStep};
 use crate::bot::{HandlerResult, texts};
 
-pub(in crate::bot::handlers) async fn handle_deadline(
+pub(crate) async fn handle_deadline(
     screen: Screen<'_>,
     message_id: MessageId,
     action: DeadlineAction,
@@ -25,39 +25,39 @@ pub(in crate::bot::handlers) async fn handle_deadline(
     let date = match action {
         DeadlineAction::Manual => {
             form.mode = InputMode::Manual;
-            return render(screen.chat, form, None).await;
+            return render(screen.chat(), form, None).await;
         }
         DeadlineAction::Options => {
             form.mode = InputMode::Buttons;
-            return render(screen.chat, form, None).await;
+            return render(screen.chat(), form, None).await;
         }
         DeadlineAction::Calendar => {
             form.mode = InputMode::Calendar(if step == TermsStep::DurationDate {
-                screen.deps.context.timezone.first_date_ending_after(
+                screen.timezone().first_date_ending_after(
                     form.terms.deadline_at.expect("duration follows deadline"),
                 )
             } else {
-                screen.deps.context.timezone.today()
+                screen.timezone().today()
             });
-            return render(screen.chat, form, None).await;
+            return render(screen.chat(), form, None).await;
         }
         DeadlineAction::Month(month) => {
             form.mode = InputMode::Calendar(month);
-            return render(screen.chat, form, None).await;
+            return render(screen.chat(), form, None).await;
         }
         DeadlineAction::Days(days) if step == TermsStep::Deadline => {
-            screen.deps.context.timezone.in_days(u64::from(days))
+            screen.timezone().in_days(u64::from(days))
         }
         DeadlineAction::Months(months) if step == TermsStep::Deadline => {
-            screen.deps.context.timezone.in_months(months)
+            screen.timezone().in_months(months)
         }
         DeadlineAction::Days(_) | DeadlineAction::Months(_) => {
             return screen.stale().await;
         }
         DeadlineAction::Pick(date) => Some(date),
     };
-    match date.and_then(|date| screen.deps.context.timezone.end_of(date)) {
+    match date.and_then(|date| screen.timezone().end_of(date)) {
         Some(at) => apply_date(screen, form, at).await,
-        None => render(screen.chat, form, Some(texts::DATE_FORMAT)).await,
+        None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
     }
 }

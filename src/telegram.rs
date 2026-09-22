@@ -27,6 +27,10 @@ pub fn new_bot(
     Ok(teloxide::Bot::with_client(token, http).set_api_url(api_url))
 }
 
+pub(crate) fn is_invalid_token(error: &RequestError) -> bool {
+    matches!(error, RequestError::Api(ApiError::InvalidToken))
+}
+
 pub(crate) fn request_error_kind(error: &RequestError) -> &'static str {
     match error {
         RequestError::RetryAfter(_) => "telegram_rate_limit",

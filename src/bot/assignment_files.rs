@@ -8,8 +8,8 @@ use super::files::{FileTransfers, incoming_file};
 use super::state::{BotState, FlowState, ScreenState};
 use super::texts;
 use super::views::{
-    assignment_files_keyboard, confirm_file_deletion_keyboard, format_file_size,
-    send_message_chunks, teacher_keyboard,
+    assignment_files_keyboard, confirm_file_deletion_keyboard, send_message_chunks,
+    teacher_keyboard,
 };
 use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
 use crate::domain::{AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata};
@@ -21,13 +21,12 @@ pub(super) async fn submit_file(
     creation_flow: bool,
     transfers: &FileTransfers,
 ) -> HandlerResult {
-    let TextStep {
-        bot, message, deps, ..
-    } = step;
-    let services = &deps.context.services;
+    let bot = step.bot();
+    let message = step.message();
+    let chat_id = step.chat_id();
+    let services = step.services();
     let Some(incoming) = incoming_file(message) else {
-        bot.send_message(message.chat.id, "Пришлите файл или фотографию.")
-            .await?;
+        bot.send_message(chat_id, texts::FILE_PROMPT).await?;
         return Ok(());
     };
     let policy = services.files.policy();
@@ -35,7 +34,7 @@ pub(super) async fn submit_file(
         .declared_size
         .is_some_and(|size| size > policy.max_file_size_bytes)
     {
-        send_error_code(bot, message.chat.id, ErrorCode::FileTooLarge).await?;
+        send_error_code(bot, chat_id, ErrorCode::FileTooLarge).await?;
         return Ok(());
     }
     let transfer_permit = transfers.acquire().await?;
@@ -49,7 +48,7 @@ pub(super) async fn submit_file(
                 kind = "file_download_failed",
                 "Telegram file download failed"
             );
-            bot.send_message(message.chat.id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
+            bot.send_message(chat_id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
                 .await?;
             return Ok(());
         }
@@ -58,8 +57,7 @@ pub(super) async fn submit_file(
         .declared_size
         .is_some_and(|declared| declared != content.len())
     {
-        bot.send_message(message.chat.id, texts::FILE_SIZE_MISMATCH)
-            .await?;
+        bot.send_message(chat_id, texts::FILE_SIZE_MISMATCH).await?;
         return Ok(());
     }
     let Some(screen) = step.resolve().await? else {
@@ -69,7 +67,7 @@ pub(super) async fn submit_file(
         .files
         .add_assignment_file(AddAssignmentFile {
             assignment_id,
-            actor: screen.actor,
+            actor: screen.actor(),
             expected_revision,
             presentation: incoming.presentation,
             filename: incoming.filename,
@@ -80,7 +78,7 @@ pub(super) async fn submit_file(
     drop(transfer_permit);
     match result {
         Ok(_) => {
-            bot.send_message(message.chat.id, "Вложение добавлено.")
+            bot.send_message(chat_id, texts::FILE_ADDED)
                 .reply_markup(teacher_keyboard())
                 .await?;
             show(screen, assignment_id, creation_flow).await?;
@@ -105,15 +103,14 @@ pub(super) async fn ask_upload(
         return screen.stale().await;
     };
     screen
-        .deps
-        .dialogue
+        .dialogue()
         .update(BotState::Flow(FlowState::AwaitingAssignmentFile {
             assignment_id: files.assignment_id,
             expected_revision: files.revision,
             creation_flow: files.creation_flow,
         }))
         .await?;
-    screen.ask("Пришлите файл или фотографию.").await
+    screen.ask(texts::FILE_PROMPT).await
 }
 
 pub(super) async fn open(
@@ -133,13 +130,11 @@ pub(super) async fn open(
     transfer
         .run(async {
             let file = screen
-                .deps
-                .context
-                .services
+                .services()
                 .files
-                .open_assignment_file_for_teacher(screen.actor, files.assignment_id, file_id)
+                .open_assignment_file_for_teacher(screen.actor(), files.assignment_id, file_id)
                 .await?;
-            transfers.send(screen.chat_id, file).await?;
+            transfers.send(screen.chat_id(), file).await?;
             Ok(())
         })
         .await
@@ -159,13 +154,12 @@ pub(super) async fn request_deletion(
     };
     if files.requires_confirmation {
         let confirmation = screen
-            .bot
-            .send_message(screen.chat_id, crate::bot::texts::FILE_DELETE_CONFIRM)
+            .bot()
+            .send_message(screen.chat_id(), crate::bot::texts::FILE_DELETE_CONFIRM)
             .reply_markup(confirm_file_deletion_keyboard())
             .await?;
         screen
-            .deps
-            .dialogue
+            .dialogue()
             .update(BotState::Flow(
                 FlowState::ConfirmingAssignmentFileDeletion {
                     message_id: confirmation.id,
@@ -226,37 +220,39 @@ pub(super) async fn show(
     assignment_id: AssignmentId,
     creation_flow: bool,
 ) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let super::context::Chat { bot, chat_id, deps } = chat;
-    let super::context::Deps { context, dialogue } = deps;
-    let services = &context.services;
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let services = screen.services();
     let card = services
         .files
         .list_assignment_files_for_teacher(actor, assignment_id)
         .await?;
     let policy = services.files.policy();
-    let mut text = if card.files.is_empty() {
-        String::from("Вложений нет.")
+    let mut lines = vec![if card.files.is_empty() {
+        texts::NO_FILES.to_owned()
     } else {
-        String::from("Вложения задания:\n")
-    };
+        texts::FILES_HEADER.to_owned()
+    }];
     for file in &card.files {
-        text.push_str(&format!(
-            "\n{}. {} · {}\n",
+        lines.push(String::new());
+        lines.push(texts::file_entry(
             file.position(),
             file.filename().as_str(),
-            format_file_size(file.size_bytes()),
+            &texts::format_file_size(file.size_bytes()),
         ));
     }
-    text.push_str(&format!(
-        "\nИспользовано: {} из {}.",
+    lines.push(String::new());
+    lines.push(texts::files_used(
         card.files.len(),
         policy.max_files_per_assignment,
     ));
+    let text = lines.join("\n");
     let can_add = card.files.len() < policy.max_files_per_assignment;
     send_message_chunks(bot, chat_id, text, None).await?;
     let message = bot
-        .send_message(chat_id, "Выберите действие:")
+        .send_message(chat_id, texts::CHOOSE_ACTION)
         .reply_markup(assignment_files_keyboard(
             &card.assignment,
             &card.files,
@@ -285,22 +281,20 @@ async fn delete(
     creation_flow: bool,
 ) -> HandlerResult {
     match screen
-        .deps
-        .context
-        .services
+        .services()
         .files
         .delete_assignment_file(DeleteAssignmentFile {
             assignment_id,
             file_id,
-            actor: screen.actor,
+            actor: screen.actor(),
             expected_revision,
         })
         .await
     {
         Ok(_) => {
             screen
-                .bot
-                .send_message(screen.chat_id, "Вложение удалено.")
+                .bot()
+                .send_message(screen.chat_id(), texts::FILE_DELETED)
                 .await?;
         }
         Err(error) => screen.fail(error).await?,

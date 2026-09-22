@@ -100,11 +100,7 @@ pub(super) async fn handle_command(
         dialogue: &dialogue,
     };
     let chat_id = message.chat.id;
-    let chat = Chat {
-        bot: &bot,
-        chat_id,
-        deps,
-    };
+    let chat = Chat::new(&bot, chat_id, deps);
     let result = async {
         tracing::Span::current().record("action", command.name());
         if !ensure_private_message(&bot, &message).await? {
@@ -151,8 +147,7 @@ pub(super) async fn handle_command(
             }
             Command::Cancel => {
                 reset_dialogue(&dialogue).await?;
-                bot.send_message(chat_id, "Текущее действие отменено.")
-                    .await?;
+                bot.send_message(chat_id, texts::ACTION_CANCELLED).await?;
                 show_home(chat, telegram_user_id).await
             }
             Command::Help => send_help(chat, telegram_user_id).await,
@@ -195,12 +190,7 @@ pub(super) async fn handle_message(
             context: &context,
             dialogue: &dialogue,
         };
-        let step = TextStep {
-            bot: &bot,
-            message: &message,
-            telegram_user_id: actor,
-            deps,
-        };
+        let step = TextStep::new(&bot, &message, actor, deps);
 
         if let Some(action) = message.text().and_then(menu_action) {
             if let Some(form) = state.active_terms() {
@@ -345,10 +335,7 @@ pub(super) async fn handle_callback(
         .cache_time(0)
         .await
     {
-        if matches!(
-            error,
-            teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)
-        ) {
+        if crate::telegram::is_invalid_token(&error) {
             return Err(error.into());
         }
         tracing::warn!(
@@ -387,11 +374,7 @@ pub(super) async fn handle_callback(
             context: &context,
             dialogue: &dialogue,
         };
-        let chat = Chat {
-            bot: &bot,
-            chat_id,
-            deps,
-        };
+        let chat = Chat::new(&bot, chat_id, deps);
         let Some(screen) = chat.resolve(telegram_user_id).await? else {
             return Ok(());
         };
@@ -450,8 +433,7 @@ async fn handle_replayable_action(
         }
         ReplayableAction::StartAssignmentCreation(course_id) => {
             screen
-                .deps
-                .dialogue
+                .dialogue()
                 .update(BotState::Flow(FlowState::AwaitingAssignmentTitle {
                     course_id,
                 }))
@@ -460,8 +442,7 @@ async fn handle_replayable_action(
         }
         ReplayableAction::StartSubmission(assignment_id) => {
             screen
-                .deps
-                .dialogue
+                .dialogue()
                 .update(BotState::Flow(FlowState::AwaitingSubmission {
                     assignment_id,
                 }))
@@ -592,7 +573,7 @@ async fn ensure_private_message(bot: &Bot, message: &Message) -> HandlerResult<b
         return Ok(true);
     }
 
-    bot.send_message(message.chat.id, "Бот работает только в личных сообщениях.")
+    bot.send_message(message.chat.id, texts::PRIVATE_CHATS_ONLY)
         .await?;
     Ok(false)
 }

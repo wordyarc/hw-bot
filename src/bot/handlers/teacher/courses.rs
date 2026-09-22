@@ -4,35 +4,34 @@ use teloxide::types::MessageId;
 
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
-use crate::bot::context::{Chat, Deps, Screen};
+use crate::bot::context::Screen;
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
+use crate::bot::texts;
 use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{
-    assignment_actions_keyboard, assignment_status, course_assignments_keyboard, courses_keyboard,
-    grading_lines, send_message_chunks, teacher_menu,
+    assignment_actions_keyboard, course_assignments_keyboard, courses_keyboard, grading_lines,
+    list_text, send_message_chunks, teacher_menu,
 };
 use crate::domain::{AssignmentId, TeachingCourseId};
 use crate::pagination::PageRequest;
 
-pub(in crate::bot::handlers) async fn show_courses_page(
-    screen: Screen<'_>,
-    page: PageRequest,
-) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let Chat { bot, chat_id, deps } = chat;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
+pub(crate) async fn show_courses_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let services = screen.services();
     let courses = services.courses.list_for_teacher(actor, page).await?;
     if courses.items.is_empty() && page.page == 0 {
         reset_dialogue(dialogue).await?;
-        bot.send_message(chat_id, "📘 У вас пока нет учебных курсов.")
+        bot.send_message(chat_id, texts::NO_COURSES)
             .reply_markup(teacher_menu(None))
             .await?;
         return Ok(());
     }
 
-    bot.send_message(chat_id, "📘 Выберите курс:")
+    bot.send_message(chat_id, texts::CHOOSE_COURSE)
         .reply_markup(paginated_keyboard(
             courses_keyboard(&courses.items),
             PageTarget::Courses,
@@ -43,38 +42,38 @@ pub(in crate::bot::handlers) async fn show_courses_page(
     reset_dialogue(dialogue).await
 }
 
-pub(in crate::bot::handlers) async fn show_course_assignments_page(
+pub(crate) async fn show_course_assignments_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
     page: PageRequest,
 ) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let Chat { bot, chat_id, deps } = chat;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
-    let timezone = &context.timezone;
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let services = screen.services();
+    let timezone = screen.timezone();
     let assignments = services
         .assignments
         .list_for_course(actor, course_id, page)
         .await?;
 
     if assignments.items.is_empty() {
-        bot.send_message(chat_id, "В этом курсе пока нет заданий.")
+        bot.send_message(chat_id, texts::NO_COURSE_ASSIGNMENTS)
             .await?;
     } else {
-        let mut text = String::from("Задания курса:\n");
-        for assignment in &assignments.items {
-            text.push_str(&format!(
-                "\n{} · {}\n⏰ {}\n",
+        let entries = assignments.items.iter().map(|assignment| {
+            texts::course_assignment_entry(
                 assignment.title().as_str(),
-                assignment_status(assignment.status()),
-                timezone.format(assignment.deadline_at()),
-            ));
-        }
+                texts::assignment_status(assignment.status()),
+                &timezone.format(assignment.deadline_at()),
+            )
+        });
+        let text = list_text(texts::COURSE_ASSIGNMENTS_HEADER, entries);
         send_message_chunks(bot, chat_id, text, None).await?;
     }
 
-    bot.send_message(chat_id, "Выберите задание или создайте новое:")
+    bot.send_message(chat_id, texts::CHOOSE_ASSIGNMENT)
         .reply_markup(paginated_keyboard(
             course_assignments_keyboard(course_id, &assignments.items),
             PageTarget::Course(course_id),
@@ -85,35 +84,34 @@ pub(in crate::bot::handlers) async fn show_course_assignments_page(
     reset_dialogue(dialogue).await
 }
 
-pub(in crate::bot::handlers) async fn show_assignment(
+pub(crate) async fn show_assignment(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
 ) -> HandlerResult {
-    let Screen { chat, actor } = screen;
-    let Chat { bot, chat_id, deps } = chat;
-    let Deps { context, dialogue } = deps;
-    let services = &context.services;
-    let timezone = &context.timezone;
+    let actor = screen.actor();
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let dialogue = screen.dialogue();
+    let services = screen.services();
+    let timezone = screen.timezone();
     let assignment = services
         .assignments
         .find_for_teacher(actor, assignment_id)
         .await?;
     let published = assignment
         .published_at()
-        .map(|published_at| format!("\n🚀 Опубликовано: {}", timezone.format(published_at)))
-        .unwrap_or_default();
-    let text = format!(
-        "{}\n\nСтатус: {}{}\n🔁 Попыток: {}{}\n\n📄 Текст задания:\n{}",
+        .map(|published_at| texts::published_line(&timezone.format(published_at)));
+    let text = texts::teacher_assignment_card(
         assignment.title().as_str(),
-        assignment_status(assignment.status()),
-        grading_lines(&assignment, Utc::now(), timezone),
+        texts::assignment_status(assignment.status()),
+        &grading_lines(&assignment, Utc::now(), timezone),
         assignment.max_attempts(),
-        published,
+        published.as_deref(),
         assignment.body().as_str(),
     );
     send_message_chunks(bot, chat_id, text, None).await?;
     let message = bot
-        .send_message(chat_id, "Выберите действие:")
+        .send_message(chat_id, texts::CHOOSE_ACTION)
         .reply_markup(assignment_actions_keyboard(&assignment))
         .await?;
     dialogue
@@ -125,7 +123,7 @@ pub(in crate::bot::handlers) async fn show_assignment(
     Ok(())
 }
 
-pub(in crate::bot::handlers) async fn publish_assignment(
+pub(crate) async fn publish_assignment(
     screen: Screen<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
@@ -138,20 +136,18 @@ pub(in crate::bot::handlers) async fn publish_assignment(
         return screen.stale().await;
     }
     screen
-        .deps
-        .context
-        .services
+        .services()
         .assignments
-        .publish(assignment_id, screen.actor, Utc::now())
+        .publish(assignment_id, screen.actor(), Utc::now())
         .await?;
     screen
-        .bot
-        .send_message(screen.chat_id, "🚀 Задание опубликовано.")
+        .bot()
+        .send_message(screen.chat_id(), texts::ASSIGNMENT_PUBLISHED)
         .await?;
     show_assignment(screen, assignment_id).await
 }
 
-pub(in crate::bot::handlers) async fn archive_assignment(
+pub(crate) async fn archive_assignment(
     screen: Screen<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
@@ -164,20 +160,18 @@ pub(in crate::bot::handlers) async fn archive_assignment(
         return screen.stale().await;
     }
     screen
-        .deps
-        .context
-        .services
+        .services()
         .assignments
-        .archive(assignment_id, screen.actor)
+        .archive(assignment_id, screen.actor())
         .await?;
     screen
-        .bot
-        .send_message(screen.chat_id, "📦 Задание архивировано.")
+        .bot()
+        .send_message(screen.chat_id(), texts::ASSIGNMENT_ARCHIVED)
         .await?;
     show_assignment(screen, assignment_id).await
 }
 
-pub(in crate::bot::handlers) async fn ask_assignment_deadline(
+pub(crate) async fn ask_assignment_deadline(
     screen: Screen<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
