@@ -7,13 +7,14 @@ use super::reset_dialogue;
 use crate::app::{ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::errors::log_handler_error;
 use crate::bot::texts;
 use crate::bot::views::{
     button_label, grading_lines, list_text, paginated_keyboard, send_message_chunks,
     student_keyboard, student_menu,
 };
 use crate::bot::{FileTransfers, HandlerResult};
-use crate::domain::{AssignmentId, AssignmentStatus, USER_TEXT_MAX_LEN};
+use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata, USER_TEXT_MAX_LEN};
 use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -247,28 +248,57 @@ pub(super) async fn show_assignment(
         .await?;
     bot.send_message(chat_id, assignment.body().as_str())
         .await?;
-    if !details.files.is_empty() {
-        bot.send_message(chat_id, texts::FILES_ATTACHED_HEADER)
-            .await?;
-        for metadata in &details.files {
-            let transfer = transfers.acquire().await?;
-            transfer
-                .run(async {
-                    let file = services
-                        .files
-                        .open_assignment_file_for_student(actor, assignment.id(), metadata.id())
-                        .await?;
-                    transfers.send(chat_id, file).await
-                })
-                .await?;
-        }
-    }
     if let Some(submission) = &details.latest_submission {
         send_submission(screen, submission).await?;
     }
     bot.send_message(chat_id, texts::CHOOSE_ACTION)
         .reply_markup(InlineKeyboardMarkup::new(rows))
         .await?;
+    if let Err(error) =
+        send_assignment_files(screen, assignment_id, &details.files, transfers).await
+    {
+        if error.is_invalid_token() {
+            return Err(error);
+        }
+        log_handler_error(&error);
+        bot.send_message(chat_id, texts::ASSIGNMENT_FILES_SEND_FAILED)
+            .reply_markup(InlineKeyboardMarkup::new([[
+                InlineKeyboardButton::callback(
+                    texts::BUTTON_REOPEN_ASSIGNMENT,
+                    ReplayableAction::Assignment(assignment_id).callback(),
+                ),
+            ]]))
+            .await?;
+    }
+    Ok(())
+}
+
+async fn send_assignment_files(
+    screen: Screen<'_>,
+    assignment_id: AssignmentId,
+    files: &[StoredFileMetadata],
+    transfers: &FileTransfers,
+) -> HandlerResult {
+    if files.is_empty() {
+        return Ok(());
+    }
+    screen
+        .bot()
+        .send_message(screen.chat_id(), texts::FILES_ATTACHED_HEADER)
+        .await?;
+    for metadata in files {
+        let transfer = transfers.acquire().await?;
+        transfer
+            .run(async {
+                let file = screen
+                    .services()
+                    .files
+                    .open_assignment_file_for_student(screen.actor(), assignment_id, metadata.id())
+                    .await?;
+                transfers.send(screen.chat_id(), file).await
+            })
+            .await?;
+    }
     Ok(())
 }
 

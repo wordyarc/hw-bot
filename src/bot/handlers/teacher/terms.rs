@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
 use teloxide::types::{ChatId, MessageId};
+use teloxide::{ApiError, RequestError};
 
 use super::courses::show_assignment;
 use crate::app::{ChangeTerms, CreateAssignment, ErrorCode};
@@ -87,15 +88,18 @@ pub(super) async fn render(
         InputMode::Buttons | InputMode::Calendar(_) => {
             if let Some(id) = form.message_id {
                 match bot
-                    .edit_message_text(chat_id, id, text)
-                    .reply_markup(keyboard)
+                    .edit_message_text(chat_id, id, &text)
+                    .reply_markup(keyboard.clone())
                     .await
                 {
-                    Ok(_)
-                    | Err(teloxide::RequestError::Api(teloxide::ApiError::MessageNotModified)) => {}
+                    Ok(_) | Err(RequestError::Api(ApiError::MessageNotModified)) => {}
+                    Err(RequestError::Api(
+                        ApiError::MessageToEditNotFound | ApiError::MessageCantBeEdited,
+                    )) => form.message_id = None,
                     Err(error) => return Err(error.into()),
                 }
-            } else {
+            }
+            if form.message_id.is_none() {
                 form.message_id = Some(
                     bot.send_message(chat_id, text)
                         .reply_markup(keyboard)
@@ -113,7 +117,15 @@ pub(super) async fn render(
 
 pub(super) async fn detach(bot: &Bot, chat_id: ChatId, form: &mut TermsForm) -> HandlerResult {
     if let Some(id) = form.message_id.take() {
-        bot.edit_message_reply_markup(chat_id, id).await?;
+        match bot.edit_message_reply_markup(chat_id, id).await {
+            Ok(_)
+            | Err(RequestError::Api(
+                ApiError::MessageNotModified
+                | ApiError::MessageToEditNotFound
+                | ApiError::MessageCantBeEdited,
+            )) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
 }
@@ -359,8 +371,8 @@ pub(crate) async fn handle_terms(
                 render(screen.chat(), form, None).await
             }
             TermsAction::Exit => {
-                abandon(screen.bot(), screen.chat_id(), &form).await?;
                 reset_dialogue(screen.dialogue()).await?;
+                abandon(screen.bot(), screen.chat_id(), &form).await?;
                 run_menu_action(screen.chat(), telegram_user_id, menu, transfers).await
             }
             _ => screen.stale().await,

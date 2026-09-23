@@ -128,8 +128,8 @@ pub(super) async fn handle_command(
                 }
                 return teacher::back(screen, form.clone()).await;
             }
-            teacher::abandon(&bot, chat_id, form).await?;
             reset_dialogue(&dialogue).await?;
+            teacher::abandon(&bot, chat_id, form).await?;
         }
 
         if let Some(action) = menu_action_for(&command) {
@@ -364,10 +364,10 @@ pub(super) async fn handle_callback(
             return Ok(());
         }
         if matches!(action, CallbackAction::Replayable(_)) {
+            reset_dialogue(&dialogue).await?;
             if let Some(form) = state.active_terms() {
                 teacher::abandon(&bot, chat_id, form).await?;
             }
-            reset_dialogue(&dialogue).await?;
         }
 
         let deps = Deps {

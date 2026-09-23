@@ -1,20 +1,21 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use hw_bot::bot::{TelegramBot, callbacks, texts};
+use hw_bot::bot::{TelegramBot, TelegramBotError, callbacks, texts};
+use hw_bot::domain::FilePresentation;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use hw_bot::app::ErrorCode;
+use hw_bot::app::{AddAssignmentFile, ErrorCode};
 use hw_bot::bot::app_error_message;
 
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
-use crate::harness::telegram_scenario::TelegramScenario;
+use crate::harness::telegram_scenario::{Button, TelegramScenario};
 
 #[tokio::test]
 async fn a_command_reports_an_application_error_to_the_user_once() {
@@ -141,6 +142,370 @@ async fn fail_next(telegram: &TelegramScenario, endpoint: &str) {
         .with_priority(1)
         .mount(&telegram.server)
         .await;
+}
+
+async fn open_terms(app: &TestApp, telegram: &TelegramScenario) -> Button {
+    open_course(app, telegram).await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::DEADLINE_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
+        .await
+}
+
+async fn reject_message_edits(telegram: &TelegramScenario, message_id: i32, description: &str) {
+    for endpoint in ["EditMessageText", "EditMessageReplyMarkup"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottest-token/{endpoint}")))
+            .and(body_partial_json(json!({"message_id": message_id})))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "ok": false, "error_code": 400, "description": description,
+            })))
+            .with_priority(1)
+            .mount(&telegram.server)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn unavailable_terms_screen_is_replaced_without_losing_input() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    for (description, days) in [
+        ("Bad Request: message to edit not found", 7),
+        ("Bad Request: message can't be edited", 14),
+    ] {
+        let old = open_terms(&app, &telegram).await;
+        let timezone = bot_timezone();
+        let deadline = timezone.end_of(timezone.in_days(days).unwrap()).unwrap();
+        telegram
+            .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, days))
+            .await;
+        let old_save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
+        telegram
+            .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
+            .await;
+        reject_message_edits(&telegram, old.message_id, description).await;
+        telegram.message(app.teacher(), "/cancel");
+        telegram.flush(app.teacher()).await;
+        let new_save = telegram
+            .button_after(app.teacher(), callbacks::TERMS_SAVE, old.message_id)
+            .await;
+        let before = telegram.messages(app.teacher()).len();
+        telegram.click(app.teacher(), &old_save);
+        telegram.flush(app.teacher()).await;
+        assert!(
+            telegram.messages(app.teacher())[before..]
+                .iter()
+                .any(|m| m["text"] == texts::STALE_BUTTON)
+        );
+        telegram.click(app.teacher(), &new_save);
+        telegram.flush(app.teacher()).await;
+        let assignment = app
+            .application
+            .assignments
+            .find_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
+            .await
+            .unwrap();
+        assert_eq!(assignment.deadline_at(), deadline);
+    }
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn deleted_terms_screen_does_not_block_exit_commands() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    for command in ["/start", "/menu", "/courses"] {
+        let old = open_terms(&app, &telegram).await;
+        reject_message_edits(
+            &telegram,
+            old.message_id,
+            "Bad Request: message to edit not found",
+        )
+        .await;
+        let before = telegram.messages(app.teacher()).len();
+        telegram.message(app.teacher(), command);
+        telegram.message(app.teacher(), "input after leaving");
+        telegram.flush(app.teacher()).await;
+        let messages = telegram.messages(app.teacher());
+        assert!(
+            messages[before..]
+                .iter()
+                .any(|m| m["text"] == texts::TERMS_DISCARDED),
+            "{command}"
+        );
+        assert!(
+            messages[before..]
+                .iter()
+                .any(|m| m["text"] == texts::USE_THE_MENU),
+            "{command}"
+        );
+    }
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn replayable_navigation_leaves_deleted_terms_screen() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let old = open_terms(&app, &telegram).await;
+    let course = telegram
+        .button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    reject_message_edits(
+        &telegram,
+        old.message_id,
+        "Bad Request: message to edit not found",
+    )
+    .await;
+    let before = telegram.messages(app.teacher()).len();
+    telegram.click(app.teacher(), &course);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+    let messages = telegram.messages(app.teacher());
+    assert!(
+        messages[before..]
+            .iter()
+            .any(|m| m["text"] == texts::TERMS_DISCARDED)
+    );
+    assert!(
+        messages[before..]
+            .iter()
+            .any(|m| m["text"] == texts::CHOOSE_ASSIGNMENT)
+    );
+}
+
+#[tokio::test]
+async fn already_removed_markup_does_not_block_manual_deadline_input() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let old = open_terms(&app, &telegram).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/EditMessageReplyMarkup"))
+        .and(body_partial_json(json!({"message_id": old.message_id})))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "ok": false, "error_code": 400,
+            "description": teloxide::ApiError::MessageNotModified.to_string(),
+        })))
+        .with_priority(1)
+        .mount(&telegram.server)
+        .await;
+    let date = deadline_input(Utc::now() + chrono::Duration::days(5));
+    telegram.message(app.teacher(), &date);
+    telegram.flush(app.teacher()).await;
+    let save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
+    telegram.click(app.teacher(), &save);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+    let assignment = app
+        .application
+        .assignments
+        .find_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
+        .await
+        .unwrap();
+    assert_eq!(assignment.deadline_at(), expected_deadline(&date));
+}
+
+#[tokio::test]
+async fn failed_keyboard_cleanup_still_closes_the_form() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_terms(&app, &telegram).await;
+    fail_next(&telegram, "EditMessageReplyMarkup").await;
+    telegram.message(app.teacher(), "/courses");
+    telegram.message(app.teacher(), "input after leaving");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+    assert!(
+        telegram
+            .messages(app.teacher())
+            .iter()
+            .any(|m| m["text"] == texts::USE_THE_MENU)
+    );
+}
+
+async fn add_assignment_document(app: &TestApp) {
+    let (_, revision) = app
+        .application
+        .assignments
+        .find_versioned_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
+        .await
+        .unwrap();
+    app.application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: app.fixture.assignment.id(),
+            actor: app.teacher_actor(),
+            expected_revision: revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment.txt".into(),
+            mime_type: Some("text/plain".into()),
+            content: DOCUMENT_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failed_attachment_delivery_keeps_actions_and_can_be_retried() {
+    let app = TestApp::start().await;
+    add_assignment_document(&app).await;
+    let previous = app.queued_submission(app.student(), "pull/first").await;
+    app.review(previous, app.teacher(), "reject", "Try again")
+        .await
+        .ok();
+    let telegram = TelegramScenario::new().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "ok": false, "error_code": 429,
+            "description": "Too Many Requests: retry after 5",
+            "parameters": {"retry_after": 5},
+        })))
+        .expect(1..)
+        .with_priority(10)
+        .mount(&telegram.server)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_assignment(&app, &telegram).await;
+    assert!(offers_submission(&telegram, app.student()));
+    assert!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .any(|m| m["text"] == texts::ASSIGNMENT_FILES_SEND_FAILED)
+    );
+    let history = telegram
+        .button_with_text(app.student(), texts::BUTTON_HISTORY)
+        .await;
+    let retry = telegram
+        .button_with_text(app.student(), texts::BUTTON_REOPEN_ASSIGNMENT)
+        .await;
+    let submit = telegram
+        .button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    let before = telegram.messages(app.student()).len();
+    telegram.click(app.student(), &history);
+    telegram.flush(app.student()).await;
+    let messages = telegram.messages(app.student());
+    let history_text = messages[before..]
+        .iter()
+        .filter_map(|message| message["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(history_text.contains("pull/first"));
+    assert!(history_text.contains("Try again"));
+    telegram.click(app.student(), &submit);
+    telegram.message(app.student(), "pull/retry");
+    telegram.flush(app.student()).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(telegram_document_response())
+        .expect(1..)
+        .with_priority(1)
+        .mount(&telegram.server)
+        .await;
+    telegram.click(app.student(), &retry);
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+    let count: i64 = sqlx::query_scalar("select count(*) from submissions")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn attachment_timeout_keeps_submission_available() {
+    let app = TestApp::start().await;
+    add_assignment_document(&app).await;
+    let telegram = TelegramScenario::new().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(telegram_document_response().set_delay(Duration::from_secs(1)))
+        .expect(1..)
+        .mount(&telegram.server)
+        .await;
+    let (cancellation, mut task) = start_bot_with_settings(
+        &app,
+        &telegram.server,
+        bot_settings_with(|settings| {
+            settings.file_transfer_timeout = Duration::from_millis(250);
+        }),
+    );
+    open_assignment(&app, &telegram).await;
+    assert!(offers_submission(&telegram, app.student()));
+    assert!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .any(|m| m["text"] == texts::ASSIGNMENT_FILES_SEND_FAILED)
+    );
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram.message(app.student(), "pull/after-timeout");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+    let count: i64 = sqlx::query_scalar("select count(*) from submissions")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn invalid_credentials_during_attachment_delivery_stop_the_bot() {
+    let app = TestApp::start().await;
+    add_assignment_document(&app).await;
+    let telegram = telegram_server(vec![callback_update(
+        1,
+        app.student(),
+        &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        BOT_MESSAGE_ID,
+    )])
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "ok": false, "error_code": 401, "description": "Unauthorized",
+        })))
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let (_, task) = start_bot(&app, &telegram);
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(result, Err(TelegramBotError::InvalidCredentials)));
+    assert!(
+        !recorded_requests(&telegram)
+            .await
+            .contains(texts::ASSIGNMENT_FILES_SEND_FAILED)
+    );
 }
 
 #[tokio::test]
