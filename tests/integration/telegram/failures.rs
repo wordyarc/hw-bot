@@ -144,6 +144,57 @@ async fn fail_next(telegram: &TelegramScenario, endpoint: &str) {
         .await;
 }
 
+#[tokio::test]
+async fn failed_terms_transition_keeps_grading_choice_retryable() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_course(&app, &telegram).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
+        .await;
+    telegram.message(app.teacher(), "Recoverable draft");
+    telegram.message(app.teacher(), "Solve the task");
+    telegram.message(app.teacher(), "2");
+    let grading_data = cb(callbacks::GRADING_PREFIX, "passfail");
+    let grading = telegram.button(app.teacher(), &grading_data).await;
+    Mock::given(method("POST"))
+        .and(|request: &wiremock::Request| {
+            matches!(
+                request.url.path(),
+                "/bottest-token/SendMessage" | "/bottest-token/EditMessageText"
+            )
+        })
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "ok": false, "error_code": 429,
+            "description": "Too Many Requests: retry after 1",
+            "parameters": {"retry_after": 1},
+        })))
+        .up_to_n_times(1)
+        .expect(1)
+        .with_priority(1)
+        .mount(&telegram.server)
+        .await;
+    telegram.click(app.teacher(), &grading);
+    telegram.flush(app.teacher()).await;
+    telegram.click_button(app.teacher(), &grading_data).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_SAVE)
+        .await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+    let created = wait_for_created_assignment(&app.pool, "Recoverable draft")
+        .await
+        .expect("the same draft can be completed after retrying the transition");
+
+    assert_eq!(created.max_score, None);
+    assert_eq!(created.max_attempts, 2);
+    assert_eq!(created.body, "Solve the task");
+}
+
 async fn open_terms(app: &TestApp, telegram: &TelegramScenario) -> Button {
     open_course(app, telegram).await;
     telegram

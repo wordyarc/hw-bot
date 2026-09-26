@@ -76,17 +76,14 @@ pub(crate) async fn handle_grading(
         }
     };
 
-    screen
-        .bot()
-        .edit_message_reply_markup(screen.chat_id(), message_id)
-        .await?;
-    apply_grading(screen.chat(), draft, grading).await
+    apply_grading(screen.chat(), draft, grading, Some(message_id)).await
 }
 
 pub(super) async fn apply_grading(
     chat: Chat<'_>,
     draft: DraftAssignment,
     grading: Grading,
+    message_id: Option<MessageId>,
 ) -> HandlerResult {
     let draft = DraftAssignment { grading, ..draft };
 
@@ -95,12 +92,9 @@ pub(super) async fn apply_grading(
     } else {
         TermsStep::Deadline
     };
-    super::terms::render(
-        chat,
-        TermsForm::new(AssignmentTerms::creating(draft), step),
-        None,
-    )
-    .await
+    let mut form = TermsForm::new(AssignmentTerms::creating(draft), step);
+    form.message_id = message_id;
+    super::terms::render(chat, form, None).await
 }
 
 pub(super) async fn ask_max_attempts(
@@ -230,7 +224,7 @@ pub(crate) async fn submit_grading_text(
             .await?;
         return Ok(());
     };
-    apply_grading(step.chat(), draft, grading).await?;
+    apply_grading(step.chat(), draft, grading, None).await?;
 
     Ok(())
 }

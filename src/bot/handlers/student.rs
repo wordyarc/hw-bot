@@ -396,7 +396,7 @@ pub(super) async fn submit_homework_text(
             assignment_id,
             actor: screen.actor(),
             content: text.to_owned(),
-            submitted_at: Utc::now(),
+            submitted_at: step.message().date,
         })
         .await;
     match submitted {

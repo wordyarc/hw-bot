@@ -410,7 +410,7 @@ pub(crate) fn message_update(update_id: u32, user_id: i64, message_id: i32, text
         "update_id": update_id,
         "message": {
             "message_id": message_id,
-            "date": 0,
+            "date": Utc::now().timestamp(),
             "chat": { "id": user_id, "type": "private" },
             "from": {
                 "id": user_id,
