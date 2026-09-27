@@ -19,11 +19,7 @@ services:
       - -c
       - maintenance_work_mem=32MB
       - -c
-      - wal_buffers=4MB
-      - -c
       - max_wal_size=512MB
-      - -c
-      - checkpoint_completion_target=0.9
       - -c
       - jit=off
     environment:

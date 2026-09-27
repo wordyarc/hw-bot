@@ -22,13 +22,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 
-cp tools/deploy/production.example.toml "$tmp/production.toml"
-cat >> "$tmp/production.toml" <<'EOF'
-
-[server]
-host = "::1"
-port = 3001
-EOF
+sed '/^\[server\]$/,/^\[/ {
+    s/^host = .*/host = "::1"/
+    s/^port = .*/port = 3001/
+}' tools/deploy/production.example.toml > "$tmp/production.toml"
+grep -qx 'host = "::1"' "$tmp/production.toml"
+grep -qx 'port = 3001' "$tmp/production.toml"
 cp tools/deploy/bootstrap.example.json "$tmp/bootstrap.production.json"
 chmod 0640 "$tmp/production.toml" "$tmp/bootstrap.production.json"
 cat > "$HW_BOT_ENV_FILE" <<EOF
