@@ -6,3 +6,4 @@
 !migrations/**
 !.sqlx/**
 !config/default.toml
+!tools/docker/entrypoint.sh

@@ -4,11 +4,7 @@ set -euo pipefail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-git archive --format=tar.gz --output=deploy.tar.gz "$COMMIT" \
-    Makefile tools/deploy/compose.yml tools/deploy/compose.bootstrap.yml \
-    tools/deploy/backup.sh tools/deploy/deploy.sh \
-    tools/deploy/.env.example tools/deploy/production.example.toml \
-    tools/deploy/bootstrap.example.json
+sh tools/actions/package.sh "$COMMIT" deploy.tar.gz
 checksum=$(sha256sum deploy.tar.gz | cut -d ' ' -f 1)
 jq -n --arg version "$VERSION" --arg commit "$COMMIT" \
     --arg image "$IMAGE" --arg checksum "$checksum" \

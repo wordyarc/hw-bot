@@ -16,11 +16,12 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /src/target/release/hw-bot /usr/local/bin/hw-bot
 COPY config/default.toml /app/config/default.toml
+COPY --chmod=0755 tools/docker/entrypoint.sh /usr/local/bin/hw-bot-entrypoint
 
 USER 10001:10001
 
 HEALTHCHECK --interval=10s --timeout=6s --start-period=20s --retries=3 \
     CMD curl --fail --silent --show-error --max-time 5 \
-        "http://127.0.0.1:${APP__SERVER__PORT:-3000}/health/ready"
+        http://127.0.0.1:3000/health/ready
 
-ENTRYPOINT ["/usr/local/bin/hw-bot"]
+ENTRYPOINT ["/usr/local/bin/hw-bot-entrypoint"]

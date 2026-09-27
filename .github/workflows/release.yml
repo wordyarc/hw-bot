@@ -92,7 +92,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=production
 
       - name: Test the release image
-        run: sh tools/ci/smoke.sh "$IMAGE:$VERSION"
+        run: sh tools/actions/smoke.sh "$IMAGE:$VERSION"
 
       - name: Publish the tested image
         id: publish
@@ -126,4 +126,4 @@ jobs:
           persist-credentials: false
 
       - name: Finalize release
-        run: bash tools/ci/release.sh
+        run: bash tools/actions/release.sh

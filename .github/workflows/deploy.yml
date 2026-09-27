@@ -84,7 +84,7 @@ jobs:
           printf 'mkdir -p %q\n' "$destination" | ssh production bash -s
           scp release.json deploy.tar.gz "production:$destination/"
           printf 'tar -xzf %q -C %q && bash %q %q %q\n' \
-            "$destination/deploy.tar.gz" "$destination" "$destination/tools/deploy/deploy.sh" "$DEPLOY_PATH" "$destination" \
+            "$destination/deploy.tar.gz" "$destination" "$destination/tools/ops/deploy.sh" "$DEPLOY_PATH" "$destination" \
             | ssh production bash -s
 
       - name: Deployment summary

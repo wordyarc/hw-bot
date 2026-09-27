@@ -1,6 +1,6 @@
 SQLX_OFFLINE := true
 TEST_CONTAINER := hw-bot-test-postgres
-COMPOSE := docker compose -f tools/docker-compose.yml
+COMPOSE := docker compose -f tools/deploy/compose.local.yml
 PROD_COMPOSE := docker compose --env-file tools/deploy/.env.production -f tools/deploy/compose.yml
 
 run:
@@ -54,6 +54,6 @@ prod-up:
 	$(PROD_COMPOSE) up -d --force-recreate app
 
 prod-backup:
-	sh tools/deploy/backup.sh
+	sh tools/ops/backup.sh
 
 .PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration audit ci image compose-up compose-down prod-bootstrap prod-up prod-backup

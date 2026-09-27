@@ -51,7 +51,12 @@ services:
     env_file:
       - ${HW_BOT_ENV_FILE:-.env.production}
     volumes:
-      - ${HW_BOT_CONFIG_DIR:-.}/production.toml:/app/config/local.toml:ro
+      - type: bind
+        source: ${HW_BOT_CONFIG_DIR:-.}/production.toml
+        target: /app/config/local.toml
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       database:
         condition: service_healthy

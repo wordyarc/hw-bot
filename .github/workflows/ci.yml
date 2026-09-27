@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
   workflow_call:
     inputs:
       skip-image:
@@ -29,6 +31,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Deployment scripts and bundle
+        run: |
+          shellcheck tools/actions/*.sh tools/ops/*.sh tools/docker/*.sh
+          sh tools/actions/package.sh HEAD "$RUNNER_TEMP/deploy.tar.gz"
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
@@ -42,9 +48,6 @@ jobs:
 
       - name: Unit, integration and documentation tests
         run: cargo test --locked
-
-      - name: Shell scripts
-        run: shellcheck tools/ci/*.sh tools/deploy/*.sh
 
   audit:
     runs-on: ubuntu-24.04
@@ -81,4 +84,4 @@ jobs:
           cache-to: type=gha,mode=max,scope=production
 
       - name: Production startup and bootstrap
-        run: sh tools/ci/smoke.sh hw-bot:ci
+        run: sh tools/actions/smoke.sh hw-bot:ci
