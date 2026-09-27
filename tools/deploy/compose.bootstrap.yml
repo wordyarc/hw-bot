@@ -4,4 +4,4 @@ services:
       APP__DATABASE__RUN_BOOTSTRAP: "true"
       APP__DATABASE__BOOTSTRAP_FILE: /run/bootstrap/data.json
     volumes:
-      - ./bootstrap.production.json:/run/bootstrap/data.json:ro
+      - ${HW_BOT_CONFIG_DIR:-.}/bootstrap.production.json:/run/bootstrap/data.json:ro

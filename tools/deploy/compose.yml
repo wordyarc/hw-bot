@@ -42,23 +42,19 @@ services:
 
   app:
     image: ${HW_BOT_IMAGE:?required}
+    group_add:
+      - ${HW_BOT_CONFIG_GID:?set to the group owning production.toml and bootstrap.production.json}
     restart: unless-stopped
     mem_limit: 320m
     cpus: 1.0
     stop_grace_period: 30s
     env_file:
-      - .env.production
+      - ${HW_BOT_ENV_FILE:-.env.production}
     volumes:
-      - ./production.toml:/app/config/local.toml:ro
+      - ${HW_BOT_CONFIG_DIR:-.}/production.toml:/app/config/local.toml:ro
     depends_on:
       database:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:3000/health/ready"]
-      interval: 10s
-      timeout: 6s
-      start_period: 20s
-      retries: 3
     networks:
       - backend
 
