@@ -18,6 +18,9 @@ fmt-fix:
 lint:
 	SQLX_OFFLINE=$(SQLX_OFFLINE) cargo clippy --all-targets -- -D warnings
 
+audit:
+	cargo audit
+
 lint-fix:
 	SQLX_OFFLINE=$(SQLX_OFFLINE) cargo clippy --fix --all-targets --allow-dirty --allow-staged -- -D warnings
 
@@ -50,4 +53,7 @@ prod-bootstrap:
 prod-up:
 	$(PROD_COMPOSE) up -d --force-recreate app
 
-.PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration ci image compose-up compose-down prod-bootstrap prod-up
+prod-backup:
+	sh tools/deploy/backup.sh
+
+.PHONY: run check fmt fmt-fix lint lint-fix test test-lib test-integration audit ci image compose-up compose-down prod-bootstrap prod-up prod-backup

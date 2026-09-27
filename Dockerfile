@@ -19,8 +19,8 @@ COPY config/default.toml /app/config/default.toml
 
 USER 10001:10001
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl --fail --silent --show-error --max-time 2 \
+HEALTHCHECK --interval=10s --timeout=6s --start-period=20s --retries=3 \
+    CMD curl --fail --silent --show-error --max-time 5 \
         "http://127.0.0.1:${APP__SERVER__PORT:-3000}/health/ready"
 
 ENTRYPOINT ["/usr/local/bin/hw-bot"]

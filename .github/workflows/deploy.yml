@@ -1,0 +1,97 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version, for example 1.2.3"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      IMAGE_REPOSITORY: ${{ vars.DOCKERHUB_IMAGE }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/srv/hw-bot' }}
+    steps:
+      - name: Download and validate release
+        id: release
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/master ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$IMAGE_REPOSITORY" =~ ^[a-z0-9_-]+/[a-z0-9._-]+$ ]]
+          gh release view "v$VERSION" --json isDraft,isPrerelease | jq -e '.isDraft == false and .isPrerelease == false'
+          gh release download "v$VERSION" --pattern release.json --pattern deploy.tar.gz
+          jq -e --arg version "$VERSION" --arg repository "$IMAGE_REPOSITORY" '
+            .version == $version and
+            (.commit | test("^[0-9a-f]{40}$")) and
+            (.image | startswith($repository + "@sha256:")) and
+            (.image | ltrimstr($repository + "@sha256:") | test("^[0-9a-f]{64}$")) and
+            (.archive_sha256 | test("^[0-9a-f]{64}$"))
+          ' release.json
+          [[ "$(gh api "repos/$GH_REPO/commits/v$VERSION" --jq '.sha')" == "$(jq -r '.commit' release.json)" ]]
+          checksum=$(jq -r '.archive_sha256' release.json)
+          printf '%s  deploy.tar.gz\n' "$checksum" | sha256sum --check
+          printf 'image=%s\n' "$(jq -r '.image' release.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.:-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]]
+          [[ -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/deploy_known_hosts"
+          cat > "$HOME/.ssh/config" <<EOF
+          Host production
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $DEPLOY_PORT
+            IdentityFile ~/.ssh/deploy_key
+            UserKnownHostsFile ~/.ssh/deploy_known_hosts
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 15
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          EOF
+
+      - name: Deploy over SSH
+        run: |
+          destination="$DEPLOY_PATH/deployments/$VERSION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'mkdir -p %q\n' "$destination" | ssh production bash -s
+          scp release.json deploy.tar.gz "production:$destination/"
+          printf 'tar -xzf %q -C %q && bash %q %q %q\n' \
+            "$destination/deploy.tar.gz" "$destination" "$destination/tools/deploy/deploy.sh" "$DEPLOY_PATH" "$destination" \
+            | ssh production bash -s
+
+      - name: Deployment summary
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+          IMAGE: ${{ steps.release.outputs.image }}
+        run: |
+          printf '### Production deployment\n\nVersion: %s\n\nImage: %s\n\nResult: %s\n' \
+            "$VERSION" "$IMAGE" "$STATUS" >> "$GITHUB_STEP_SUMMARY"

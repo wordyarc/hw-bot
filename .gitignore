@@ -5,3 +5,7 @@
 /tools/deploy/production.toml
 /tools/deploy/bootstrap.production.json
 /backups
+/deployments
+/.deploy.lock
+/current-release.json
+/current-release.json.next
