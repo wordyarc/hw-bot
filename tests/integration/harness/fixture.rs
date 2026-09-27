@@ -1,4 +1,4 @@
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use hw_bot::db;
 use hw_bot::domain::{Assignment, StudentGroup, Subject, TeachingCourse, User};
 use hw_bot::test_support::{
@@ -14,7 +14,7 @@ pub fn wall_clock_assignment<'a>(
     author: &'a User,
 ) -> AssignmentBuilder<'a> {
     assignment(course, author)
-        .created_at(Utc::now() - Duration::hours(1))
+        .created_at(Utc::now().trunc_subsecs(6) - Duration::hours(1))
         .deadline_in(Duration::days(30))
 }
 

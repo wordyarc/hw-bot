@@ -1,5 +1,5 @@
 use axum::http::StatusCode;
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -296,8 +296,9 @@ async fn assignment_revision_rejects_a_stale_deadline_update() -> anyhow::Result
         .expect("assignment");
     let first_revision = first.revision();
     let second_revision = second.revision();
-    let first_deadline = Utc::now() + Duration::days(10);
-    let second_deadline = Utc::now() + Duration::days(20);
+    let now = Utc::now().trunc_subsecs(6);
+    let first_deadline = now + Duration::days(10);
+    let second_deadline = now + Duration::days(20);
     let mut first_assignment = first.into_assignment();
     let mut second_assignment = second.into_assignment();
     first_assignment.change_deadline(&app.fixture.course, &app.fixture.teacher, first_deadline)?;
