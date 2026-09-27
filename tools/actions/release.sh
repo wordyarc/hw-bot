@@ -17,20 +17,20 @@ else
     gh api "repos/$GH_REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$COMMIT"
 fi
 
-if gh release view "$TAG" --json isDraft > "$tmp/release-state.json" 2> "$tmp/release-error.log"; then
-    if jq -e '.isDraft' "$tmp/release-state.json" > /dev/null; then
-        gh release upload "$TAG" release.json deploy.tar.gz --clobber
-        gh release edit "$TAG" --draft=false
-    else
-        mkdir "$tmp/existing-release"
-        gh release download "$TAG" --pattern release.json --pattern deploy.tar.gz --dir "$tmp/existing-release"
-        cmp release.json "$tmp/existing-release/release.json"
-        cmp deploy.tar.gz "$tmp/existing-release/deploy.tar.gz"
-    fi
-else
-    grep -q 'release not found' "$tmp/release-error.log" || { cat "$tmp/release-error.log"; exit 1; }
+release_state=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+    | jq -r --arg tag "$TAG" '.[] | select(.tag_name == $tag) | .draft')
+if [[ -z "$release_state" ]]; then
     gh release create "$TAG" release.json deploy.tar.gz --verify-tag --generate-notes --title "$TAG" --draft
     gh release edit "$TAG" --draft=false
+elif [[ "$release_state" == true ]]; then
+    gh release upload "$TAG" release.json deploy.tar.gz --clobber
+    gh release edit "$TAG" --draft=false
+else
+    [[ "$release_state" == false ]]
+    mkdir "$tmp/existing-release"
+    gh release download "$TAG" --pattern release.json --pattern deploy.tar.gz --dir "$tmp/existing-release"
+    cmp release.json "$tmp/existing-release/release.json"
+    cmp deploy.tar.gz "$tmp/existing-release/deploy.tar.gz"
 fi
 printf '### Release %s\n\nImage: %s\n\nCommit: %s\n\nBranch: release/%s\n' \
     "$TAG" "$IMAGE" "$COMMIT" "$VERSION" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"

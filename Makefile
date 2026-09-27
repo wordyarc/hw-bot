@@ -48,10 +48,10 @@ compose-down:
 # Production Compose
 
 prod-bootstrap:
-	$(PROD_COMPOSE) -f tools/deploy/compose.bootstrap.yml up -d
+	$(PROD_COMPOSE) -f tools/deploy/compose.bootstrap.yml up -d --wait --wait-timeout 120
 
 prod-up:
-	$(PROD_COMPOSE) up -d --force-recreate app
+	$(PROD_COMPOSE) up -d --no-deps --force-recreate --wait --wait-timeout 120 app
 
 prod-backup:
 	sh tools/ops/backup.sh

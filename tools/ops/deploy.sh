@@ -32,16 +32,16 @@ compose() {
     docker compose --env-file "$HW_BOT_ENV_FILE" -f tools/deploy/compose.yml "$@"
 }
 resume_old=false
-env_next=
+stage=
 cleanup() {
     status=$?
-    if [[ -n "$env_next" ]]; then
-        rm -f "$env_next"
+    if [[ -n "$stage" ]]; then
+        rm -rf "$stage"
     fi
     rm -f "$root/current-release.json.next"
     if (( status != 0 )); then
         if [[ "$resume_old" == true ]]; then
-            compose start app || true
+            docker start "$container" || true
         fi
         printf 'Image: %s\nPrevious image: %s\nBackup: %s\n' \
             "$image" "${previous_image:-unknown}" "${backup:-none}" > "$release_dir/deploy.log"
@@ -51,7 +51,7 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-trap 'exit 1' INT TERM
+trap 'exit 1' HUP INT TERM
 
 container=$(compose ps --all -q app)
 [[ -n "$container" ]] || { printf '%s\n' 'Bootstrap the installation before deploying' >&2; exit 1; }
@@ -60,20 +60,24 @@ HW_BOT_IMAGE="$image" docker compose --env-file "$HW_BOT_ENV_FILE" \
     -f "$release_dir/tools/deploy/compose.yml" config --quiet
 docker pull "$image"
 
-resume_old=true
-compose stop app
-backup=$(sh "$release_dir/tools/ops/backup.sh")
-
-env_next=$(mktemp "$HW_BOT_ENV_FILE.XXXXXX")
+stage=$(mktemp -d "$root/.deploy.XXXXXX")
+for file in "${files[@]}"; do
+    install -D -m 0644 "$release_dir/$file" "$stage/$file"
+done
 awk -v image="$image" '
     /^HW_BOT_IMAGE=/ { if (!written) print "HW_BOT_IMAGE=" image; written = 1; next }
     { print }
     END { if (!written) print "HW_BOT_IMAGE=" image }
-' "$HW_BOT_ENV_FILE" > "$env_next"
+' "$HW_BOT_ENV_FILE" > "$stage/.env.production"
+
+resume_old=true
+compose stop app
+backup=$(sh "$release_dir/tools/ops/backup.sh")
+
 for file in "${files[@]}"; do
-    install -D -m 0644 "$release_dir/$file" "$root/$file"
+    mv "$stage/$file" "$root/$file"
 done
-mv "$env_next" "$HW_BOT_ENV_FILE"
+mv "$stage/.env.production" "$HW_BOT_ENV_FILE"
 export HW_BOT_IMAGE="$image"
 resume_old=false
 compose up -d --no-deps --force-recreate --wait --wait-timeout 120 app
