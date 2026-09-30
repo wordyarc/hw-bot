@@ -4,16 +4,15 @@ use teloxide::types::MessageId;
 use super::gradebook::show_student_grades_page;
 use crate::app::GrantExtraAttempts;
 use crate::bot::HandlerResult;
-use crate::bot::callbacks::PageTarget;
-use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX};
+use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX, PageTarget};
 use crate::bot::context::{Screen, TextStep};
 use crate::bot::handlers::input::{parse_positive_attempts, require_text};
+use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::texts;
-use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{
-    assignment_students_keyboard, attempts_keyboard, list_text, send_message_chunks,
-    teacher_keyboard,
+    assignment_students_keyboard, attempts_keyboard, list_text, paginated_keyboard,
+    send_message_chunks, teacher_keyboard,
 };
 use crate::domain::{AssignmentId, MAX_ATTEMPTS, UserId};
 use crate::pagination::PageRequest;
@@ -150,7 +149,7 @@ pub(super) async fn grant_attempts(
             amount,
         })
         .await?;
-    crate::bot::handlers::reset_dialogue(screen.dialogue()).await?;
+    reset_dialogue(screen.dialogue()).await?;
     screen
         .bot()
         .send_message(

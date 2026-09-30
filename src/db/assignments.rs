@@ -9,6 +9,7 @@ use crate::domain::{
     StudentGroupId, Subject, SubjectId, TeachingCourseId, UserId,
 };
 use crate::pagination::PageRequest;
+use crate::read_models::VersionedAssignment;
 
 const MAX_ATTEMPTS: &str = "assignments.max_attempts";
 const MAX_SCORE: &str = "assignments.max_score";
@@ -232,22 +233,6 @@ where
     .ok_or(DbError::Conflict {
         message: "assignment was changed by a concurrent request",
     })
-}
-
-#[derive(Debug)]
-pub struct VersionedAssignment {
-    assignment: Assignment,
-    revision: i64,
-}
-
-impl VersionedAssignment {
-    pub fn into_assignment(self) -> Assignment {
-        self.assignment
-    }
-
-    pub fn revision(&self) -> i64 {
-        self.revision
-    }
 }
 
 pub async fn find_versioned_by_id<'e, E>(

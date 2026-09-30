@@ -14,6 +14,7 @@ struct State {
     updates: Vec<Value>,
     messages: Vec<Value>,
     next_message: i32,
+    acknowledged_offset: u64,
 }
 
 pub struct TelegramScenario {
@@ -26,6 +27,18 @@ pub struct Button {
     pub message_id: i32,
     data: String,
     message: Value,
+}
+
+impl Button {
+    pub fn with_data(mut self, data: String) -> Self {
+        self.data = data;
+        self
+    }
+
+    pub fn in_chat(mut self, user: i64) -> Self {
+        self.message["chat"]["id"] = user.into();
+        self
+    }
 }
 
 impl TelegramScenario {
@@ -58,11 +71,14 @@ impl TelegramScenario {
             .respond_with(move |request: &wiremock::Request| {
                 let body: Value = request.body_json().unwrap();
                 let offset = body["offset"].as_u64().unwrap_or(0);
-                let state = polling.lock().unwrap();
+                let mut state = polling.lock().unwrap();
+                state.acknowledged_offset = state.acknowledged_offset.max(offset);
                 let updates: Vec<_> = state
                     .updates
                     .iter()
-                    .filter(|update| update["update_id"].as_u64().unwrap() >= offset)
+                    .filter(|update| {
+                        update["update_id"].as_u64().unwrap() >= state.acknowledged_offset
+                    })
                     .cloned()
                     .collect();
                 ResponseTemplate::new(200)

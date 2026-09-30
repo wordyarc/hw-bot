@@ -10,6 +10,7 @@ use crate::domain::{
     Assignment, AssignmentId, FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner,
     StoredFileParts,
 };
+use crate::read_models::{StoredFile, VersionedAssignment};
 
 #[derive(Clone, Copy, Debug)]
 pub struct FilePolicy {
@@ -45,12 +46,6 @@ pub struct DeleteAssignmentFile {
 }
 
 #[derive(Clone, Debug)]
-pub struct OpenedFile {
-    pub metadata: StoredFileMetadata,
-    pub content: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
 pub struct FileService {
     pool: PgPool,
     policy: FilePolicy,
@@ -70,7 +65,10 @@ impl FileService {
         actor: Actor,
         assignment_id: AssignmentId,
     ) -> AppResult<AssignmentFiles> {
-        let (assignment, revision) = load_managed_versioned_assignment(
+        let VersionedAssignment {
+            assignment,
+            revision,
+        } = load_managed_versioned_assignment(
             &self.pool,
             actor,
             assignment_id,
@@ -115,13 +113,14 @@ impl FileService {
         })?;
 
         let mut tx = self.pool.begin().await?;
-        let (assignment, _) = load_managed_versioned_assignment_on(
+        let assignment = load_managed_versioned_assignment_on(
             &mut tx,
             command.actor,
             command.assignment_id,
             "add assignment file",
         )
-        .await?;
+        .await?
+        .assignment;
         let revision =
             advance_revision(&mut tx, assignment.id(), command.expected_revision).await?;
         let files = db::files::list_for_assignment(&mut *tx, assignment.id()).await?;
@@ -150,13 +149,14 @@ impl FileService {
         command: DeleteAssignmentFile,
     ) -> AppResult<AssignmentFiles> {
         let mut tx = self.pool.begin().await?;
-        let (assignment, _) = load_managed_versioned_assignment_on(
+        let assignment = load_managed_versioned_assignment_on(
             &mut tx,
             command.actor,
             command.assignment_id,
             "delete assignment file",
         )
-        .await?;
+        .await?
+        .assignment;
         let revision =
             advance_revision(&mut tx, assignment.id(), command.expected_revision).await?;
         if !db::files::delete_assignment_file(&mut *tx, assignment.id(), command.file_id).await? {
@@ -177,7 +177,7 @@ impl FileService {
         actor: Actor,
         assignment_id: AssignmentId,
         file_id: StoredFileId,
-    ) -> AppResult<OpenedFile> {
+    ) -> AppResult<StoredFile> {
         load_managed_versioned_assignment(&self.pool, actor, assignment_id, "open assignment file")
             .await?;
         self.open_assignment_file(assignment_id, file_id).await
@@ -188,7 +188,7 @@ impl FileService {
         actor: Actor,
         assignment_id: AssignmentId,
         file_id: StoredFileId,
-    ) -> AppResult<OpenedFile> {
+    ) -> AppResult<StoredFile> {
         load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
         self.open_assignment_file(assignment_id, file_id).await
     }
@@ -197,15 +197,10 @@ impl FileService {
         &self,
         assignment_id: AssignmentId,
         file_id: StoredFileId,
-    ) -> AppResult<OpenedFile> {
-        let file = db::files::find_assignment_file(&self.pool, assignment_id, file_id)
+    ) -> AppResult<StoredFile> {
+        db::files::find_assignment_file(&self.pool, assignment_id, file_id)
             .await?
-            .required("file")?;
-
-        Ok(OpenedFile {
-            metadata: file.metadata,
-            content: file.content,
-        })
+            .required("file")
     }
 }
 

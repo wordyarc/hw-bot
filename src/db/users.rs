@@ -7,7 +7,7 @@ use crate::domain::{
     AssignmentId, Role, StudentGroupId, SubmissionHistory, TelegramUserId, User, UserId,
 };
 use crate::pagination::PageRequest;
-use crate::read_models::{AssignmentStudentSummary, CourseStudent};
+use crate::read_models::{AssignmentStudentSummary, CourseStudent, UserStatistics};
 
 pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
 where
@@ -15,7 +15,9 @@ where
 {
     sqlx::query!(
         r#"
-        insert into users (id, telegram_user_id, role, display_name, student_group_id, registered_at)
+        insert into users (
+            id, telegram_user_id, role, display_name, student_group_id, registered_at
+        )
         values ($1, $2, $3, $4, $5, $6)
         "#,
         user.id().as_uuid(),
@@ -130,37 +132,81 @@ where
     .collect()
 }
 
-pub async fn profile_statistics<'e, E: PgExecutor<'e>>(
-    executor: E,
-    user: &User,
-) -> DbResult<(u32, u32, u32)> {
+pub async fn profile_statistics<'e, E>(executor: E, user: &User) -> DbResult<UserStatistics>
+where
+    E: PgExecutor<'e>,
+{
     let row = sqlx::query!(
-        r#"select
-        (select count(*) from assignments where student_group_id = $2 and status = 'published') as "assignments!",
-        (select count(*) from submissions where student_id = $1 and status = 'pending_review') as "pending!",
-        (select count(*) from teaching_courses c where $3 or exists (
-            select 1 from teaching_course_teachers t where t.teaching_course_id = c.id and t.teacher_id = $1
-        )) as "courses!""#,
-        user.id().as_uuid(), user.student_group_id().map(StudentGroupId::as_uuid), user.role().can_manage_all_teaching_courses(),
-    ).fetch_one(executor).await?;
-    Ok((
-        checked_num_cast("profile.assignments", row.assignments)?,
-        checked_num_cast("profile.pending", row.pending)?,
-        checked_num_cast("profile.courses", row.courses)?,
-    ))
+        r#"
+        select
+            (
+                select count(*)
+                from assignments
+                where student_group_id = $2
+                  and status = 'published'
+            ) as "assignments!",
+            (
+                select count(*)
+                from submissions
+                where student_id = $1
+                  and status = 'pending_review'
+            ) as "pending!",
+            (
+                select count(*)
+                from teaching_courses course
+                where $3 or exists (
+                    select 1
+                    from teaching_course_teachers teacher
+                    where teacher.teaching_course_id = course.id
+                      and teacher.teacher_id = $1
+                )
+            ) as "courses!"
+        "#,
+        user.id().as_uuid(),
+        user.student_group_id().map(StudentGroupId::as_uuid),
+        user.role().can_manage_all_teaching_courses(),
+    )
+    .fetch_one(executor)
+    .await?;
+
+    Ok(UserStatistics {
+        assignments: checked_num_cast("profile.assignments", row.assignments)?,
+        pending: checked_num_cast("profile.pending", row.pending)?,
+        courses: checked_num_cast("profile.courses", row.courses)?,
+    })
 }
 
-pub async fn list_student_names<'e, E: PgExecutor<'e>>(
+pub async fn list_student_names<'e, E>(
     executor: E,
     group_id: StudentGroupId,
     page: PageRequest,
-) -> DbResult<Vec<CourseStudent>> {
-    Ok(sqlx::query!(
-        "select id, display_name from users where student_group_id = $1 and role = 'student' order by display_name, id limit $2 offset $3",
-        group_id.as_uuid(), PageRequest::FETCH_LIMIT, page.offset(),
-    ).fetch_all(executor).await?.into_iter().map(|row| CourseStudent {
-        student_id: UserId::from_uuid(row.id), display_name: row.display_name,
-    }).collect())
+) -> DbResult<Vec<CourseStudent>>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query!(
+        r#"
+        select id, display_name
+        from users
+        where student_group_id = $1
+          and role = 'student'
+        order by display_name, id
+        limit $2 offset $3
+        "#,
+        group_id.as_uuid(),
+        PageRequest::FETCH_LIMIT,
+        page.offset(),
+    )
+    .fetch_all(executor)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| CourseStudent {
+            student_id: UserId::from_uuid(row.id),
+            display_name: row.display_name,
+        })
+        .collect())
 }
 
 #[derive(Debug)]

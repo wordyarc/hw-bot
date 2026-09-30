@@ -1,13 +1,14 @@
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
+use crate::app::CourseStudent;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::texts;
-use crate::bot::views::paginated_keyboard;
-use crate::bot::views::{gradebook_students_keyboard, send_message_chunks};
+use crate::bot::views::{
+    gradebook_students_keyboard, paginated_keyboard, send_message_chunks, student_grades_keyboard,
+};
 use crate::domain::{TeachingCourseId, UserId};
 use crate::pagination::{Page, PageRequest};
 
@@ -28,7 +29,7 @@ pub(crate) async fn show_gradebook_page(
 async fn render_gradebook(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
-    students: &Page<crate::app::CourseStudent>,
+    students: &Page<CourseStudent>,
 ) -> HandlerResult {
     if students.items.is_empty() && students.page == 0 {
         screen
@@ -90,10 +91,7 @@ pub(crate) async fn show_student_grades_page(
     }
     let text = lines.join("\n");
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        texts::BUTTON_BACK_TO_STUDENTS,
-        PageTarget::Gradebook(course_id).callback(0),
-    )]]);
+    let keyboard = student_grades_keyboard(course_id, student_id);
     send_message_chunks(
         screen.bot(),
         screen.chat_id(),

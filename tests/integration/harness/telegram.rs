@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -165,10 +166,10 @@ pub(crate) fn bot_settings_with(
         request_timeout: Duration::from_secs(2),
         polling_timeout: Duration::from_secs(10),
         rate_limit_replenish: Duration::from_secs(1),
-        rate_limit_burst: 100,
-        max_concurrent_updates: 32,
+        rate_limit_burst: NonZeroU32::new(100).unwrap(),
+        max_concurrent_updates: NonZeroUsize::new(32).unwrap(),
         file_transfer_timeout: Duration::from_secs(5),
-        max_concurrent_file_transfers: 2,
+        max_concurrent_file_transfers: NonZeroUsize::new(2).unwrap(),
     };
     update(&mut settings);
     settings

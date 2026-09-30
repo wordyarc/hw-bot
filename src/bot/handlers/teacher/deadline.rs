@@ -1,9 +1,10 @@
 use teloxide::types::MessageId;
 
 use super::terms::{apply_date, render};
+use crate::bot::assignment_form::{InputMode, TermsStep};
 use crate::bot::callbacks::DeadlineAction;
 use crate::bot::context::Screen;
-use crate::bot::state::{BotState, InputMode, TermsStep};
+use crate::bot::state::BotState;
 use crate::bot::{HandlerResult, texts};
 
 pub(crate) async fn handle_deadline(
@@ -32,12 +33,11 @@ pub(crate) async fn handle_deadline(
             return render(screen.chat(), form, None).await;
         }
         DeadlineAction::Calendar => {
-            form.mode = InputMode::Calendar(if step == TermsStep::DurationDate {
-                screen.timezone().first_date_ending_after(
-                    form.terms.deadline_at.expect("duration follows deadline"),
-                )
-            } else {
-                screen.timezone().today()
+            form.mode = InputMode::Calendar(match (step, form.terms.deadline_at) {
+                (TermsStep::DurationDate, Some(deadline)) => {
+                    screen.timezone().first_date_ending_after(deadline)
+                }
+                _ => screen.timezone().today(),
             });
             return render(screen.chat(), form, None).await;
         }

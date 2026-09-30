@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
-use futures::{Stream, StreamExt, future};
+use futures::{FutureExt, Stream, StreamExt, future};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use teloxide::dispatching::UpdateHandler;
 use teloxide::dispatching::dialogue::{self, InMemStorage};
@@ -18,7 +18,7 @@ use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::app::ApplicationContainer;
+use crate::app::{ApplicationContainer, ErrorCode};
 use crate::domain::TelegramUserId;
 use crate::health::ComponentHealth;
 use crate::invites::GroupInviteCodec;
@@ -26,6 +26,7 @@ use crate::invites::GroupInviteCodec;
 pub const MAX_CONCURRENT_UPDATES: usize = 1024;
 
 mod assignment_files;
+mod assignment_form;
 pub mod callbacks;
 mod context;
 mod errors;
@@ -37,14 +38,14 @@ pub mod texts;
 mod timezone;
 mod views;
 
-use crate::telegram::is_invalid_token;
 use crate::telegram::network::Bot;
+use crate::telegram::{is_invalid_token, new_bot};
 pub use errors::app_error_message;
 use files::FileTransfers;
 use handlers::home::default_commands;
-use handlers::{Command, handle_callback, handle_command, handle_message};
+use handlers::{Command, handle_callback, handle_command, handle_message, reset_dialogue};
 use invites::BotInvites;
-use state::BotState;
+use state::{BotDialogue, BotState};
 pub use timezone::BotTimezone;
 
 use context::BotContext;
@@ -59,7 +60,7 @@ pub struct TelegramBot {
     application: ApplicationContainer,
     settings: TelegramBotSettings,
     timezone: BotTimezone,
-    admission: UpdateAdmission,
+    admission: Arc<UpdateAdmission>,
     file_transfers: FileTransfers,
     codec: GroupInviteCodec,
 }
@@ -69,24 +70,23 @@ pub struct TelegramBotSettings {
     pub request_timeout: Duration,
     pub polling_timeout: Duration,
     pub rate_limit_replenish: Duration,
-    pub rate_limit_burst: u32,
-    pub max_concurrent_updates: usize,
+    pub rate_limit_burst: NonZeroU32,
+    pub max_concurrent_updates: NonZeroUsize,
     pub file_transfer_timeout: Duration,
-    pub max_concurrent_file_transfers: usize,
+    pub max_concurrent_file_transfers: NonZeroUsize,
 }
 
-#[derive(Clone)]
 struct UpdateAdmission {
-    rate_limiter: Arc<DefaultKeyedRateLimiter<TelegramUserId>>,
+    rate_limiter: DefaultKeyedRateLimiter<TelegramUserId>,
     semaphore: Arc<Semaphore>,
-    checks: Arc<AtomicU64>,
-    rate_limit_rejections: Arc<AtomicU64>,
-    permits: Arc<Mutex<HashMap<UpdateId, OwnedSemaphorePermit>>>,
+    checks: AtomicU64,
+    rate_limit_rejections: AtomicU64,
+    permits: Mutex<HashMap<UpdateId, OwnedSemaphorePermit>>,
 }
 
 struct AdmissionListener<L> {
     inner: L,
-    admission: UpdateAdmission,
+    admission: Arc<UpdateAdmission>,
     invalid_credentials: Arc<AtomicBool>,
 }
 
@@ -114,28 +114,24 @@ impl TelegramBot {
         timezone: BotTimezone,
         codec: GroupInviteCodec,
     ) -> anyhow::Result<Self> {
-        let burst = NonZeroU32::new(settings.rate_limit_burst)
-            .context("Telegram rate limit burst must be positive")?;
         let quota = Quota::with_period(settings.rate_limit_replenish)
             .context("Telegram rate limit replenishment must be positive")?
-            .allow_burst(burst);
+            .allow_burst(settings.rate_limit_burst);
         let polling_http_timeout = settings
             .polling_timeout
             .checked_add(settings.request_timeout)
             .context("Telegram polling HTTP timeout is too large")?;
         let token = token.into();
-        let bot = crate::telegram::new_bot(token.clone(), api_base_url, settings.request_timeout)?;
-        let polling_bot =
-            crate::telegram::new_bot(token.clone(), api_base_url, polling_http_timeout)?;
-        let transfer_bot =
-            crate::telegram::new_bot(token, api_base_url, settings.file_transfer_timeout)?;
-        let admission = UpdateAdmission {
-            rate_limiter: Arc::new(RateLimiter::keyed(quota)),
-            semaphore: Arc::new(Semaphore::new(settings.max_concurrent_updates)),
-            checks: Arc::new(AtomicU64::new(0)),
-            rate_limit_rejections: Arc::new(AtomicU64::new(0)),
-            permits: Arc::new(Mutex::new(HashMap::new())),
-        };
+        let bot = new_bot(token.clone(), api_base_url, settings.request_timeout)?;
+        let polling_bot = new_bot(token.clone(), api_base_url, polling_http_timeout)?;
+        let transfer_bot = new_bot(token, api_base_url, settings.file_transfer_timeout)?;
+        let admission = Arc::new(UpdateAdmission {
+            rate_limiter: RateLimiter::keyed(quota),
+            semaphore: Arc::new(Semaphore::new(settings.max_concurrent_updates.get())),
+            checks: AtomicU64::new(0),
+            rate_limit_rejections: AtomicU64::new(0),
+            permits: Mutex::new(HashMap::new()),
+        });
 
         Ok(Self {
             bot: Bot::new(bot, settings.request_timeout),
@@ -146,7 +142,7 @@ impl TelegramBot {
             admission,
             file_transfers: FileTransfers::new(
                 transfer_bot,
-                settings.max_concurrent_file_transfers,
+                settings.max_concurrent_file_transfers.get(),
                 settings.file_transfer_timeout,
             ),
             codec,
@@ -204,12 +200,12 @@ impl TelegramBot {
                     services: self.application,
                     timezone: self.timezone,
                     invites,
+                    transfers: self.file_transfers,
                 },
-                self.admission.clone(),
-                self.file_transfers
+                self.admission.clone()
             ])
             .distribution_function(|update| update.chat().map(|chat| chat.id))
-            .worker_queue_size(self.settings.max_concurrent_updates)
+            .worker_queue_size(self.settings.max_concurrent_updates.get())
             .default_handler(|_| async {})
             .error_handler(Arc::new(move |error: BotError| {
                 let credentials = handler_credentials.clone();
@@ -354,7 +350,7 @@ fn log_rate_limit_rejection(
 
 fn admitted_listener<L>(
     listener: L,
-    admission: UpdateAdmission,
+    admission: Arc<UpdateAdmission>,
     invalid_credentials: Arc<AtomicBool>,
 ) -> AdmissionListener<L>
 where
@@ -421,7 +417,7 @@ where
 
 fn take_admission_permit(
     update: Update,
-    admission: UpdateAdmission,
+    admission: Arc<UpdateAdmission>,
 ) -> Option<OwnedSemaphorePermit> {
     admission
         .permits
@@ -451,6 +447,7 @@ fn schema(force_stop: CancellationToken) -> UpdateHandler<BotError> {
 
 fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<BotError> {
     use std::ops::ControlFlow;
+    use std::panic::AssertUnwindSafe;
 
     use tracing::Instrument;
 
@@ -470,16 +467,30 @@ fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<BotError> {
                 kind,
                 action = tracing::field::Empty,
             );
+            let recovery = PanicRecovery::of(&deps, &update);
             async move {
                 let started = tokio::time::Instant::now();
                 tokio::select! {
                     biased;
                     () = force_stop.cancelled() => ControlFlow::Break(Ok(())),
-                    result = next(deps) => {
+                    // Паника обработчика убивает chat-worker teloxide, а следующий update этого
+                    // чата роняет уже диспетчер. Здесь она остаётся отказом одного update.
+                    result = AssertUnwindSafe(next(deps)).catch_unwind() => {
+                        let result = match result {
+                            Ok(result) => result,
+                            Err(_) => {
+                                tracing::error!("Telegram update handler panicked");
+                                recovery.run().await;
+                                ControlFlow::Break(Ok(()))
+                            }
+                        };
                         if let ControlFlow::Break(Err(ref error)) = result {
                             errors::log_handler_error(error);
                         }
-                        tracing::debug!(elapsed_ms = started.elapsed().as_millis(), "Telegram update completed");
+                        tracing::debug!(
+                            elapsed_ms = started.elapsed().as_millis(),
+                            "Telegram update completed"
+                        );
                         result
                     }
                 }
@@ -488,4 +499,107 @@ fn update_lifecycle(force_stop: CancellationToken) -> UpdateHandler<BotError> {
         },
         dptree::HandlerSignature::Entry,
     )
+}
+
+/// Состояние диалога могло и вызвать панику, поэтому оно сбрасывается: иначе каждый следующий
+/// ввод в этом чате падал бы на том же месте.
+struct PanicRecovery {
+    chat: Option<(Arc<Bot>, BotDialogue, ChatId)>,
+}
+
+impl PanicRecovery {
+    fn of(deps: &DependencyMap, update: &Update) -> Self {
+        let chat = update
+            .chat()
+            .filter(|chat| chat.is_private())
+            .and_then(|chat| {
+                let bot = deps.try_get::<Bot>()?;
+                let storage = deps.try_get::<Arc<InMemStorage<BotState>>>()?;
+                let dialogue = BotDialogue::new(Arc::clone(&storage), chat.id);
+                Some((bot, dialogue, chat.id))
+            });
+        Self { chat }
+    }
+
+    async fn run(self) {
+        let Some((bot, dialogue, chat_id)) = self.chat else {
+            return;
+        };
+        if let Err(error) = reset_dialogue(&dialogue).await {
+            errors::log_handler_error(&error);
+        }
+        if let Err(error) = errors::send_error_code(&bot, chat_id, ErrorCode::InternalError).await {
+            errors::log_handler_error(&error);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+    use crate::bot::state::FlowState;
+    use crate::domain::AssignmentId;
+
+    #[tokio::test]
+    async fn a_handler_panic_fails_one_update_and_resets_the_chat() {
+        let telegram = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:test/SendMessage"))
+            .and(body_partial_json(json!({
+                "chat_id": 42,
+                "text": app_error_message(ErrorCode::InternalError),
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "result": {
+                    "message_id": 1,
+                    "date": 0,
+                    "chat": { "id": 42, "type": "private" },
+                    "from": { "id": 999, "is_bot": true, "first_name": "Test Bot" },
+                    "text": "response"
+                }
+            })))
+            .expect(1)
+            .mount(&telegram)
+            .await;
+        let timeout = Duration::from_secs(5);
+        let bot = Bot::new(
+            new_bot("123:test", &telegram.uri(), timeout).unwrap(),
+            timeout,
+        );
+        let storage = InMemStorage::<BotState>::new();
+        let dialogue = BotDialogue::new(storage.clone(), ChatId(42));
+        dialogue
+            .update(BotState::Flow(FlowState::AwaitingSubmission {
+                assignment_id: AssignmentId::new(),
+            }))
+            .await
+            .unwrap();
+        let update = json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "date": 0,
+                "chat": { "id": 42, "type": "private" },
+                "from": { "id": 42, "is_bot": false, "first_name": "Student" },
+                "text": "boom"
+            }
+        });
+        let update: Update = serde_json::from_str(&update.to_string()).unwrap();
+        assert!(update.chat().is_some());
+        let handler =
+            update_lifecycle(CancellationToken::new()).endpoint(|update: Update| async move {
+                assert_eq!(update.id.0, 0, "handler bug");
+                HandlerResult::Ok(())
+            });
+
+        let outcome = handler.dispatch(dptree::deps![update, bot, storage]).await;
+
+        assert!(matches!(outcome, ControlFlow::Break(Ok(()))));
+        assert!(dialogue.get().await.unwrap().is_none());
+    }
 }

@@ -1,3 +1,4 @@
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use serde_json::json;
@@ -17,7 +18,7 @@ async fn rate_limiter_silently_drops_updates_above_the_burst() {
     let telegram = telegram_server(updates).await;
     let sent = expect_sent_messages(&telegram, 1, Duration::ZERO).await;
     let settings = bot_settings_with(|settings| {
-        settings.rate_limit_burst = 1;
+        settings.rate_limit_burst = NonZeroU32::MIN;
         settings.rate_limit_replenish = Duration::from_secs(60);
     });
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
@@ -39,7 +40,7 @@ async fn rate_limiter_has_an_independent_bucket_per_user() {
     let telegram = telegram_server(updates).await;
     let sent = expect_sent_messages(&telegram, 2, Duration::ZERO).await;
     let settings = bot_settings_with(|settings| {
-        settings.rate_limit_burst = 1;
+        settings.rate_limit_burst = NonZeroU32::MIN;
         settings.rate_limit_replenish = Duration::from_secs(60);
     });
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
@@ -59,7 +60,8 @@ async fn concurrency_limit_backpressures_instead_of_dropping_updates() {
     ];
     let telegram = telegram_server(updates).await;
     let sent = expect_sent_messages(&telegram, 2, HELD_PERMIT).await;
-    let settings = bot_settings_with(|settings| settings.max_concurrent_updates = 1);
+    let settings =
+        bot_settings_with(|settings| settings.max_concurrent_updates = NonZeroUsize::MIN);
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
 
     wait_for_sent_message_count(&telegram, 1).await;
@@ -87,7 +89,8 @@ async fn a_waiting_update_holds_back_the_polling_offset() {
     ];
     let telegram = telegram_server(updates).await;
     let sent = expect_sent_messages(&telegram, 2, HELD_PERMIT).await;
-    let settings = bot_settings_with(|settings| settings.max_concurrent_updates = 1);
+    let settings =
+        bot_settings_with(|settings| settings.max_concurrent_updates = NonZeroUsize::MIN);
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
 
     wait_for_sent_message_count(&telegram, 1).await;
@@ -140,7 +143,7 @@ async fn interactive_timeout_releases_the_permit_and_keeps_long_polling_alive() 
     let sent = expect_sent_messages(&telegram, 2, Duration::from_millis(200)).await;
     let settings = bot_settings_with(|settings| {
         settings.request_timeout = Duration::from_millis(50);
-        settings.max_concurrent_updates = 1;
+        settings.max_concurrent_updates = NonZeroUsize::MIN;
     });
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
 
@@ -178,7 +181,7 @@ async fn a_server_error_cannot_hold_the_permit_during_teloxides_internal_sleep()
         &telegram,
         bot_settings_with(|settings| {
             settings.request_timeout = Duration::from_millis(100);
-            settings.max_concurrent_updates = 1;
+            settings.max_concurrent_updates = NonZeroUsize::MIN;
         }),
     );
     tokio::time::timeout(Duration::from_secs(2), sent.wait_until_satisfied())
@@ -204,7 +207,8 @@ async fn shutdown_finishes_while_an_update_waits_for_admission() {
         .with_priority(1)
         .mount_as_scoped(&telegram)
         .await;
-    let settings = bot_settings_with(|settings| settings.max_concurrent_updates = 1);
+    let settings =
+        bot_settings_with(|settings| settings.max_concurrent_updates = NonZeroUsize::MIN);
     let (cancellation, mut task) = start_bot_with_settings(&app, &telegram, settings);
 
     wait_for_sent_message_count(&telegram, 1).await;

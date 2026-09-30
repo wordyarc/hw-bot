@@ -13,9 +13,9 @@ use crate::bot::context::{Screen, TextStep};
 use crate::bot::errors::send_app_error;
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::texts;
-use crate::bot::views::teacher_keyboard;
 use crate::bot::views::{
-    ask_input, review_keyboard, review_score_keyboard, send_message_chunks, teacher_menu,
+    ask_input, review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard,
+    teacher_menu,
 };
 use crate::domain::{DomainError, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
 
@@ -28,7 +28,7 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let item = services.reviews.take_next_from_queue(actor).await?;
     let Some(item) = item else {
         reset_dialogue(dialogue).await?;
-        bot.send_message(chat_id, crate::bot::texts::REVIEW_QUEUE_EMPTY)
+        bot.send_message(chat_id, texts::REVIEW_QUEUE_EMPTY)
             .reply_markup(teacher_menu(Some(0)))
             .await?;
         return Ok(());
@@ -59,7 +59,11 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
         summary.push('\n');
         summary.push_str(&texts::late_submission_line(penalty));
     }
-    let keyboard = review_keyboard(item.submission.id());
+    let keyboard = review_keyboard(
+        item.submission.id(),
+        item.assignment.teaching_course_id(),
+        item.student.id(),
+    );
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;

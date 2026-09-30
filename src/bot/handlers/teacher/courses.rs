@@ -8,10 +8,9 @@ use crate::bot::context::Screen;
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
-use crate::bot::views::paginated_keyboard;
 use crate::bot::views::{
     assignment_actions_keyboard, course_assignments_keyboard, courses_keyboard, grading_lines,
-    list_text, send_message_chunks, teacher_menu,
+    list_text, paginated_keyboard, send_message_chunks, teacher_menu,
 };
 use crate::domain::{AssignmentId, TeachingCourseId};
 use crate::pagination::PageRequest;
@@ -169,13 +168,4 @@ pub(crate) async fn archive_assignment(
         .send_message(screen.chat_id(), texts::ASSIGNMENT_ARCHIVED)
         .await?;
     show_assignment(screen, assignment_id).await
-}
-
-pub(crate) async fn ask_assignment_deadline(
-    screen: Screen<'_>,
-    message_id: MessageId,
-    assignment_id: AssignmentId,
-    state: &BotState,
-) -> HandlerResult {
-    super::terms::begin_edit(screen, message_id, assignment_id, state).await
 }

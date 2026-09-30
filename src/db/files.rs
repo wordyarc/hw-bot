@@ -7,6 +7,7 @@ use crate::domain::{
     AssignmentId, FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner,
     StoredFileParts, SubmissionId,
 };
+use crate::read_models::StoredFile;
 
 const POSITION: &str = "stored_files.position";
 const PRESENTATION: &str = "stored_files.presentation";
@@ -43,11 +44,6 @@ macro_rules! stored_file_row {
     };
 }
 
-pub struct StoredFile {
-    pub metadata: StoredFileMetadata,
-    pub content: Vec<u8>,
-}
-
 pub async fn insert_assignment_file<'e, E>(
     executor: E,
     metadata: &StoredFileMetadata,
@@ -57,7 +53,7 @@ where
     E: PgExecutor<'e>,
 {
     let StoredFileOwner::Assignment(assignment_id) = metadata.owner() else {
-        return Err(DbError::Conflict {
+        return Err(DbError::Precondition {
             message: "assignment file has a non-assignment owner",
         });
     };

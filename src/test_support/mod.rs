@@ -1,5 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 
+pub mod telegram;
+
 use crate::domain::{
     Assignment, AssignmentId, DomainResult, EducationLevel, Grading, LatePolicy, NewAssignment,
     Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission,

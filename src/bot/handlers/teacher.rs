@@ -11,7 +11,7 @@ pub(super) use attempts::select_student;
 pub(super) use attempts::show_students_page;
 pub(super) use attempts::submit_attempt_amount;
 pub(super) use courses::show_assignment;
-pub(super) use courses::{archive_assignment, ask_assignment_deadline, publish_assignment};
+pub(super) use courses::{archive_assignment, publish_assignment};
 pub(super) use courses::{show_course_assignments_page, show_courses_page};
 pub(super) use creation::handle_grading;
 pub(super) use creation::handle_max_attempts;
@@ -24,6 +24,6 @@ pub(super) use gradebook::{show_gradebook_page, show_student_grades_page};
 pub(super) use invites::show_group_invite;
 pub(super) use invites::{ask_invite_rotation, cancel_invite_rotation, confirm_invite_rotation};
 pub(super) use terms::{
-    abandon, back, confirm_exit, handle_late_policy, handle_penalty, handle_period, handle_periods,
-    handle_terms, submit_terms,
+    abandon, back, begin_terms_edit, confirm_exit, handle_late_policy, handle_penalty,
+    handle_period, handle_periods, handle_terms, submit_terms,
 };

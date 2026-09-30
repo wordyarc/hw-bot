@@ -3,6 +3,8 @@ use chrono::{
 };
 use chrono_tz::Tz;
 
+use super::texts;
+
 /// «До конца дня 21.09» переводится в 22.09 00:00 по времени установки.
 /// Сам момент границы уже закрыт для сдач, как исключительный конец интервала в RFC 5545.
 #[derive(Clone, Copy, Debug)]
@@ -62,11 +64,11 @@ impl BotTimezone {
     }
 
     pub fn format(&self, instant: DateTime<Utc>) -> String {
-        format!("до {}", self.format_until(instant))
+        texts::until(&self.format_until(instant))
     }
 
     pub fn format_closed_since(&self, instant: DateTime<Utc>) -> String {
-        format!("с {}", self.format_since(instant))
+        texts::since(&self.format_since(instant))
     }
 
     pub fn format_until(&self, instant: DateTime<Utc>) -> String {
@@ -90,7 +92,7 @@ impl BotTimezone {
         let local = instant.with_timezone(&self.tz);
         match local.date_naive().pred_opt() {
             Some(day) if local.time() == NaiveTime::MIN => {
-                format!("конца дня {}", day.format(date))
+                texts::end_of_day(&day.format(date).to_string())
             }
             _ => local.format(date_time).to_string(),
         }
@@ -194,11 +196,23 @@ mod tests {
         let timezone = vladivostok();
         let deadline = timezone.parse_deadline("20.08.2026").unwrap();
 
-        assert_eq!(timezone.format(deadline), "до конца дня 20.08.2026");
-        assert_eq!(timezone.format_until(deadline), "конца дня 20.08.2026");
-        assert_eq!(timezone.format_until_short(deadline), "конца дня 20.08");
+        assert_eq!(
+            timezone.format(deadline),
+            texts::until(&texts::end_of_day("20.08.2026"))
+        );
+        assert_eq!(
+            timezone.format_until(deadline),
+            texts::end_of_day("20.08.2026")
+        );
+        assert_eq!(
+            timezone.format_until_short(deadline),
+            texts::end_of_day("20.08")
+        );
         assert_eq!(timezone.format_since(deadline), "21.08.2026");
-        assert_eq!(timezone.format_closed_since(deadline), "с 21.08.2026");
+        assert_eq!(
+            timezone.format_closed_since(deadline),
+            texts::since("21.08.2026")
+        );
     }
 
     #[test]
@@ -210,7 +224,7 @@ mod tests {
             deadline,
             "2026-08-20T05:00:00Z".parse::<DateTime<Utc>>().unwrap()
         );
-        assert_eq!(timezone.format(deadline), "до 20.08.2026 15:00");
+        assert_eq!(timezone.format(deadline), texts::until("20.08.2026 15:00"));
         assert_eq!(timezone.format_until_short(deadline), "20.08 15:00");
         assert_eq!(timezone.format_since(deadline), "20.08.2026 15:00");
     }

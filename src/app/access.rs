@@ -4,16 +4,15 @@ use sqlx::{PgConnection, PgPool};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
-use crate::domain::{
-    Assignment, AssignmentId, DomainError, TeachingCourse, TeachingCourseId, User,
-};
+use crate::domain::{AssignmentId, DomainError, TeachingCourse, TeachingCourseId, User};
+use crate::read_models::VersionedAssignment;
 
 pub(crate) async fn load_managed_versioned_assignment(
     pool: &PgPool,
     actor: Actor,
     assignment_id: AssignmentId,
     action: &'static str,
-) -> AppResult<(Assignment, i64)> {
+) -> AppResult<VersionedAssignment> {
     load_managed_versioned_assignment_on(&mut *pool.acquire().await?, actor, assignment_id, action)
         .await
 }
@@ -23,17 +22,21 @@ pub(crate) async fn load_managed_versioned_assignment_on(
     actor: Actor,
     assignment_id: AssignmentId,
     action: &'static str,
-) -> AppResult<(Assignment, i64)> {
+) -> AppResult<VersionedAssignment> {
     let stored = db::assignments::find_versioned_by_id(&mut *connection, assignment_id)
         .await?
         .required("assignment")?;
-    let revision = stored.revision();
-    let assignment = stored.into_assignment();
-    let (actor, course) =
-        load_managing_teacher_on(connection, actor, assignment.teaching_course_id(), action)
-            .await?;
-    assignment.ensure_managed_by(&course, &actor, action)?;
-    Ok((assignment, revision))
+    let (actor, course) = load_managing_teacher_on(
+        connection,
+        actor,
+        stored.assignment.teaching_course_id(),
+        action,
+    )
+    .await?;
+    stored
+        .assignment
+        .ensure_managed_by(&course, &actor, action)?;
+    Ok(stored)
 }
 
 pub(crate) async fn load_managing_teacher(

@@ -81,7 +81,7 @@ pub struct LoggingConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilesConfig {
-    pub max_file_size_bytes: NonZeroU64,
+    pub max_file_size_bytes: NonZeroUsize,
     pub max_files_per_assignment: NonZeroUsize,
     pub max_files_per_submission: NonZeroUsize,
     pub transfer_timeout_ms: NonZeroU64,
@@ -160,6 +160,14 @@ pub enum LogRotation {
     Never,
 }
 
+impl TelegramConfig {
+    fn token(&self) -> Option<&str> {
+        self.bot_token
+            .as_deref()
+            .filter(|token| !token.trim().is_empty())
+    }
+}
+
 impl AppConfig {
     pub fn shutdown_grace(&self) -> Duration {
         Duration::from_millis(
@@ -205,10 +213,7 @@ impl AppConfig {
 
         if self.telegram.enabled || self.notification_worker.enabled {
             validate(
-                self.telegram
-                    .bot_token
-                    .as_deref()
-                    .is_some_and(|token| !token.trim().is_empty()),
+                self.telegram.token().is_some(),
                 "telegram.bot_token is required when a Telegram component is enabled",
             )?;
         }
@@ -218,6 +223,25 @@ impl AppConfig {
 }
 
 pub struct ValidatedAppConfig(AppConfig);
+
+impl ValidatedAppConfig {
+    /// `None` означает, что бот выключен: у включённого компонента токен есть, это проверил
+    /// `validate`.
+    pub fn telegram_bot_token(&self) -> Option<&str> {
+        self.telegram
+            .enabled
+            .then(|| self.telegram.token())
+            .flatten()
+    }
+
+    /// `None` означает, что воркер уведомлений выключен.
+    pub fn notification_worker_token(&self) -> Option<&str> {
+        self.notification_worker
+            .enabled
+            .then(|| self.telegram.token())
+            .flatten()
+    }
+}
 
 impl std::ops::Deref for ValidatedAppConfig {
     type Target = AppConfig;
@@ -235,7 +259,7 @@ pub struct ConfigValidationError {
 
 fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
     validate(
-        config.max_file_size_bytes.get() <= i64::MAX as u64,
+        i64::try_from(config.max_file_size_bytes.get()).is_ok(),
         "files.max_file_size_bytes is too large",
     )?;
     validate(
@@ -247,9 +271,9 @@ fn validate_files(config: &FilesConfig) -> Result<(), ConfigValidationError> {
         "files.max_concurrent_transfers is too large",
     )?;
 
-    let size = usize::try_from(config.max_file_size_bytes.get())
-        .map_err(|_| invalid("files.max_file_size_bytes does not fit this platform"))?;
-    size.checked_mul(config.max_concurrent_transfers.get())
+    config
+        .max_file_size_bytes
+        .checked_mul(config.max_concurrent_transfers)
         .ok_or_else(|| invalid("total concurrent file transfer size is too large"))?;
     Ok(())
 }
@@ -511,6 +535,18 @@ mod tests {
         let error = config.validate().err().expect("config must be rejected");
 
         assert!(error.to_string().contains("telegram.bot_token"));
+    }
+
+    #[test]
+    fn a_component_gets_the_bot_token_only_when_it_is_enabled() {
+        let mut config = app_config();
+        config.telegram.bot_token = Some("123:secret".to_owned());
+        config.notification_worker.enabled = true;
+
+        let config = config.validate().expect("config must be accepted");
+
+        assert_eq!(config.telegram_bot_token(), None);
+        assert_eq!(config.notification_worker_token(), Some("123:secret"));
     }
 
     #[test]

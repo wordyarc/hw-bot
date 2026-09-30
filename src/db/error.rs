@@ -37,8 +37,14 @@ pub enum DbError {
     #[error("invalid database value for {field}: {value}")]
     InvalidDatabaseValue { field: &'static str, value: String },
 
+    /// Условный update не затронул строк: запись успел изменить конкурент.
     #[error("{message}")]
     Conflict { message: &'static str },
+
+    /// Вызывающий нарушил контракт функции. Это ошибка программы, а не гонка, поэтому
+    /// `on_conflict` её не перехватывает и наружу она уходит как внутренняя.
+    #[error("{message}")]
+    Precondition { message: &'static str },
 
     #[error("database is saturated")]
     Overloaded,

@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use hw_bot::bot::texts;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::telegram::{
     DeliveryOutcome, NotificationWorker, NotificationWorkerError, NotificationWorkerSettings,
     new_bot,
 };
+use hw_bot::test_support::{ASSIGNMENT_TITLE, SUBJECT_NAME};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_json, method, path};
@@ -26,7 +28,13 @@ async fn successful_telegram_delivery_completes_notification() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": app.student(),
-            "text": "✅ Работа принята.\n📘 Предмет: Backend development\n📚 Задание: Rust ownership\n\n💬 Комментарий преподавателя:\n95/100"
+            "text": texts::review_notification(
+                texts::REVIEW_ACCEPTED,
+                SUBJECT_NAME,
+                ASSIGNMENT_TITLE,
+                None,
+                "95/100",
+            )
         })))
         .respond_with(telegram_message_response())
         .expect(1)

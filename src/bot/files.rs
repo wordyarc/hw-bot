@@ -1,17 +1,49 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, anyhow};
 use futures::StreamExt;
+use teloxide::RequestError;
 use teloxide::net::Download;
 use teloxide::prelude::{Bot, ChatId, Requester};
 use teloxide::types::{FileId, InputFile, Message};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::HandlerResult;
-use crate::app::OpenedFile;
+use super::errors::BotError;
+use crate::app::{AppError, AppResult, StoredFile};
 use crate::domain::{FILE_NAME_MAX_LEN, FilePresentation};
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum TransferError {
+    #[error("file transfer deadline exceeded")]
+    Deadline,
+
+    #[error("downloaded file exceeds the configured limit")]
+    TooLarge,
+
+    #[error("file transfer semaphore closed")]
+    Closed,
+
+    #[error("Telegram file download failed")]
+    Download(#[source] reqwest::Error),
+
+    #[error(transparent)]
+    Telegram(#[from] RequestError),
+
+    #[error(transparent)]
+    App(#[from] AppError),
+}
+
+impl From<TransferError> for BotError {
+    fn from(error: TransferError) -> Self {
+        match error {
+            TransferError::Telegram(error) => Self::Telegram(error),
+            TransferError::App(error) => Self::App(error),
+            other => Self::Other(other.into()),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct FileTransfers {
@@ -20,17 +52,12 @@ pub(super) struct FileTransfers {
     timeout: Duration,
 }
 
-pub(super) struct FileTransfer {
-    _permit: OwnedSemaphorePermit,
-    deadline: tokio::time::Instant,
-}
-
-impl FileTransfer {
-    pub async fn run<T>(&self, future: impl Future<Output = HandlerResult<T>>) -> HandlerResult<T> {
-        tokio::time::timeout_at(self.deadline, future)
-            .await
-            .context("file transfer deadline exceeded")?
-    }
+/// Слот передачи. Скачать или отправить файл можно только через него, поэтому обойти
+/// предел параллельных передач и общий deadline одной передачи нельзя.
+pub(super) struct FileTransfer<'a> {
+    bot: &'a Bot,
+    _permit: SemaphorePermit<'a>,
+    deadline: Instant,
 }
 
 pub(super) struct IncomingFile {
@@ -50,48 +77,77 @@ impl FileTransfers {
         }
     }
 
-    pub async fn acquire(&self) -> HandlerResult<FileTransfer> {
-        let deadline = tokio::time::Instant::now() + self.timeout;
-        let permit = tokio::time::timeout_at(deadline, self.semaphore.clone().acquire_owned())
+    pub async fn acquire(&self) -> Result<FileTransfer<'_>, TransferError> {
+        let deadline = Instant::now() + self.timeout;
+        let permit = tokio::time::timeout_at(deadline, self.semaphore.acquire())
             .await
-            .context("file transfer admission deadline exceeded")?
-            .context("file transfer semaphore closed")?;
+            .map_err(|_| TransferError::Deadline)?
+            .map_err(|_| TransferError::Closed)?;
+
         Ok(FileTransfer {
+            bot: &self.bot,
             _permit: permit,
             deadline,
         })
     }
+}
 
-    pub async fn download(&self, file_id: &FileId, max_size: usize) -> HandlerResult<Vec<u8>> {
-        let file = self.bot.get_file(file_id.clone()).await?;
-        let mut stream = self.bot.download_file_stream(&file.path);
-        let mut content = Vec::with_capacity((file.size as usize).min(max_size));
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.context("Telegram file download failed")?;
-            let size = content
-                .len()
-                .checked_add(chunk.len())
-                .context("downloaded file size overflow")?;
-            if size > max_size {
-                return Err(anyhow!("downloaded file exceeds configured limit").into());
+impl FileTransfer<'_> {
+    pub async fn download(
+        &self,
+        file_id: &FileId,
+        max_size: usize,
+    ) -> Result<Vec<u8>, TransferError> {
+        self.within(async {
+            let file = self.bot.get_file(file_id.clone()).await?;
+            let mut stream = self.bot.download_file_stream(&file.path);
+            let mut content = Vec::with_capacity((file.size as usize).min(max_size));
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(TransferError::Download)?;
+                if content.len().saturating_add(chunk.len()) > max_size {
+                    return Err(TransferError::TooLarge);
+                }
+                content.extend_from_slice(&chunk);
             }
-            content.extend_from_slice(&chunk);
-        }
-        Ok(content)
+            Ok(content)
+        })
+        .await
     }
 
-    pub async fn send(&self, chat_id: ChatId, file: OpenedFile) -> HandlerResult {
-        let input =
-            InputFile::memory(file.content).file_name(file.metadata.filename().as_str().to_owned());
-        match file.metadata.presentation() {
-            FilePresentation::Document => {
-                self.bot.send_document(chat_id, input).await?;
+    /// Чтение файла из БД входит в тот же deadline, что и отправка, поэтому файл открывает
+    /// переданное замыкание.
+    pub async fn send<F>(
+        &self,
+        chat_id: ChatId,
+        open: impl FnOnce() -> F,
+    ) -> Result<(), TransferError>
+    where
+        F: Future<Output = AppResult<StoredFile>>,
+    {
+        self.within(async {
+            let file = open().await?;
+            let input = InputFile::memory(file.content)
+                .file_name(file.metadata.filename().as_str().to_owned());
+            match file.metadata.presentation() {
+                FilePresentation::Document => {
+                    self.bot.send_document(chat_id, input).await?;
+                }
+                FilePresentation::Image => {
+                    self.bot.send_photo(chat_id, input).await?;
+                }
             }
-            FilePresentation::Image => {
-                self.bot.send_photo(chat_id, input).await?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
+    }
+
+    async fn within<T>(
+        &self,
+        future: impl Future<Output = Result<T, TransferError>>,
+    ) -> Result<T, TransferError> {
+        tokio::time::timeout_at(self.deadline, future)
+            .await
+            .map_err(|_| TransferError::Deadline)?
     }
 }
 
@@ -162,7 +218,10 @@ mod tests {
     async fn waiting_for_a_transfer_slot_has_a_deadline_and_does_not_leak_permits() {
         let transfers = FileTransfers::new(Bot::new("test-token"), 1, Duration::from_millis(50));
         let first = transfers.acquire().await.unwrap();
-        assert!(transfers.acquire().await.is_err());
+        assert!(matches!(
+            transfers.acquire().await,
+            Err(TransferError::Deadline)
+        ));
         drop(first);
         assert!(transfers.acquire().await.is_ok());
     }
@@ -193,12 +252,43 @@ mod tests {
             Duration::from_millis(500),
         );
         let permit = transfers.acquire().await.unwrap();
-        let result = permit
-            .run(transfers.download(&FileId("file".into()), 10))
-            .await;
-        assert!(result.unwrap_err().to_string().contains("deadline"));
+        let result = permit.download(&FileId("file".into()), 10).await;
+        assert!(matches!(result, Err(TransferError::Deadline)));
         drop(permit);
         assert!(transfers.acquire().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_stream_longer_than_the_limit_is_reported_as_too_large() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bottest-token/GetFile"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {
+                    "file_id": "file", "file_unique_id": "unique", "file_size": 2,
+                    "file_path": "document.bin"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/file/bottest-token/document.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"abc"))
+            .mount(&server)
+            .await;
+        let transfers = FileTransfers::new(
+            Bot::new("test-token").set_api_url(server.uri().parse().unwrap()),
+            1,
+            Duration::from_secs(5),
+        );
+        let permit = transfers.acquire().await.unwrap();
+
+        let result = permit.download(&FileId("file".into()), 2).await;
+
+        assert!(matches!(result, Err(TransferError::TooLarge)));
     }
 
     #[tokio::test]
@@ -257,11 +347,9 @@ mod tests {
             Duration::from_millis(500),
         );
         let permit = transfers.acquire().await.unwrap();
-        let result = permit
-            .run(transfers.download(&FileId("file".into()), 10))
-            .await;
+        let result = permit.download(&FileId("file".into()), 10).await;
         server.abort();
-        assert!(result.unwrap_err().to_string().contains("deadline"));
+        assert!(matches!(result, Err(TransferError::Deadline)));
         assert_eq!(chunks.load(Ordering::Relaxed), 1);
         drop(permit);
         assert!(transfers.acquire().await.is_ok());

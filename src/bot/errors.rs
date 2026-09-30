@@ -3,6 +3,8 @@ use teloxide::prelude::ChatId;
 use super::Bot;
 use super::HandlerResult;
 use crate::app::{AppError, ErrorCode};
+use crate::telegram::is_invalid_token;
+pub(super) use crate::telegram::request_error_kind;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum BotError {
@@ -29,8 +31,7 @@ impl BotError {
     }
 
     pub(super) fn is_invalid_token(&self) -> bool {
-        self.request_error()
-            .is_some_and(crate::telegram::is_invalid_token)
+        self.request_error().is_some_and(is_invalid_token)
     }
 }
 
@@ -52,8 +53,6 @@ pub(super) fn log_handler_error(error: &BotError) {
         tracing::error!(error = ?error, "Telegram update failed");
     }
 }
-
-pub(super) use crate::telegram::request_error_kind;
 
 pub(super) fn log_request_error(operation: &'static str, error: &teloxide::RequestError) {
     let retry_after_seconds = match error {
@@ -166,17 +165,5 @@ mod tests {
             assert_eq!(event["fields"]["kind"], "telegram_invalid_response");
         }
         assert!(!String::from_utf8_lossy(&bytes).contains("private-comment-and-token"));
-    }
-
-    #[test]
-    fn common_submission_errors_have_student_facing_text() {
-        assert_eq!(
-            app_error_message(ErrorCode::SubmissionPendingReview),
-            "Предыдущая работа ещё на проверке."
-        );
-        assert_eq!(
-            app_error_message(ErrorCode::SubmissionAlreadyReviewed),
-            "Эту сдачу уже проверил другой преподаватель."
-        );
     }
 }

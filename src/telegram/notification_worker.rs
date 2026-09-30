@@ -10,8 +10,9 @@ use uuid::Uuid;
 use super::network::TimedRequest;
 use super::text::{MESSAGE_LIMIT, truncate};
 use super::{DeliveryFailure, delivery_failure, request_error_kind};
-use crate::db::{self, DbError, DbResult};
-use crate::domain::SubmissionStatus;
+use crate::bot::texts;
+use crate::db::notifications::ReviewOutcome;
+use crate::db::{self, DbError};
 use crate::health::ComponentHealth;
 
 #[derive(Clone, Debug)]
@@ -66,7 +67,7 @@ impl NotificationWorker {
         now: DateTime<Utc>,
     ) -> Result<DeliveryOutcome, NotificationWorkerError> {
         let lease_token = Uuid::new_v4();
-        let lease_expires_at = now + chrono_duration(self.settings.lease_duration)?;
+        let lease_expires_at = after(now, self.settings.lease_duration);
         let Some(notification) =
             db::notifications::claim_next(&self.pool, now, lease_token, lease_expires_at).await?
         else {
@@ -145,7 +146,7 @@ impl NotificationWorker {
             );
             DeliveryOutcome::Failed
         } else {
-            let available_at = Utc::now() + chrono_duration(retry_after)?;
+            let available_at = after(Utc::now(), retry_after);
             db::notifications::reschedule(
                 &self.pool,
                 notification.id,
@@ -218,23 +219,22 @@ impl NotificationWorker {
 }
 
 fn render_review_notification(
-    outcome: SubmissionStatus,
+    outcome: ReviewOutcome,
     subject_name: &str,
     assignment_title: &str,
     score: Option<(u16, u16)>,
     review_comment: &str,
 ) -> String {
     let verdict = match outcome {
-        SubmissionStatus::Accepted => "✅ Работа принята.",
-        SubmissionStatus::Rejected => "❌ Работа отклонена.",
-        SubmissionStatus::PendingReview => unreachable!("outbox contains only completed reviews"),
+        ReviewOutcome::Accepted => texts::REVIEW_ACCEPTED,
+        ReviewOutcome::Rejected => texts::REVIEW_REJECTED,
     };
-    let score = score
-        .map(|(final_score, max_score)| format!("\n🏅 Балл: {final_score} из {max_score}"))
-        .unwrap_or_default();
-    let text = format!(
-        "{verdict}\n📘 Предмет: {subject_name}\n📚 Задание: {assignment_title}{score}\n\n\
-         💬 Комментарий преподавателя:\n{review_comment}"
+    let text = texts::review_notification(
+        verdict,
+        subject_name,
+        assignment_title,
+        score,
+        review_comment,
     );
 
     if text.chars().count() <= MESSAGE_LIMIT {
@@ -254,10 +254,12 @@ fn retry_delay(settings: &NotificationWorkerSettings, attempt_count: u32) -> Dur
         .min(settings.retry_max)
 }
 
-fn chrono_duration(duration: Duration) -> DbResult<chrono::Duration> {
-    chrono::Duration::from_std(duration).map_err(|_| DbError::Conflict {
-        message: "notification worker duration is too large",
-    })
+/// Непредставимая задержка означает «никогда»: запись просто не станет доступной раньше срока.
+fn after(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc> {
+    chrono::Duration::from_std(delay)
+        .ok()
+        .and_then(|delay| now.checked_add_signed(delay))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 #[cfg(test)]
@@ -267,7 +269,7 @@ mod tests {
     #[test]
     fn review_message_is_bounded_by_telegram_limit() {
         let message = render_review_notification(
-            SubmissionStatus::Rejected,
+            ReviewOutcome::Rejected,
             "Backend development",
             "Ownership",
             None,
@@ -281,44 +283,55 @@ mod tests {
     #[test]
     fn review_message_names_the_subject_the_assignment_belongs_to() {
         let message = render_review_notification(
-            SubmissionStatus::Accepted,
+            ReviewOutcome::Accepted,
             "Backend development",
             "Ownership",
             None,
             "95/100",
         );
 
-        assert!(
-            message.contains("Предмет: Backend development"),
-            "{message}"
-        );
-        assert!(message.contains("Задание: Ownership"), "{message}");
+        assert!(message.contains("Backend development"), "{message}");
+        assert!(message.contains("Ownership"), "{message}");
     }
 
     #[test]
     fn an_accepted_scored_review_names_the_score() {
         let message = render_review_notification(
-            SubmissionStatus::Accepted,
+            ReviewOutcome::Accepted,
             "Backend development",
             "Ownership",
             Some((4, 5)),
             "Хорошо",
         );
 
-        assert!(message.contains("Балл: 4 из 5"), "{message}");
+        assert!(message.contains(&texts::score_line(4, 5)), "{message}");
     }
 
     #[test]
     fn a_pass_fail_review_names_no_score() {
-        let message = render_review_notification(
-            SubmissionStatus::Accepted,
-            "Backend development",
-            "Ownership",
-            None,
-            "Зачтено",
-        );
+        let render = |score| {
+            render_review_notification(
+                ReviewOutcome::Accepted,
+                "Backend development",
+                "Ownership",
+                score,
+                "Зачтено",
+            )
+        };
+        let score_line = format!("\n{}", texts::score_line(4, 5));
 
-        assert!(!message.contains("Балл"), "{message}");
+        assert_eq!(render(Some((4, 5))).replace(&score_line, ""), render(None));
+    }
+
+    #[test]
+    fn an_unrepresentable_delay_means_never_instead_of_an_error() {
+        let now = Utc::now();
+
+        assert_eq!(
+            after(now, Duration::from_secs(60)),
+            now + chrono::Duration::seconds(60)
+        );
+        assert_eq!(after(now, Duration::MAX), DateTime::<Utc>::MAX_UTC);
     }
 
     #[test]

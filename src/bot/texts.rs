@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 
-use crate::domain::{AssignmentStatus, Grade, Role, SubmissionStatus};
+use crate::domain::{
+    AssignmentStatus, Grade, MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS,
+    MAX_LATENESS_DAYS, Role, SubmissionStatus,
+};
 
 pub const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
 pub const BUTTON_ARCHIVE: &str = "🗄 Архив";
@@ -10,6 +13,26 @@ pub const BUTTON_COURSES: &str = "📘 Мои курсы";
 pub const BUTTON_PROFILE: &str = "👤 Профиль";
 pub const BUTTON_HELP: &str = "❓ Помощь";
 pub const MENU_PLACEHOLDER: &str = "Выберите пункт меню";
+
+pub const BUTTON_STUDENT_CONTACT: &str = "👤 Контакт студента";
+pub const BUTTON_OPEN_TELEGRAM: &str = "↗ Открыть в Telegram";
+pub const BUTTON_REFRESH_CONTACT: &str = "🔄 Обновить контакт";
+pub const BUTTON_RETRY_CONTACT: &str = "Повторить";
+pub const CONTACT_NO_USERNAME: &str = "Публичный username не указан.";
+pub const CONTACT_RESTRICTED: &str =
+    "У студента нет публичного username, а ссылка на аккаунт ограничена настройками приватности.";
+pub const CONTACT_UNAVAILABLE: &str = "Контакт сейчас недоступен.";
+pub const CONTACT_LOOKUP_FAILED: &str = "Не удалось получить контакт. Попробуйте ещё раз.";
+pub const CONTACT_PERSONAL_ACCOUNT: &str =
+    "Откройте Telegram, чтобы написать со своего личного аккаунта.";
+
+pub fn student_contact_header(name: &str, group: &str) -> String {
+    format!("👤 {name}\nГруппа: {group}")
+}
+
+pub fn contact_username(username: &str) -> String {
+    format!("Telegram: @{username}")
+}
 
 pub const GUEST_NEEDS_INVITE: &str = "Чтобы открыть задания, сначала зарегистрируйтесь. Сейчас у вас нет регистрации.\n\n\
     Учитесь в группе? Перейдите по её ссылке-приглашению. Ссылку можно получить у преподавателя.\n\
@@ -45,7 +68,6 @@ pub const GRADING_QUESTION: &str = "Как будете оценивать ра�
 pub const ATTEMPTS_QUESTION: &str = "Сколько попыток будет у каждого студента?";
 pub const ASSIGNMENT_TITLE_PROMPT: &str = "Напишите короткое название задания:";
 pub const ASSIGNMENT_BODY_PROMPT: &str = "Пришлите текст задания одним сообщением:";
-pub const PERIOD_PROMPT: &str = "Укажите длину периода опоздания в днях: целое число от 1 до 365.";
 pub const TERMS_CONFIRM: &str = "Проверьте условия и сохраните, если всё верно:";
 pub const SCHEDULE_HEADER: &str = "📅 Баллы с учётом опоздания:";
 pub const TERMS_SAVED: &str = "Новые условия сохранены.";
@@ -114,6 +136,10 @@ pub const INVITE_ROTATION_CONFIRM: &str = "После перевыпуска с�
 pub const REVIEW_SAVED: &str =
     "✅ Проверка сохранена. Студент получит от бота результат вместе с вашим комментарием.";
 
+pub fn period_prompt() -> String {
+    format!("Укажите длину периода опоздания в днях: целое число от 1 до {MAX_LATE_PERIOD_DAYS}.")
+}
+
 pub fn timezone_note(timezone: &str) -> String {
     format!(
         "{TIMEZONE_LABEL} {timezone}. Указывайте время в этом поясе. В нём же показаны все сроки."
@@ -164,7 +190,7 @@ fn plural(value: u32, one: &'static str, few: &'static str, many: &'static str) 
 
 pub fn periods_question(days: u16) -> String {
     format!(
-        "{DURATION_QUESTION} В одном периоде {days} дн. Сколько периодов разрешить? Введите число от 1 до 100. Вместе они должны укладываться в 366 дней."
+        "{DURATION_QUESTION} В одном периоде {days} дн. Сколько периодов разрешить? Введите число от 1 до {MAX_LATE_PERIODS}. Вместе они должны укладываться в {MAX_LATENESS_DAYS} дней."
     )
 }
 
@@ -260,9 +286,10 @@ pub fn student_help() -> String {
 pub fn teacher_help() -> String {
     format!(
         "❓ Как вести курс\n\n\
-        Новое задание создаётся внутри курса в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать 366 дней.\n\n\
+        Новое задание создаётся внутри курса в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
         После проверки условий сохраните черновик и при необходимости прикрепите файлы. На этом этапе задание доступно только преподавателям курса. Студенты увидят его, когда вы нажмёте «{BUTTON_PUBLISH}».\n\n\
         Для проверки нажмите «{BUTTON_REVIEW}»: бот откроет следующую работу из очереди. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
+        Кнопка «{BUTTON_STUDENT_CONTACT}» есть под работой и в «{BUTTON_COURSES} → Курс → {BUTTON_GRADEBOOK} → Студент». Она сохраняет текущий шаг. Нажмите «{BUTTON_OPEN_TELEGRAM}», чтобы написать со своего личного аккаунта; доступность перехода зависит от Telegram. Если адрес изменился, нажмите «{BUTTON_REFRESH_CONTACT}».\n\n\
         Чтобы изменить условия, воспользуйтесь кнопкой «{BUTTON_EDIT_DATES}» в задании. Перенос срока также сдвигает конец приёма, поэтому перед сохранением сверьте новую дату. Команда /cancel во время настройки возвращает к предыдущему шагу. На первом шаге она завершает настройку."
     )
 }
@@ -548,8 +575,16 @@ pub fn period_summary(period_days: u16) -> String {
     format!("{PERIOD_LABEL} {period_days} дн.")
 }
 
-pub fn until_short(date: &str) -> String {
-    format!("до {date}")
+pub fn until(moment: &str) -> String {
+    format!("до {moment}")
+}
+
+pub fn since(moment: &str) -> String {
+    format!("с {moment}")
+}
+
+pub fn end_of_day(date: &str) -> String {
+    format!("конца дня {date}")
 }
 
 pub fn date_preset(label: &str, date: &str) -> String {
@@ -562,7 +597,7 @@ pub fn periods_option(duration: &str, until: &str) -> String {
 
 pub fn penalty_step(question: &str, period_days: u16) -> String {
     format!(
-        "{question}\nНовый штраф начисляется с началом каждого периода в {period_days} дн. Введите его размер целым числом от 1 до 100 баллов:"
+        "{question}\nНовый штраф начисляется с началом каждого периода в {period_days} дн. Введите его размер целым числом от 1 до {MAX_LATE_PENALTY} баллов:"
     )
 }
 
@@ -667,9 +702,31 @@ pub fn role_name(role: Role) -> &'static str {
     }
 }
 
+pub const REVIEW_ACCEPTED: &str = "✅ Работа принята.";
+pub const REVIEW_REJECTED: &str = "❌ Работа отклонена.";
+
+pub fn review_notification(
+    verdict: &str,
+    subject: &str,
+    title: &str,
+    score: Option<(u16, u16)>,
+    comment: &str,
+) -> String {
+    let score = score
+        .map(|(final_score, max_score)| format!("\n{}", score_line(final_score, max_score)))
+        .unwrap_or_default();
+    format!(
+        "{verdict}\n📘 Предмет: {subject}\n📚 Задание: {title}{score}\n\n{REVIEW_COMMENT_HEADER}\n{comment}"
+    )
+}
+
+pub fn score_line(score: u16, max_score: u16) -> String {
+    format!("🏅 Балл: {score} из {max_score}")
+}
+
 pub fn grade_line(grade: Grade) -> String {
     if grade.penalty() == 0 {
-        return format!("🏅 Балл: {} из {}", grade.final_score(), grade.max_score());
+        return score_line(grade.final_score(), grade.max_score());
     }
     format!(
         "🏅 Балл: {} − {} = {} из {} (штраф за опоздание)",

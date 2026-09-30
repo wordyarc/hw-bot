@@ -464,6 +464,17 @@ impl TestApp {
         teacher
     }
 
+    pub async fn remove_course_teacher(&self, teacher: &User) {
+        sqlx::query(
+            "delete from teaching_course_teachers where teaching_course_id = $1 and teacher_id = $2",
+        )
+        .bind(self.fixture.course.id().as_uuid())
+        .bind(teacher.id().as_uuid())
+        .execute(&self.pool)
+        .await
+        .expect("detach teacher from the course");
+    }
+
     pub async fn add_admin(&self) -> User {
         let admin = named_admin(self.next_telegram_id(), "Admin");
         insert_user(&self.pool, &admin).await;

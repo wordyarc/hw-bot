@@ -1,16 +1,22 @@
+use std::backtrace::{Backtrace, BacktraceStatus};
 use std::net::SocketAddr;
+use std::num::NonZeroU64;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{ApplicationContainer, FilePolicy};
 use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings};
-use hw_bot::config::{AppConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig};
+use hw_bot::config::{
+    AppConfig, DatabaseConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig,
+};
 use hw_bot::db;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::invites::GroupInviteCodec;
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, new_bot};
+use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -26,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to load application config")?
         .validate()?;
     let _log_guard = init_logging(&config.logging)?;
+    log_panics();
 
     if let Err(error) = run(config).await {
         tracing::error!(error = ?error, "application failed");
@@ -37,72 +44,15 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let files = &config.files;
-    let database = &config.database;
     let server = &config.server;
+    tracing::info!(app = %config.app.name, "starting application");
+    let db_pool = prepare_database(&config.database).await?;
+
     let file_policy = FilePolicy {
-        max_file_size_bytes: usize::try_from(files.max_file_size_bytes.get())
-            .expect("validated file size fits usize"),
+        max_file_size_bytes: files.max_file_size_bytes.get(),
         max_files_per_assignment: files.max_files_per_assignment.get(),
         max_files_per_submission: files.max_files_per_submission.get(),
     };
-    tracing::info!(app = %config.app.name, "starting application");
-    tracing::info!(
-        max_connections = database.max_connections.get(),
-        run_migrations = database.run_migrations,
-        run_bootstrap = database.run_bootstrap,
-        "connecting to database"
-    );
-    let setup_pool =
-        db::connect_with_max_connections(&database.url, database.max_connections.get())
-            .await
-            .context("failed to connect to database")?;
-    tracing::info!("connected to database");
-
-    if database.run_migrations {
-        tracing::info!("running database migrations");
-        db::run_migrations(&setup_pool)
-            .await
-            .context("failed to run database migrations")?;
-        tracing::info!("database migrations completed");
-    } else {
-        tracing::info!("database migrations disabled, validating schema");
-        db::validate_migrations(&setup_pool)
-            .await
-            .context("database schema does not match embedded migrations")?;
-    }
-
-    if database.run_bootstrap {
-        let bootstrap_file = &database.bootstrap_file;
-        tracing::info!(path = %bootstrap_file.display(), "running database bootstrap");
-        let data = tokio::fs::read_to_string(bootstrap_file)
-            .await
-            .with_context(|| {
-                format!("failed to read bootstrap file {}", bootstrap_file.display())
-            })?;
-        let seed = serde_json::from_str(&data).with_context(|| {
-            format!(
-                "failed to parse bootstrap file {}",
-                bootstrap_file.display()
-            )
-        })?;
-        db::run_bootstrap(&setup_pool, &seed)
-            .await
-            .context("failed to run database bootstrap")?;
-        tracing::info!("database bootstrap completed");
-    } else {
-        tracing::info!("database bootstrap disabled");
-    }
-
-    setup_pool.close().await;
-    let db_pool = db::connect_runtime(
-        &database.url,
-        database.max_connections.get(),
-        Duration::from_millis(database.acquire_timeout_ms.get()),
-        Duration::from_millis(database.statement_timeout_ms.get()),
-    )
-    .await
-    .context("failed to initialize runtime database pool")?;
-
     let cancellation = CancellationToken::new();
     let health = HealthState::new(config.telegram.enabled, config.notification_worker.enabled);
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
@@ -111,7 +61,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
         AppState::new(db_pool.clone(), application, invites, health.clone()),
-        Duration::from_millis(server.request_timeout_ms.get()),
+        ms(server.request_timeout_ms),
     );
 
     let addr = SocketAddr::new(server.host, server.port.get());
@@ -161,34 +111,89 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
         .await
 }
 
+async fn prepare_database(database: &DatabaseConfig) -> anyhow::Result<PgPool> {
+    tracing::info!(
+        max_connections = database.max_connections.get(),
+        run_migrations = database.run_migrations,
+        run_bootstrap = database.run_bootstrap,
+        "connecting to database"
+    );
+    let setup_pool =
+        db::connect_with_max_connections(&database.url, database.max_connections.get())
+            .await
+            .context("failed to connect to database")?;
+    tracing::info!("connected to database");
+
+    if database.run_migrations {
+        tracing::info!("running database migrations");
+        db::run_migrations(&setup_pool)
+            .await
+            .context("failed to run database migrations")?;
+        tracing::info!("database migrations completed");
+    } else {
+        tracing::info!("database migrations disabled, validating schema");
+        db::validate_migrations(&setup_pool)
+            .await
+            .context("database schema does not match embedded migrations")?;
+    }
+
+    if database.run_bootstrap {
+        bootstrap(&setup_pool, &database.bootstrap_file).await?;
+    } else {
+        tracing::info!("database bootstrap disabled");
+    }
+
+    setup_pool.close().await;
+    db::connect_runtime(
+        &database.url,
+        database.max_connections.get(),
+        ms(database.acquire_timeout_ms),
+        ms(database.statement_timeout_ms),
+    )
+    .await
+    .context("failed to initialize runtime database pool")
+}
+
+async fn bootstrap(pool: &PgPool, file: &Path) -> anyhow::Result<()> {
+    tracing::info!(path = %file.display(), "running database bootstrap");
+    let data = tokio::fs::read_to_string(file)
+        .await
+        .with_context(|| format!("failed to read bootstrap file {}", file.display()))?;
+    let seed = serde_json::from_str(&data)
+        .with_context(|| format!("failed to parse bootstrap file {}", file.display()))?;
+    db::run_bootstrap(pool, &seed)
+        .await
+        .context("failed to run database bootstrap")?;
+    tracing::info!("database bootstrap completed");
+    Ok(())
+}
+
 fn build_telegram_bot(
     config: &ValidatedAppConfig,
     application: ApplicationContainer,
     invites: GroupInviteCodec,
 ) -> anyhow::Result<Option<TelegramBot>> {
-    let telegram = &config.telegram;
-    let files = &config.files;
-    if !telegram.enabled {
+    let Some(token) = config.telegram_bot_token() else {
         tracing::info!("Telegram bot disabled");
         return Ok(None);
-    }
-
-    let timezone = BotTimezone::new(config.ui.timezone);
+    };
+    let telegram = &config.telegram;
+    let files = &config.files;
 
     let bot = TelegramBot::new(
         application,
-        required_bot_token(config)?,
+        token,
         &telegram.api_base_url,
         TelegramBotSettings {
-            request_timeout: Duration::from_millis(telegram.request_timeout_ms.get()),
-            polling_timeout: Duration::from_millis(telegram.polling_timeout_ms.get()),
-            rate_limit_replenish: Duration::from_millis(telegram.rate_limit_replenish_ms.get()),
-            rate_limit_burst: telegram.rate_limit_burst.get(),
-            max_concurrent_updates: telegram.max_concurrent_updates.get(),
-            file_transfer_timeout: Duration::from_millis(files.transfer_timeout_ms.get()),
-            max_concurrent_file_transfers: files.max_concurrent_transfers.get(),
+            request_timeout: ms(telegram.request_timeout_ms),
+            polling_timeout: ms(telegram.polling_timeout_ms),
+            rate_limit_replenish: ms(telegram.rate_limit_replenish_ms),
+            rate_limit_burst: telegram.rate_limit_burst,
+            max_concurrent_updates: telegram.max_concurrent_updates,
+            file_transfer_timeout: ms(files.transfer_timeout_ms),
+            max_concurrent_file_transfers: files.max_concurrent_transfers,
         },
-        timezone,
+        BotTimezone::new(config.ui.timezone),
         invites,
     )?;
 
@@ -198,32 +203,27 @@ fn build_telegram_bot(
 
 fn build_notification_worker(
     config: &ValidatedAppConfig,
-    pool: sqlx::PgPool,
+    pool: PgPool,
 ) -> anyhow::Result<Option<NotificationWorker>> {
-    if !config.notification_worker.enabled {
+    let Some(token) = config.notification_worker_token() else {
         tracing::info!("review notification worker disabled");
         return Ok(None);
-    }
-
+    };
     let worker = &config.notification_worker;
-    let bot_token = required_bot_token(config)?;
+    let request_timeout = ms(config.telegram.request_timeout_ms);
 
-    let telegram = new_bot(
-        bot_token,
-        &config.telegram.api_base_url,
-        Duration::from_millis(config.telegram.request_timeout_ms.get()),
-    )
-    .context("failed to initialize Telegram client")?;
+    let telegram = new_bot(token, &config.telegram.api_base_url, request_timeout)
+        .context("failed to initialize Telegram client")?;
     let worker = NotificationWorker::new(
         pool,
         telegram,
         NotificationWorkerSettings {
-            request_timeout: Duration::from_millis(config.telegram.request_timeout_ms.get()),
-            poll_interval: Duration::from_millis(worker.poll_interval_ms.get()),
-            lease_duration: Duration::from_millis(worker.lease_duration_ms.get()),
+            request_timeout,
+            poll_interval: ms(worker.poll_interval_ms),
+            lease_duration: ms(worker.lease_duration_ms),
             max_attempts: worker.max_attempts.get(),
-            retry_initial: Duration::from_millis(worker.retry_initial_ms.get()),
-            retry_max: Duration::from_millis(worker.retry_max_ms.get()),
+            retry_initial: ms(worker.retry_initial_ms),
+            retry_max: ms(worker.retry_max_ms),
         },
     );
 
@@ -231,13 +231,8 @@ fn build_notification_worker(
     Ok(Some(worker))
 }
 
-fn required_bot_token(config: &ValidatedAppConfig) -> anyhow::Result<&str> {
-    config
-        .telegram
-        .bot_token
-        .as_deref()
-        .filter(|token| !token.trim().is_empty())
-        .context("Telegram bot token is required when a Telegram component is enabled")
+fn ms(value: NonZeroU64) -> Duration {
+    Duration::from_millis(value.get())
 }
 
 async fn shutdown_signal() -> anyhow::Result<()> {
@@ -264,6 +259,29 @@ async fn shutdown_signal() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Стандартный hook пишет в stderr простым текстом и в JSON-логи не попадает.
+fn log_panics() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("panic payload is not a string");
+        let location = info.location().map(ToString::to_string);
+        let backtrace = Backtrace::capture();
+        let backtrace =
+            (backtrace.status() == BacktraceStatus::Captured).then(|| backtrace.to_string());
+
+        tracing::error!(
+            panic.message = message,
+            panic.location = location,
+            panic.backtrace = backtrace,
+            "panic"
+        );
+    }));
 }
 
 fn init_logging(config: &LoggingConfig) -> anyhow::Result<Option<WorkerGuard>> {

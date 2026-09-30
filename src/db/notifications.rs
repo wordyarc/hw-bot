@@ -7,6 +7,7 @@ use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     Assignment, Subject, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User,
 };
+use crate::string_enum::str_enum;
 
 const ATTEMPT_COUNT: &str = "review_notification_outbox.attempt_count";
 const OUTCOME: &str = "review_notification_outbox.outcome";
@@ -16,6 +17,15 @@ const LOST_LEASE: DbError = DbError::Conflict {
     message: "notification lease is no longer owned by this worker",
 };
 
+str_enum! {
+    /// Сдача, ожидающая проверки, в outbox не попадает, поэтому исходов только два.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ReviewOutcome {
+        Accepted => "accepted",
+        Rejected => "rejected",
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ClaimedReviewNotification {
     pub id: Uuid,
@@ -23,7 +33,7 @@ pub struct ClaimedReviewNotification {
     pub recipient_telegram_user_id: TelegramUserId,
     pub subject_name: String,
     pub assignment_title: String,
-    pub outcome: SubmissionStatus,
+    pub outcome: ReviewOutcome,
     pub review_comment: String,
     pub final_score: Option<u16>,
     pub max_score: Option<u16>,
@@ -59,13 +69,16 @@ pub async fn enqueue_review_result<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    if submission.status() == SubmissionStatus::PendingReview {
-        return Err(DbError::Conflict {
-            message: "pending submission cannot produce a review notification",
-        });
-    }
-
-    let review_comment = submission.review_comment().ok_or(DbError::Conflict {
+    let outcome = match submission.status() {
+        SubmissionStatus::Accepted => ReviewOutcome::Accepted,
+        SubmissionStatus::Rejected => ReviewOutcome::Rejected,
+        SubmissionStatus::PendingReview => {
+            return Err(DbError::Precondition {
+                message: "pending submission cannot produce a review notification",
+            });
+        }
+    };
+    let review_comment = submission.review_comment().ok_or(DbError::Precondition {
         message: "reviewed submission has no comment",
     })?;
 
@@ -92,7 +105,7 @@ where
         student.telegram_user_id().as_i64(),
         subject.name().as_str(),
         assignment.title().as_str(),
-        submission.status().as_str(),
+        outcome.as_str(),
         review_comment.as_str(),
         score.map(|(final_score, _)| final_score),
         score.map(|(_, max_score)| max_score),
@@ -267,8 +280,7 @@ impl TryFrom<ClaimedReviewNotificationRow> for ClaimedReviewNotification {
     type Error = DbError;
 
     fn try_from(row: ClaimedReviewNotificationRow) -> Result<Self, Self::Error> {
-        let outcome = SubmissionStatus::parse_str(&row.outcome)
-            .filter(|status| *status != SubmissionStatus::PendingReview)
+        let outcome = ReviewOutcome::parse_str(&row.outcome)
             .ok_or_else(|| DbError::invalid_value(OUTCOME, &row.outcome))?;
 
         Ok(Self {

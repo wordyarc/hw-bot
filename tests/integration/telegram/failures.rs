@@ -392,12 +392,13 @@ async fn failed_keyboard_cleanup_still_closes_the_form() {
 }
 
 async fn add_assignment_document(app: &TestApp) {
-    let (_, revision) = app
+    let revision = app
         .application
         .assignments
         .find_versioned_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     app.application
         .files
         .add_assignment_file(AddAssignmentFile {

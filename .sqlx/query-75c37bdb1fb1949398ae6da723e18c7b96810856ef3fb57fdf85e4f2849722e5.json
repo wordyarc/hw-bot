@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            (\n                select count(*)\n                from assignments\n                where student_group_id = $2\n                  and status = 'published'\n            ) as \"assignments!\",\n            (\n                select count(*)\n                from submissions\n                where student_id = $1\n                  and status = 'pending_review'\n            ) as \"pending!\",\n            (\n                select count(*)\n                from teaching_courses course\n                where $3 or exists (\n                    select 1\n                    from teaching_course_teachers teacher\n                    where teacher.teaching_course_id = course.id\n                      and teacher.teacher_id = $1\n                )\n            ) as \"courses!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignments!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "pending!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "courses!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "75c37bdb1fb1949398ae6da723e18c7b96810856ef3fb57fdf85e4f2849722e5"
+}

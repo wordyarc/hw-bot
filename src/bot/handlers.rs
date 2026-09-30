@@ -8,7 +8,8 @@ use super::Bot;
 use super::HandlerResult;
 use super::assignment_files;
 use super::callbacks::{
-    self, CallbackAction, FlowAction, PageTarget, ReplayableAction, ScreenAction,
+    self, CallbackAction, FlowAction, InformationalAction, PageTarget, ReplayableAction,
+    ScreenAction,
 };
 use super::context::{BotContext, Chat, Deps, Screen, TextStep};
 use super::errors::finish_handler;
@@ -17,7 +18,9 @@ use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button};
 use crate::domain::{Role, TelegramUserId};
 use crate::pagination::PageRequest;
+use crate::telegram::is_invalid_token;
 
+mod contact;
 pub(super) mod home;
 pub(super) mod input;
 mod registration;
@@ -93,7 +96,6 @@ pub(super) async fn handle_command(
     dialogue: BotDialogue,
     state: BotState,
     context: BotContext,
-    transfers: super::FileTransfers,
 ) -> HandlerResult {
     let deps = Deps {
         context: &context,
@@ -107,7 +109,7 @@ pub(super) async fn handle_command(
             return Ok(());
         }
 
-        let telegram_user_id = actor_from_message(&message)?;
+        let telegram_user_id = message_sender_id(&message)?;
 
         if let Some(form) = state.active_terms()
             && !matches!(command, Command::Help)
@@ -122,7 +124,6 @@ pub(super) async fn handle_command(
                         *message_id,
                         callbacks::TermsAction::Stay,
                         state,
-                        &transfers,
                     )
                     .await;
                 }
@@ -134,7 +135,7 @@ pub(super) async fn handle_command(
 
         if let Some(action) = menu_action_for(&command) {
             reset_dialogue(&dialogue).await?;
-            return run_menu_action(chat, telegram_user_id, action, &transfers).await;
+            return run_menu_action(chat, telegram_user_id, action).await;
         }
         match command {
             Command::Start(payload) => {
@@ -176,7 +177,6 @@ pub(super) async fn handle_message(
     dialogue: BotDialogue,
     state: BotState,
     context: BotContext,
-    transfers: super::FileTransfers,
 ) -> HandlerResult {
     let chat_id = message.chat.id;
     let result = async {
@@ -185,22 +185,22 @@ pub(super) async fn handle_message(
             return Ok(());
         }
 
-        let actor = actor_from_message(&message)?;
+        let telegram_user_id = message_sender_id(&message)?;
         let deps = Deps {
             context: &context,
             dialogue: &dialogue,
         };
-        let step = TextStep::new(&bot, &message, actor, deps);
+        let step = TextStep::new(&bot, &message, telegram_user_id, deps);
 
         if let Some(action) = message.text().and_then(menu_action) {
             if let Some(form) = state.active_terms() {
                 let Some(screen) = step.resolve().await? else {
                     return Ok(());
                 };
-                return teacher::confirm_exit(screen, form.clone(), action, actor).await;
+                return teacher::confirm_exit(screen, form.clone(), action, telegram_user_id).await;
             }
             reset_dialogue(&dialogue).await?;
-            return run_menu_action(step.chat(), actor, action, &transfers).await;
+            return run_menu_action(step.chat(), telegram_user_id, action).await;
         }
 
         match state {
@@ -243,7 +243,6 @@ pub(super) async fn handle_message(
                     assignment_id,
                     expected_revision,
                     creation_flow,
-                    &transfers,
                 )
                 .await?;
             }
@@ -253,13 +252,8 @@ pub(super) async fn handle_message(
             BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
                 teacher::submit_body(step, course_id, title).await?;
             }
-            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
-                course_id,
-                title,
-                body,
-                ..
-            }) => {
-                teacher::submit_max_attempts(step, course_id, title, body).await?;
+            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts { text, .. }) => {
+                teacher::submit_max_attempts(step, text).await?;
             }
             BotState::Flow(FlowState::ChoosingGrading { draft, .. })
             | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
@@ -292,7 +286,6 @@ async fn run_menu_action(
     chat: Chat<'_>,
     telegram_user_id: TelegramUserId,
     action: MenuAction,
-    transfers: &super::FileTransfers,
 ) -> HandlerResult {
     tracing::Span::current().record("action", tracing::field::debug(action));
     let Some(target) = menu_target(action) else {
@@ -303,7 +296,7 @@ async fn run_menu_action(
         return Ok(());
     };
 
-    handle_replayable_action(screen, target, transfers).await
+    handle_replayable_action(screen, target).await
 }
 
 fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
@@ -324,7 +317,6 @@ pub(super) async fn handle_callback(
     dialogue: BotDialogue,
     state: BotState,
     context: BotContext,
-    transfers: super::FileTransfers,
 ) -> HandlerResult {
     let action = query.data.as_deref().and_then(callbacks::parse);
     if let Some(action) = action {
@@ -335,7 +327,7 @@ pub(super) async fn handle_callback(
         .cache_time(0)
         .await
     {
-        if crate::telegram::is_invalid_token(&error) {
+        if is_invalid_token(&error) {
             return Err(error.into());
         }
         tracing::warn!(
@@ -352,7 +344,7 @@ pub(super) async fn handle_callback(
     }
     let chat_id = message.chat.id;
     let result = async {
-        let telegram_user_id = actor_from_user(&query.from)?;
+        let telegram_user_id = sender_id(&query.from)?;
         if query.data.is_none() {
             return Ok(());
         }
@@ -380,15 +372,17 @@ pub(super) async fn handle_callback(
         };
 
         match action {
-            CallbackAction::Replayable(action) => {
-                handle_replayable_action(screen, action, &transfers).await
-            }
+            CallbackAction::Replayable(action) => handle_replayable_action(screen, action).await,
             CallbackAction::Screen(action) => {
-                handle_screen_action(screen, message.id, action, state, &transfers).await
+                handle_screen_action(screen, message.id, action, state).await
             }
             CallbackAction::Flow(action) => {
-                handle_flow_action(screen, message.id, action, state, &transfers).await
+                handle_flow_action(screen, message.id, action, state).await
             }
+            CallbackAction::Informational(InformationalAction::StudentContact {
+                course_id,
+                student_id,
+            }) => contact::show(screen, message.id, course_id, student_id).await,
             CallbackAction::Noop => Ok(()),
         }
     }
@@ -396,11 +390,7 @@ pub(super) async fn handle_callback(
     finish_handler(&bot, chat_id, result).await
 }
 
-async fn handle_replayable_action(
-    screen: Screen<'_>,
-    action: ReplayableAction,
-    transfers: &super::FileTransfers,
-) -> HandlerResult {
+async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) -> HandlerResult {
     match action {
         ReplayableAction::Page(target, page) => {
             let page = PageRequest::new(page);
@@ -426,7 +416,7 @@ async fn handle_replayable_action(
             teacher::show_course_assignments_page(screen, course_id, PageRequest::default()).await
         }
         ReplayableAction::Assignment(assignment_id) => {
-            student::show_assignment(screen, assignment_id, transfers).await
+            student::show_assignment(screen, assignment_id).await
         }
         ReplayableAction::ManageAssignment(assignment_id) => {
             teacher::show_assignment(screen, assignment_id).await
@@ -469,12 +459,11 @@ async fn handle_screen_action(
     message_id: MessageId,
     action: ScreenAction,
     state: BotState,
-    transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
         ScreenAction::AddFile => assignment_files::ask_upload(screen, message_id, &state).await,
         ScreenAction::OpenFile(index) => {
-            assignment_files::open(screen, message_id, &state, index, transfers).await
+            assignment_files::open(screen, message_id, &state, index).await
         }
         ScreenAction::DeleteFile(index) => {
             assignment_files::request_deletion(screen, message_id, &state, index).await
@@ -495,7 +484,7 @@ async fn handle_screen_action(
             teacher::archive_assignment(screen, message_id, id, &state).await
         }
         ScreenAction::ChangeDeadline(id) => {
-            teacher::ask_assignment_deadline(screen, message_id, id, &state).await
+            teacher::begin_terms_edit(screen, message_id, id, &state).await
         }
         ScreenAction::RotateGroupInvite => {
             teacher::ask_invite_rotation(screen, message_id, &state).await
@@ -508,7 +497,6 @@ async fn handle_flow_action(
     message_id: MessageId,
     action: FlowAction,
     state: BotState,
-    transfers: &super::FileTransfers,
 ) -> HandlerResult {
     match action {
         FlowAction::ConfirmFileDeletion => {
@@ -537,7 +525,7 @@ async fn handle_flow_action(
         }
         FlowAction::PenaltyPeriod => teacher::handle_period(screen, message_id, state).await?,
         FlowAction::Terms(action) => {
-            teacher::handle_terms(screen, message_id, action, state, transfers).await?
+            teacher::handle_terms(screen, message_id, action, state).await?
         }
         FlowAction::ReviewScore {
             submission_id,
@@ -578,8 +566,8 @@ async fn ensure_private_message(bot: &Bot, message: &Message) -> HandlerResult<b
     Ok(false)
 }
 
-fn actor_from_message(message: &Message) -> HandlerResult<TelegramUserId> {
-    actor_from_user(
+fn message_sender_id(message: &Message) -> HandlerResult<TelegramUserId> {
+    sender_id(
         message
             .from
             .as_ref()
@@ -587,7 +575,7 @@ fn actor_from_message(message: &Message) -> HandlerResult<TelegramUserId> {
     )
 }
 
-fn actor_from_user(user: &User) -> HandlerResult<TelegramUserId> {
+fn sender_id(user: &User) -> HandlerResult<TelegramUserId> {
     let value = i64::try_from(user.id.0).context("Telegram user id does not fit into i64")?;
     TelegramUserId::new(value).map_err(|error| anyhow!(error).into())
 }
@@ -643,7 +631,7 @@ mod tests {
     use crate::bot::views::{
         assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
     };
-    use crate::domain::SubmissionId;
+    use crate::domain::{SubmissionId, TeachingCourseId, UserId};
 
     fn timezone() -> BotTimezone {
         BotTimezone::new(Tz::Asia__Vladivostok)
@@ -703,12 +691,14 @@ mod tests {
 
     #[test]
     fn every_button_the_bot_sends_is_routable() {
+        use crate::bot::assignment_form::{AssignmentTerms, TermsForm, TermsStep};
         use crate::bot::views::{
             assignment_files_keyboard, assignment_students_keyboard, attempts_keyboard,
             calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
-            course_assignments_keyboard, deadline_options_keyboard, gradebook_students_keyboard,
-            grading_keyboard, group_invite_keyboard, late_policy_keyboard, penalty_keyboard,
-            review_score_keyboard, terms_keyboard,
+            contact_keyboard, course_assignments_keyboard, deadline_options_keyboard,
+            gradebook_students_keyboard, grading_keyboard, group_invite_keyboard,
+            late_policy_keyboard, penalty_keyboard, review_score_keyboard, student_grades_keyboard,
+            terms_exit_keyboard, terms_form_view, terms_keyboard,
         };
         use crate::domain::{
             FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
@@ -733,26 +723,36 @@ mod tests {
         .unwrap();
         let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
         let timezone = timezone();
+        let student_id = UserId::new();
+        let contact = InformationalAction::StudentContact {
+            course_id: course.id(),
+            student_id,
+        };
 
-        let terms = super::super::state::AssignmentTerms {
-            target: super::super::state::TermsTarget::Edit {
-                assignment_id: assignment.id(),
-                grading: assignment.grading(),
-                revision: 0,
-                created_at: assignment.created_at(),
-                original_closes_at: assignment.closes_at(),
-            },
-            deadline_at: Some(assignment.deadline_at()),
+        let terms = AssignmentTerms {
             allow_late: true,
-            period_days: 7,
             penalty: Some(1),
             max_periods: Some(4),
+            ..AssignmentTerms::editing(&assignment, 0)
         };
 
         let mut keyboards = vec![
             student_menu(),
             teacher_menu(Some(1)),
-            review_keyboard(SubmissionId::new()),
+            review_keyboard(SubmissionId::new(), course.id(), student_id),
+            student_grades_keyboard(course.id(), student_id),
+            contact_keyboard(
+                contact,
+                Some("https://t.me/student_name".parse().unwrap()),
+                texts::BUTTON_REFRESH_CONTACT,
+            ),
+            contact_keyboard(
+                contact,
+                Some("tg://user?id=12345".parse().unwrap()),
+                texts::BUTTON_REFRESH_CONTACT,
+            ),
+            contact_keyboard(contact, None, texts::BUTTON_REFRESH_CONTACT),
+            contact_keyboard(contact, None, texts::BUTTON_RETRY_CONTACT),
             course_assignments_keyboard(course.id(), std::slice::from_ref(&assignment)),
             assignment_actions_keyboard(&assignment),
             attempts_keyboard(MAX_ATTEMPTS_PREFIX),
@@ -760,8 +760,8 @@ mod tests {
             grading_keyboard(),
             late_policy_keyboard(),
             penalty_keyboard(7),
-            terms_keyboard(&terms, &timezone),
-            super::super::views::terms_exit_keyboard(),
+            terms_keyboard(&terms, &terms.complete().unwrap(), &timezone),
+            terms_exit_keyboard(),
             review_score_keyboard(SubmissionId::new(), 10),
             deadline_options_keyboard(&timezone),
             calendar_keyboard(today, today),
@@ -774,7 +774,6 @@ mod tests {
             confirm_invite_rotation_keyboard(),
         ];
 
-        use super::super::state::{TermsForm, TermsStep};
         for step in [
             TermsStep::Policy,
             TermsStep::Deadline,
@@ -788,26 +787,33 @@ mod tests {
             },
             TermsStep::Summary,
         ] {
-            keyboards.push(
-                super::super::views::terms_form_view(
-                    &TermsForm::new(terms.clone(), step),
-                    &timezone,
-                )
-                .1,
-            );
+            let (_, keyboard) =
+                terms_form_view(&TermsForm::new(terms.clone(), step), &timezone).unwrap();
+            keyboards.push(keyboard);
         }
 
         for keyboard in keyboards {
-            let json = serde_json::to_value(keyboard).unwrap();
-            for row in json["inline_keyboard"].as_array().unwrap() {
-                for button in row.as_array().unwrap() {
-                    let data = button["callback_data"].as_str().unwrap();
-                    assert!(
-                        callbacks::parse(data).is_some(),
-                        "button {:?} sends {data}, which the callback parser rejects",
-                        button["text"],
-                    );
-                    assert!(data.len() <= 64, "{data} exceeds the Telegram limit");
+            for button in keyboard.inline_keyboard.into_iter().flatten() {
+                use teloxide::types::InlineKeyboardButtonKind;
+                match button.kind {
+                    InlineKeyboardButtonKind::CallbackData(data) => {
+                        assert!(
+                            callbacks::parse(&data).is_some(),
+                            "button {:?} sends {data}, which the callback parser rejects",
+                            button.text,
+                        );
+                        assert!(data.len() <= 64, "{data} exceeds the Telegram limit");
+                    }
+                    InlineKeyboardButtonKind::Url(url) => {
+                        assert!(
+                            matches!(
+                                url.as_str(),
+                                "https://t.me/student_name" | "tg://user?id=12345"
+                            ),
+                            "unexpected Telegram URL: {url}"
+                        );
+                    }
+                    kind => panic!("unverified button kind: {kind:?}"),
                 }
             }
         }
@@ -836,7 +842,7 @@ mod tests {
     #[test]
     fn review_callbacks_carry_the_submission_the_buttons_belong_to() {
         let submission_id = SubmissionId::new();
-        let keyboard = review_keyboard(submission_id);
+        let keyboard = review_keyboard(submission_id, TeachingCourseId::new(), UserId::new());
         let json = serde_json::to_value(keyboard).unwrap();
         let accept = json["inline_keyboard"][0][0]["callback_data"]
             .as_str()

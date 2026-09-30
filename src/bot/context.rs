@@ -2,6 +2,7 @@ use teloxide::types::{ChatId, Message};
 
 use super::Bot;
 use super::HandlerResult;
+use super::files::FileTransfers;
 use super::invites::BotInvites;
 use super::state::BotDialogue;
 use super::timezone::BotTimezone;
@@ -13,6 +14,7 @@ pub(super) struct BotContext {
     pub services: ApplicationContainer,
     pub timezone: BotTimezone,
     pub invites: BotInvites,
+    pub transfers: FileTransfers,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +57,10 @@ impl<'a> Chat<'a> {
 
     pub fn invites(&self) -> &'a BotInvites {
         &self.deps.context.invites
+    }
+
+    pub fn transfers(&self) -> &'a FileTransfers {
+        &self.deps.context.transfers
     }
 
     pub async fn resolve(
@@ -123,6 +129,10 @@ impl<'a> Screen<'a> {
         self.chat.invites()
     }
 
+    pub fn transfers(&self) -> &'a FileTransfers {
+        self.chat.transfers()
+    }
+
     pub async fn stale(self) -> HandlerResult {
         self.chat.stale().await
     }
@@ -181,6 +191,10 @@ impl<'a> TextStep<'a> {
 
     pub fn services(&self) -> &'a ApplicationContainer {
         &self.deps.context.services
+    }
+
+    pub fn transfers(&self) -> &'a FileTransfers {
+        &self.deps.context.transfers
     }
 
     pub fn chat(&self) -> Chat<'a> {

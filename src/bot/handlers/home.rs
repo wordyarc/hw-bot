@@ -7,6 +7,7 @@ use crate::app::{Actor, AppResult, ErrorCode};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::context::{Chat, Screen};
+use crate::bot::errors::log_request_error;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{main_keyboard, main_menu, send_message_chunks};
@@ -46,7 +47,7 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Option<Role>) {
         })
         .await
     {
-        crate::bot::errors::log_request_error("set_role_commands", &error);
+        log_request_error("set_role_commands", &error);
     }
 }
 
@@ -128,11 +129,15 @@ fn optional_stat<T>(result: AppResult<T>, statistic: &'static str) -> Option<T> 
     }
 }
 
-pub(super) async fn show_home(chat: Chat<'_>, actor: TelegramUserId) -> HandlerResult {
+pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) -> HandlerResult {
     let bot = chat.bot();
     let chat_id = chat.chat_id();
     let services = chat.services();
-    match services.users.find_by_telegram_user_id(actor).await {
+    match services
+        .users
+        .find_by_telegram_user_id(telegram_user_id)
+        .await
+    {
         Ok(registered) => {
             let role = registered.user.role();
             sync_commands(bot, chat_id, Some(role)).await;

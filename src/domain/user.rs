@@ -56,10 +56,6 @@ impl Role {
         matches!(self, Self::Admin)
     }
 
-    pub fn can_grant_attempts(self) -> bool {
-        matches!(self, Self::Teacher | Self::Admin)
-    }
-
     pub fn can_manage_users(self) -> bool {
         matches!(self, Self::Admin)
     }

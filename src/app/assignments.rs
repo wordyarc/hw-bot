@@ -14,7 +14,7 @@ use crate::domain::{
     Submission, SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::AssignmentStudentSummary;
+use crate::read_models::{AssignmentStudentSummary, VersionedAssignment};
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
@@ -395,14 +395,14 @@ impl AssignmentService {
     ) -> AppResult<Assignment> {
         load_managed_versioned_assignment(&self.pool, actor, assignment_id, action)
             .await
-            .map(|(assignment, _)| assignment)
+            .map(|stored| stored.assignment)
     }
 
     pub async fn find_versioned_for_teacher(
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
-    ) -> AppResult<(Assignment, i64)> {
+    ) -> AppResult<VersionedAssignment> {
         load_managed_versioned_assignment(&self.pool, actor, assignment_id, "read assignment").await
     }
 
@@ -418,11 +418,12 @@ impl AssignmentService {
     {
         let mut tx = self.pool.begin().await?;
 
-        let stored = db::assignments::find_versioned_by_id(&mut *tx, assignment_id)
+        let VersionedAssignment {
+            mut assignment,
+            revision,
+        } = db::assignments::find_versioned_by_id(&mut *tx, assignment_id)
             .await?
             .required("assignment")?;
-        let revision = stored.revision();
-        let mut assignment = stored.into_assignment();
 
         let (actor, teaching_course) = load_managing_teacher_on(
             &mut tx,

@@ -239,11 +239,11 @@ async fn oversized_download_stream_is_rejected_without_a_database_row() {
         DOCUMENT_FIXTURE,
     )
     .await;
-    let failed = Mock::given(method("POST"))
+    let rejected = Mock::given(method("POST"))
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": app.teacher(),
-            "text": texts::FILE_DOWNLOAD_FAILED
+            "text": app_error_message(ErrorCode::FileTooLarge)
         })))
         .respond_with(telegram_message_response())
         .expect(1)
@@ -260,7 +260,7 @@ async fn oversized_download_stream_is_rejected_without_a_database_row() {
     let (cancellation, mut task) =
         start_bot_with_application(&telegram, application, bot_settings_with(|_| {}));
 
-    tokio::time::timeout(Duration::from_secs(5), failed.wait_until_satisfied())
+    tokio::time::timeout(Duration::from_secs(5), rejected.wait_until_satisfied())
         .await
         .expect("oversized stream is rejected");
     stop_bot(cancellation, &mut task).await;

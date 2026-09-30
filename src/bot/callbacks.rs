@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::handlers::input::parse_u16;
 use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId, UserId};
 
-use CallbackAction::{Flow, Replayable, Screen};
+use CallbackAction::{Flow, Informational, Replayable, Screen};
 
 pub const MENU_ASSIGNMENTS: &str = "menu:assignments";
 pub const PAGE_PREFIX: &str = "pg:";
@@ -24,6 +24,7 @@ pub const FILES_PREFIX: &str = "files:";
 pub const ATTEMPTS_PREFIX: &str = "attempts:";
 pub const INVITE_PREFIX: &str = "invite:";
 pub const GRADES_PREFIX: &str = "grades:";
+pub const CONTACT_PREFIX: &str = "contact:";
 pub const PUBLISH_PREFIX: &str = "publish:";
 pub const ARCHIVE_PREFIX: &str = "archive:";
 pub const DEADLINE_PREFIX: &str = "deadline:";
@@ -77,7 +78,50 @@ pub(super) enum CallbackAction {
     Replayable(ReplayableAction),
     Screen(ScreenAction),
     Flow(FlowAction),
+    Informational(InformationalAction),
     Noop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InformationalAction {
+    StudentContact {
+        course_id: TeachingCourseId,
+        student_id: UserId,
+    },
+}
+
+impl InformationalAction {
+    pub fn callback(self) -> String {
+        match self {
+            Self::StudentContact {
+                course_id,
+                student_id,
+            } => format!(
+                "{CONTACT_PREFIX}{}:{}",
+                encode_id(course_id.as_uuid()),
+                encode_id(student_id.as_uuid()),
+            ),
+        }
+    }
+}
+
+fn encode_id(id: Uuid) -> String {
+    URL_SAFE_NO_PAD.encode(id.as_bytes())
+}
+
+fn decode_id(value: &str) -> Option<Uuid> {
+    Uuid::from_slice(&URL_SAFE_NO_PAD.decode(value).ok()?).ok()
+}
+
+fn parse_contact(data: &str) -> Option<InformationalAction> {
+    if data.len() > 64 {
+        return None;
+    }
+    let (course, student) = data.strip_prefix(CONTACT_PREFIX)?.split_once(':')?;
+    Some(InformationalAction::StudentContact {
+        course_id: TeachingCourseId::from_uuid(decode_id(course)?),
+        student_id: UserId::from_uuid(decode_id(student)?),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,7 +178,7 @@ pub(super) enum PageTarget {
 
 impl PageTarget {
     pub fn callback(self, page: u32) -> String {
-        let id = |id: uuid::Uuid| URL_SAFE_NO_PAD.encode(id.as_bytes());
+        let id = encode_id;
         let target = match self {
             Self::Assignments => "a".to_owned(),
             Self::Archive => "ar".to_owned(),
@@ -161,10 +205,7 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
     let page = page.parse().ok()?;
     let mut parts = target.split(':');
     let kind = parts.next()?;
-    let mut id = || {
-        let bytes = URL_SAFE_NO_PAD.decode(parts.next()?).ok()?;
-        Uuid::from_slice(&bytes).ok()
-    };
+    let mut id = || decode_id(parts.next()?);
     let target = match kind {
         "a" => PageTarget::Assignments,
         "ar" => PageTarget::Archive,
@@ -400,6 +441,9 @@ const INDEX_ROUTES: &[Route<usize, ScreenAction>] = &[
 ];
 
 fn parse_prefixed(data: &str) -> Option<CallbackAction> {
+    if data.starts_with(CONTACT_PREFIX) {
+        return parse_contact(data).map(Informational);
+    }
     if data.starts_with(PAGE_PREFIX) {
         return parse_page(data).map(Replayable);
     }
@@ -492,6 +536,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn student_contact_is_informational_and_fits_two_ids_in_53_bytes() {
+        let target = InformationalAction::StudentContact {
+            course_id: TeachingCourseId::new(),
+            student_id: UserId::new(),
+        };
+        let data = target.callback();
+        assert_eq!(data.len(), 53);
+        assert_eq!(parse(&data), Some(Informational(target)));
+    }
+
+    #[test]
+    fn malformed_contact_targets_are_rejected() {
+        let id = encode_id(Uuid::new_v4());
+        for invalid in [
+            format!("{CONTACT_PREFIX}{id}"),
+            format!("{CONTACT_PREFIX}{id}:"),
+            format!("{CONTACT_PREFIX}:{id}"),
+            format!("{CONTACT_PREFIX}{id}:{id}:extra"),
+            format!("{CONTACT_PREFIX}{id}:{id}=="),
+            format!("{CONTACT_PREFIX}!invalid!:{id}"),
+            format!("{CONTACT_PREFIX}{}:{id}", URL_SAFE_NO_PAD.encode([1; 15])),
+            format!("{CONTACT_PREFIX}{id}:{}", URL_SAFE_NO_PAD.encode([1; 17])),
+            format!("{CONTACT_PREFIX}{id}:{}", "A".repeat(65)),
+        ] {
+            assert_eq!(parse(&invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
     fn pagination_routes_fit_telegram_even_with_two_ids_and_the_last_page() {
         for target in [
             PageTarget::Assignments,
@@ -575,6 +648,14 @@ mod tests {
             (format!("attempts:{assignment}"), "replayable"),
             (format!("invite:{course}"), "replayable"),
             (format!("grades:{course}"), "replayable"),
+            (
+                format!(
+                    "{CONTACT_PREFIX}{}:{}",
+                    encode_id(course),
+                    encode_id(student)
+                ),
+                "informational",
+            ),
             (format!("publish:{assignment}"), "screen"),
             (format!("archive:{assignment}"), "screen"),
             (format!("deadline:{assignment}"), "screen"),
@@ -612,6 +693,7 @@ mod tests {
                 Some(CallbackAction::Replayable(_)) => "replayable",
                 Some(CallbackAction::Screen(_)) => "screen",
                 Some(CallbackAction::Flow(_)) => "flow",
+                Some(CallbackAction::Informational(_)) => "informational",
                 Some(CallbackAction::Noop) => "noop",
                 None => "invalid",
             };

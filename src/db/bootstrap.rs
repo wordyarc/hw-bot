@@ -85,7 +85,7 @@ struct ValidatedCourse {
 }
 
 pub async fn run_bootstrap(pool: &PgPool, value: &serde_json::Value) -> Result<(), BootstrapError> {
-    let seed = validate_seed(serde_json::from_value(value.clone())?)?;
+    let seed = validate_seed(Seed::deserialize(value)?)?;
     let mut transaction = pool.begin().await?;
 
     sqlx::query!(

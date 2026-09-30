@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, display_name from users where student_group_id = $1 and role = 'student' order by display_name, id limit $2 offset $3",
+  "query": "\n        select id, display_name\n        from users\n        where student_group_id = $1\n          and role = 'student'\n        order by display_name, id\n        limit $2 offset $3\n        ",
   "describe": {
     "columns": [
       {
@@ -38,5 +38,5 @@
       false
     ]
   },
-  "hash": "f4c9cf728ff007cedf4357e93eac3f54cd6b7b7de31f43b398b360d6e6c8c70f"
+  "hash": "069b37a5de658c45a06e1b29a2ac06dd4ad98228e4b29f4a91466517fd54c765"
 }

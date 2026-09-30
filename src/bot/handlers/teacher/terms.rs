@@ -4,20 +4,24 @@ use teloxide::types::{ChatId, MessageId};
 use teloxide::{ApiError, RequestError};
 
 use super::courses::show_assignment;
-use crate::app::{ChangeTerms, CreateAssignment, ErrorCode};
+use crate::app::{AppError, ChangeTerms, CreateAssignment, ErrorCode, VersionedAssignment};
+use crate::bot::assignment_form::{
+    AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget,
+};
 use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, TermsAction};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::handlers::input::{parse_number, require_text};
 use crate::bot::handlers::{reset_dialogue, run_menu_action};
-use crate::bot::state::{
-    AssignmentTerms, BotState, FlowState, InputMode, TermsForm, TermsStep, TermsTarget,
-};
-use crate::bot::views::{MenuAction, teacher_keyboard, terms_form_view};
+use crate::bot::state::{BotState, FlowState};
+use crate::bot::views::{MenuAction, teacher_keyboard, terms_exit_keyboard, terms_form_view};
 use crate::bot::{Bot, HandlerResult, assignment_files, texts};
-use crate::domain::{AssignmentId, AssignmentStatus, DomainError, DomainResult, LatePolicy};
+use crate::domain::{
+    AssignmentId, AssignmentStatus, DomainError, MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS,
+    MAX_LATE_PERIODS, TelegramUserId,
+};
 
-pub(crate) async fn begin_edit(
+pub(crate) async fn begin_terms_edit(
     screen: Screen<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
@@ -29,15 +33,14 @@ pub(crate) async fn begin_edit(
     {
         return screen.stale().await;
     }
-    let (assignment, revision) = match screen
+    let VersionedAssignment {
+        assignment,
+        revision,
+    } = screen
         .services()
         .assignments
         .find_versioned_for_teacher(screen.actor(), assignment_id)
-        .await
-    {
-        Ok(value) => value,
-        Err(error) => return screen.fail(error).await,
-    };
+        .await?;
     if assignment.status() == AssignmentStatus::Archived {
         return send_error_code(
             screen.bot(),
@@ -46,22 +49,10 @@ pub(crate) async fn begin_edit(
         )
         .await;
     }
-    let policy = assignment.late_policy();
-    let terms = AssignmentTerms {
-        target: TermsTarget::Edit {
-            assignment_id,
-            grading: assignment.grading(),
-            revision,
-            created_at: assignment.created_at(),
-            original_closes_at: assignment.closes_at(),
-        },
-        deadline_at: Some(assignment.deadline_at()),
-        allow_late: policy.is_some(),
-        period_days: policy.map_or(7, LatePolicy::period_days),
-        penalty: policy.map(LatePolicy::penalty),
-        max_periods: policy.map(LatePolicy::max_periods),
-    };
-    let mut form = TermsForm::new(terms, TermsStep::Summary);
+    let mut form = TermsForm::new(
+        AssignmentTerms::editing(&assignment, revision),
+        TermsStep::Summary,
+    );
     form.message_id = Some(message_id);
     render(screen.chat(), form, None).await
 }
@@ -76,13 +67,15 @@ pub(super) async fn render(
     if form.step == TermsStep::Summary {
         form.go(TermsStep::Summary);
     }
-    let (mut text, keyboard) = terms_form_view(&form, chat.timezone());
+    let Some((mut text, keyboard)) = terms_form_view(&form, chat.timezone()) else {
+        return discard(chat, form).await;
+    };
     if let Some(error) = error {
         text = format!("{error}\n\n{text}");
     }
     match form.mode {
         InputMode::Manual => {
-            detach(bot, chat_id, &mut form).await?;
+            detach(bot, chat_id, form.message_id.take()).await?;
             chat.ask(&text).await?;
         }
         InputMode::Buttons | InputMode::Calendar(_) => {
@@ -115,38 +108,35 @@ pub(super) async fn render(
     Ok(())
 }
 
-pub(super) async fn detach(bot: &Bot, chat_id: ChatId, form: &mut TermsForm) -> HandlerResult {
-    if let Some(id) = form.message_id.take() {
-        match bot.edit_message_reply_markup(chat_id, id).await {
-            Ok(_)
-            | Err(RequestError::Api(
-                ApiError::MessageNotModified
-                | ApiError::MessageToEditNotFound
-                | ApiError::MessageCantBeEdited,
-            )) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
+/// Сюда попадает только форма, которую нельзя показать: шаг требует значений, которых в ней нет.
+/// Каждая правка формы проверяется, поэтому это ошибка программы, а не ввода.
+async fn discard(chat: Chat<'_>, form: TermsForm) -> HandlerResult {
+    tracing::error!(step = ?form.step, "terms form does not hold what its step needs");
+    reset_dialogue(chat.dialogue()).await?;
+    detach(chat.bot(), chat.chat_id(), form.message_id).await?;
+    chat.bot()
+        .send_message(chat.chat_id(), texts::INVALID_TERMS)
+        .reply_markup(teacher_keyboard())
+        .await?;
     Ok(())
 }
 
-fn validate_partial(terms: &AssignmentTerms) -> DomainResult<()> {
-    if let Some(deadline) = terms.deadline_at {
-        if let TermsTarget::Edit { created_at, .. } = terms.target
-            && deadline <= created_at
-        {
-            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
-        }
-        if terms.allow_late {
-            terms
-                .preview_policy(terms.max_periods.unwrap_or(1))?
-                .validate_horizon(deadline)?;
-        }
+async fn detach(bot: &Bot, chat_id: ChatId, message_id: Option<MessageId>) -> HandlerResult {
+    let Some(message_id) = message_id else {
+        return Ok(());
+    };
+    match bot.edit_message_reply_markup(chat_id, message_id).await {
+        Ok(_)
+        | Err(RequestError::Api(
+            ApiError::MessageNotModified
+            | ApiError::MessageToEditNotFound
+            | ApiError::MessageCantBeEdited,
+        )) => Ok(()),
+        Err(error) => Err(error.into()),
     }
-    Ok(())
 }
 
-pub(super) fn validation_message(error: &DomainError) -> String {
+fn validation_message(error: &DomainError) -> String {
     match error {
         DomainError::LateHorizonTooLong { max_days } => texts::horizon_too_long(*max_days),
         DomainError::AssignmentClosingOutOfRange => texts::HORIZON_OUT_OF_RANGE.into(),
@@ -170,7 +160,17 @@ pub(crate) async fn handle_late_policy(
     if !form.terms.grading().is_scored() {
         return screen.stale().await;
     }
-    form.terms.allow_late = choice == LatePolicyChoice::Penalty;
+    let previous = std::mem::replace(
+        &mut form.terms.allow_late,
+        choice == LatePolicyChoice::Penalty,
+    );
+    // Прежние штраф и число периодов сохраняются, поэтому возвращённая политика может сразу
+    // вести к итогу. Старый горизонт длиннее нынешнего предела здесь допустим: его исправят
+    // с итога.
+    if form.terms.cannot_be_summarised() {
+        form.terms.allow_late = previous;
+        return render(screen.chat(), form, Some(texts::HORIZON_OUT_OF_RANGE)).await;
+    }
     form.advance();
     render(screen.chat(), form, None).await
 }
@@ -229,22 +229,22 @@ async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> Ha
     let max = match form.step {
         TermsStep::Penalty => {
             terms.penalty = Some(value);
-            crate::domain::MAX_LATE_PENALTY
+            MAX_LATE_PENALTY
         }
         TermsStep::Period => {
             terms.period_days = value;
-            crate::domain::MAX_LATE_PERIOD_DAYS
+            MAX_LATE_PERIOD_DAYS
         }
         TermsStep::Periods => {
             terms.max_periods = Some(value);
-            crate::domain::MAX_LATE_PERIODS
+            MAX_LATE_PERIODS
         }
         _ => return screen.stale().await,
     };
     if !(1..=max).contains(&value) {
         return render(screen.chat(), form, Some(&texts::number_prompt(max))).await;
     }
-    if let Err(error) = validate_partial(&terms) {
+    if let Err(error) = terms.validate() {
         return render(screen.chat(), form, Some(&validation_message(&error))).await;
     }
     form.terms = terms;
@@ -258,19 +258,17 @@ pub(super) async fn apply_date(
     at: DateTime<Utc>,
 ) -> HandlerResult {
     if form.step == TermsStep::DurationDate {
-        let deadline = form.terms.deadline_at.expect("duration follows deadline");
-        let policy = form
-            .terms
-            .preview_policy(1)
-            .map_err(crate::app::AppError::from)?;
-        let periods = policy.periods_to_close_at(deadline, at);
-        if periods == 0 || periods > u32::from(crate::domain::MAX_LATE_PERIODS) {
-            return render(screen.chat(), form, Some(texts::INVALID_DURATION_DATE)).await;
-        }
-        let periods = u16::try_from(periods).expect("bounded by MAX_LATE_PERIODS");
+        let Some(deadline) = form.terms.deadline_at else {
+            return render(screen.chat(), form, None).await;
+        };
+        let policy = form.terms.preview_policy(1).map_err(AppError::from)?;
+        let periods = match u16::try_from(policy.periods_to_close_at(deadline, at)) {
+            Ok(periods) if (1..=MAX_LATE_PERIODS).contains(&periods) => periods,
+            _ => return render(screen.chat(), form, Some(texts::INVALID_DURATION_DATE)).await,
+        };
         let mut terms = form.terms.clone();
         terms.max_periods = Some(periods);
-        if let Err(error) = validate_partial(&terms) {
+        if let Err(error) = terms.validate() {
             let message = match error {
                 DomainError::LateHorizonTooLong { .. } | DomainError::InvalidLatePolicy { .. } => {
                     texts::INVALID_DURATION_DATE.to_owned()
@@ -289,7 +287,7 @@ pub(super) async fn apply_date(
         }
         let mut terms = form.terms.clone();
         terms.deadline_at = Some(at);
-        if let Err(error) = validate_partial(&terms) {
+        if let Err(error) = terms.validate() {
             return render(screen.chat(), form, Some(&validation_message(&error))).await;
         }
         form.terms = terms;
@@ -315,7 +313,7 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> Han
     ) {
         return render(screen.chat(), form, Some(texts::CHOOSE_BUTTON)).await;
     }
-    detach(screen.bot(), screen.chat_id(), &mut form).await?;
+    detach(screen.bot(), screen.chat_id(), form.message_id.take()).await?;
     match form.step {
         TermsStep::Deadline | TermsStep::DurationDate => {
             match screen.timezone().parse_deadline(text) {
@@ -339,7 +337,7 @@ pub(crate) async fn back(screen: Screen<'_>, mut form: TermsForm) -> HandlerResu
                 return cancel(screen, form).await;
             };
             // Если настройку штрафа прервали, итог снова запрещает опоздание, но введённые числа сохраняет.
-            if step == TermsStep::Summary && form.terms.committed_policy().is_err() {
+            if step == TermsStep::Summary && form.terms.complete().is_none() {
                 form.terms.allow_late = false;
             }
             form.go(step);
@@ -353,7 +351,6 @@ pub(crate) async fn handle_terms(
     message_id: MessageId,
     action: TermsAction,
     state: BotState,
-    transfers: &crate::bot::FileTransfers,
 ) -> HandlerResult {
     if let BotState::Flow(FlowState::ConfirmingTermsExit {
         message_id: current,
@@ -373,7 +370,7 @@ pub(crate) async fn handle_terms(
             TermsAction::Exit => {
                 reset_dialogue(screen.dialogue()).await?;
                 abandon(screen.bot(), screen.chat_id(), &form).await?;
-                run_menu_action(screen.chat(), telegram_user_id, menu, transfers).await
+                run_menu_action(screen.chat(), telegram_user_id, menu).await
             }
             _ => screen.stale().await,
         };
@@ -405,18 +402,12 @@ pub(crate) async fn handle_terms(
     if form.step != TermsStep::Summary {
         return screen.stale().await;
     }
-    if form.previous_closes_at.is_none() {
-        form.previous_closes_at = form.terms.deadline_at.map(|deadline| {
-            form.terms
-                .committed_policy()
-                .expect("complete summary")
-                .map_or(deadline, |policy| {
-                    policy.closes_at(deadline).expect("validated summary")
-                })
-        });
-    }
+    let Some(complete) = form.terms.complete() else {
+        return render(screen.chat(), form, None).await;
+    };
+    form.previous_closes_at.get_or_insert(complete.closes_at);
     match action {
-        TermsAction::Save => return save(screen, form).await,
+        TermsAction::Save => return save(screen, form, complete).await,
         TermsAction::Cancel => return cancel(screen, form).await,
         _ => {
             let Some(step) = TermsStep::summary_edit(action, &form.terms) else {
@@ -433,13 +424,13 @@ pub(crate) async fn confirm_exit(
     screen: Screen<'_>,
     mut form: TermsForm,
     action: MenuAction,
-    telegram_user_id: crate::domain::TelegramUserId,
+    telegram_user_id: TelegramUserId,
 ) -> HandlerResult {
-    detach(screen.bot(), screen.chat_id(), &mut form).await?;
+    detach(screen.bot(), screen.chat_id(), form.message_id).await?;
     let sent = screen
         .bot()
         .send_message(screen.chat_id(), texts::TERMS_EXIT_QUESTION)
-        .reply_markup(crate::bot::views::terms_exit_keyboard())
+        .reply_markup(terms_exit_keyboard())
         .await?;
     form.message_id = Some(sent.id);
     screen
@@ -455,8 +446,7 @@ pub(crate) async fn confirm_exit(
 }
 
 pub(crate) async fn abandon(bot: &Bot, chat_id: ChatId, form: &TermsForm) -> HandlerResult {
-    let mut form = form.clone();
-    detach(bot, chat_id, &mut form).await?;
+    detach(bot, chat_id, form.message_id).await?;
     let text = if matches!(form.terms.target, TermsTarget::Create(_)) {
         texts::DRAFT_DISCARDED
     } else {
@@ -477,143 +467,85 @@ async fn cancel(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
     Ok(())
 }
 
-async fn save(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
-    let terms = &form.terms;
-    let Some(deadline_at) = terms.deadline_at else {
-        return screen.stale().await;
-    };
-    if terms.first_incomplete_step() != TermsStep::Summary {
-        return render(screen.chat(), form, None).await;
-    }
-    if let Err(error) = validate_partial(terms) {
+async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> HandlerResult {
+    if let Err(error) = form.terms.validate() {
         return render(screen.chat(), form, Some(&validation_message(&error))).await;
     }
-    let late_policy = match terms.committed_policy() {
-        Ok(policy) => policy,
-        Err(error) => {
-            return render(screen.chat(), form, Some(&validation_message(&error))).await;
-        }
-    };
-    let creating = matches!(terms.target, TermsTarget::Create(_));
-    let edited = match terms.target {
-        TermsTarget::Edit { assignment_id, .. } => Some(assignment_id),
-        TermsTarget::Create(_) => None,
-    };
-    let result = match &terms.target {
+    let TermsForm {
+        terms, message_id, ..
+    } = form;
+    let assignments = &screen.services().assignments;
+    let (result, edited) = match terms.target {
         TermsTarget::Create(draft) => {
-            screen
-                .services()
-                .assignments
+            let created = assignments
                 .create(CreateAssignment {
-                    teaching_course_id: draft.course_id,
+                    teaching_course_id: draft.text.course_id,
                     actor: screen.actor(),
-                    title: draft.title.clone(),
-                    body: draft.body.clone(),
+                    title: draft.text.title,
+                    body: draft.text.body,
                     max_attempts: draft.max_attempts,
                     grading: draft.grading,
-                    late_policy,
+                    late_policy: complete.late_policy,
                     created_at: Utc::now(),
-                    deadline_at,
+                    deadline_at: complete.deadline_at,
                 })
-                .await
+                .await;
+            (created, None)
         }
         TermsTarget::Edit {
             assignment_id,
             revision,
             ..
         } => {
-            screen
-                .services()
-                .assignments
+            let changed = assignments
                 .change_terms(ChangeTerms {
-                    assignment_id: *assignment_id,
+                    assignment_id,
                     actor: screen.actor(),
-                    deadline_at,
-                    late_policy,
-                    expected_revision: *revision,
+                    deadline_at: complete.deadline_at,
+                    late_policy: complete.late_policy,
+                    expected_revision: revision,
                 })
-                .await
+                .await;
+            (changed, Some(assignment_id))
         }
     };
-    let assignment = match result {
-        Ok(value) => value,
-        Err(error) => {
-            return match edited {
-                Some(assignment_id) if error.code() == ErrorCode::ConcurrentModification => {
-                    conflict(screen, form, assignment_id).await
-                }
-                _ => screen.fail(error).await,
-            };
+    let assignment = match (result, edited) {
+        (Ok(assignment), _) => assignment,
+        (Err(error), Some(assignment_id)) if error.code() == ErrorCode::ConcurrentModification => {
+            return conflict(screen, message_id, assignment_id).await;
         }
+        (Err(error), _) => return Err(error.into()),
     };
     reset_dialogue(screen.dialogue()).await?;
-    let mut form = form;
-    detach(screen.bot(), screen.chat_id(), &mut form).await?;
+    detach(screen.bot(), screen.chat_id(), message_id).await?;
+    let notice = if edited.is_some() {
+        texts::TERMS_SAVED
+    } else {
+        texts::DRAFT_CREATED
+    };
     screen
         .bot()
-        .send_message(
-            screen.chat_id(),
-            if creating {
-                texts::DRAFT_CREATED
-            } else {
-                texts::TERMS_SAVED
-            },
-        )
+        .send_message(screen.chat_id(), notice)
         .reply_markup(teacher_keyboard())
         .await?;
-    if creating {
-        assignment_files::show(screen, assignment.id(), true).await
-    } else {
+    if edited.is_some() {
         show_assignment(screen, assignment.id()).await
+    } else {
+        assignment_files::show(screen, assignment.id(), true).await
     }
 }
 
 async fn conflict(
     screen: Screen<'_>,
-    mut form: TermsForm,
+    message_id: Option<MessageId>,
     assignment_id: AssignmentId,
 ) -> HandlerResult {
     reset_dialogue(screen.dialogue()).await?;
-    detach(screen.bot(), screen.chat_id(), &mut form).await?;
+    detach(screen.bot(), screen.chat_id(), message_id).await?;
     screen
         .bot()
         .send_message(screen.chat_id(), texts::TERMS_CONFLICT)
         .reply_markup(teacher_keyboard())
         .await?;
     show_assignment(screen, assignment_id).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::bot::state::DraftAssignment;
-    use crate::domain::{Grading, TeachingCourseId};
-
-    #[test]
-    fn summary_transition_collects_missing_policy_fields_without_defaulting_them() {
-        let mut draft =
-            DraftAssignment::new(TeachingCourseId::new(), "Title".into(), "Body".into(), 1);
-        draft.grading = Grading::scored(5).unwrap();
-        let mut terms = AssignmentTerms::creating(draft);
-        terms.allow_late = true;
-        let mut form = TermsForm::new(terms, TermsStep::Policy);
-
-        form.go(TermsStep::Summary);
-        assert_eq!(form.step, TermsStep::Deadline);
-        form.terms.deadline_at = Some(crate::test_support::t0());
-        form.go(TermsStep::Summary);
-        assert_eq!(form.step, TermsStep::Penalty);
-        assert!(form.terms.penalty.is_none());
-        form.terms.penalty = Some(2);
-        form.go(TermsStep::Summary);
-        assert_eq!(form.step, TermsStep::Periods);
-        assert!(form.terms.max_periods.is_none());
-        form.terms.max_periods = Some(4);
-        form.go(TermsStep::Summary);
-        assert_eq!(form.step, TermsStep::Summary);
-        assert_eq!(
-            form.terms.committed_policy().unwrap(),
-            Some(LatePolicy::new(7, 2, 4).unwrap())
-        );
-    }
 }

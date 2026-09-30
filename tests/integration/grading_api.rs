@@ -443,8 +443,6 @@ async fn a_horizon_longer_than_366_days_preserves_conditions_and_revision() {
         .await
         .unwrap()
         .unwrap();
-    let revision = before.revision();
-    let before = before.into_assignment();
     app.post_as(
         &format!("/assignments/{}/grading", assignment.id().as_uuid()),
         app.teacher(),
@@ -458,8 +456,8 @@ async fn a_horizon_longer_than_366_days_preserves_conditions_and_revision() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(after.revision(), revision);
-    assert_eq!(after.into_assignment(), before);
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.assignment, before.assignment);
 }
 
 #[tokio::test]

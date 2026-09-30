@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into users (\n            id, telegram_user_id, role, display_name, student_group_id, registered_at\n        )\n        values ($1, $2, $3, $4, $5, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "435d7fa707678e92fc94a39832d4317e2f70320dfa846135f49dce3d67c3ca75"
+}

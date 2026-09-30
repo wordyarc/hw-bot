@@ -1,16 +1,17 @@
 use chrono::{DateTime, Utc};
-
 use teloxide::types::InlineKeyboardMarkup;
 
-use crate::bot::state::{TermsForm, TermsStep, TermsTarget};
+use super::keyboards::terms_form_keyboard;
+use crate::bot::assignment_form::{CompleteTerms, TermsForm, TermsStep, TermsTarget};
 use crate::bot::{texts, timezone::BotTimezone};
 use crate::domain::{Assignment, Grading, LatePolicy, MaxScore};
 use crate::telegram::text::truncate;
 
+/// `None` означает, что в форме нет значений, без которых её шаг не показать.
 pub(crate) fn terms_form_view(
     form: &TermsForm,
     timezone: &BotTimezone,
-) -> (String, InlineKeyboardMarkup) {
+) -> Option<(String, InlineKeyboardMarkup)> {
     let terms = &form.terms;
     let context = terms
         .deadline_at
@@ -51,11 +52,9 @@ pub(crate) fn terms_form_view(
                 terms.period_days
             )
         ),
-        TermsStep::Period => format!("{context}{}", texts::PERIOD_PROMPT),
+        TermsStep::Period => format!("{context}{}", texts::period_prompt()),
         TermsStep::Periods => {
-            let policy = terms
-                .preview_policy(1)
-                .expect("validated period and penalty");
+            let policy = terms.preview_policy(1).ok()?;
             format!(
                 "{context}{}\n{}",
                 texts::penalty_rule(policy.period_days(), policy.penalty()),
@@ -63,39 +62,38 @@ pub(crate) fn terms_form_view(
             )
         }
         TermsStep::DurationConfirm { selected, periods } => {
-            let policy = terms.preview_policy(periods).expect("validated duration");
-            let closing = policy
-                .closes_at(terms.deadline_at.expect("duration follows deadline"))
-                .expect("validated duration");
+            let closing = terms
+                .preview_policy(periods)
+                .ok()?
+                .closes_at(terms.deadline_at?)
+                .ok()?;
             texts::duration_confirmation(
                 &timezone.format(selected),
                 &texts::lateness_duration(terms.period_days, periods),
                 &timezone.format(closing),
             )
         }
-        TermsStep::Summary => terms_summary(form, timezone),
+        TermsStep::Summary => terms_summary(form, terms.complete()?, timezone),
     };
-    (text, super::keyboards::terms_form_keyboard(form, timezone))
+    Some((text, terms_form_keyboard(form, timezone)?))
 }
 
-fn terms_summary(form: &TermsForm, timezone: &BotTimezone) -> String {
+fn terms_summary(form: &TermsForm, complete: CompleteTerms, timezone: &BotTimezone) -> String {
     let terms = &form.terms;
-    let deadline = terms.deadline_at.expect("summary requires deadline");
-    let policy = terms
-        .committed_policy()
-        .expect("summary requires complete policy");
-    let closing = policy.map_or(deadline, |policy| {
-        policy.closes_at(deadline).expect("validated horizon")
-    });
+    let CompleteTerms {
+        deadline_at: deadline,
+        late_policy: policy,
+        closes_at: closing,
+    } = complete;
     let mut text = format!(
         "{}\n{}",
         texts::TERMS_CONFIRM,
-        terms_lines(terms.grading(), deadline, policy, timezone)
+        terms_lines(terms.grading(), deadline, policy, closing, timezone)
     );
     if let (Some(policy), Grading::Score { max_score }) = (policy, terms.grading()) {
         text.push_str(&format!(
             "\n{}",
-            penalty_schedule(deadline, policy, max_score, timezone)
+            penalty_schedule(deadline, policy, closing, max_score, timezone)
         ));
     }
     let previous = match terms.target {
@@ -142,6 +140,7 @@ fn schedule_periods(policy: LatePolicy, max_score: MaxScore) -> Vec<u16> {
 pub(super) fn penalty_schedule(
     deadline_at: DateTime<Utc>,
     policy: LatePolicy,
+    closes_at: DateTime<Utc>,
     max_score: MaxScore,
     timezone: &BotTimezone,
 ) -> String {
@@ -152,13 +151,13 @@ pub(super) fn penalty_schedule(
     ];
     let mut previous = 0;
     for periods in schedule_periods(policy, max_score) {
+        let Ok(until) = policy.period_end(deadline_at, periods) else {
+            break;
+        };
         if periods > previous + 1 {
             lines.push(texts::schedule_skipped(u32::from(periods - previous - 1)));
         }
         let score = policy.possible_score(max_score, u32::from(periods));
-        let until = policy
-            .period_end(deadline_at, periods)
-            .expect("validated horizon");
         lines.push(texts::schedule_penalty_row(
             &timezone.format_until(until),
             max - score,
@@ -167,7 +166,6 @@ pub(super) fn penalty_schedule(
         ));
         previous = periods;
     }
-    let closes_at = policy.closes_at(deadline_at).expect("validated horizon");
     lines.push(texts::schedule_closed(&timezone.format_since(closes_at)));
     lines.join("\n")
 }
@@ -177,33 +175,36 @@ pub(crate) fn grading_lines(
     now: DateTime<Utc>,
     timezone: &BotTimezone,
 ) -> String {
+    let closes_at = assignment.closes_at();
     let mut lines = format!(
         "\n{}",
         terms_lines(
             assignment.grading(),
             assignment.deadline_at(),
             assignment.late_policy(),
+            closes_at,
             timezone,
         )
     );
-    if now >= assignment.closes_at() {
+    if now >= closes_at {
         lines.push_str(&format!(
             "\n{} {}.",
             texts::CLOSED_ON,
-            timezone.format_closed_since(assignment.closes_at())
+            timezone.format_closed_since(closes_at)
         ));
     }
     let penalty = assignment.penalty_at(now);
-    if penalty > 0 && now < assignment.closes_at() {
+    if penalty > 0 && now < closes_at {
         lines.push_str(&format!("\n{} −{penalty}", texts::LATE_PENALTY_LABEL));
     }
     lines
 }
 
-pub(crate) fn terms_lines(
+fn terms_lines(
     grading: Grading,
     deadline_at: DateTime<Utc>,
     late_policy: Option<LatePolicy>,
+    closes_at: DateTime<Utc>,
     timezone: &BotTimezone,
 ) -> String {
     let scale = match grading.max_score() {
@@ -219,7 +220,7 @@ pub(crate) fn terms_lines(
             texts::LATENESS_LABEL,
             texts::lateness_duration(policy.period_days(), policy.max_periods()),
             texts::SUBMISSIONS_CLOSE_LABEL,
-            timezone.format(policy.closes_at(deadline_at).expect("validated horizon"))
+            timezone.format(closes_at)
         ),
         None => format!(
             "{scale}\n{} {}. {}",

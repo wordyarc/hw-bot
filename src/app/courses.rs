@@ -4,7 +4,9 @@ use crate::app::access::load_managing_teacher;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
-use crate::domain::{DomainError, InviteGeneration, StudentGroup, TeachingCourseId, UserId};
+use crate::domain::{
+    DomainError, InviteGeneration, StudentGroup, TeachingCourseId, TelegramUserId, UserId,
+};
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{AssignmentGrade, CourseStudent, TeachingCourseSummary};
 
@@ -12,6 +14,14 @@ use crate::read_models::{AssignmentGrade, CourseStudent, TeachingCourseSummary};
 pub struct GroupInviteState {
     pub group: StudentGroup,
     pub generation: InviteGeneration,
+}
+
+#[derive(Clone, Debug)]
+pub struct StudentContact {
+    pub student_id: UserId,
+    pub telegram_user_id: TelegramUserId,
+    pub display_name: String,
+    pub group_code: String,
 }
 
 #[derive(Clone, Debug)]
@@ -155,6 +165,28 @@ impl CourseService {
             .into_iter()
             .next()
             .required("student")
+    }
+
+    pub async fn student_contact(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+        student_id: UserId,
+    ) -> AppResult<StudentContact> {
+        let group = self
+            .managed_group(actor, course_id, "read student contact")
+            .await?;
+        let student = db::users::find_by_id(&self.pool, student_id)
+            .await?
+            .filter(|user| user.role().student_group_id() == Some(group.id()))
+            .required("student")?;
+
+        Ok(StudentContact {
+            student_id: student.id(),
+            telegram_user_id: student.telegram_user_id(),
+            display_name: student.display_name().as_str().to_owned(),
+            group_code: group.code().as_str().to_owned(),
+        })
     }
 
     async fn managed_group(

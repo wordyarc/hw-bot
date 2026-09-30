@@ -62,7 +62,9 @@ async fn registration_without_an_invite_is_rejected() {
 async fn a_tampered_invite_is_rejected() {
     let app = TestApp::start().await;
     let token = app.group_invite_token().await;
-    let tampered = format!("{}A", &token[..token.len() - 1]);
+    let replacement = if token.ends_with('A') { 'B' } else { 'A' };
+    let tampered = format!("{}{replacement}", &token[..token.len() - 1]);
+    assert_ne!(tampered, token);
 
     app.register_student(2002, "Petr", &tampered)
         .await

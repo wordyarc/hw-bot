@@ -1,4 +1,5 @@
 mod admission;
+mod contacts;
 mod creation;
 mod failures;
 mod files;

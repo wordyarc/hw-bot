@@ -1,7 +1,10 @@
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    AssignmentId, StudentGroup, Subject, SubmissionHistory, TeachingCourse, User, UserId,
+    Assignment, AssignmentId, StoredFileMetadata, StudentGroup, Subject, SubmissionHistory,
+    TeachingCourse, User, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -39,4 +42,31 @@ pub struct QueuePlace {
 pub struct AssignmentStudentSummary {
     pub student: User,
     pub history: SubmissionHistory,
+}
+
+#[derive(Clone, Debug)]
+pub struct VersionedAssignment {
+    pub assignment: Assignment,
+    pub revision: i64,
+}
+
+pub struct StoredFile {
+    pub metadata: StoredFileMetadata,
+    pub content: Vec<u8>,
+}
+
+impl fmt::Debug for StoredFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredFile")
+            .field("metadata", &self.metadata)
+            .field("content_len", &self.content.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UserStatistics {
+    pub assignments: u32,
+    pub pending: u32,
+    pub courses: u32,
 }

@@ -56,6 +56,7 @@ pub(crate) use str_enum;
 #[cfg(test)]
 mod tests {
     use crate::app::ErrorCode;
+    use crate::db::notifications::ReviewOutcome;
     use crate::domain::{AssignmentStatus, EducationLevel, SubmissionStatus};
 
     macro_rules! assert_round_trips {
@@ -74,7 +75,8 @@ mod tests {
             SubmissionStatus,
             AssignmentStatus,
             EducationLevel,
-            ErrorCode
+            ErrorCode,
+            ReviewOutcome
         );
     }
 

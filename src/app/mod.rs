@@ -15,22 +15,24 @@ pub use assignments::{
     CreateAssignment, GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
-pub use courses::{CourseService, GroupInviteState, StudentGrades};
+pub use courses::{CourseService, GroupInviteState, StudentContact, StudentGrades};
 pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{
-    AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
+    AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService,
 };
 pub use review::{ReviewQueueItem, ReviewService, ReviewSubmission};
 pub use submissions::{SubmissionService, SubmitHomework};
-pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService, UserStatistics};
+pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService};
 
+use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
-    AssignmentGrade, AssignmentStudentSummary, CourseStudent, QueuePlace, TeachingCourseSummary,
+    AssignmentGrade, AssignmentStudentSummary, CourseStudent, QueuePlace, StoredFile,
+    TeachingCourseSummary, UserStatistics, VersionedAssignment,
 };
 
-fn on_conflict<T>(result: crate::db::DbResult<T>, conflict: AppError) -> AppResult<T> {
+fn on_conflict<T>(result: DbResult<T>, conflict: AppError) -> AppResult<T> {
     match result {
-        Err(crate::db::DbError::Conflict { .. }) => Err(conflict),
+        Err(DbError::Conflict { .. }) => Err(conflict),
         result => Ok(result?),
     }
 }

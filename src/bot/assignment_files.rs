@@ -4,22 +4,21 @@ use teloxide::types::MessageId;
 use super::HandlerResult;
 use super::context::{Screen, TextStep};
 use super::errors::send_error_code;
-use super::files::{FileTransfers, incoming_file};
-use super::state::{BotState, FlowState, ScreenState};
+use super::files::{TransferError, incoming_file};
+use super::state::{BotState, FileDeletion, FlowState, ScreenState};
 use super::texts;
 use super::views::{
     assignment_files_keyboard, confirm_file_deletion_keyboard, send_message_chunks,
     teacher_keyboard,
 };
 use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
-use crate::domain::{AssignmentId, AssignmentStatus, StoredFileId, StoredFileMetadata};
+use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata};
 
 pub(super) async fn submit_file(
     step: TextStep<'_>,
     assignment_id: AssignmentId,
     expected_revision: i64,
     creation_flow: bool,
-    transfers: &FileTransfers,
 ) -> HandlerResult {
     let bot = step.bot();
     let message = step.message();
@@ -37,18 +36,22 @@ pub(super) async fn submit_file(
         send_error_code(bot, chat_id, ErrorCode::FileTooLarge).await?;
         return Ok(());
     }
-    let transfer_permit = transfers.acquire().await?;
-    let content = match transfer_permit
-        .run(transfers.download(&incoming.file_id, policy.max_file_size_bytes))
+    let transfer = step.transfers().acquire().await?;
+    let content = match transfer
+        .download(&incoming.file_id, policy.max_file_size_bytes)
         .await
     {
         Ok(content) => content,
+        Err(TransferError::TooLarge) => {
+            send_error_code(bot, chat_id, ErrorCode::FileTooLarge).await?;
+            return Ok(());
+        }
         Err(_) => {
             tracing::warn!(
                 kind = "file_download_failed",
                 "Telegram file download failed"
             );
-            bot.send_message(chat_id, crate::bot::texts::FILE_DOWNLOAD_FAILED)
+            bot.send_message(chat_id, texts::FILE_DOWNLOAD_FAILED)
                 .await?;
             return Ok(());
         }
@@ -75,7 +78,7 @@ pub(super) async fn submit_file(
             content,
         })
         .await;
-    drop(transfer_permit);
+    drop(transfer);
     match result {
         Ok(_) => {
             bot.send_message(chat_id, texts::FILE_ADDED)
@@ -118,7 +121,6 @@ pub(super) async fn open(
     message_id: MessageId,
     state: &BotState,
     index: usize,
-    transfers: &FileTransfers,
 ) -> HandlerResult {
     let Some(files) = state.files_screen(message_id) else {
         return screen.stale().await;
@@ -126,18 +128,17 @@ pub(super) async fn open(
     let Some(file_id) = files.file_ids.get(index).copied() else {
         return screen.stale().await;
     };
-    let transfer = transfers.acquire().await?;
+    let transfer = screen.transfers().acquire().await?;
     transfer
-        .run(async {
-            let file = screen
-                .services()
-                .files
-                .open_assignment_file_for_teacher(screen.actor(), files.assignment_id, file_id)
-                .await?;
-            transfers.send(screen.chat_id(), file).await?;
-            Ok(())
+        .send(screen.chat_id(), || {
+            screen.services().files.open_assignment_file_for_teacher(
+                screen.actor(),
+                files.assignment_id,
+                file_id,
+            )
         })
-        .await
+        .await?;
+    Ok(())
 }
 
 pub(super) async fn request_deletion(
@@ -152,10 +153,16 @@ pub(super) async fn request_deletion(
     let Some(file_id) = files.file_ids.get(index).copied() else {
         return screen.stale().await;
     };
+    let deletion = FileDeletion {
+        assignment_id: files.assignment_id,
+        file_id,
+        expected_revision: files.revision,
+        creation_flow: files.creation_flow,
+    };
     if files.requires_confirmation {
         let confirmation = screen
             .bot()
-            .send_message(screen.chat_id(), crate::bot::texts::FILE_DELETE_CONFIRM)
+            .send_message(screen.chat_id(), texts::FILE_DELETE_CONFIRM)
             .reply_markup(confirm_file_deletion_keyboard())
             .await?;
         screen
@@ -163,22 +170,12 @@ pub(super) async fn request_deletion(
             .update(BotState::Flow(
                 FlowState::ConfirmingAssignmentFileDeletion {
                     message_id: confirmation.id,
-                    assignment_id: files.assignment_id,
-                    file_id,
-                    expected_revision: files.revision,
-                    creation_flow: files.creation_flow,
+                    deletion,
                 },
             ))
             .await?;
     } else {
-        delete(
-            screen,
-            files.assignment_id,
-            file_id,
-            files.revision,
-            files.creation_flow,
-        )
-        .await?;
+        delete(screen, deletion).await?;
     }
     Ok(())
 }
@@ -188,19 +185,10 @@ pub(super) async fn confirm_deletion(
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
-    let Some((assignment_id, file_id, expected_revision, creation_flow)) =
-        state.confirming_file_deletion(message_id)
-    else {
+    let Some(deletion) = state.confirming_file_deletion(message_id) else {
         return screen.stale().await;
     };
-    delete(
-        screen,
-        assignment_id,
-        file_id,
-        expected_revision,
-        creation_flow,
-    )
-    .await
+    delete(screen, deletion).await
 }
 
 pub(super) async fn cancel_deletion(
@@ -208,11 +196,10 @@ pub(super) async fn cancel_deletion(
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
-    let Some((assignment_id, _, _, creation_flow)) = state.confirming_file_deletion(message_id)
-    else {
+    let Some(deletion) = state.confirming_file_deletion(message_id) else {
         return screen.stale().await;
     };
-    show(screen, assignment_id, creation_flow).await
+    show(screen, deletion.assignment_id, deletion.creation_flow).await
 }
 
 pub(super) async fn show(
@@ -273,13 +260,13 @@ pub(super) async fn show(
     Ok(())
 }
 
-async fn delete(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
-    file_id: StoredFileId,
-    expected_revision: i64,
-    creation_flow: bool,
-) -> HandlerResult {
+async fn delete(screen: Screen<'_>, deletion: FileDeletion) -> HandlerResult {
+    let FileDeletion {
+        assignment_id,
+        file_id,
+        expected_revision,
+        creation_flow,
+    } = deletion;
     match screen
         .services()
         .files

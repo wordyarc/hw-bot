@@ -123,7 +123,7 @@ where
     E: PgExecutor<'e>,
 {
     if submission.status() == SubmissionStatus::PendingReview {
-        return Err(DbError::Conflict {
+        return Err(DbError::Precondition {
             message: "pending submission cannot be saved as a review result",
         });
     }

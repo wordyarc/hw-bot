@@ -1128,6 +1128,52 @@ async fn cancelling_an_incomplete_policy_edit_returns_to_a_valid_strict_summary(
 }
 
 #[tokio::test]
+async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_bot_survives() {
+    let app = TestApp::start().await;
+    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
+    let id = assignment.id().as_uuid();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let strict = cb(callbacks::LATE_POLICY_PREFIX, "none");
+    open_edit(&app, &telegram, id, callbacks::DEADLINE_PREFIX).await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_POLICY)
+        .await;
+    telegram.click_button(app.teacher(), &strict).await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
+        .await;
+    telegram.message(app.teacher(), "30.12.+262142");
+    telegram.flush(app.teacher()).await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_POLICY)
+        .await;
+
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
+        .await;
+
+    let policy_step = telegram.button(app.teacher(), &strict).await;
+    let refusal = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| message["message_id"] == policy_step.message_id)
+        .unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(refusal.contains(texts::HORIZON_OUT_OF_RANGE), "{refusal}");
+    telegram.click_button(app.teacher(), &strict).await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_CANCEL)
+        .await;
+    let stored = stored_assignment(&app, id).await;
+    assert_eq!(stored.deadline_at(), assignment.deadline_at());
+    assert_eq!(stored.late_policy(), assignment.late_policy());
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
 async fn editing_a_deadline_into_the_past_warns_before_saving() {
     let app = TestApp::start().await;
     let assignment = app.add_overdue_assignment(10, Some((7, 1, 4))).await;

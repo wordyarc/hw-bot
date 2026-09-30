@@ -1,10 +1,11 @@
-use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
+use super::assignment_form::{AssignmentText, DraftAssignment, InputMode, TermsForm, TermsStep};
+use super::views::MenuAction;
 use crate::domain::{
-    AssignmentId, Grading, InviteGeneration, LatePolicy, ReviewDecision, StoredFileId,
-    SubmissionId, TeachingCourseId, UserId,
+    AssignmentId, Grading, InviteGeneration, ReviewDecision, StoredFileId, SubmissionId,
+    TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::invites::VerifiedInvite;
 
@@ -16,6 +17,14 @@ pub(super) struct FilesScreen<'a> {
     pub creation_flow: bool,
     pub requires_confirmation: bool,
     pub file_ids: &'a [StoredFileId],
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FileDeletion {
+    pub assignment_id: AssignmentId,
+    pub file_id: StoredFileId,
+    pub expected_revision: i64,
+    pub creation_flow: bool,
 }
 
 /// Кнопка допустима при совпадении двух условий: ожидаемого состояния диалога и ID сообщения.
@@ -85,20 +94,12 @@ impl BotState {
         }
     }
 
-    pub(super) fn confirming_file_deletion(
-        &self,
-        message_id: MessageId,
-    ) -> Option<(AssignmentId, StoredFileId, i64, bool)> {
+    pub(super) fn confirming_file_deletion(&self, message_id: MessageId) -> Option<FileDeletion> {
         match self {
             Self::Flow(FlowState::ConfirmingAssignmentFileDeletion {
                 message_id: current,
-                assignment_id,
-                file_id,
-                expected_revision,
-                creation_flow,
-            }) if *current == message_id => {
-                Some((*assignment_id, *file_id, *expected_revision, *creation_flow))
-            }
+                deletion,
+            }) if *current == message_id => Some(*deletion),
             _ => None,
         }
     }
@@ -133,17 +134,12 @@ impl BotState {
         }
     }
 
-    pub(super) fn awaiting_max_attempts(
-        self,
-        message_id: MessageId,
-    ) -> Option<(TeachingCourseId, String, String)> {
+    pub(super) fn awaiting_max_attempts(self, message_id: MessageId) -> Option<AssignmentText> {
         match self {
             Self::Flow(FlowState::AwaitingAssignmentMaxAttempts {
                 message_id: current,
-                course_id,
-                title,
-                body,
-            }) if current == message_id => Some((course_id, title, body)),
+                text,
+            }) if current == message_id => Some(text),
             _ => None,
         }
     }
@@ -180,246 +176,10 @@ impl BotState {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct DraftAssignment {
-    pub course_id: TeachingCourseId,
-    pub title: String,
-    pub body: String,
-    pub max_attempts: u16,
-    pub grading: Grading,
-}
-
-impl DraftAssignment {
-    pub fn new(
-        course_id: TeachingCourseId,
-        title: String,
-        body: String,
-        max_attempts: u16,
-    ) -> Self {
-        Self {
-            course_id,
-            title,
-            body,
-            max_attempts,
-            grading: Grading::PassFail,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(super) enum StudentChoice {
     Grades { course_id: TeachingCourseId },
     ExtraAttempts { assignment_id: AssignmentId },
-}
-
-#[derive(Clone)]
-pub(super) enum TermsTarget {
-    Create(DraftAssignment),
-    Edit {
-        assignment_id: AssignmentId,
-        grading: Grading,
-        revision: i64,
-        created_at: DateTime<Utc>,
-        original_closes_at: DateTime<Utc>,
-    },
-}
-
-#[derive(Clone)]
-pub(super) struct AssignmentTerms {
-    pub target: TermsTarget,
-    pub deadline_at: Option<DateTime<Utc>>,
-    pub allow_late: bool,
-    pub period_days: u16,
-    pub penalty: Option<u16>,
-    pub max_periods: Option<u16>,
-}
-
-impl AssignmentTerms {
-    pub fn first_incomplete_step(&self) -> TermsStep {
-        let mut step = TermsStep::Deadline;
-        while step.is_complete(self) {
-            step = step.next(self);
-        }
-        step
-    }
-
-    pub fn creating(draft: DraftAssignment) -> Self {
-        Self {
-            target: TermsTarget::Create(draft),
-            deadline_at: None,
-            allow_late: false,
-            period_days: 7,
-            penalty: None,
-            max_periods: None,
-        }
-    }
-
-    pub fn committed_policy(&self) -> crate::domain::DomainResult<Option<LatePolicy>> {
-        if !self.allow_late {
-            return Ok(None);
-        }
-        self.policy(self.penalty.unwrap_or(0), self.max_periods.unwrap_or(0))
-            .map(Some)
-    }
-
-    pub fn preview_policy(&self, max_periods: u16) -> crate::domain::DomainResult<LatePolicy> {
-        // Пока штраф не введён, это значение нужно лишь для превью и не попадёт в сохранённые условия.
-        const PREVIEW_PENALTY: u16 = 1;
-        self.policy(self.penalty.unwrap_or(PREVIEW_PENALTY), max_periods)
-    }
-
-    fn policy(&self, penalty: u16, max_periods: u16) -> crate::domain::DomainResult<LatePolicy> {
-        LatePolicy::new(self.period_days, penalty, max_periods)
-    }
-
-    pub fn grading(&self) -> Grading {
-        match &self.target {
-            TermsTarget::Create(draft) => draft.grading,
-            TermsTarget::Edit { grading, .. } => *grading,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TermsStep {
-    Policy,
-    Deadline,
-    Penalty,
-    Period,
-    Periods,
-    DurationDate,
-    DurationConfirm {
-        selected: DateTime<Utc>,
-        periods: u16,
-    },
-    Summary,
-}
-
-impl TermsStep {
-    pub fn next(self, terms: &AssignmentTerms) -> Self {
-        match self {
-            Self::Policy => terms.first_incomplete_step(),
-            Self::Deadline if terms.allow_late => Self::Penalty,
-            Self::Deadline => Self::Summary,
-            Self::Period => Self::Penalty,
-            Self::Penalty => Self::Periods,
-            Self::Periods | Self::DurationConfirm { .. } | Self::Summary => Self::Summary,
-            Self::DurationDate => Self::DurationDate,
-        }
-    }
-
-    pub fn previous(self, terms: &AssignmentTerms) -> Option<Self> {
-        match self {
-            Self::Policy => None,
-            Self::Deadline => terms.grading().is_scored().then_some(Self::Policy),
-            Self::Penalty => Some(Self::Deadline),
-            Self::Period | Self::Periods => Some(Self::Penalty),
-            Self::DurationDate => Some(Self::Periods),
-            Self::DurationConfirm { .. } => Some(Self::DurationDate),
-            Self::Summary if matches!(terms.target, TermsTarget::Edit { .. }) => None,
-            Self::Summary if terms.allow_late => Some(Self::Periods),
-            Self::Summary => Some(Self::Deadline),
-        }
-    }
-
-    fn is_complete(self, terms: &AssignmentTerms) -> bool {
-        match self {
-            Self::Deadline => terms.deadline_at.is_some(),
-            Self::Penalty => terms.penalty.is_some(),
-            Self::Periods => terms.max_periods.is_some(),
-            Self::Policy
-            | Self::Period
-            | Self::DurationDate
-            | Self::DurationConfirm { .. }
-            | Self::Summary => false,
-        }
-    }
-
-    pub fn summary_edit(
-        action: crate::bot::callbacks::TermsAction,
-        terms: &AssignmentTerms,
-    ) -> Option<Self> {
-        use crate::bot::callbacks::TermsAction;
-        match action {
-            TermsAction::Deadline => Some(Self::Deadline),
-            TermsAction::Policy if terms.grading().is_scored() => Some(Self::Policy),
-            TermsAction::Penalty if terms.allow_late => Some(Self::Penalty),
-            TermsAction::Period if terms.allow_late => Some(Self::Period),
-            TermsAction::Periods if terms.allow_late => Some(Self::Periods),
-            _ => None,
-        }
-    }
-
-    fn input_mode(self) -> InputMode {
-        match self {
-            Self::Period => InputMode::Manual,
-            _ => InputMode::Buttons,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InputMode {
-    Buttons,
-    Manual,
-    Calendar(chrono::NaiveDate),
-}
-
-#[derive(Clone)]
-pub(super) struct TermsForm {
-    pub terms: AssignmentTerms,
-    pub step: TermsStep,
-    pub message_id: Option<MessageId>,
-    pub mode: InputMode,
-    pub return_to_summary: bool,
-    pub previous_closes_at: Option<DateTime<Utc>>,
-}
-
-impl TermsForm {
-    pub fn can_go_back(&self) -> bool {
-        // Из итога /cancel ведёт на шаг назад. Всю форму отменяет отдельная кнопка.
-        self.step != TermsStep::Summary && self.previous_step().is_some()
-    }
-
-    pub fn previous_step(&self) -> Option<TermsStep> {
-        if self.return_to_summary && self.step != TermsStep::Summary {
-            Some(TermsStep::Summary)
-        } else {
-            self.step.previous(&self.terms)
-        }
-    }
-
-    pub fn go(&mut self, step: TermsStep) {
-        self.step = if step == TermsStep::Summary {
-            self.terms.first_incomplete_step()
-        } else {
-            step
-        };
-        if self.step == TermsStep::Summary {
-            self.return_to_summary = false;
-        }
-        self.mode = self.step.input_mode();
-    }
-
-    pub fn advance(&mut self) {
-        let step = if self.return_to_summary {
-            TermsStep::Summary
-        } else {
-            self.step.next(&self.terms)
-        };
-        self.go(step);
-    }
-
-    pub fn new(terms: AssignmentTerms, step: TermsStep) -> Self {
-        Self {
-            terms,
-            step,
-            message_id: None,
-            mode: step.input_mode(),
-            return_to_summary: false,
-            previous_closes_at: None,
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -488,10 +248,7 @@ pub(super) enum FlowState {
     },
     ConfirmingAssignmentFileDeletion {
         message_id: MessageId,
-        assignment_id: AssignmentId,
-        file_id: StoredFileId,
-        expected_revision: i64,
-        creation_flow: bool,
+        deletion: FileDeletion,
     },
     AwaitingAssignmentTitle {
         course_id: TeachingCourseId,
@@ -502,9 +259,7 @@ pub(super) enum FlowState {
     },
     AwaitingAssignmentMaxAttempts {
         message_id: MessageId,
-        course_id: TeachingCourseId,
-        title: String,
-        body: String,
+        text: AssignmentText,
     },
     ChoosingGrading {
         message_id: MessageId,
@@ -517,8 +272,8 @@ pub(super) enum FlowState {
     ConfirmingTermsExit {
         message_id: MessageId,
         form: TermsForm,
-        action: crate::bot::views::MenuAction,
-        telegram_user_id: crate::domain::TelegramUserId,
+        action: MenuAction,
+        telegram_user_id: TelegramUserId,
     },
     ChoosingStudent {
         message_id: MessageId,
@@ -558,31 +313,6 @@ mod tests {
         assert!(files.file_ids.get(2).is_none());
         assert!(state.files_screen(MessageId(11)).is_none());
         assert!(BotState::Idle.files_screen(MessageId(10)).is_none());
-    }
-
-    #[test]
-    fn preview_defaults_never_complete_the_policy_for_saving() {
-        let draft = DraftAssignment::new(TeachingCourseId::new(), "Title".into(), "Body".into(), 1);
-        let mut terms = AssignmentTerms::creating(draft);
-        terms.allow_late = true;
-
-        assert_eq!(
-            terms.preview_policy(4).unwrap(),
-            LatePolicy::new(7, 1, 4).unwrap()
-        );
-        assert!(terms.committed_policy().is_err());
-        assert_eq!(terms.penalty, None);
-        assert_eq!(terms.max_periods, None);
-
-        terms.penalty = Some(2);
-        assert!(terms.committed_policy().is_err());
-        terms.max_periods = Some(3);
-        assert_eq!(
-            terms.committed_policy().unwrap(),
-            Some(terms.preview_policy(3).unwrap())
-        );
-        terms.allow_late = false;
-        assert_eq!(terms.committed_policy().unwrap(), None);
     }
 
     #[test]

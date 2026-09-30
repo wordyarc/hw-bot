@@ -3,18 +3,20 @@ use teloxide::types::MessageId;
 
 use super::attempts::chosen_amount;
 use crate::bot::HandlerResult;
+use crate::bot::assignment_form::{
+    AssignmentTerms, AssignmentText, DraftAssignment, TermsForm, TermsStep,
+};
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::handlers::input::{
     ensure_text_limit, parse_max_score, parse_positive_attempts, require_text,
 };
-use crate::bot::state::{
-    AssignmentTerms, BotState, DraftAssignment, FlowState, TermsForm, TermsStep,
-};
+use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{attempts_keyboard, grading_keyboard};
-use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, USER_TEXT_MAX_LEN};
-use crate::domain::{Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
+use crate::domain::{
+    ASSIGNMENT_TITLE_MAX_LEN, Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId, USER_TEXT_MAX_LEN,
+};
 
 pub(crate) async fn handle_max_attempts(
     screen: Screen<'_>,
@@ -22,24 +24,20 @@ pub(crate) async fn handle_max_attempts(
     choice: AmountChoice,
     state: BotState,
 ) -> HandlerResult {
-    let Some((course_id, title, body)) = state.awaiting_max_attempts(message_id) else {
+    let Some(text) = state.awaiting_max_attempts(message_id) else {
         return screen.stale().await;
     };
     let Some(max_attempts) = chosen_amount(choice) else {
         return screen.ask(&texts::attempts_prompt(MAX_ATTEMPTS)).await;
     };
-    ask_grading(
-        screen.chat(),
-        DraftAssignment::new(course_id, title, body, max_attempts),
-    )
-    .await
+    ask_grading(screen.chat(), DraftAssignment::new(text, max_attempts)).await
 }
 
 pub(super) async fn ask_grading(chat: Chat<'_>, draft: DraftAssignment) -> HandlerResult {
     let bot = chat.bot();
     let chat_id = chat.chat_id();
     let sent = bot
-        .send_message(chat_id, crate::bot::texts::GRADING_QUESTION)
+        .send_message(chat_id, texts::GRADING_QUESTION)
         .reply_markup(grading_keyboard())
         .await?;
     chat.dialogue()
@@ -97,24 +95,17 @@ pub(super) async fn apply_grading(
     super::terms::render(chat, form, None).await
 }
 
-pub(super) async fn ask_max_attempts(
-    chat: Chat<'_>,
-    course_id: TeachingCourseId,
-    title: String,
-    body: String,
-) -> HandlerResult {
+pub(super) async fn ask_max_attempts(chat: Chat<'_>, text: AssignmentText) -> HandlerResult {
     let bot = chat.bot();
     let chat_id = chat.chat_id();
     let sent = bot
-        .send_message(chat_id, crate::bot::texts::ATTEMPTS_QUESTION)
+        .send_message(chat_id, texts::ATTEMPTS_QUESTION)
         .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
         .await?;
     chat.dialogue()
         .update(BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
             message_id: sent.id,
-            course_id,
-            title,
-            body,
+            text,
         }))
         .await?;
     Ok(())
@@ -150,9 +141,7 @@ pub(crate) async fn submit_title(step: TextStep<'_>, course_id: TeachingCourseId
             title: text.to_owned(),
         }))
         .await?;
-    step.chat()
-        .ask(crate::bot::texts::ASSIGNMENT_BODY_PROMPT)
-        .await?;
+    step.chat().ask(texts::ASSIGNMENT_BODY_PROMPT).await?;
 
     Ok(())
 }
@@ -176,16 +165,19 @@ pub(crate) async fn submit_body(
     if !ensure_text_limit(bot, chat_id, text, USER_TEXT_MAX_LEN, texts::FIELD_BODY).await? {
         return Ok(());
     }
-    ask_max_attempts(step.chat(), course_id, title, text.to_owned()).await?;
+    let text = AssignmentText {
+        course_id,
+        title,
+        body: text.to_owned(),
+    };
+    ask_max_attempts(step.chat(), text).await?;
 
     Ok(())
 }
 
 pub(crate) async fn submit_max_attempts(
     step: TextStep<'_>,
-    course_id: TeachingCourseId,
-    title: String,
-    body: String,
+    assignment: AssignmentText,
 ) -> HandlerResult {
     let bot = step.bot();
     let message = step.message();
@@ -199,11 +191,7 @@ pub(crate) async fn submit_max_attempts(
             .await?;
         return Ok(());
     };
-    ask_grading(
-        step.chat(),
-        DraftAssignment::new(course_id, title, body, max_attempts),
-    )
-    .await?;
+    ask_grading(step.chat(), DraftAssignment::new(assignment, max_attempts)).await?;
 
     Ok(())
 }

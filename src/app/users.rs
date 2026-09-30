@@ -6,6 +6,7 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{StaffRole, StudentGroup, TelegramUserId, User, UserId};
 use crate::invites::VerifiedInvite;
+use crate::read_models::UserStatistics;
 
 pub(crate) async fn load_actor<'e, E>(
     executor: E,
@@ -43,31 +44,20 @@ pub struct RegisteredUser {
     pub student_group: Option<StudentGroup>,
 }
 
-pub struct UserStatistics {
-    pub assignments: u32,
-    pub pending: u32,
-    pub courses: u32,
-}
-
 #[derive(Clone, Debug)]
 pub struct UserService {
     pool: PgPool,
 }
 
 impl UserService {
-    pub async fn statistics(&self, actor: Actor) -> AppResult<UserStatistics> {
-        let user = load_actor(&self.pool, actor, "user").await?;
-        let (assignments, pending, courses) =
-            db::users::profile_statistics(&self.pool, &user).await?;
-        Ok(UserStatistics {
-            assignments,
-            pending,
-            courses,
-        })
-    }
-
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub async fn statistics(&self, actor: Actor) -> AppResult<UserStatistics> {
+        let user = load_actor(&self.pool, actor, "user").await?;
+
+        Ok(db::users::profile_statistics(&self.pool, &user).await?)
     }
 
     /// Проверка под `for share` и добавление студента входят в одну транзакцию.

@@ -288,8 +288,8 @@ async fn a_pending_submission_cannot_be_saved_as_a_review_result() -> anyhow::Re
     let result = submissions::save_review_result(&app.pool, &submission).await;
 
     assert!(
-        matches!(result, Err(DbError::Conflict { .. })),
-        "expected a conflict, got {result:?}"
+        matches!(result, Err(DbError::Precondition { .. })),
+        "expected a broken precondition, got {result:?}"
     );
 
     Ok(())

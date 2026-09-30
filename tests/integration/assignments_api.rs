@@ -294,13 +294,13 @@ async fn assignment_revision_rejects_a_stale_deadline_update() -> anyhow::Result
     let second = db::assignments::find_versioned_by_id(&app.pool, app.fixture.assignment.id())
         .await?
         .expect("assignment");
-    let first_revision = first.revision();
-    let second_revision = second.revision();
+    let first_revision = first.revision;
+    let second_revision = second.revision;
     let now = Utc::now().trunc_subsecs(6);
     let first_deadline = now + Duration::days(10);
     let second_deadline = now + Duration::days(20);
-    let mut first_assignment = first.into_assignment();
-    let mut second_assignment = second.into_assignment();
+    let mut first_assignment = first.assignment;
+    let mut second_assignment = second.assignment;
     first_assignment.change_deadline(&app.fixture.course, &app.fixture.teacher, first_deadline)?;
     second_assignment.change_deadline(
         &app.fixture.course,
