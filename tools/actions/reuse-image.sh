@@ -20,15 +20,22 @@ case "$status" in
         docker pull "$IMAGE:$VERSION"
         revision=$(docker image inspect "$IMAGE:$VERSION" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
         published_version=$(docker image inspect "$IMAGE:$VERSION" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
-        [[ "$revision" == "$COMMIT" && "$published_version" == "$VERSION" ]]
+        [[ "$revision" == "$COMMIT" && "$published_version" == "$VERSION" ]] || {
+            printf '::error::Existing image labels differ: expected revision %s, version %s; found revision %s, version %s\n' \
+                "$COMMIT" "$VERSION" "$revision" "$published_version" >&2
+            exit 1
+        }
         printf 'found=true\n' >> "$GITHUB_OUTPUT"
         ;;
     404)
-        jq -e 'any(.errors[]; .code == "MANIFEST_UNKNOWN")' "$response" > /dev/null
+        jq -e 'any(.errors[]; .code == "MANIFEST_UNKNOWN")' "$response" > /dev/null || {
+            printf '%s\n' '::error::Registry returned 404 without MANIFEST_UNKNOWN; check the image repository' >&2
+            exit 1
+        }
         printf 'found=false\n' >> "$GITHUB_OUTPUT"
         ;;
     *)
-        printf 'Registry lookup failed: HTTP %s\n' "$status" >&2
+        printf '::error::Registry lookup failed: HTTP %s\n' "$status" >&2
         cat "$response" >&2
         exit 1
         ;;

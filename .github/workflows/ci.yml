@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -21,6 +25,7 @@ concurrency:
 env:
   SQLX_OFFLINE: "true"
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
 
 jobs:
   checks-and-tests:
@@ -28,56 +33,103 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Deployment scripts and bundle
-        run: |
-          shellcheck tools/actions/*.sh tools/ops/*.sh tools/docker/*.sh
-          bash tools/actions/test-backup.sh
-          bash tools/actions/test-deploy.sh
-          bash tools/actions/test-release.sh
-          sh tools/actions/package.sh HEAD "$RUNNER_TEMP/deploy.tar.gz"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: actionlint@1.7.12
+
+      - name: Workflow lint
+        run: actionlint
+
+      - name: Shell lint
+        run: shellcheck tools/actions/*.sh tools/ops/*.sh tools/docker/*.sh
+
+      - name: Backup failure handling
+        run: bash tools/actions/test-backup.sh
+
+      - name: Deployment failure handling
+        run: bash tools/actions/test-deploy.sh
+
+      - name: Release idempotency
+        run: bash tools/actions/test-release.sh
+
+      - name: Deployment bundle
+        run: sh tools/actions/package.sh HEAD "$RUNNER_TEMP/deploy.tar.gz"
 
       - name: Format
-        run: cargo fmt --check
+        run: make fmt
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Build all targets
-        run: cargo build --locked --all-targets
+        run: make all
 
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: make lint
 
       - name: Unit, integration and documentation tests
-        run: cargo test --locked
+        run: make test
+
+      - name: Rust future compatibility report
+        if: ${{ !cancelled() && hashFiles('target/.future-incompat-report.json') != '' }}
+        run: |
+          cargo report future-incompatibilities --color never | tee "$RUNNER_TEMP/future-incompatibilities.txt"
+          {
+            printf '### Rust future compatibility\n\n```text\n'
+            cat "$RUNNER_TEMP/future-incompatibilities.txt"
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save Rust compatibility report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-compatibility-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/future-incompatibilities.txt
+          if-no-files-found: ignore
+          retention-days: 7
 
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-audit
 
       - name: Audit
-        run: cargo audit
+        env:
+          CARGO_TERM_COLOR: never
+        run: make audit 2>&1 | tee "$RUNNER_TEMP/audit.log"
+
+      - name: Audit summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ -f "$RUNNER_TEMP/audit.log" ]]; then
+            {
+              printf '### Dependency audit\n\n```text\n'
+              cat "$RUNNER_TEMP/audit.log"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   image-smoke:
     if: ${{ !inputs.skip-image }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Production image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
@@ -87,4 +139,13 @@ jobs:
           cache-to: type=gha,mode=max,scope=production
 
       - name: Production startup and bootstrap
-        run: sh tools/actions/smoke.sh hw-bot:ci
+        run: sh tools/actions/smoke.sh hw-bot:ci "$RUNNER_TEMP/smoke-diagnostics"
+
+      - name: Save smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-smoke-diagnostics-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7

@@ -4,6 +4,7 @@ umask 077
 
 image=${1:?usage: sh tools/actions/smoke.sh IMAGE}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/hw-bot-smoke.XXXXXX")
+diagnostics=${2:-"$tmp/diagnostics"}
 export COMPOSE_PROJECT_NAME="hw-bot-smoke-$$"
 export HW_BOT_ENV_FILE="$tmp/.env.production" HW_BOT_CONFIG_DIR="$tmp"
 export HW_BOT_IMAGE="$image" POSTGRES_PASSWORD=smoke
@@ -12,12 +13,20 @@ compose() {
 }
 cleanup() {
     status=$?
+    set +e
     if [ "$status" -ne 0 ]; then
-        compose ps --all || true
-        compose logs --no-color --tail 100 app database || true
+        mkdir -p "$diagnostics"
+        compose ps --all > "$diagnostics/compose-ps.log" 2>&1 || true
+        compose logs --no-color --tail 200 app database > "$diagnostics/compose.log" 2>&1 || true
+        for container in $(compose ps --all -q); do
+            docker inspect --format '{{json .State}}' "$container" > "$diagnostics/$container-state.json" 2>&1 || true
+        done
+        if [ -f "$tmp/startup.log" ]; then cp "$tmp/startup.log" "$diagnostics/startup.log"; fi
+        cat "$diagnostics/compose-ps.log" "$diagnostics/compose.log" >&2
     fi
     compose down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -rf "$tmp"
+    exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM

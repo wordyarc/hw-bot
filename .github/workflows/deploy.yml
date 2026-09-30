@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -33,10 +37,19 @@ jobs:
       - name: Download and validate release
         id: release
         run: |
-          [[ "$GITHUB_REF" == refs/heads/master ]]
-          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          [[ "$IMAGE_REPOSITORY" =~ ^[a-z0-9_-]+/[a-z0-9._-]+$ ]]
-          gh release view "v$VERSION" --json isDraft,isPrerelease | jq -e '.isDraft == false and .isPrerelease == false'
+          [[ "$GITHUB_REF" == refs/heads/master ]] || {
+            echo '::error::Run Deploy from master'; exit 1;
+          }
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo '::error::Version must be X.Y.Z without the v prefix or leading zeros'; exit 1;
+          }
+          [[ "$IMAGE_REPOSITORY" =~ ^[a-z0-9_-]+/[a-z0-9._-]+$ ]] || {
+            echo '::error::Set DOCKERHUB_IMAGE to namespace/repository in repository variables'; exit 1;
+          }
+          gh release view "v$VERSION" --json isDraft,isPrerelease > release-state.json
+          jq -e '.isDraft == false and .isPrerelease == false' release-state.json || {
+            echo '::error::Deploy requires a published, non-prerelease GitHub Release'; exit 1;
+          }
           gh release download "v$VERSION" --pattern release.json --pattern deploy.tar.gz
           jq -e --arg version "$VERSION" --arg repository "$IMAGE_REPOSITORY" '
             .version == $version and
@@ -44,22 +57,39 @@ jobs:
             (.image | startswith($repository + "@sha256:")) and
             (.image | ltrimstr($repository + "@sha256:") | test("^[0-9a-f]{64}$")) and
             (.archive_sha256 | test("^[0-9a-f]{64}$"))
-          ' release.json
-          [[ "$(gh api "repos/$GH_REPO/commits/v$VERSION" --jq '.sha')" == "$(jq -r '.commit' release.json)" ]]
+          ' release.json || {
+            echo '::error::release.json has invalid version, commit, image digest or archive checksum'; exit 1;
+          }
+          [[ "$(gh api "repos/$GH_REPO/commits/v$VERSION" --jq '.sha')" == "$(jq -r '.commit' release.json)" ]] || {
+            echo '::error::Release tag and release.json point to different commits'; exit 1;
+          }
           checksum=$(jq -r '.archive_sha256' release.json)
-          printf '%s  deploy.tar.gz\n' "$checksum" | sha256sum --check
+          printf '%s  deploy.tar.gz\n' "$checksum" | sha256sum --check || {
+            echo '::error::Deployment archive checksum does not match release.json'; exit 1;
+          }
           printf 'image=%s\n' "$(jq -r '.image' release.json)" >> "$GITHUB_OUTPUT"
 
       - name: Configure SSH
+        id: ssh
         env:
           SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.:-]+$ ]]
-          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
-          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
-          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]]
-          [[ -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.:-]+$ ]] || {
+            echo '::error::DEPLOY_HOST must be a hostname or IP address'; exit 1;
+          }
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || {
+            echo '::error::DEPLOY_USER must be a Linux username'; exit 1;
+          }
+          if [[ ! "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$DEPLOY_PORT < 1 || 10#$DEPLOY_PORT > 65535 )); then
+            echo '::error::DEPLOY_PORT must be between 1 and 65535'; exit 1
+          fi
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]] || {
+            echo '::error::DEPLOY_PATH must be an absolute path without whitespace or shell metacharacters'; exit 1;
+          }
+          [[ -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || {
+            echo '::error::Set DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS in the production environment'; exit 1;
+          }
           umask 077
           mkdir -p "$HOME/.ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
@@ -79,13 +109,35 @@ jobs:
           EOF
 
       - name: Deploy over SSH
+        id: deploy
+        timeout-minutes: 17
         run: |
           destination="$DEPLOY_PATH/deployments/$VERSION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'directory=%s\n' "$destination" >> "$GITHUB_OUTPUT"
           printf 'mkdir -p %q\n' "$destination" | ssh production bash -s
           scp release.json deploy.tar.gz "production:$destination/"
-          printf 'tar -xzf %q -C %q && bash %q %q %q\n' \
+          printf 'tar -xzf %q -C %q && timeout --signal=TERM --kill-after=30s 15m bash %q %q %q\n' \
             "$destination/deploy.tar.gz" "$destination" "$destination/tools/ops/deploy.sh" "$DEPLOY_PATH" "$destination" \
             | ssh production bash -s
+
+      - name: Retrieve deployment diagnostics
+        if: ${{ failure() && steps.ssh.outcome == 'success' && steps.deploy.outputs.directory != '' }}
+        timeout-minutes: 1
+        continue-on-error: true
+        env:
+          RELEASE_DIRECTORY: ${{ steps.deploy.outputs.directory }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/deploy-diagnostics"
+          scp "production:$RELEASE_DIRECTORY/deploy.log" "$RUNNER_TEMP/deploy-diagnostics/"
+
+      - name: Save deployment diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deployment-diagnostics-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deploy-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Deployment summary
         if: always()

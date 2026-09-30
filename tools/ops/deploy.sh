@@ -22,7 +22,7 @@ image=$(jq -er '.image' "$release_dir/release.json")
 for file in "$HW_BOT_ENV_FILE" "$HW_BOT_CONFIG_DIR/production.toml"; do
     [[ -f "$file" && -r "$file" ]] || { printf 'Missing or unreadable file: %s\n' "$file" >&2; exit 1; }
 done
-files=(Makefile tools/deploy/compose.yml tools/deploy/compose.bootstrap.yml
+files=(tools/deploy/compose.yml tools/deploy/compose.bootstrap.yml
     tools/ops/backup.sh tools/ops/deploy.sh)
 for file in "${files[@]}"; do
     [[ -f "$release_dir/$file" ]] || { printf 'Missing release file: %s\n' "$file" >&2; exit 1; }
@@ -33,8 +33,10 @@ compose() {
 }
 resume_old=false
 stage=
+phase=preflight
 cleanup() {
     status=$?
+    set +e
     if [[ -n "$stage" ]]; then
         rm -rf "$stage"
     fi
@@ -43,12 +45,13 @@ cleanup() {
         if [[ "$resume_old" == true ]]; then
             docker start "$container" || true
         fi
-        printf 'Image: %s\nPrevious image: %s\nBackup: %s\n' \
-            "$image" "${previous_image:-unknown}" "${backup:-none}" > "$release_dir/deploy.log"
+        printf 'Phase: %s\nExit code: %s\nImage: %s\nPrevious image: %s\nBackup: %s\n' \
+            "$phase" "$status" "$image" "${previous_image:-unknown}" "${backup:-none}" > "$release_dir/deploy.log"
         compose ps --all >> "$release_dir/deploy.log" 2>&1 || true
         compose logs --no-color --tail 100 app database >> "$release_dir/deploy.log" 2>&1 || true
         cat "$release_dir/deploy.log" >&2
     fi
+    exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -70,18 +73,23 @@ awk -v image="$image" '
     END { if (!written) print "HW_BOT_IMAGE=" image }
 ' "$HW_BOT_ENV_FILE" > "$stage/.env.production"
 
+phase=stop
 resume_old=true
 compose stop app
+phase=backup
 backup=$(sh "$release_dir/tools/ops/backup.sh")
 
+phase=replace
 for file in "${files[@]}"; do
     mv "$stage/$file" "$root/$file"
 done
 mv "$stage/.env.production" "$HW_BOT_ENV_FILE"
 export HW_BOT_IMAGE="$image"
+phase=start
 resume_old=false
 compose up -d --no-deps --force-recreate --wait --wait-timeout 120 app
 
+phase=record
 jq --arg previous_image "$previous_image" --arg backup "$backup" \
     --arg deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '. + {previous_image: $previous_image, backup: $backup, deployed_at: $deployed_at}' \

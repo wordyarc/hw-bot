@@ -12,7 +12,10 @@ jq -n --arg version "$VERSION" --arg commit "$COMMIT" \
 
 branch="release/$VERSION"
 if existing=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch"); then
-    [[ "$existing" == "$COMMIT" ]]
+    [[ "$existing" == "$COMMIT" ]] || {
+        printf '::error::Branch %s points to %s instead of %s\n' "$branch" "$existing" "$COMMIT" >&2
+        exit 1
+    }
 else
     gh api "repos/$GH_REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$COMMIT"
 fi
@@ -26,11 +29,18 @@ elif [[ "$release_state" == true ]]; then
     gh release upload "$TAG" release.json deploy.tar.gz --clobber
     gh release edit "$TAG" --draft=false
 else
-    [[ "$release_state" == false ]]
+    [[ "$release_state" == false ]] || {
+        printf '::error::Unexpected release state for %s\n' "$TAG" >&2
+        exit 1
+    }
     mkdir "$tmp/existing-release"
     gh release download "$TAG" --pattern release.json --pattern deploy.tar.gz --dir "$tmp/existing-release"
-    cmp release.json "$tmp/existing-release/release.json"
-    cmp deploy.tar.gz "$tmp/existing-release/deploy.tar.gz"
+    for asset in release.json deploy.tar.gz; do
+        cmp "$asset" "$tmp/existing-release/$asset" || {
+            printf '::error::Published %s differs from this release; use a new version\n' "$asset" >&2
+            exit 1
+        }
+    done
 fi
 printf '### Release %s\n\nImage: %s\n\nCommit: %s\n\nBranch: release/%s\n' \
     "$TAG" "$IMAGE" "$COMMIT" "$VERSION" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
