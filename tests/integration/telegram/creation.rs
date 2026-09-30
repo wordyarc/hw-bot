@@ -1132,6 +1132,7 @@ async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_
     let app = TestApp::start().await;
     let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
     let id = assignment.id().as_uuid();
+    let original = stored_assignment(&app, id).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     let strict = cb(callbacks::LATE_POLICY_PREFIX, "none");
@@ -1168,8 +1169,8 @@ async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_
         .click_button(app.teacher(), callbacks::TERMS_CANCEL)
         .await;
     let stored = stored_assignment(&app, id).await;
-    assert_eq!(stored.deadline_at(), assignment.deadline_at());
-    assert_eq!(stored.late_policy(), assignment.late_policy());
+    assert_eq!(stored.deadline_at(), original.deadline_at());
+    assert_eq!(stored.late_policy(), original.late_policy());
     stop_bot(cancellation, &mut task).await;
 }
 
