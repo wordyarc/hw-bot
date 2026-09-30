@@ -226,21 +226,57 @@ async fn the_loser_of_a_review_race_is_rejected_by_the_conditional_update() -> a
 async fn a_double_tap_reports_the_same_error_as_the_up_front_check() -> anyhow::Result<()> {
     let app = TestApp::start().await;
     let first = submission(&app.fixture.assignment, &app.fixture.student).build();
-    let double_tap = submission(&app.fixture.assignment, &app.fixture.student).build();
-
     submissions::insert(&app.pool, &first).await?;
-    let lost = submissions::insert(&app.pool, &double_tap).await;
 
-    assert!(
-        matches!(
-            lost,
-            Err(DbError::RuleViolation(
-                DomainError::SubmissionAlreadyPendingReview
-            ))
-        ),
-        "expected the same rule as the up-front check, got {lost:?}"
-    );
+    for used in [0, 1] {
+        let double_tap = submission(&app.fixture.assignment, &app.fixture.student)
+            .history(history().used(used).build())
+            .build();
+        let lost = submissions::insert(&app.pool, &double_tap).await;
+        assert!(
+            matches!(
+                lost,
+                Err(DbError::RuleViolation(
+                    DomainError::SubmissionAlreadyPendingReview
+                ))
+            ),
+            "both a duplicate attempt number and another pending attempt must report the same rule; used={used}, result={lost:?}"
+        );
+    }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn storage_rejects_a_second_accepted_attempt_of_the_same_assignment() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    for used in [0, 1] {
+        let mut accepted = submission(&app.fixture.assignment, &app.fixture.student)
+            .history(history().used(used).build())
+            .build();
+        accepted.accept(
+            &app.fixture.assignment,
+            &app.fixture.course,
+            &app.fixture.teacher,
+            None,
+            "Accepted",
+            reviewed_at(&app.fixture.assignment),
+        )?;
+        let result = submissions::insert(&app.pool, &accepted).await;
+        if used == 0 {
+            result?;
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(DbError::RuleViolation(
+                        DomainError::SubmissionAlreadyAccepted
+                    ))
+                ),
+                "{result:?}"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -275,22 +311,6 @@ async fn concurrent_double_submit_creates_one_pending_submission() -> anyhow::Re
     .fetch_one(&app.pool)
     .await?;
     assert_eq!(count, 1);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_pending_submission_cannot_be_saved_as_a_review_result() -> anyhow::Result<()> {
-    let app = TestApp::start().await;
-    let submission = submission(&app.fixture.assignment, &app.fixture.student).build();
-    submissions::insert(&app.pool, &submission).await?;
-
-    let result = submissions::save_review_result(&app.pool, &submission).await;
-
-    assert!(
-        matches!(result, Err(DbError::Precondition { .. })),
-        "expected a broken precondition, got {result:?}"
-    );
 
     Ok(())
 }

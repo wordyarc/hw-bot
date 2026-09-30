@@ -3,7 +3,8 @@ use teloxide::types::MessageId;
 
 use super::callbacks::TermsAction;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, Grading, LatePolicy, TeachingCourseId,
+    Assignment, AssignmentId, DomainError, DomainResult, Grading, LatePolicy, MAX_LATE_PENALTY,
+    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, TeachingCourseId,
 };
 
 const DEFAULT_PERIOD_DAYS: u16 = 7;
@@ -256,6 +257,15 @@ pub(super) struct TermsForm {
     pub previous_closes_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum TermsInputError {
+    UnexpectedStep,
+    NumberOutOfRange { max: u16 },
+    InvalidDurationDate,
+    DeadlineInPast,
+    Domain(DomainError),
+}
+
 impl TermsForm {
     pub fn new(terms: AssignmentTerms, step: TermsStep) -> Self {
         Self {
@@ -301,6 +311,139 @@ impl TermsForm {
         };
         self.go(step);
     }
+
+    pub fn choose_policy(&mut self, allow_late: bool) -> Result<(), TermsInputError> {
+        if self.step != TermsStep::Policy || !self.terms.grading().is_scored() {
+            return Err(TermsInputError::UnexpectedStep);
+        }
+        let mut terms = self.terms.clone();
+        terms.allow_late = allow_late;
+        // Сохранённый длинный горизонт можно править с итога; непредставимую дату показать нельзя.
+        if terms.cannot_be_summarised() {
+            return Err(TermsInputError::Domain(
+                DomainError::AssignmentClosingOutOfRange,
+            ));
+        }
+        self.terms = terms;
+        self.advance();
+        Ok(())
+    }
+
+    pub fn apply_number(&mut self, value: u16) -> Result<(), TermsInputError> {
+        let mut terms = self.terms.clone();
+        let max = match self.step {
+            TermsStep::Penalty => {
+                terms.penalty = Some(value);
+                MAX_LATE_PENALTY
+            }
+            TermsStep::Period => {
+                terms.period_days = value;
+                MAX_LATE_PERIOD_DAYS
+            }
+            TermsStep::Periods => {
+                terms.max_periods = Some(value);
+                MAX_LATE_PERIODS
+            }
+            _ => return Err(TermsInputError::UnexpectedStep),
+        };
+        if !(1..=max).contains(&value) {
+            return Err(TermsInputError::NumberOutOfRange { max });
+        }
+        terms.validate().map_err(TermsInputError::Domain)?;
+        self.terms = terms;
+        self.advance();
+        Ok(())
+    }
+
+    pub fn apply_date(
+        &mut self,
+        at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<(), TermsInputError> {
+        if self.step == TermsStep::DurationDate {
+            let Some(deadline) = self.terms.deadline_at else {
+                return Ok(());
+            };
+            let policy = self
+                .terms
+                .preview_policy(1)
+                .map_err(TermsInputError::Domain)?;
+            let periods = u16::try_from(policy.periods_to_close_at(deadline, at))
+                .ok()
+                .filter(|periods| (1..=MAX_LATE_PERIODS).contains(periods))
+                .ok_or(TermsInputError::InvalidDurationDate)?;
+            let mut terms = self.terms.clone();
+            terms.max_periods = Some(periods);
+            terms.validate().map_err(|error| match error {
+                DomainError::LateHorizonTooLong { .. } | DomainError::InvalidLatePolicy { .. } => {
+                    TermsInputError::InvalidDurationDate
+                }
+                _ => TermsInputError::Domain(error),
+            })?;
+            self.go(TermsStep::DurationConfirm {
+                selected: at,
+                periods,
+            });
+        } else {
+            if self.step != TermsStep::Deadline {
+                return Err(TermsInputError::UnexpectedStep);
+            }
+            if matches!(self.terms.target, TermsTarget::Create(_)) && at <= now {
+                return Err(TermsInputError::DeadlineInPast);
+            }
+            let mut terms = self.terms.clone();
+            terms.deadline_at = Some(at);
+            terms.validate().map_err(TermsInputError::Domain)?;
+            self.terms = terms;
+            self.advance();
+        }
+        Ok(())
+    }
+
+    pub fn confirm_duration(&mut self) -> bool {
+        let TermsStep::DurationConfirm { periods, .. } = self.step else {
+            return false;
+        };
+        self.terms.max_periods = Some(periods);
+        self.advance();
+        true
+    }
+
+    pub fn back(&mut self) -> bool {
+        match (self.mode, self.step) {
+            (InputMode::Manual, step) if step != TermsStep::Period => {
+                self.mode = InputMode::Buttons
+            }
+            (InputMode::Calendar(_), _) => self.mode = InputMode::Buttons,
+            _ => {
+                let Some(step) = self.previous_step() else {
+                    return false;
+                };
+                // Незавершённую политику нельзя показать в итоге, но её числа пригодятся при повторном включении.
+                if step == TermsStep::Summary && self.terms.complete().is_none() {
+                    self.terms.allow_late = false;
+                }
+                self.go(step);
+            }
+        }
+        true
+    }
+
+    pub fn edit_summary(&mut self, action: TermsAction) -> bool {
+        if self.step != TermsStep::Summary {
+            return false;
+        }
+        let Some(complete) = self.terms.complete() else {
+            return false;
+        };
+        let Some(step) = TermsStep::summary_edit(action, &self.terms) else {
+            return false;
+        };
+        self.previous_closes_at.get_or_insert(complete.closes_at);
+        self.go(step);
+        self.return_to_summary = true;
+        true
+    }
 }
 
 #[cfg(test)]
@@ -321,6 +464,192 @@ mod tests {
         );
         draft.grading = Grading::scored(5).unwrap();
         AssignmentTerms::creating(draft)
+    }
+
+    fn complete_form() -> TermsForm {
+        TermsForm::new(
+            AssignmentTerms {
+                deadline_at: Some(t0() + Duration::days(7)),
+                allow_late: true,
+                penalty: Some(2),
+                max_periods: Some(4),
+                ..scored_terms()
+            },
+            TermsStep::Summary,
+        )
+    }
+
+    #[test]
+    fn repeated_back_after_a_point_edit_reaches_the_exit_instead_of_looping() {
+        let mut form = complete_form();
+        let before = form.terms.complete();
+        assert!(form.edit_summary(TermsAction::Deadline));
+
+        for step in [
+            TermsStep::Summary,
+            TermsStep::Periods,
+            TermsStep::Penalty,
+            TermsStep::Deadline,
+            TermsStep::Policy,
+        ] {
+            assert!(form.back());
+            assert_eq!(form.step, step);
+        }
+        assert!(!form.back());
+        assert_eq!(form.terms.complete(), before);
+    }
+
+    #[test]
+    fn changing_the_period_keeps_the_penalty_and_count_and_returns_to_summary() {
+        let mut form = complete_form();
+        let old_closing = form.terms.complete().unwrap().closes_at;
+        assert!(form.edit_summary(TermsAction::Period));
+        assert_eq!(form.mode, InputMode::Manual);
+
+        form.apply_number(10).unwrap();
+
+        assert_eq!(form.step, TermsStep::Summary);
+        assert_eq!(
+            form.terms.complete().unwrap().late_policy,
+            Some(LatePolicy::new(10, 2, 4).unwrap())
+        );
+        assert_eq!(form.previous_closes_at, Some(old_closing));
+    }
+
+    #[test]
+    fn cancelling_an_incomplete_policy_restores_a_strict_summary_but_keeps_entered_numbers() {
+        let mut terms = scored_terms();
+        terms.deadline_at = Some(t0() + Duration::days(7));
+        let mut form = TermsForm::new(terms, TermsStep::Summary);
+        assert!(form.edit_summary(TermsAction::Policy));
+        form.choose_policy(true).unwrap();
+        form.apply_number(2).unwrap();
+        assert_eq!(form.step, TermsStep::Periods);
+
+        assert!(form.back());
+
+        assert_eq!(form.step, TermsStep::Summary);
+        assert_eq!(form.terms.complete().unwrap().late_policy, None);
+        assert_eq!(form.terms.penalty, Some(2));
+        assert_eq!(form.terms.max_periods, None);
+    }
+
+    #[test]
+    fn a_duration_date_changes_the_period_count_only_after_confirmation() {
+        let mut form = complete_form();
+        let before = form.terms.complete();
+        let deadline = form.terms.deadline_at.unwrap();
+        assert!(form.edit_summary(TermsAction::Periods));
+        form.go(TermsStep::DurationDate);
+
+        let selected = deadline + Duration::days(10);
+        form.apply_date(selected, t0()).unwrap();
+
+        assert_eq!(
+            form.step,
+            TermsStep::DurationConfirm {
+                selected,
+                periods: 2
+            }
+        );
+        assert_eq!(form.terms.complete(), before);
+        assert!(form.confirm_duration());
+        assert_eq!(form.step, TermsStep::Summary);
+        assert_eq!(
+            form.terms.complete().unwrap().closes_at,
+            deadline + Duration::days(14)
+        );
+        assert!(!form.confirm_duration());
+    }
+
+    #[test]
+    fn invalid_period_counts_preserve_the_previous_terms_and_input_step() {
+        let mut form = complete_form();
+        assert!(form.edit_summary(TermsAction::Periods));
+        let before = form.terms.complete();
+        for (value, expected) in [
+            (0, TermsInputError::NumberOutOfRange { max: 100 }),
+            (101, TermsInputError::NumberOutOfRange { max: 100 }),
+            (
+                53,
+                TermsInputError::Domain(DomainError::LateHorizonTooLong { max_days: 366 }),
+            ),
+        ] {
+            assert_eq!(form.apply_number(value), Err(expected), "{value}");
+            assert_eq!(form.terms.complete(), before, "{value}");
+            assert_eq!(form.step, TermsStep::Periods);
+        }
+        form.apply_number(3).unwrap();
+        assert_eq!(form.step, TermsStep::Summary);
+        assert_eq!(form.terms.max_periods, Some(3));
+    }
+
+    #[test]
+    fn invalid_duration_dates_preserve_the_calendar_and_report_a_date_error() {
+        let mut form = complete_form();
+        let before = form.terms.complete();
+        let deadline = form.terms.deadline_at.unwrap();
+        form.go(TermsStep::DurationDate);
+        let calendar = InputMode::Calendar(deadline.date_naive());
+        form.mode = calendar;
+        for at in [
+            deadline - Duration::days(1),
+            deadline,
+            deadline + Duration::weeks(53),
+            deadline + Duration::weeks(101),
+        ] {
+            assert_eq!(
+                form.apply_date(at, t0()),
+                Err(TermsInputError::InvalidDurationDate),
+                "{at}"
+            );
+            assert_eq!(form.step, TermsStep::DurationDate);
+            assert_eq!(form.mode, calendar);
+            assert_eq!(form.terms.complete(), before);
+        }
+    }
+
+    #[test]
+    fn back_from_manual_input_returns_to_the_same_step_without_changing_terms() {
+        let mut form = complete_form();
+        form.go(TermsStep::Periods);
+        form.mode = InputMode::Manual;
+        let before = form.terms.complete();
+
+        assert!(form.back());
+
+        assert_eq!(form.step, TermsStep::Periods);
+        assert_eq!(form.mode, InputMode::Buttons);
+        assert_eq!(form.terms.complete(), before);
+    }
+
+    #[test]
+    fn only_creation_requires_a_deadline_in_the_future() {
+        use crate::test_support::{assignment, course_for, student_group, teacher};
+
+        let mut creation = complete_form();
+        creation.go(TermsStep::Deadline);
+        let before = creation.terms.complete();
+        let now = t0() + Duration::days(3);
+        let past = t0() + Duration::days(1);
+        for at in [past, now] {
+            assert_eq!(
+                creation.apply_date(at, now),
+                Err(TermsInputError::DeadlineInPast)
+            );
+            assert_eq!(creation.terms.complete(), before);
+        }
+
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let assignment = assignment(&course, &teacher).build();
+        let mut edit = TermsForm::new(
+            AssignmentTerms::editing(&assignment, 0),
+            TermsStep::Deadline,
+        );
+        edit.apply_date(past, now).unwrap();
+        assert_eq!(edit.terms.deadline_at, Some(past));
+        assert_eq!(edit.step, TermsStep::Summary);
     }
 
     #[test]

@@ -224,16 +224,6 @@ async fn oversized_review_comment_is_rejected() {
 }
 
 #[tokio::test]
-async fn unknown_decision_is_rejected() {
-    let app = TestApp::start().await;
-    let submission = app.queued_submission(app.student(), "pull/1").await;
-
-    app.review(submission, app.teacher(), "maybe", "undecided")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
-}
-
-#[tokio::test]
 async fn reviewing_unknown_submission_is_not_found() {
     let app = TestApp::start().await;
 

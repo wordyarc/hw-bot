@@ -427,3 +427,56 @@ pub async fn grant_extra_attempts(
 
     Ok(Json(StudentAssignmentProgressResponse::from(&progress)))
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn missing_and_null_policy_fields_mean_no_policy() {
+        for value in [
+            json!({}),
+            json!({
+                "late_period_days": null, "late_penalty": null, "late_max_periods": null,
+            }),
+        ] {
+            let request: LatePolicyRequest = serde_json::from_value(value).unwrap();
+            assert_eq!(request.parse().unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn a_partial_policy_is_never_silently_ignored() {
+        let fields = ["late_period_days", "late_penalty", "late_max_periods"];
+        for mask in 1..7 {
+            for missing_as_null in [false, true] {
+                let mut value = json!({});
+                for (index, field) in fields.iter().enumerate() {
+                    if mask & (1 << index) != 0 {
+                        value[field] = json!(1);
+                    } else if missing_as_null {
+                        value[field] = json!(null);
+                    }
+                }
+                let request: LatePolicyRequest = serde_json::from_value(value.clone()).unwrap();
+                let error = request.parse().unwrap_err();
+                assert_eq!(error.status(), StatusCode::UNPROCESSABLE_ENTITY, "{value}");
+                assert_eq!(error.code(), "invalid_input", "{value}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_complete_policy_preserves_each_independent_value() {
+        let request: LatePolicyRequest = serde_json::from_value(json!({
+            "late_period_days": 3, "late_penalty": 2, "late_max_periods": 5,
+        }))
+        .unwrap();
+        assert_eq!(
+            request.parse().unwrap(),
+            Some(LatePolicy::new(3, 2, 5).unwrap())
+        );
+    }
+}

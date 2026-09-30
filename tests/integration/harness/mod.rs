@@ -25,12 +25,16 @@ use uuid::Uuid;
 mod database;
 mod fixture;
 mod response;
+mod response_gate;
 pub mod telegram;
 pub mod telegram_scenario;
 
-pub use database::{fresh_database, migrated_database, saturated_database};
+pub use database::{
+    fresh_database, migrated_database, saturated_database, wait_for_blocked_connection,
+};
 pub use fixture::{CourseFixture, Fixture};
 pub use response::TestResponse;
+pub use response_gate::ResponseGate;
 
 use fixture::{insert_course, insert_group, insert_user, wall_clock_assignment};
 
@@ -153,18 +157,6 @@ impl TestApp {
         self.get_as("/me/review-queue", actor).await
     }
 
-    pub async fn post(&self, path: &str, body: Value) -> TestResponse {
-        self.send(json_request(Request::post(path), body)).await
-    }
-
-    pub async fn post_raw(&self, path: &str, body: Vec<u8>) -> TestResponse {
-        let request = Request::post(path)
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .expect("valid request");
-        self.send(request).await
-    }
-
     pub async fn post_as(&self, path: &str, actor: i64, body: Value) -> TestResponse {
         self.send(json_request(
             Request::post(path).header(ACTOR_HEADER, actor),
@@ -173,31 +165,9 @@ impl TestApp {
         .await
     }
 
-    pub async fn post_raw_as(&self, path: &str, actor: i64, body: Vec<u8>) -> TestResponse {
-        let request = Request::post(path)
-            .header(ACTOR_HEADER, actor)
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .expect("valid request");
-        self.send(request).await
-    }
-
     pub async fn post_empty_as(&self, path: &str, actor: i64) -> TestResponse {
         self.send(empty_request(
             Request::post(path).header(ACTOR_HEADER, actor),
-        ))
-        .await
-    }
-
-    pub async fn post_with_actor_header(
-        &self,
-        path: &str,
-        actor: &str,
-        body: Value,
-    ) -> TestResponse {
-        self.send(json_request(
-            Request::post(path).header(ACTOR_HEADER, actor),
-            body,
         ))
         .await
     }

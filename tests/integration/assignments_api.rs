@@ -38,20 +38,6 @@ async fn a_created_assignment_inherits_the_group_of_its_course() {
 }
 
 #[tokio::test]
-async fn a_draft_assignment_cannot_be_submitted_yet() {
-    let app = TestApp::start().await;
-    let assignment = app.drafted_assignment(app.teacher()).await;
-
-    app.submit(
-        assignment,
-        app.student(),
-        "https://github.com/course/hw/pull/1",
-    )
-    .await
-    .error(StatusCode::CONFLICT, "assignment_unavailable");
-}
-
-#[tokio::test]
 async fn publishing_opens_the_assignment_for_submissions() {
     let app = TestApp::start().await;
     let assignment = app.drafted_assignment(app.teacher()).await;

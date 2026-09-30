@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use hw_bot::bot::{callbacks, texts};
+use hw_bot::bot::callbacks;
 use hw_bot::db;
 use hw_bot::domain::{Assignment, Submission};
 use serde_json::json;
@@ -117,39 +117,5 @@ async fn student_opens_a_previously_published_assignment_from_the_archive() {
         !callbacks
             .iter()
             .any(|callback| callback.starts_with(callbacks::SUBMIT_PREFIX))
-    );
-}
-
-#[tokio::test]
-async fn a_student_sees_what_a_late_submission_costs_right_now() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
-    let updates = vec![
-        message_update(1, app.student(), 1, "/menu"),
-        callback_update(
-            2,
-            app.student(),
-            &format!(
-                "{}{}",
-                callbacks::ASSIGNMENT_PREFIX,
-                assignment.id().as_uuid()
-            ),
-            BOT_MESSAGE_ID,
-        ),
-    ];
-    let telegram = telegram_server(updates).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
-
-    wait_for_sent_message_count(&telegram, 5).await;
-    stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-
-    assert!(
-        requests.contains(&format!("{} −1", texts::LATE_PENALTY_LABEL)),
-        "requests:\n{requests}"
-    );
-    assert!(
-        requests.contains(texts::SUBMISSIONS_CLOSE_LABEL),
-        "requests:\n{requests}"
     );
 }

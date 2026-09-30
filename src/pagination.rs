@@ -41,3 +41,35 @@ impl<T> Page<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_extra_row_announces_a_next_page() {
+        for count in [0, PAGE_SIZE, PAGE_SIZE + 1] {
+            let page = Page::from_rows((0..count).collect(), PageRequest::new(3));
+            assert_eq!(
+                page.items,
+                (0..count.min(PAGE_SIZE)).collect::<Vec<_>>(),
+                "{count} rows"
+            );
+            assert_eq!(page.page, 3);
+            assert_eq!(
+                page.next_page,
+                (count > PAGE_SIZE).then_some(4),
+                "{count} rows"
+            );
+        }
+    }
+
+    #[test]
+    fn the_last_representable_page_never_wraps_around() {
+        let request = PageRequest::new(u32::MAX);
+        let page = Page::from_rows(vec![(); PAGE_SIZE + 1], request);
+        assert_eq!(page.next_page, None);
+        assert_eq!(page.items.len(), PAGE_SIZE);
+        assert_eq!(request.offset(), i64::from(u32::MAX) * PAGE_SIZE as i64);
+    }
+}

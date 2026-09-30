@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(safe.chars().count(), FILE_NAME_MAX_LEN);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn waiting_for_a_transfer_slot_has_a_deadline_and_does_not_leak_permits() {
         let transfers = FileTransfers::new(Bot::new("test-token"), 1, Duration::from_millis(50));
         let first = transfers.acquire().await.unwrap();

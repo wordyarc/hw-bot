@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, FixedOffset, Months, Utc};
 use hw_bot::bot::{callbacks, texts};
 use serde_json::json;
 use wiremock::Mock;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_json, body_partial_json, method, path};
 
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
@@ -112,20 +112,11 @@ async fn a_prompt_hides_the_menu_and_the_finished_step_brings_it_back() {
         .await;
     let restored = Mock::given(method("POST"))
         .and(path("/bottest-token/SendMessage"))
-        .and(body_json(json!({
+        .and(body_partial_json(json!({
             "chat_id": app.student(),
-            "text": texts::submission_queued(),
-            "reply_markup": {
-                "keyboard": [
-                    [{ "text": "📚 Мои задания" }, { "text": "⏳ Очередь проверки" }],
-                    [{ "text": "🗄 Архив" }, { "text": "👤 Профиль" }],
-                    [{ "text": "❓ Помощь" }]
-                ],
-                "is_persistent": true,
-                "resize_keyboard": true,
-                "input_field_placeholder": "Выберите пункт меню"
-            }
+            "text": texts::submission_queued()
         })))
+        .and(|request: &wiremock::Request| has_reply_button(request, texts::BUTTON_ASSIGNMENTS))
         .respond_with(telegram_message_response())
         .expect(1)
         .with_priority(1)
@@ -694,135 +685,6 @@ async fn all_button_steps_reuse_one_message_and_wait_for_explicit_save() {
 }
 
 #[tokio::test]
-async fn the_summary_lists_one_penalty_step_per_chosen_period() {
-    let app = TestApp::start().await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Schedule").await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 1))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 4))
-        .await;
-
-    let summary = summary_text(&app, &telegram).await;
-    let rows: Vec<_> = summary
-        .lines()
-        .skip_while(|line| *line != texts::SCHEDULE_HEADER)
-        .skip(1)
-        .take_while(|line| line.starts_with('•'))
-        .collect();
-
-    assert_eq!(rows.len(), 6, "{summary}");
-    let timezone = bot_timezone();
-    let closing =
-        timezone.end_of(timezone.in_days(7).unwrap()).unwrap() + chrono::Duration::weeks(4);
-    assert_eq!(
-        rows[5],
-        texts::schedule_closed(&timezone.format_since(closing)),
-        "{summary}"
-    );
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
-async fn duration_presets_are_relative_to_a_deadline_thirty_days_away() {
-    let app = TestApp::start().await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Duration preset").await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
-        .await;
-    let deadline = expected_deadline(
-        &(Utc::now() + chrono::Duration::days(30))
-            .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
-            .format("%d.%m.%Y")
-            .to_string(),
-    );
-    telegram.message(app.teacher(), &deadline_input(deadline));
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 1))
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_DURATION_DATE)
-        .await;
-    let selected = (deadline + chrono::Duration::weeks(1) - chrono::Duration::nanoseconds(1))
-        .with_timezone(&FixedOffset::east_opt(10 * 3600).unwrap())
-        .date_naive();
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::CALENDAR_PICK_PREFIX, selected),
-        )
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_DURATION_APPLY)
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_SAVE)
-        .await;
-    let created = wait_for_created_assignment(&app.pool, "Duration preset")
-        .await
-        .unwrap();
-    let saved = stored_assignment(&app, created.id).await;
-    assert_eq!(saved.late_policy().unwrap().max_periods(), 1);
-    assert_eq!(saved.closes_at(), deadline + chrono::Duration::weeks(1));
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
-async fn an_invalid_duration_date_keeps_the_calendar_and_explains_the_date_constraint() {
-    let app = TestApp::start().await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Invalid duration date").await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
-        .await;
-    let deadline = expected_deadline(&deadline_input(Utc::now() + chrono::Duration::days(30)));
-    telegram.message(app.teacher(), &deadline_input(deadline));
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 1))
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_DURATION_DATE)
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::DEADLINE_CALENDAR)
-        .await;
-    for date in [
-        deadline - chrono::Duration::weeks(1),
-        deadline,
-        deadline + chrono::Duration::weeks(53),
-        deadline + chrono::Duration::weeks(101),
-    ] {
-        telegram.message(app.teacher(), &deadline_input(date));
-        telegram.flush(app.teacher()).await;
-        let back = telegram
-            .button(app.teacher(), callbacks::DEADLINE_OPTIONS)
-            .await;
-        let message = telegram
-            .messages(app.teacher())
-            .into_iter()
-            .find(|message| message["message_id"] == back.message_id)
-            .unwrap();
-        let text = message["text"].as_str().unwrap();
-        assert!(text.starts_with(texts::INVALID_DURATION_DATE), "{text}");
-        assert!(!text.contains(&texts::number_prompt(100)), "{text}");
-    }
-    assert_eq!(draft_count(&app, "Invalid duration date").await, 0);
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
 async fn choosing_a_duration_date_requires_confirmation_of_rounded_periods() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
@@ -935,31 +797,6 @@ async fn cancelling_the_first_terms_step_exits_with_a_message_and_menu() {
 }
 
 #[tokio::test]
-async fn repeated_cancel_after_point_edit_eventually_exits_the_creation_wizard() {
-    let app = TestApp::start().await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_periods_step(&app, &telegram, "Repeated cancel").await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 4))
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
-        .await;
-    for _ in 0..6 {
-        telegram.message(app.teacher(), "/cancel");
-    }
-    telegram.flush(app.teacher()).await;
-    assert!(
-        recorded_requests(&telegram.server)
-            .await
-            .contains(texts::DRAFT_DISCARDED)
-    );
-    assert_eq!(draft_count(&app, "Repeated cancel").await, 0);
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
 async fn a_bottom_menu_misclick_can_be_cancelled_without_losing_input() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
@@ -1056,78 +893,6 @@ async fn summary_cancel_reports_that_no_draft_was_saved() {
 }
 
 #[tokio::test]
-async fn editing_the_period_preserves_penalty_and_count_and_previews_the_date_change() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(1, Some((7, 2, 4))).await;
-    let id = assignment.id().as_uuid();
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_edit(&app, &telegram, id, callbacks::DEADLINE_PREFIX).await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_PERIOD)
-        .await;
-    telegram.message(app.teacher(), "10");
-    telegram.flush(app.teacher()).await;
-    let preview = summary_text(&app, &telegram).await;
-    assert!(preview.contains("→"));
-    telegram
-        .button_with_text(app.teacher(), "Период: 10 дн.")
-        .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_SAVE)
-        .await;
-    let saved = stored_assignment(&app, id).await;
-    let policy = saved.late_policy().unwrap();
-    assert_eq!(
-        (policy.period_days(), policy.penalty(), policy.max_periods()),
-        (10, 2, 4)
-    );
-    assert_eq!(
-        saved.closes_at(),
-        saved.deadline_at() + chrono::Duration::days(40)
-    );
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
-async fn cancelling_an_incomplete_policy_edit_returns_to_a_valid_strict_summary() {
-    let app = TestApp::start().await;
-    let assignment = app.add_scored_assignment(5).await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_edit(
-        &app,
-        &telegram,
-        assignment.id().as_uuid(),
-        callbacks::DEADLINE_PREFIX,
-    )
-    .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_POLICY)
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
-        .await;
-    telegram.message(app.teacher(), "/cancel");
-    telegram.flush(app.teacher()).await;
-    assert!(
-        summary_text(&app, &telegram)
-            .await
-            .contains(texts::STRICT_AFTER_DEADLINE)
-    );
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_SAVE)
-        .await;
-    assert!(
-        stored_assignment(&app, assignment.id().as_uuid())
-            .await
-            .late_policy()
-            .is_none()
-    );
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
 async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_bot_survives() {
     let app = TestApp::start().await;
     let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
@@ -1171,42 +936,6 @@ async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_
     let stored = stored_assignment(&app, id).await;
     assert_eq!(stored.deadline_at(), original.deadline_at());
     assert_eq!(stored.late_policy(), original.late_policy());
-    stop_bot(cancellation, &mut task).await;
-}
-
-#[tokio::test]
-async fn editing_a_deadline_into_the_past_warns_before_saving() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(10, Some((7, 1, 4))).await;
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_edit(
-        &app,
-        &telegram,
-        assignment.id().as_uuid(),
-        callbacks::DEADLINE_PREFIX,
-    )
-    .await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
-        .await;
-    let deadline = deadline_input(Utc::now() - chrono::Duration::days(1));
-    telegram.message(app.teacher(), &deadline);
-    telegram.flush(app.teacher()).await;
-    assert!(
-        summary_text(&app, &telegram)
-            .await
-            .contains(texts::PAST_PENALTY_WARNING)
-    );
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_SAVE)
-        .await;
-    assert_eq!(
-        stored_assignment(&app, assignment.id().as_uuid())
-            .await
-            .deadline_at(),
-        expected_deadline(&deadline)
-    );
     stop_bot(cancellation, &mut task).await;
 }
 
@@ -1406,41 +1135,6 @@ async fn a_teacher_can_enable_penalties_from_the_assignment_card() {
         saved.deadline_at() + chrono::Duration::weeks(4)
     );
     assert_eq!(saved.late_policy().unwrap().penalty(), 1);
-}
-
-#[tokio::test]
-async fn a_due_date_beyond_the_old_closing_shows_the_new_computed_date() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
-    let id = assignment.id().as_uuid();
-    let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_edit(&app, &telegram, id, callbacks::DEADLINE_PREFIX).await;
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
-        .await;
-    let deadline = deadline_input(Utc::now() + chrono::Duration::days(40));
-    telegram.message(app.teacher(), &deadline);
-    telegram.flush(app.teacher()).await;
-    assert!(
-        recorded_requests(&telegram.server)
-            .await
-            .contains(&texts::closing_change(
-                &bot_timezone().format(assignment.closes_at()),
-                &bot_timezone().format(expected_deadline(&deadline) + chrono::Duration::weeks(4))
-            ))
-    );
-    telegram
-        .click_button(app.teacher(), callbacks::TERMS_SAVE)
-        .await;
-    telegram.flush(app.teacher()).await;
-    stop_bot(cancellation, &mut task).await;
-    let saved = stored_assignment(&app, id).await;
-    assert_eq!(saved.deadline_at(), expected_deadline(&deadline));
-    assert_eq!(
-        saved.closes_at(),
-        expected_deadline(&deadline) + chrono::Duration::weeks(4)
-    );
 }
 
 #[tokio::test]

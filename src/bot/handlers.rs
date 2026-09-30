@@ -787,8 +787,12 @@ mod tests {
             },
             TermsStep::Summary,
         ] {
-            let (_, keyboard) =
-                terms_form_view(&TermsForm::new(terms.clone(), step), &timezone).unwrap();
+            let (_, keyboard) = terms_form_view(
+                &TermsForm::new(terms.clone(), step),
+                &timezone,
+                crate::test_support::t0(),
+            )
+            .unwrap();
             keyboards.push(keyboard);
         }
 
@@ -867,21 +871,6 @@ mod tests {
         );
         assert!(accept.len() <= 64);
         assert!(reject.len() <= 64);
-    }
-
-    #[test]
-    fn old_review_callback_identifies_a_different_submission() {
-        let current = SubmissionId::new();
-        let old = SubmissionId::new();
-        let Some(CallbackAction::Flow(FlowAction::Review {
-            submission_id: callback_submission,
-            ..
-        })) = callbacks::parse(&format!("review:accept:{}", old.as_uuid()))
-        else {
-            panic!("review callback must parse");
-        };
-
-        assert_ne!(callback_submission, current);
     }
 
     #[test]

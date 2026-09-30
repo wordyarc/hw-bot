@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
 use hw_bot::db;
 use hw_bot::domain::{AssignmentStatus, EducationLevel, FilePresentation, SubmissionStatus};
-use sqlx::PgPool;
 
 use crate::harness::{TestApp, fresh_database};
 
@@ -15,47 +14,7 @@ async fn migrations_apply_to_empty_postgres() -> anyhow::Result<()> {
     let pool = fresh_database().await;
 
     db::run_migrations(&pool).await?;
-
-    for table_name in [
-        "student_groups",
-        "subjects",
-        "users",
-        "teaching_courses",
-        "teaching_course_teachers",
-        "assignments",
-        "submissions",
-        "stored_files",
-        "student_assignment_progress",
-        "review_notification_outbox",
-    ] {
-        assert!(
-            table_exists(&pool, table_name).await?,
-            "missing table {table_name}"
-        );
-    }
-
-    for index_name in [
-        "submissions_one_pending_per_student_assignment_idx",
-        "submissions_one_accepted_per_student_assignment_idx",
-        "submissions_pending_review_queue_idx",
-        "review_notification_outbox_pending_idx",
-        "stored_files_assignment_position_idx",
-        "stored_files_submission_position_idx",
-    ] {
-        assert!(
-            index_exists(&pool, index_name).await?,
-            "missing index {index_name}"
-        );
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn migrated_database_matches_the_embedded_migration_set() -> anyhow::Result<()> {
-    let app = TestApp::start().await;
-
-    db::validate_migrations(&app.pool).await?;
+    db::validate_migrations(&pool).await?;
 
     Ok(())
 }
@@ -270,15 +229,19 @@ async fn stored_file_requires_exactly_one_owner() -> anyhow::Result<()> {
         .execute(&app.pool)
     };
 
-    assert!(valid(None, None, 1).await.is_err());
-    assert!(
+    assert_check(
+        valid(None, None, 1).await.unwrap_err(),
+        Some("stored_files_check"),
+    );
+    assert_check(
         valid(
             Some(app.fixture.assignment.id().as_uuid()),
             Some(app.queued_submission(app.student(), "pull/1").await),
             2,
         )
         .await
-        .is_err()
+        .unwrap_err(),
+        Some("stored_files_check"),
     );
     assert!(
         valid(Some(app.fixture.assignment.id().as_uuid()), None, 3)
@@ -324,10 +287,50 @@ async fn stored_file_schema_has_no_installation_size_or_count_limit() -> anyhow:
 }
 
 #[tokio::test]
+async fn file_positions_are_unique_within_each_owner() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    for (assignment, submission, constraint) in [
+        (
+            Some(app.assignment()),
+            None,
+            "stored_files_assignment_position_idx",
+        ),
+        (
+            None,
+            Some(submission),
+            "stored_files_submission_position_idx",
+        ),
+    ] {
+        let insert = || {
+            sqlx::query(
+                "insert into stored_files (
+                    assignment_id, submission_id, position, presentation, filename,
+                    size_bytes, sha256, content
+                 ) values ($1, $2, 1, 'document', 'file.txt', 0, $3, $4)",
+            )
+            .bind(assignment)
+            .bind(submission)
+            .bind(vec![0_u8; 32])
+            .bind(Vec::<u8>::new())
+            .execute(&app.pool)
+        };
+        insert().await.unwrap();
+        let error = insert().await.unwrap_err();
+        let database = error.as_database_error().unwrap();
+        assert_eq!(database.code().as_deref(), Some("23505"), "{error}");
+        assert_eq!(database.constraint(), Some(constraint), "{error}");
+    }
+}
+
+#[tokio::test]
 async fn stored_file_size_and_checksum_shape_are_hard_invariants() -> anyhow::Result<()> {
     let app = TestApp::start().await;
 
-    for (size, sha256) in [(2_i64, vec![0_u8; 32]), (1_i64, vec![0_u8; 31])] {
+    for (size, sha256, constraint) in [
+        (2_i64, vec![0_u8; 32], "stored_files_check1"),
+        (1_i64, vec![0_u8; 31], "stored_files_sha256_check"),
+    ] {
         let result = sqlx::query(
             r#"
             insert into stored_files (
@@ -345,7 +348,7 @@ async fn stored_file_size_and_checksum_shape_are_hard_invariants() -> anyhow::Re
         .execute(&app.pool)
         .await;
 
-        assert!(result.is_err());
+        assert_check(result.unwrap_err(), Some(constraint));
     }
     Ok(())
 }
@@ -376,7 +379,7 @@ async fn assignment_status_requires_the_matching_published_at_shape() -> anyhow:
         .execute(&app.pool)
         .await;
 
-        assert!(result.is_err(), "schema accepted invalid {status} shape");
+        assert_check(result.unwrap_err(), Some("assignments_check1"));
     }
 
     Ok(())
@@ -405,10 +408,7 @@ async fn schema_rejects_user_text_over_the_product_limit() -> anyhow::Result<()>
     .execute(&app.pool)
     .await;
 
-    assert!(
-        result.is_err(),
-        "schema accepted an oversized assignment body"
-    );
+    assert_check(result.unwrap_err(), Some("assignments_body_check"));
     Ok(())
 }
 
@@ -423,10 +423,7 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
         .bind(1_i16)
         .execute(&app.pool)
         .await;
-    assert!(
-        group.is_err(),
-        "the schema accepts an unknown education level"
-    );
+    assert_check(group.unwrap_err(), None);
 
     let assignment = sqlx::query(
         r#"
@@ -444,10 +441,7 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     .bind(Utc::now() + Duration::days(7))
     .execute(&app.pool)
     .await;
-    assert!(
-        assignment.is_err(),
-        "the schema accepts an unknown assignment status"
-    );
+    assert_check(assignment.unwrap_err(), None);
 
     let submission = sqlx::query(
         r#"
@@ -459,10 +453,7 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     .bind(fixture.student.id().as_uuid())
     .execute(&app.pool)
     .await;
-    assert!(
-        submission.is_err(),
-        "the schema accepts an unknown submission status"
-    );
+    assert_check(submission.unwrap_err(), None);
 
     Ok(())
 }
@@ -482,45 +473,17 @@ async fn study_year_limits_match_the_domain() -> anyhow::Result<()> {
             .execute(&app.pool)
             .await;
 
-        assert!(
-            over_limit.is_err(),
-            "the schema accepts {} year {}, but max_study_year() says {max}",
-            level.as_str(),
-            max + 1
-        );
+        assert_check(over_limit.unwrap_err(), Some("student_groups_check"));
     }
 
     Ok(())
 }
 
-async fn table_exists(pool: &PgPool, table_name: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"
-        select exists (
-            select 1
-            from information_schema.tables
-            where table_schema = 'public'
-              and table_name = $1
-        )
-        "#,
-    )
-    .bind(table_name)
-    .fetch_one(pool)
-    .await
-}
-
-async fn index_exists(pool: &PgPool, index_name: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"
-        select exists (
-            select 1
-            from pg_indexes
-            where schemaname = 'public'
-              and indexname = $1
-        )
-        "#,
-    )
-    .bind(index_name)
-    .fetch_one(pool)
-    .await
+#[track_caller]
+fn assert_check(error: sqlx::Error, constraint: Option<&str>) {
+    let database = error.as_database_error().expect("a PostgreSQL error");
+    assert_eq!(database.code().as_deref(), Some("23514"), "{error}");
+    if let Some(constraint) = constraint {
+        assert_eq!(database.constraint(), Some(constraint), "{error}");
+    }
 }

@@ -13,8 +13,8 @@ use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::harness::TestApp;
-use crate::harness::telegram::{telegram_me_body, telegram_message_response};
+use crate::harness::telegram::{gate_sent_messages, telegram_me_body, telegram_message_response};
+use crate::harness::{ResponseGate, TestApp};
 
 #[tokio::test]
 async fn successful_telegram_delivery_completes_notification() {
@@ -88,12 +88,7 @@ async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
     .await
     .unwrap();
     let telegram = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/bottest-token/SendMessage"))
-        .respond_with(telegram_message_response().set_delay(Duration::from_millis(250)))
-        .expect(1)
-        .mount(&telegram)
-        .await;
+    let gate = gate_sent_messages(&telegram, 1).await;
     let worker = NotificationWorker::new(
         runtime.clone(),
         new_bot("test-token", &telegram.uri(), Duration::from_secs(1)).unwrap(),
@@ -107,13 +102,15 @@ async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
         },
     );
     let held = runtime.acquire().await.unwrap();
-    let delivery = tokio::spawn(async move { worker.deliver_one(Utc::now()).await });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    let mut delivery = Box::pin(async move { worker.deliver_one(Utc::now()).await });
+    assert!(futures::poll!(delivery.as_mut()).is_pending());
     drop(held);
-    wait_for_worker_request(&telegram, "/bottest-token/SendMessage").await;
+    let delivery = tokio::spawn(delivery);
+    gate.wait_started().await;
     // Пока идёт запрос в Telegram, соединение можно занять. Запись подтверждения будет ждать его возврата.
     let held = runtime.acquire().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.release();
+    gate.wait_finished().await;
     assert!(!delivery.is_finished());
     let now = Utc::now();
     assert!(
@@ -129,6 +126,13 @@ async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
     );
     drop(held);
     assert_eq!(delivery.await.unwrap().unwrap(), DeliveryOutcome::Delivered);
+    let confirmed: bool = sqlx::query_scalar(
+        "select delivered_at is not null and lease_token is null from review_notification_outbox where submission_id = $1",
+    ).bind(submission).fetch_one(&app.pool).await.unwrap();
+    assert!(
+        confirmed,
+        "delivery must persist its confirmation after the connection is released"
+    );
     runtime.close().await;
 }
 
@@ -375,13 +379,10 @@ async fn invalid_credentials_preserve_the_notification_for_a_fixed_deployment() 
 async fn run_becomes_ready_after_credentials_and_drops_readiness_on_exit() {
     let app = TestApp::start().await;
     let telegram = MockServer::start().await;
+    let gate = ResponseGate::new(telegram_me_body()).await;
     Mock::given(method("POST"))
         .and(path("/bottest-token/GetMe"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(500))
-                .set_body_json(telegram_me_body()),
-        )
+        .respond_with(gate.response())
         .expect(1)
         .mount(&telegram)
         .await;
@@ -393,15 +394,16 @@ async fn run_becomes_ready_after_credentials_and_drops_readiness_on_exit() {
         health.component(CriticalComponent::NotificationWorker),
     ));
 
-    wait_for_worker_request(&telegram, "/bottest-token/GetMe").await;
+    gate.wait_started().await;
     assert!(
         !health.is_ready_without_database(),
         "credentials must be validated before readiness"
     );
+    gate.release();
     wait_for_worker_readiness(&health).await;
 
     cancellation.cancel();
-    tokio::time::timeout(Duration::from_millis(300), task)
+    tokio::time::timeout(Duration::from_secs(3), task)
         .await
         .expect("idle worker reacts to cancellation without waiting for poll interval")
         .expect("worker task does not panic")
@@ -502,25 +504,6 @@ async fn malformed_startup_response_does_not_leak_into_the_process_error_or_mark
     ));
     assert!(!format!("{error:?}: {error}").contains("private-comment-and-token"));
     assert!(!health.is_ready_without_database());
-}
-
-async fn wait_for_worker_request(telegram: &MockServer, expected: &str) {
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let seen = telegram
-                .received_requests()
-                .await
-                .unwrap()
-                .iter()
-                .any(|request| request.url.path() == expected);
-            if seen {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("worker sent the expected Telegram request");
 }
 
 async fn wait_for_worker_readiness(health: &HealthState) {

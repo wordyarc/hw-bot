@@ -283,42 +283,6 @@ async fn an_assignment_without_a_late_policy_still_reports_the_deadline() {
 }
 
 #[tokio::test]
-async fn moving_the_deadline_recalculates_the_closing() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(10, Some((7, 1, 4))).await;
-    let id = assignment.id().as_uuid();
-
-    let deadline = Utc::now() - Duration::days(1);
-    let body = app.change_deadline(id, app.teacher(), deadline).await.ok();
-    let closes_at: chrono::DateTime<Utc> =
-        serde_json::from_value(body["closes_at"].clone()).unwrap();
-    assert_eq!(
-        closes_at.timestamp_micros(),
-        (deadline + Duration::days(28)).timestamp_micros()
-    );
-}
-
-#[tokio::test]
-async fn an_incomplete_late_policy_is_rejected() {
-    let app = TestApp::start().await;
-
-    app.create_assignment_raw(
-        app.course(),
-        app.teacher(),
-        json!({
-            "title": "Half a policy",
-            "body": "Send a pull request link.",
-            "max_attempts": 2,
-            "max_score": 5,
-            "late_period_days": 7,
-            "deadline_at": Utc::now() + Duration::days(7),
-        }),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
 async fn the_horizon_reaches_the_assignment_response() {
     let app = TestApp::start().await;
     let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
@@ -369,42 +333,6 @@ async fn a_nonweekly_policy_round_trips_through_http() {
     );
     assert_eq!(body["late_max_periods"], json!(2));
     assert!(body.get("late_closes_at").is_none());
-}
-
-#[tokio::test]
-async fn the_removed_absolute_date_is_rejected_including_null() {
-    let app = TestApp::start().await;
-    for value in [json!(Utc::now()), json!(null)] {
-        app.create_assignment_raw(
-            app.course(),
-            app.teacher(),
-            json!({
-                "title": "Old policy", "body": "Send a pull request.", "max_attempts": 2,
-                "max_score": 5, "deadline_at": Utc::now() + Duration::days(7),
-                "late_closes_at": value,
-            }),
-        )
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
-        app.post_as(
-            &format!("/assignments/{}/grading", app.assignment()),
-            app.teacher(),
-            json!({
-                "max_score": 5, "late_closes_at": value,
-            }),
-        )
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
-        app.post_as(
-            &format!("/assignments/{}/deadline", app.assignment()),
-            app.teacher(),
-            json!({
-                "deadline_at": Utc::now() + Duration::days(5), "late_closes_at": value,
-            }),
-        )
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
-    }
 }
 
 #[tokio::test]

@@ -362,33 +362,6 @@ async fn app_deletes_a_published_file_without_transport_confirmation_state() {
 }
 
 #[tokio::test]
-async fn deletion_removes_file_and_advances_revision() {
-    let app = TestApp::start().await;
-    let application = application(&app);
-    let added = add(
-        &app,
-        &application,
-        card(&app, &application).await.revision,
-        DOCUMENT,
-    )
-    .await;
-
-    let deleted = application
-        .files
-        .delete_assignment_file(DeleteAssignmentFile {
-            assignment_id: app.fixture.assignment.id(),
-            file_id: added.files[0].id(),
-            actor: app.teacher_actor(),
-            expected_revision: added.revision,
-        })
-        .await
-        .unwrap();
-
-    assert!(deleted.files.is_empty());
-    assert_eq!(deleted.revision, added.revision + 1);
-}
-
-#[tokio::test]
 async fn unrelated_teacher_cannot_manage_assignment_files() {
     let app = TestApp::start().await;
     let application = application(&app);

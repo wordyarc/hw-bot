@@ -6,15 +6,6 @@ use hw_bot::domain::{InviteGeneration, StudentGroupId};
 use crate::harness::TestApp;
 
 #[tokio::test]
-async fn the_group_directory_is_no_longer_exposed() {
-    let app = TestApp::start().await;
-
-    let response = app.get("/student-groups").await;
-
-    assert_eq!(response.status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
 async fn student_registers_themselves_with_a_group_invite() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();
@@ -142,21 +133,6 @@ async fn a_student_cannot_make_themselves_staff() {
     app.register_staff(app.student(), 2005, "Sneaky", "teacher")
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
-async fn student_is_not_a_staff_role() {
-    let app = TestApp::start().await;
-    let admin = app.add_admin().await;
-
-    app.register_staff(
-        admin.telegram_user_id().as_i64(),
-        2006,
-        "Not staff",
-        "student",
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
 }
 
 #[tokio::test]

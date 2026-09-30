@@ -342,48 +342,26 @@ async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
         })
         .await
         .unwrap();
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::MENU_COURSES, BOT_MESSAGE_ID),
-        callback_update(
-            3,
-            app.teacher(),
-            &format!("{}{}", callbacks::COURSE_PREFIX, app.course()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            4,
-            app.teacher(),
-            &format!("{}{}", callbacks::MANAGE_PREFIX, assignment.as_uuid()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            5,
-            app.teacher(),
-            &format!("{}{}", callbacks::FILES_PREFIX, assignment.as_uuid()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            6,
-            app.teacher(),
-            &cb(callbacks::FILE_DELETE_PREFIX, 0),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            7,
-            app.teacher(),
-            callbacks::FILE_CONFIRM_DELETE,
-            BOT_MESSAGE_ID,
-        ),
-    ];
-    let telegram = telegram_server(updates).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
+    let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/courses");
+    for data in [
+        cb(callbacks::COURSE_PREFIX, app.course()),
+        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILE_DELETE_PREFIX, 0),
+    ] {
+        telegram.click_button(app.teacher(), &data).await;
+    }
+    let confirm = telegram
+        .button(app.teacher(), callbacks::FILE_CONFIRM_DELETE)
+        .await;
+    assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 1);
 
-    wait_for_file_count(&app.pool, assignment.as_uuid(), 0).await;
+    telegram.click(app.teacher(), &confirm);
+    telegram.flush(app.teacher()).await;
+    assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 0);
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-
-    assert!(requests.contains(texts::FILE_DELETE_CONFIRM));
 }
 
 #[tokio::test]

@@ -447,3 +447,119 @@ async fn validate_stored_courses(connection: &mut PgConnection) -> Result<(), Bo
 fn invalid(message: impl Into<String>) -> BootstrapError {
     BootstrapError::InvalidData(message.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::test_support::{bootstrap_seed, closed_pool};
+
+    #[track_caller]
+    fn rejects(value: serde_json::Value, reason: &str) {
+        let result = validate_seed(Seed::deserialize(value).unwrap());
+        assert!(
+            matches!(&result, Err(BootstrapError::InvalidData(message)) if message == reason),
+            "expected {reason}, got {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn blank_unicode_name_is_rejected_before_accessing_the_database() {
+        let pool = closed_pool().await;
+        let mut seed = bootstrap_seed();
+        seed["admin"]["display_name"] = json!("\u{a0}");
+        assert!(matches!(
+            run_bootstrap(&pool, &seed).await,
+            Err(BootstrapError::Domain(DomainError::EmptyField { .. }))
+        ));
+    }
+
+    #[test]
+    fn staff_identities_must_be_unique() {
+        let mut seed = bootstrap_seed();
+        seed["teachers"][0]["telegram_user_id"] = seed["admin"]["telegram_user_id"].clone();
+        rejects(seed, "staff telegram_user_id values must be unique");
+    }
+
+    #[test]
+    fn group_codes_are_unique_after_trimming() {
+        let mut seed = bootstrap_seed();
+        let mut duplicate = seed["student_groups"][0].clone();
+        duplicate["code"] = json!(" b9122-02.03.21 ");
+        seed["student_groups"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        rejects(seed, "student group codes must be unique");
+    }
+
+    #[test]
+    fn subject_names_are_unique_after_trimming() {
+        let mut seed = bootstrap_seed();
+        seed["subjects"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": " Backend Development "}));
+        rejects(seed, "subject names must be unique");
+    }
+
+    #[test]
+    fn course_pairs_are_unique_after_trimming() {
+        let mut seed = bootstrap_seed();
+        let mut duplicate = seed["courses"][0].clone();
+        duplicate["subject_name"] = json!(" Backend Development ");
+        duplicate["student_group_code"] = json!(" b9122-02.03.21 ");
+        seed["courses"].as_array_mut().unwrap().push(duplicate);
+        rejects(seed, "subject and student group pairs must be unique");
+    }
+
+    #[test]
+    fn courses_reference_groups_and_subjects_from_the_same_seed() {
+        for field in ["subject_name", "student_group_code"] {
+            let mut seed = bootstrap_seed();
+            seed["courses"][0][field] = json!("unknown");
+            rejects(
+                seed,
+                "every course must reference a subject and student group from this seed",
+            );
+        }
+    }
+
+    #[test]
+    fn course_teachers_reference_staff_from_the_same_seed() {
+        let mut seed = bootstrap_seed();
+        seed["courses"][0]["teacher_telegram_user_ids"] = json!([999]);
+        rejects(
+            seed,
+            "every course teacher must reference the admin or a teacher from this seed",
+        );
+    }
+
+    #[test]
+    fn a_course_requires_at_least_one_teacher() {
+        let mut seed = bootstrap_seed();
+        seed["courses"][0]["teacher_telegram_user_ids"] = json!([]);
+        rejects(seed, "every course must have at least one teacher");
+    }
+
+    #[test]
+    fn a_course_cannot_repeat_a_teacher() {
+        let mut seed = bootstrap_seed();
+        seed["courses"][0]["teacher_telegram_user_ids"] = json!([100000002, 100000002]);
+        rejects(seed, "a teacher must not be repeated within a course");
+    }
+
+    #[test]
+    fn required_academic_collections_cannot_be_empty() {
+        for collection in ["student_groups", "subjects", "courses"] {
+            let mut seed = bootstrap_seed();
+            seed[collection] = json!([]);
+            rejects(
+                seed,
+                "student_groups, subjects and courses must not be empty",
+            );
+        }
+    }
+}

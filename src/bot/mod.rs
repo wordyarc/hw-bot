@@ -544,6 +544,68 @@ mod tests {
     use crate::bot::state::FlowState;
     use crate::domain::AssignmentId;
 
+    fn admission(burst: u32, concurrency: usize) -> Arc<UpdateAdmission> {
+        Arc::new(UpdateAdmission {
+            rate_limiter: RateLimiter::keyed(
+                Quota::with_period(Duration::from_secs(60))
+                    .unwrap()
+                    .allow_burst(NonZeroU32::new(burst).unwrap()),
+            ),
+            semaphore: Arc::new(Semaphore::new(concurrency)),
+            checks: AtomicU64::new(0),
+            rate_limit_rejections: AtomicU64::new(0),
+            permits: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn update(id: u32, user: u64) -> Update {
+        serde_json::from_str(
+            &json!({
+                "update_id": id,
+                "message": {
+                    "message_id": id, "date": 0,
+                    "chat": {"id": user, "type": "private"},
+                    "from": {"id": user, "is_bot": false, "first_name": "Student"},
+                    "text": "/help"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn updates_above_the_user_burst_are_dropped() {
+        let admission = admission(1, 2);
+        assert!(admit_update(&update(1, 42), &admission).await);
+        assert!(!admit_update(&update(2, 42), &admission).await);
+        assert!(take_admission_permit(update(2, 42), admission).is_none());
+    }
+
+    #[tokio::test]
+    async fn each_user_has_an_independent_rate_limit_bucket() {
+        let admission = admission(1, 2);
+        assert!(admit_update(&update(1, 42), &admission).await);
+        assert!(admit_update(&update(2, 43), &admission).await);
+    }
+
+    #[tokio::test]
+    async fn waiting_updates_are_admitted_only_after_the_handler_releases_its_permit() {
+        let admission = admission(2, 1);
+        let first = update(1, 42);
+        let second = update(2, 43);
+        assert!(admit_update(&first, &admission).await);
+        let mut waiting = std::pin::pin!(admit_update(&second, &admission));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+
+        let permit = take_admission_permit(first, admission.clone()).unwrap();
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        drop(permit);
+
+        assert!(waiting.await);
+        assert!(take_admission_permit(second.clone(), admission.clone()).is_some());
+    }
+
     #[tokio::test]
     async fn a_handler_panic_fails_one_update_and_resets_the_chat() {
         let telegram = MockServer::start().await;

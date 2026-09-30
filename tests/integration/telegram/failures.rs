@@ -733,7 +733,7 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         app.application.clone(),
         "test-token",
         &telegram.server.uri(),
-        bot_settings_with(|_| {}),
+        bot_settings_with(|settings| settings.request_timeout = Duration::from_secs(30)),
         bot_timezone(),
         crate::harness::invite_codec(),
     )
@@ -775,22 +775,17 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         .await;
     telegram.flush(app.student()).await;
     let before = sent_message_count(&telegram.server).await;
-    Mock::given(method("POST"))
-        .and(path("/bottest-token/SendMessage"))
-        .respond_with(telegram_message_response().set_delay(Duration::from_millis(600)))
-        .with_priority(1)
-        .mount(&telegram.server)
-        .await;
+    let gate = gate_sent_messages(&telegram.server, 1).await;
     telegram.message(app.student(), "/help");
     telegram.message(app.student(), "pull/should-not-be-written");
-    wait_for_sent_message_count(&telegram.server, before + 1).await;
+    gate.wait_started().await;
     cancellation.cancel();
     tokio::time::timeout(Duration::from_secs(1), task)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    gate.wait_finished().await;
     assert_eq!(sent_message_count(&telegram.server).await, before + 1);
     let count: i64 = sqlx::query_scalar("select count(*) from submissions")
         .fetch_one(&app.pool)

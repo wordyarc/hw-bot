@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use hw_bot::db;
-use serde_json::{Value, json};
+use hw_bot::test_support::bootstrap_seed as seed;
 use sqlx::PgPool;
 
-use crate::harness::migrated_database;
+use crate::harness::{migrated_database, wait_for_blocked_connection};
 
 const BOOTSTRAP_LOCK: &str = "hw-bot/bootstrap/v1";
 
@@ -135,20 +135,6 @@ async fn conflicting_existing_staff_aborts_without_partial_seed() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn bootstrap_rejects_text_that_is_empty_after_domain_trimming() -> anyhow::Result<()> {
-    let pool = migrated_database().await;
-    let mut seed = seed();
-    seed["admin"]["display_name"] = json!("\u{a0}");
-
-    let error = db::run_bootstrap(&pool, &seed).await.unwrap_err();
-
-    assert!(error.to_string().contains("bootstrap:"), "{error}");
-    assert_eq!(count(&pool, "users").await?, 0);
-    assert_eq!(count(&pool, "student_groups").await?, 0);
-    Ok(())
-}
-
-#[tokio::test]
 async fn bootstrap_rejects_a_manually_seeded_course_without_teacher() -> anyhow::Result<()> {
     let pool = migrated_database().await;
 
@@ -195,6 +181,9 @@ async fn bootstrap_rejects_a_manually_seeded_course_without_teacher() -> anyhow:
 async fn bootstrap_waits_for_its_advisory_lock() -> anyhow::Result<()> {
     let pool = migrated_database().await;
     let mut lock_connection = pool.acquire().await?;
+    let blocker = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *lock_connection)
+        .await?;
     sqlx::query("select pg_advisory_lock(hashtextextended($1, 0))")
         .bind(BOOTSTRAP_LOCK)
         .execute(&mut *lock_connection)
@@ -203,56 +192,18 @@ async fn bootstrap_waits_for_its_advisory_lock() -> anyhow::Result<()> {
     let task_pool = pool.clone();
     let bootstrap = tokio::spawn(async move { db::run_bootstrap(&task_pool, &seed()).await });
 
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let waiting = sqlx::query_scalar::<_, bool>(
-                "select exists (select 1 from pg_locks where locktype = 'advisory' and not granted)",
-            )
-            .fetch_one(&pool)
-            .await
-            .expect("read advisory locks");
-            if waiting {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("bootstrap did not wait for the advisory lock");
+    wait_for_blocked_connection(&pool, blocker).await;
     assert!(!bootstrap.is_finished());
 
     sqlx::query("select pg_advisory_unlock(hashtextextended($1, 0))")
         .bind(BOOTSTRAP_LOCK)
         .execute(&mut *lock_connection)
         .await?;
-    bootstrap.await??;
+    tokio::time::timeout(Duration::from_secs(5), bootstrap)
+        .await
+        .expect("bootstrap continues after its advisory lock is released")??;
+    assert_eq!(count(&pool, "teaching_courses").await?, 1);
     Ok(())
-}
-
-fn seed() -> Value {
-    json!({
-        "admin": {
-            "telegram_user_id": 100000001,
-            "display_name": "First Admin"
-        },
-        "teachers": [{
-            "telegram_user_id": 100000002,
-            "display_name": "Course Teacher"
-        }],
-        "student_groups": [{
-            "code": "b9122-02.03.21",
-            "education_level": "bachelor",
-            "study_year": 1
-        }],
-        "subjects": [{
-            "name": "Backend Development"
-        }],
-        "courses": [{
-            "subject_name": "Backend Development",
-            "student_group_code": "b9122-02.03.21",
-            "teacher_telegram_user_ids": [100000002]
-        }]
-    })
 }
 
 async fn count(pool: &PgPool, table: &str) -> Result<i64, sqlx::Error> {

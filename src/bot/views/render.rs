@@ -11,6 +11,7 @@ use crate::telegram::text::truncate;
 pub(crate) fn terms_form_view(
     form: &TermsForm,
     timezone: &BotTimezone,
+    now: DateTime<Utc>,
 ) -> Option<(String, InlineKeyboardMarkup)> {
     let terms = &form.terms;
     let context = terms
@@ -73,12 +74,17 @@ pub(crate) fn terms_form_view(
                 &timezone.format(closing),
             )
         }
-        TermsStep::Summary => terms_summary(form, terms.complete()?, timezone),
+        TermsStep::Summary => terms_summary(form, terms.complete()?, timezone, now),
     };
-    Some((text, terms_form_keyboard(form, timezone)?))
+    Some((text, terms_form_keyboard(form, timezone, now)?))
 }
 
-fn terms_summary(form: &TermsForm, complete: CompleteTerms, timezone: &BotTimezone) -> String {
+fn terms_summary(
+    form: &TermsForm,
+    complete: CompleteTerms,
+    timezone: &BotTimezone,
+    now: DateTime<Utc>,
+) -> String {
     let terms = &form.terms;
     let CompleteTerms {
         deadline_at: deadline,
@@ -110,7 +116,7 @@ fn terms_summary(form: &TermsForm, complete: CompleteTerms, timezone: &BotTimezo
             texts::closing_change(&timezone.format(previous), &timezone.format(closing))
         ));
     }
-    if matches!(terms.target, TermsTarget::Edit { .. }) && deadline <= Utc::now() {
+    if matches!(terms.target, TermsTarget::Edit { .. }) && deadline <= now {
         text.push_str(&format!(
             "\n{}",
             if policy.is_some() {
@@ -240,4 +246,100 @@ pub(crate) fn list_text(header: &str, entries: impl IntoIterator<Item = String>)
 
 pub(crate) fn button_label(label: &str) -> String {
     truncate(label, 60, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+    use chrono_tz::Tz;
+
+    use super::*;
+    use crate::bot::assignment_form::AssignmentTerms;
+    use crate::bot::callbacks::TermsAction;
+    use crate::test_support::{assignment, course_for, student_group, t0, teacher};
+
+    #[test]
+    fn summary_warns_at_a_past_deadline_according_to_the_selected_policy() {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        for allow_late in [false, true] {
+            let mut builder = assignment(&course, &teacher).scored(5);
+            if allow_late {
+                builder = builder.late_policy(7, 1, 4);
+            }
+            let assignment = builder.build();
+            let form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
+            let before = terms_form_view(
+                &form,
+                &timezone,
+                assignment.deadline_at() - Duration::nanoseconds(1),
+            )
+            .unwrap()
+            .0;
+            assert!(!before.contains(texts::PAST_STRICT_WARNING));
+            assert!(!before.contains(texts::PAST_PENALTY_WARNING));
+
+            let at_deadline = terms_form_view(&form, &timezone, assignment.deadline_at())
+                .unwrap()
+                .0;
+            assert_eq!(
+                at_deadline.contains(texts::PAST_PENALTY_WARNING),
+                allow_late
+            );
+            assert_eq!(
+                at_deadline.contains(texts::PAST_STRICT_WARNING),
+                !allow_late
+            );
+        }
+    }
+
+    #[test]
+    fn summary_previews_the_original_and_new_computed_closing() {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let assignment = assignment(&course, &teacher)
+            .scored(5)
+            .late_policy(7, 2, 4)
+            .build();
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let mut form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
+        assert!(form.edit_summary(TermsAction::Period));
+        form.apply_number(10).unwrap();
+
+        let (text, _) = terms_form_view(&form, &timezone, t0()).unwrap();
+
+        assert!(
+            text.contains(&texts::closing_change(
+                &timezone.format(assignment.closes_at()),
+                &timezone.format(assignment.deadline_at() + Duration::days(40)),
+            )),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_student_card_shows_the_current_penalty_only_while_submissions_are_open() {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let assignment = assignment(&course, &teacher)
+            .scored(5)
+            .late_policy(7, 1, 4)
+            .build();
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let late = grading_lines(
+            &assignment,
+            assignment.deadline_at() + Duration::days(1),
+            &timezone,
+        );
+        assert!(
+            late.contains(&format!("{} −1", texts::LATE_PENALTY_LABEL)),
+            "{late}"
+        );
+        assert!(late.contains(texts::SUBMISSIONS_CLOSE_LABEL), "{late}");
+
+        let closed = grading_lines(&assignment, assignment.closes_at(), &timezone);
+        assert!(closed.contains(texts::CLOSED_ON), "{closed}");
+        assert!(!closed.contains(texts::LATE_PENALTY_LABEL), "{closed}");
+    }
 }

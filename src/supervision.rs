@@ -137,7 +137,7 @@ mod tests {
         assert!(error.to_string().contains("stopped unexpectedly"));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn cleanup_is_bounded_by_the_same_shutdown_grace() {
         let supervisor = Supervisor::new(
             CancellationToken::new(),

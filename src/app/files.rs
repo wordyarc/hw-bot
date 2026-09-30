@@ -226,3 +226,42 @@ fn first_free_position(files: &[StoredFileMetadata]) -> u64 {
     }
     position
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::t0;
+
+    #[test]
+    fn an_attachment_reuses_the_first_gap_in_position_order() {
+        for (positions, expected) in [
+            (vec![], 1),
+            (vec![1, 2, 3], 4),
+            (vec![2, 3], 1),
+            (vec![1, 3, 4], 2),
+        ] {
+            let files: Vec<_> = positions
+                .iter()
+                .map(|&position| {
+                    StoredFileMetadata::restore(StoredFileParts {
+                        id: StoredFileId::new(),
+                        owner: StoredFileOwner::Assignment(AssignmentId::new()),
+                        position,
+                        presentation: FilePresentation::Document,
+                        filename: "file.txt".into(),
+                        mime_type: None,
+                        size_bytes: 0,
+                        sha256: [0; 32],
+                        created_at: t0(),
+                    })
+                    .unwrap()
+                })
+                .collect();
+            assert_eq!(
+                first_free_position(&files),
+                expected,
+                "positions: {positions:?}"
+            );
+        }
+    }
+}

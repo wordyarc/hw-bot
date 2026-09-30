@@ -1,4 +1,3 @@
-use axum::http::StatusCode;
 use hw_bot::app::Actor;
 use hw_bot::domain::UserId;
 use hw_bot::{
@@ -82,14 +81,6 @@ async fn assignment_pages_are_bounded_disjoint_and_exhaustive() {
         .await
         .unwrap();
     assert_eq!(stats.assignments as usize, PAGE_SIZE + 1);
-}
-
-#[tokio::test]
-async fn invalid_page_is_a_transport_error() {
-    let app = TestApp::start().await;
-    app.get_as("/me/assignments?page=-1", app.student())
-        .await
-        .error(StatusCode::BAD_REQUEST, "invalid_query");
 }
 
 #[tokio::test]

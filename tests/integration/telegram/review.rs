@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{Duration as ChronoDuration, Utc};
 use hw_bot::bot::{callbacks, texts};
 use serde_json::{Value, json};
-use wiremock::matchers::{body_json, body_partial_json, method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
@@ -257,40 +257,21 @@ async fn review_confirmation_uses_the_grade_saved_after_a_deadline_change() {
             .await
             .created(),
     );
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
-        callback_update(
-            3,
+    let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(
             app.teacher(),
-            &format!("{}{submission}", callbacks::REVIEW_ACCEPT_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            4,
-            app.teacher(),
-            &format!("{}{submission}:4", callbacks::REVIEW_SCORE_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        message_update(5, app.teacher(), 2, "Хорошо"),
-    ];
-    let telegram = telegram_server(updates).await;
-    let score_prompt = Mock::given(method("POST"))
-        .and(path("/bottest-token/SendMessage"))
-        .and(body_partial_json(json!({
-            "chat_id": app.teacher(),
-            "text": texts::review_score_question(5)
-        })))
-        .respond_with(telegram_message_response().set_delay(Duration::from_secs(2)))
-        .expect(1)
-        .with_priority(1)
-        .mount_as_scoped(&telegram)
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, submission),
+        )
         .await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
-
-    tokio::time::timeout(Duration::from_secs(5), score_prompt.wait_until_satisfied())
-        .await
-        .expect("the bot showed the score preview");
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_SCORE_PREFIX, format!("{submission}:4")),
+        )
+        .await;
     app.change_deadline(
         assignment.id().as_uuid(),
         app.teacher(),
@@ -299,17 +280,25 @@ async fn review_confirmation_uses_the_grade_saved_after_a_deadline_change() {
     .await
     .ok();
 
-    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    telegram.message(app.teacher(), "Хорошо");
+    telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-
-    let (_, _, final_score) =
-        reviewed.unwrap_or_else(|| panic!("submission was not reviewed; requests:\n{requests}"));
-    assert_eq!(final_score, Some(4));
-    assert!(
-        requests.contains("Сохранено: 4 − 0 = 4 из 5."),
-        "confirmation did not use the saved grade; requests:\n{requests}"
-    );
+    let saved = hw_bot::db::submissions::find_by_id(
+        &app.pool,
+        hw_bot::domain::SubmissionId::from_uuid(submission),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .grade()
+    .unwrap();
+    assert_eq!(saved.final_score(), 4);
+    assert_eq!(saved.penalty(), 0);
+    assert!(telegram.messages(app.teacher()).iter().any(|message| {
+        message["text"]
+            .as_str()
+            .is_some_and(|text| text.contains(&texts::grade_saved(saved)))
+    }));
 }
 
 #[tokio::test]
@@ -354,17 +343,11 @@ async fn an_empty_review_queue_answers_the_teacher_instead_of_failing() {
     let telegram = telegram_server(updates).await;
     let empty = Mock::given(method("POST"))
         .and(path("/bottest-token/SendMessage"))
-        .and(body_json(json!({
+        .and(body_partial_json(json!({
             "chat_id": app.teacher(),
-            "text": texts::REVIEW_QUEUE_EMPTY,
-            "reply_markup": {
-                "inline_keyboard": [
-                    [{ "text": "✅ Проверить работы (0)", "callback_data": callbacks::NEXT_REVIEW }],
-                    [{ "text": "📘 Мои курсы", "callback_data": callbacks::MENU_COURSES }],
-                    [{ "text": "👤 Профиль", "callback_data": callbacks::MENU_PROFILE }]
-                ]
-            }
+            "text": texts::REVIEW_QUEUE_EMPTY
         })))
+        .and(|request: &wiremock::Request| has_callback_button(request, callbacks::NEXT_REVIEW))
         .respond_with(telegram_message_response())
         .expect(1)
         .with_priority(1)

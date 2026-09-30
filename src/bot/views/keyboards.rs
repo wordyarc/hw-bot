@@ -561,6 +561,7 @@ pub(crate) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
 pub(super) fn terms_form_keyboard(
     form: &TermsForm,
     timezone: &BotTimezone,
+    now: DateTime<Utc>,
 ) -> Option<InlineKeyboardMarkup> {
     let terms = &form.terms;
     let calendar = |month, after| calendar_keyboard(month, timezone.first_date_ending_after(after));
@@ -570,7 +571,7 @@ pub(super) fn terms_form_keyboard(
             (InputMode::Calendar(month), TermsTarget::Edit { created_at, .. }) => {
                 calendar(month, *created_at)
             }
-            (InputMode::Calendar(month), TermsTarget::Create(_)) => calendar(month, Utc::now()),
+            (InputMode::Calendar(month), TermsTarget::Create(_)) => calendar(month, now),
             _ => deadline_options_keyboard(timezone),
         },
         TermsStep::DurationDate => {
@@ -789,6 +790,7 @@ mod tests {
     use crate::bot::assignment_form::{AssignmentText, DraftAssignment};
     use crate::bot::texts::deadline_left;
     use crate::domain::{Grading, LatePolicy, MaxScore};
+    use crate::test_support::t0;
 
     fn scored_terms() -> AssignmentTerms {
         let mut draft = DraftAssignment::new(
@@ -859,7 +861,7 @@ mod tests {
         };
         let mut form = TermsForm::new(terms, TermsStep::Deadline);
         form.mode = InputMode::Calendar(timezone.local_date(created_at));
-        let (_, keyboard) = terms_form_view(&form, &timezone).unwrap();
+        let (_, keyboard) = terms_form_view(&form, &timezone, t0()).unwrap();
         let json = serde_json::to_string(&keyboard).unwrap();
         assert!(!json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-20")));
         assert!(json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-21")));
@@ -868,7 +870,7 @@ mod tests {
     #[test]
     fn a_hundred_periods_still_produce_a_short_schedule() {
         let form = TermsForm::new(scored_terms(), TermsStep::Summary);
-        let (text, keyboard) = terms_form_view(&form, &timezone()).unwrap();
+        let (text, keyboard) = terms_form_view(&form, &timezone(), t0()).unwrap();
         assert!(text.contains(texts::SCHEDULE_HEADER), "{text}");
         assert!(text.chars().count() < 1000, "{text}");
         assert_eq!(keyboard.inline_keyboard.last().unwrap().len(), 1);
@@ -944,7 +946,7 @@ mod tests {
     fn calendar_return_and_previous_step_have_distinct_labels_and_actions() {
         let mut form = TermsForm::new(scored_terms(), TermsStep::Deadline);
         form.mode = InputMode::Calendar(timezone().today());
-        let (_, keyboard) = terms_form_view(&form, &timezone()).unwrap();
+        let (_, keyboard) = terms_form_view(&form, &timezone(), t0()).unwrap();
         let json = serde_json::to_value(keyboard).unwrap();
         let rows = json["inline_keyboard"].as_array().unwrap();
         assert_eq!(rows[rows.len() - 2][0]["text"], texts::BUTTON_DATE_OPTIONS);
@@ -983,13 +985,16 @@ mod tests {
             },
         ] {
             let form = TermsForm::new(terms.clone(), step);
-            assert!(terms_form_view(&form, &timezone).is_none(), "{step:?}");
+            assert!(
+                terms_form_view(&form, &timezone, t0()).is_none(),
+                "{step:?}"
+            );
         }
 
         let mut terms = scored_terms();
         terms.deadline_at = None;
         let form = TermsForm::new(terms, TermsStep::DurationDate);
-        assert!(terms_form_view(&form, &timezone).is_none());
+        assert!(terms_form_view(&form, &timezone, t0()).is_none());
     }
 
     #[test]

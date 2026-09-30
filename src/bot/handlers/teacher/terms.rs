@@ -4,9 +4,9 @@ use teloxide::types::{ChatId, MessageId};
 use teloxide::{ApiError, RequestError};
 
 use super::courses::show_assignment;
-use crate::app::{AppError, ChangeTerms, CreateAssignment, ErrorCode, VersionedAssignment};
+use crate::app::{ChangeTerms, CreateAssignment, ErrorCode, VersionedAssignment};
 use crate::bot::assignment_form::{
-    AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget,
+    AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsInputError, TermsStep, TermsTarget,
 };
 use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, TermsAction};
 use crate::bot::context::{Chat, Screen, TextStep};
@@ -16,10 +16,7 @@ use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::views::{MenuAction, teacher_keyboard, terms_exit_keyboard, terms_form_view};
 use crate::bot::{Bot, HandlerResult, assignment_files, texts};
-use crate::domain::{
-    AssignmentId, AssignmentStatus, DomainError, MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS,
-    MAX_LATE_PERIODS, TelegramUserId,
-};
+use crate::domain::{AssignmentId, AssignmentStatus, DomainError, TelegramUserId};
 
 pub(crate) async fn begin_terms_edit(
     screen: Screen<'_>,
@@ -67,7 +64,7 @@ pub(super) async fn render(
     if form.step == TermsStep::Summary {
         form.go(TermsStep::Summary);
     }
-    let Some((mut text, keyboard)) = terms_form_view(&form, chat.timezone()) else {
+    let Some((mut text, keyboard)) = terms_form_view(&form, chat.timezone(), Utc::now()) else {
         return discard(chat, form).await;
     };
     if let Some(error) = error {
@@ -157,22 +154,8 @@ pub(crate) async fn handle_late_policy(
     let Some(mut form) = state.terms_form(message_id, TermsStep::Policy) else {
         return screen.stale().await;
     };
-    if !form.terms.grading().is_scored() {
-        return screen.stale().await;
-    }
-    let previous = std::mem::replace(
-        &mut form.terms.allow_late,
-        choice == LatePolicyChoice::Penalty,
-    );
-    // Прежние штраф и число периодов сохраняются, поэтому возвращённая политика может сразу
-    // вести к итогу. Старый горизонт длиннее нынешнего предела здесь допустим: его исправят
-    // с итога.
-    if form.terms.cannot_be_summarised() {
-        form.terms.allow_late = previous;
-        return render(screen.chat(), form, Some(texts::HORIZON_OUT_OF_RANGE)).await;
-    }
-    form.advance();
-    render(screen.chat(), form, None).await
+    let result = form.choose_policy(choice == LatePolicyChoice::Penalty);
+    render_input_result(screen, form, result).await
 }
 
 pub(crate) async fn handle_penalty(
@@ -225,31 +208,8 @@ pub(crate) async fn handle_period(
 }
 
 async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> HandlerResult {
-    let mut terms = form.terms.clone();
-    let max = match form.step {
-        TermsStep::Penalty => {
-            terms.penalty = Some(value);
-            MAX_LATE_PENALTY
-        }
-        TermsStep::Period => {
-            terms.period_days = value;
-            MAX_LATE_PERIOD_DAYS
-        }
-        TermsStep::Periods => {
-            terms.max_periods = Some(value);
-            MAX_LATE_PERIODS
-        }
-        _ => return screen.stale().await,
-    };
-    if !(1..=max).contains(&value) {
-        return render(screen.chat(), form, Some(&texts::number_prompt(max))).await;
-    }
-    if let Err(error) = terms.validate() {
-        return render(screen.chat(), form, Some(&validation_message(&error))).await;
-    }
-    form.terms = terms;
-    form.advance();
-    render(screen.chat(), form, None).await
+    let result = form.apply_number(value);
+    render_input_result(screen, form, result).await
 }
 
 pub(super) async fn apply_date(
@@ -257,43 +217,24 @@ pub(super) async fn apply_date(
     mut form: TermsForm,
     at: DateTime<Utc>,
 ) -> HandlerResult {
-    if form.step == TermsStep::DurationDate {
-        let Some(deadline) = form.terms.deadline_at else {
-            return render(screen.chat(), form, None).await;
-        };
-        let policy = form.terms.preview_policy(1).map_err(AppError::from)?;
-        let periods = match u16::try_from(policy.periods_to_close_at(deadline, at)) {
-            Ok(periods) if (1..=MAX_LATE_PERIODS).contains(&periods) => periods,
-            _ => return render(screen.chat(), form, Some(texts::INVALID_DURATION_DATE)).await,
-        };
-        let mut terms = form.terms.clone();
-        terms.max_periods = Some(periods);
-        if let Err(error) = terms.validate() {
-            let message = match error {
-                DomainError::LateHorizonTooLong { .. } | DomainError::InvalidLatePolicy { .. } => {
-                    texts::INVALID_DURATION_DATE.to_owned()
-                }
-                _ => validation_message(&error),
-            };
-            return render(screen.chat(), form, Some(&message)).await;
-        }
-        form.go(TermsStep::DurationConfirm {
-            selected: at,
-            periods,
-        });
-    } else {
-        if matches!(form.terms.target, TermsTarget::Create(_)) && at <= Utc::now() {
-            return render(screen.chat(), form, Some(texts::DEADLINE_IN_FUTURE)).await;
-        }
-        let mut terms = form.terms.clone();
-        terms.deadline_at = Some(at);
-        if let Err(error) = terms.validate() {
-            return render(screen.chat(), form, Some(&validation_message(&error))).await;
-        }
-        form.terms = terms;
-        form.advance();
-    }
-    render(screen.chat(), form, None).await
+    let result = form.apply_date(at, Utc::now());
+    render_input_result(screen, form, result).await
+}
+
+async fn render_input_result(
+    screen: Screen<'_>,
+    form: TermsForm,
+    result: Result<(), TermsInputError>,
+) -> HandlerResult {
+    let message = match result {
+        Ok(()) => return render(screen.chat(), form, None).await,
+        Err(TermsInputError::UnexpectedStep) => return screen.stale().await,
+        Err(TermsInputError::NumberOutOfRange { max }) => texts::number_prompt(max),
+        Err(TermsInputError::InvalidDurationDate) => texts::INVALID_DURATION_DATE.into(),
+        Err(TermsInputError::DeadlineInPast) => texts::DEADLINE_IN_FUTURE.into(),
+        Err(TermsInputError::Domain(error)) => validation_message(&error),
+    };
+    render(screen.chat(), form, Some(&message)).await
 }
 
 pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> HandlerResult {
@@ -329,19 +270,8 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> Han
 }
 
 pub(crate) async fn back(screen: Screen<'_>, mut form: TermsForm) -> HandlerResult {
-    match (form.mode, form.step) {
-        (InputMode::Manual, step) if step != TermsStep::Period => form.mode = InputMode::Buttons,
-        (InputMode::Calendar(_), _) => form.mode = InputMode::Buttons,
-        _ => {
-            let Some(step) = form.previous_step() else {
-                return cancel(screen, form).await;
-            };
-            // Если настройку штрафа прервали, итог снова запрещает опоздание, но введённые числа сохраняет.
-            if step == TermsStep::Summary && form.terms.complete().is_none() {
-                form.terms.allow_late = false;
-            }
-            form.go(step);
-        }
+    if !form.back() {
+        return cancel(screen, form).await;
     }
     render(screen.chat(), form, None).await
 }
@@ -392,11 +322,7 @@ pub(crate) async fn handle_terms(
         form.go(TermsStep::DurationDate);
         return render(screen.chat(), form, None).await;
     }
-    if let TermsStep::DurationConfirm { periods, .. } = form.step
-        && action == TermsAction::DurationApply
-    {
-        form.terms.max_periods = Some(periods);
-        form.advance();
+    if action == TermsAction::DurationApply && form.confirm_duration() {
         return render(screen.chat(), form, None).await;
     }
     if form.step != TermsStep::Summary {
@@ -405,18 +331,15 @@ pub(crate) async fn handle_terms(
     let Some(complete) = form.terms.complete() else {
         return render(screen.chat(), form, None).await;
     };
-    form.previous_closes_at.get_or_insert(complete.closes_at);
     match action {
         TermsAction::Save => return save(screen, form, complete).await,
         TermsAction::Cancel => return cancel(screen, form).await,
         _ => {
-            let Some(step) = TermsStep::summary_edit(action, &form.terms) else {
+            if !form.edit_summary(action) {
                 return screen.stale().await;
-            };
-            form.go(step);
+            }
         }
     }
-    form.return_to_summary = true;
     render(screen.chat(), form, None).await
 }
 

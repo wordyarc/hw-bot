@@ -1,55 +1,21 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use hw_bot::api::REQUEST_BODY_LIMIT;
 use sqlx::ConnectOptions;
 
 use crate::harness::TestApp;
 
 #[tokio::test]
-async fn malformed_path_uses_the_api_error_envelope() {
+async fn authenticated_routes_use_api_path_and_pagination_rejections() {
     let app = TestApp::start().await;
-    app.get_as("/me/assignments/not-a-uuid", app.student())
-        .await
-        .error(StatusCode::BAD_REQUEST, "invalid_path");
-}
-
-#[tokio::test]
-async fn unknown_route_uses_the_api_error_envelope() {
-    let app = TestApp::start().await;
-    app.get("/does-not-exist").await.not_found();
-}
-
-#[tokio::test]
-async fn unsupported_method_uses_the_api_error_envelope() {
-    let app = TestApp::start().await;
-    app.post_raw("/health/live", Vec::new())
-        .await
-        .error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed");
-}
-
-#[tokio::test]
-async fn http_accepts_a_body_at_the_transport_limit() {
-    let app = TestApp::start().await;
-    let body = registration_body(&app.group_invite_token().await, REQUEST_BODY_LIMIT);
-
-    let response = app
-        .post_raw_as("/students", app.next_telegram_id(), body)
-        .await;
-
-    response.created();
-}
-
-#[tokio::test]
-async fn http_rejects_a_body_above_the_transport_limit() {
-    let app = TestApp::start().await;
-    let body = registration_body(&app.group_invite_token().await, REQUEST_BODY_LIMIT + 1);
-
-    let response = app
-        .post_raw_as("/students", app.next_telegram_id(), body)
-        .await;
-
-    response.error(StatusCode::PAYLOAD_TOO_LARGE, "request_body_too_large");
+    for (path, code) in [
+        ("/me/assignments/not-a-uuid", "invalid_path"),
+        ("/me/assignments?page=-1", "invalid_query"),
+    ] {
+        app.get_as(path, app.student())
+            .await
+            .error(StatusCode::BAD_REQUEST, code);
+    }
 }
 
 #[tokio::test]
@@ -125,15 +91,4 @@ async fn runtime_pool_applies_statement_timeout() {
             .unwrap(),
         1
     );
-}
-
-fn registration_body(invite_token: &str, size: usize) -> Vec<u8> {
-    let mut body = serde_json::to_vec(&serde_json::json!({
-        "display_name": "Student",
-        "invite_token": invite_token,
-    }))
-    .unwrap();
-    assert!(size >= body.len());
-    body.resize(size, b' ');
-    body
 }

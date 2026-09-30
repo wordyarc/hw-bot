@@ -9,6 +9,38 @@ use crate::domain::{
     UserId,
 };
 
+#[cfg(test)]
+pub(crate) async fn closed_pool() -> sqlx::PgPool {
+    let pool = sqlx::PgPool::connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
+        .expect("valid test database URL");
+    pool.close().await;
+    pool
+}
+
+pub fn bootstrap_seed() -> serde_json::Value {
+    serde_json::json!({
+        "admin": {
+            "telegram_user_id": 100000001,
+            "display_name": "First Admin"
+        },
+        "teachers": [{
+            "telegram_user_id": 100000002,
+            "display_name": "Course Teacher"
+        }],
+        "student_groups": [{
+            "code": "b9122-02.03.21",
+            "education_level": "bachelor",
+            "study_year": 1
+        }],
+        "subjects": [{"name": "Backend Development"}],
+        "courses": [{
+            "subject_name": "Backend Development",
+            "student_group_code": "b9122-02.03.21",
+            "teacher_telegram_user_ids": [100000002]
+        }]
+    })
+}
+
 pub const GROUP_CODE: &str = "B9122-02.03.21";
 pub const OTHER_GROUP_CODE: &str = "M9241-09.04.03";
 pub const SUBJECT_NAME: &str = "Backend development";

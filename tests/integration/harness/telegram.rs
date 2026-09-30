@@ -15,10 +15,8 @@ use uuid::Uuid;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::harness::TestApp;
+use crate::harness::{ResponseGate, TestApp};
 
-/// Все ожидания опрашивают состояние раз в 10 мс. При шаге 20 мс под нагрузкой иногда
-/// пропускалось самое короткое окно: 300 мс на подтверждение polling offset.
 const POLL_STEP: Duration = Duration::from_millis(10);
 
 pub(crate) async fn wait_until<F, Fut>(timeout: Duration, mut probe: F) -> bool
@@ -61,7 +59,29 @@ pub(crate) fn cb(prefix: &str, value: impl std::fmt::Display) -> String {
     format!("{prefix}{value}")
 }
 
-pub(crate) const HELD_PERMIT: Duration = Duration::from_millis(600);
+pub(crate) fn has_reply_button(request: &wiremock::Request, label: &str) -> bool {
+    let body: Value = request.body_json().unwrap();
+    body["reply_markup"]["keyboard"]
+        .as_array()
+        .is_some_and(|rows| {
+            rows.iter()
+                .filter_map(Value::as_array)
+                .flatten()
+                .any(|button| button["text"] == label)
+        })
+}
+
+pub(crate) fn has_callback_button(request: &wiremock::Request, data: &str) -> bool {
+    let body: Value = request.body_json().unwrap();
+    body["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .is_some_and(|rows| {
+            rows.iter()
+                .filter_map(Value::as_array)
+                .flatten()
+                .any(|button| button["callback_data"] == data)
+        })
+}
 
 pub(crate) const DOCUMENT_FIXTURE: &[u8] = include_bytes!("../fixtures/assignment-note.txt");
 
@@ -292,7 +312,11 @@ pub(crate) fn telegram_me_body() -> Value {
 }
 
 pub(crate) fn telegram_message_response() -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_json(json!({
+    ResponseTemplate::new(200).set_body_json(telegram_message_body())
+}
+
+pub(crate) fn telegram_message_body() -> Value {
+    json!({
         "ok": true,
         "result": {
             "message_id": BOT_MESSAGE_ID,
@@ -301,7 +325,19 @@ pub(crate) fn telegram_message_response() -> ResponseTemplate {
             "from": { "id": 999, "is_bot": true, "first_name": "Test Bot" },
             "text": "response"
         }
-    }))
+    })
+}
+
+pub(crate) async fn gate_sent_messages(telegram: &MockServer, count: u64) -> ResponseGate {
+    let gate = ResponseGate::new(telegram_message_body()).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .respond_with(gate.response())
+        .expect(count)
+        .with_priority(1)
+        .mount(telegram)
+        .await;
+    gate
 }
 
 pub(crate) fn telegram_document_response() -> ResponseTemplate {
@@ -366,7 +402,7 @@ pub(crate) async fn wait_for_sent_message_count(telegram: &MockServer, expected:
 }
 
 pub(crate) async fn wait_for_poll_offset(telegram: &MockServer, offset: i64) -> bool {
-    wait_until(Duration::from_millis(300), || async {
+    wait_until(Duration::from_secs(5), || async {
         poll_offsets(telegram).await.contains(&offset)
     })
     .await
@@ -583,16 +619,6 @@ pub(crate) async fn wait_for_presentation(
         .unwrap()
     })
     .await
-}
-
-pub(crate) async fn wait_for_file_count(pool: &PgPool, assignment_id: Uuid, expected: i64) {
-    assert!(
-        wait_until(Duration::from_secs(5), || async {
-            stored_file_count(pool, assignment_id).await == expected
-        })
-        .await,
-        "stored file count reaches expected value"
-    );
 }
 
 pub(crate) async fn stored_file_count(pool: &PgPool, assignment_id: Uuid) -> i64 {

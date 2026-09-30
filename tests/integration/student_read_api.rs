@@ -65,7 +65,7 @@ async fn a_draft_assignment_stays_out_of_the_student_list() {
 
     let body = app.student_assignments(app.student()).await.ok();
 
-    only(&body);
+    assert_eq!(only(&body)["assignment"]["id"], json!(app.assignment()));
 }
 
 #[tokio::test]

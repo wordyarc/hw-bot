@@ -5,7 +5,7 @@ use hw_bot::db;
 use hw_bot::domain::{InviteGeneration, StudentGroupId};
 use sqlx::PgPool;
 
-use crate::harness::{TestApp, fresh_database};
+use crate::harness::{TestApp, fresh_database, wait_for_blocked_connection};
 
 #[tokio::test]
 async fn every_group_gets_an_invite_when_it_is_created() {
@@ -29,7 +29,10 @@ async fn a_group_has_at_most_one_invite() {
     .execute(&app.pool)
     .await;
 
-    assert!(duplicate.is_err());
+    let error = duplicate.unwrap_err();
+    let database = error.as_database_error().unwrap();
+    assert_eq!(database.code().as_deref(), Some("23505"), "{error}");
+    assert_eq!(database.constraint(), Some("student_group_invites_pkey"));
 }
 
 #[tokio::test]
@@ -45,7 +48,17 @@ async fn generation_stays_inside_the_u32_range() {
         .execute(&app.pool)
         .await;
 
-        assert!(stored.is_err(), "{generation} must be rejected");
+        let error = stored.unwrap_err();
+        let database = error.as_database_error().unwrap();
+        assert_eq!(
+            database.code().as_deref(),
+            Some("23514"),
+            "{generation}: {error}"
+        );
+        assert_eq!(
+            database.constraint(),
+            Some("student_group_invites_generation_check")
+        );
     }
 }
 
@@ -125,6 +138,11 @@ async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
     let group_id = app.fixture.group.id();
     let mut registration = app.pool.begin().await.unwrap();
 
+    let blocker = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *registration)
+        .await
+        .unwrap();
+
     let locked = db::group_invites::lock_group_for_registration(
         &mut registration,
         group_id,
@@ -139,13 +157,20 @@ async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
         db::group_invites::rotate(&pool, group_id, InviteGeneration::FIRST).await
     });
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), rotation)
-            .await
-            .is_err(),
-        "rotation must wait for the registration transaction"
-    );
+    wait_for_blocked_connection(&app.pool, blocker).await;
+    assert!(!rotation.is_finished());
     registration.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), rotation)
+        .await
+        .expect("rotation continues after registration commits")
+        .expect("rotation task does not panic")
+        .expect("rotation succeeds");
+    assert_eq!(
+        db::group_invites::find_generation(&app.pool, group_id)
+            .await
+            .unwrap(),
+        Some(InviteGeneration::new(2).unwrap())
+    );
 }
 
 #[tokio::test]

@@ -81,7 +81,9 @@ async fn postgres() -> &'static Postgres {
                 host,
                 port,
             };
-            drop_stale_databases(&postgres.url("postgres")).await;
+            let mut admin = connect_when_ready(&postgres.url("postgres")).await;
+            drop_stale_databases(&mut admin).await;
+            admin.close().await.expect("close readiness connection");
 
             postgres
         })
@@ -90,15 +92,12 @@ async fn postgres() -> &'static Postgres {
 
 /// Контейнер переиспользуется, поэтому базы прошлых прогонов убираем сами - иначе они копятся.
 /// Ошибки глотаем: занятую параллельным прогоном базу дропнуть нельзя, и это нормально.
-async fn drop_stale_databases(url: &str) {
-    let Ok(mut conn) = PgConnection::connect(url).await else {
-        return;
-    };
-    lock_database_lifecycle(&mut conn).await;
+async fn drop_stale_databases(conn: &mut PgConnection) {
+    lock_database_lifecycle(conn).await;
 
     let stale: Vec<String> =
         sqlx::query_scalar(r"select datname from pg_database where datname like 'test\_%'")
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
             .unwrap_or_default();
 
@@ -106,11 +105,9 @@ async fn drop_stale_databases(url: &str) {
         let _ = sqlx::query(AssertSqlSafe(format!(
             r#"drop database if exists "{name}""#
         )))
-        .execute(&mut conn)
+        .execute(&mut *conn)
         .await;
     }
-
-    let _ = conn.close().await;
 }
 
 async fn lock_database_lifecycle(conn: &mut PgConnection) {
@@ -121,22 +118,27 @@ async fn lock_database_lifecycle(conn: &mut PgConnection) {
         .expect("lock test database lifecycle");
 }
 
-/// Образ печатает ready ещё на этапе initdb, поэтому первый коннект иногда упирается в закрытый
-/// порт. Дешевле переподключиться, чем ловить редкий флак.
-async fn connect_with_retry(options: PgPoolOptions, url: &str) -> PgPool {
+// Первое ready относится к временному серверу initdb. Первый admin-connect обязан дождаться
+// SQL через опубликованный TCP-порт, прежде чем создавать или удалять тестовые базы.
+async fn connect_when_ready(url: &str) -> PgConnection {
     let mut last_error = None;
-
-    for attempt in 0..10 {
-        match options.clone().connect(url).await {
-            Ok(pool) => return pool,
-            Err(error) => {
-                last_error = Some(error);
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
+    let result = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let attempt = async {
+                let mut connection = PgConnection::connect(url).await?;
+                sqlx::query("select 1").execute(&mut connection).await?;
+                Ok::<_, sqlx::Error>(connection)
             }
+            .await;
+            match attempt {
+                Ok(connection) => return connection,
+                Err(error) => last_error = Some(error),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-    }
-
-    panic!("cannot connect to {url}: {}", last_error.expect("an error"));
+    })
+    .await;
+    result.unwrap_or_else(|_| panic!("PostgreSQL did not become SQL-ready: {last_error:?}"))
 }
 
 pub async fn fresh_database() -> PgPool {
@@ -175,7 +177,10 @@ async fn connect_fresh(options: PgPoolOptions) -> PgPool {
 
     // Lock держим до первого подключения: другой прогон уже не сможет удалить только что
     // созданную базу в зазоре между `create database` и коннектом.
-    let pool = connect_with_retry(options, &postgres.url(&name)).await;
+    let pool = options
+        .connect(&postgres.url(&name))
+        .await
+        .expect("connect to the test database");
     admin
         .close()
         .await
@@ -189,4 +194,28 @@ pub async fn migrated_database() -> PgPool {
     db::run_migrations(&pool).await.expect("migrations apply");
 
     pool
+}
+
+pub async fn wait_for_blocked_connection(pool: &PgPool, blocker: i32) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "select exists (
+                    select 1 from pg_stat_activity
+                    where datid = (select oid from pg_database where datname = current_database())
+                      and $1 = any(pg_blocking_pids(pid))
+                )",
+            )
+            .bind(blocker)
+            .fetch_one(pool)
+            .await
+            .expect("read blocked connections");
+            if waiting {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no connection in this database is blocked by backend {blocker}"));
 }

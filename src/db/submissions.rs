@@ -611,3 +611,28 @@ impl TryFrom<SubmissionRow> for Submission {
         })?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{
+        assignment, closed_pool, course_for, student, student_group, submission, teacher,
+    };
+
+    #[tokio::test]
+    async fn pending_review_is_rejected_before_accessing_the_database() {
+        let pool = closed_pool().await;
+        let group = student_group("test");
+        let teacher = teacher(1);
+        let course = course_for(&group, &teacher);
+        let assignment = assignment(&course, &teacher).published().build();
+        let submission = submission(&assignment, &student(2, &group)).build();
+
+        let result = save_review_result(&pool, &submission).await;
+
+        assert!(
+            matches!(result, Err(DbError::Precondition { .. })),
+            "{result:?}"
+        );
+    }
+}
