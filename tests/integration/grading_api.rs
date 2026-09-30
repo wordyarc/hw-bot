@@ -333,10 +333,11 @@ async fn the_horizon_reaches_the_assignment_response() {
     assert_eq!(card["late_penalty"], json!(1));
     assert!(card.get("late_closes_at").is_none());
     assert_eq!(card["late_max_periods"], json!(4));
+    let closes_at: chrono::DateTime<Utc> =
+        serde_json::from_value(card["closes_at"].clone()).unwrap();
     assert_eq!(
-        card["closes_at"].as_str().unwrap(),
-        (assignment.deadline_at() + Duration::days(28))
-            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+        closes_at.timestamp_micros(),
+        (assignment.deadline_at() + Duration::days(28)).timestamp_micros()
     );
 }
 
