@@ -138,13 +138,14 @@ impl BotTimezone {
         let local = date.and_time(time);
         let resolved = match self.tz.from_local_datetime(&local) {
             LocalResult::Single(instant) | LocalResult::Ambiguous(instant, _) => instant,
+            // Сюда попадает и время у края диапазона chrono, а не только переход на летнее время.
             LocalResult::None => {
                 let before = self
                     .tz
-                    .from_local_datetime(&(local - TimeDelta::hours(1)))
+                    .from_local_datetime(&local.checked_sub_signed(TimeDelta::hours(1))?)
                     .earliest()?;
-                let offset = i64::from(before.offset().fix().local_minus_utc());
-                return Some(Utc.from_utc_datetime(&(local - TimeDelta::seconds(offset))));
+                let utc = local.checked_sub_offset(before.offset().fix())?;
+                return Some(Utc.from_utc_datetime(&utc));
             }
         };
         Some(resolved.with_timezone(&Utc))
@@ -236,6 +237,13 @@ mod tests {
         assert!(timezone.parse_deadline("20.08.2026 23:59 UTC").is_none());
         assert!(timezone.parse_deadline("31.02.2026 10:00").is_none());
         assert!(timezone.parse_deadline("завтра").is_none());
+    }
+
+    #[test]
+    fn a_local_time_before_the_first_representable_instant_is_rejected() {
+        let timezone = vladivostok();
+
+        assert!(timezone.parse_deadline("01.01.-262143 00:00").is_none());
     }
 
     #[test]

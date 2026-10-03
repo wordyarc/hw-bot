@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 
 use crate::domain::{
     ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, Grade, NonEmptyString,
@@ -12,6 +12,9 @@ pub const MAX_LATE_PERIOD_DAYS: u16 = 365;
 pub const MAX_LATE_PENALTY: u16 = MAX_SCORE;
 pub const MAX_LATE_PERIODS: u16 = 100;
 pub const MAX_LATENESS_DAYS: u32 = 366;
+/// Год выбран по формату ДД.ММ.ГГГГ. Граница нужна не только для показа: у края диапазона chrono
+/// перевод момента в пояс установки паникует, а сроки печатаются в каждом экране задания.
+pub const LATEST_TERM_YEAR: i32 = 9999;
 
 str_enum! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,6 +153,7 @@ impl LatePolicy {
         deadline_at
             .checked_add_signed(Duration::days(i64::from(days)))
             .ok_or(DomainError::AssignmentClosingOutOfRange)
+            .and_then(supported_term)
     }
 
     pub fn closes_at(self, deadline_at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
@@ -210,6 +214,13 @@ impl LatePolicy {
     }
 }
 
+fn supported_term(at: DateTime<Utc>) -> DomainResult<DateTime<Utc>> {
+    if at.year() > LATEST_TERM_YEAR {
+        return Err(DomainError::AssignmentClosingOutOfRange);
+    }
+    Ok(at)
+}
+
 fn check_range(field: &'static str, value: u16, max: u16) -> DomainResult<()> {
     if value == 0 || value > max {
         return Err(DomainError::InvalidLatePolicy { field, value, max });
@@ -261,9 +272,7 @@ impl Assignment {
         if parts.late_policy.is_some() && !parts.grading.is_scored() {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
-        if let Some(policy) = parts.late_policy {
-            policy.closes_at(parts.deadline_at)?;
-        }
+        Self::closing_for(parts.deadline_at, parts.late_policy)?;
 
         // У архивного задания может не быть published_at, если его убрали туда из черновика.
         match parts.status {
@@ -442,6 +451,7 @@ impl Assignment {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
 
+        Self::closing_for(deadline_at, late_policy)?;
         if let Some(policy) = late_policy {
             policy.validate_horizon(deadline_at)?;
         }
@@ -509,11 +519,18 @@ impl Assignment {
     }
 
     pub fn closes_at(&self) -> DateTime<Utc> {
-        self.late_policy.map_or(self.deadline_at, |policy| {
-            policy
-                .closes_at(self.deadline_at)
-                .expect("validated assignment horizon")
-        })
+        Self::closing_for(self.deadline_at, self.late_policy).expect("validated assignment horizon")
+    }
+
+    /// Без политики опозданий приём закрывает сам дедлайн.
+    pub fn closing_for(
+        deadline_at: DateTime<Utc>,
+        late_policy: Option<LatePolicy>,
+    ) -> DomainResult<DateTime<Utc>> {
+        match late_policy {
+            Some(policy) => policy.closes_at(deadline_at),
+            None => supported_term(deadline_at),
+        }
     }
 
     pub fn late_periods_at(&self, at: DateTime<Utc>) -> u32 {

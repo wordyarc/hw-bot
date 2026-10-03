@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Datelike, FixedOffset, Months, Utc};
 use hw_bot::bot::{callbacks, texts};
+use hw_bot::domain::LATEST_TERM_YEAR;
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
@@ -909,7 +910,7 @@ async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_
     telegram
         .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
         .await;
-    telegram.message(app.teacher(), "30.12.+262142");
+    telegram.message(app.teacher(), &format!("30.12.{LATEST_TERM_YEAR}"));
     telegram.flush(app.teacher()).await;
     telegram
         .click_button(app.teacher(), callbacks::TERMS_POLICY)

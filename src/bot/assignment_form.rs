@@ -110,10 +110,7 @@ impl AssignmentTerms {
         } else {
             None
         };
-        let closes_at = match late_policy {
-            Some(policy) => policy.closes_at(deadline_at).ok()?,
-            None => deadline_at,
-        };
+        let closes_at = Assignment::closing_for(deadline_at, late_policy).ok()?;
 
         Some(CompleteTerms {
             deadline_at,
@@ -153,6 +150,8 @@ impl AssignmentTerms {
         if self.allow_late {
             self.preview_policy(self.max_periods.unwrap_or(1))?
                 .validate_horizon(deadline)?;
+        } else {
+            Assignment::closing_for(deadline, None)?;
         }
 
         Ok(())
@@ -448,10 +447,16 @@ impl TermsForm {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Duration;
+    use chrono::{Duration, TimeZone};
 
     use super::*;
+    use crate::domain::LATEST_TERM_YEAR;
     use crate::test_support::t0;
+
+    fn last_supported_day() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(LATEST_TERM_YEAR, 12, 31, 0, 0, 0)
+            .unwrap()
+    }
 
     fn scored_terms() -> AssignmentTerms {
         let mut draft = DraftAssignment::new(
@@ -695,9 +700,20 @@ mod tests {
     }
 
     #[test]
+    fn a_deadline_after_the_last_supported_year_is_rejected_at_input() {
+        let mut terms = scored_terms();
+        terms.deadline_at = Some(last_supported_day() + Duration::days(1));
+
+        assert_eq!(
+            terms.validate(),
+            Err(DomainError::AssignmentClosingOutOfRange)
+        );
+    }
+
+    #[test]
     fn a_policy_restored_over_a_deadline_it_cannot_follow_cannot_be_summarised() {
         let mut terms = scored_terms();
-        terms.deadline_at = Some(DateTime::<Utc>::MAX_UTC - Duration::days(1));
+        terms.deadline_at = Some(last_supported_day());
         terms.penalty = Some(1);
         terms.max_periods = Some(4);
         assert!(terms.validate().is_ok());

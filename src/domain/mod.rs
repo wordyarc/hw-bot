@@ -14,8 +14,9 @@ mod tests;
 
 pub use academic::{EducationLevel, StudentGroup, StudyProgram, Subject, TeachingCourse};
 pub use assignment::{
-    Assignment, AssignmentStatus, Grading, LatePolicy, MAX_ATTEMPTS, MAX_LATE_PENALTY,
-    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_LATENESS_DAYS, MAX_SCORE, MaxScore, NewAssignment,
+    Assignment, AssignmentStatus, Grading, LATEST_TERM_YEAR, LatePolicy, MAX_ATTEMPTS,
+    MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_LATENESS_DAYS, MAX_SCORE,
+    MaxScore, NewAssignment,
 };
 pub use attempts::StudentAssignmentProgress;
 pub use error::{DomainError, DomainResult};

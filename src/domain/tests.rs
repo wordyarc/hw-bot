@@ -1,9 +1,9 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, Grading, LatePolicy, NewAssignment,
-    Role, StaffRole, StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId,
-    SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DomainError, Grading, LATEST_TERM_YEAR, LatePolicy,
+    NewAssignment, Role, StaffRole, StudentAssignmentProgress, Submission, SubmissionHistory,
+    SubmissionId, SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
@@ -544,11 +544,34 @@ fn a_failed_deadline_change_preserves_the_previous_horizon() {
 }
 
 #[test]
-fn adding_a_policy_rejects_date_overflow_without_changing_the_scale() {
+fn assignment_terms_end_in_the_last_supported_year() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    let deadline_at = |year| Utc.with_ymd_and_hms(year, 12, 31, 0, 0, 0).unwrap();
+
+    assert!(
+        assignment(&course, &teacher)
+            .deadline_at(deadline_at(LATEST_TERM_YEAR))
+            .try_build()
+            .is_ok()
+    );
+    assert_eq!(
+        assignment(&course, &teacher)
+            .deadline_at(deadline_at(LATEST_TERM_YEAR + 1))
+            .try_build(),
+        Err(DomainError::AssignmentClosingOutOfRange)
+    );
+}
+
+#[test]
+fn adding_a_policy_rejects_a_closing_out_of_range_without_changing_the_scale() {
     let teacher = teacher(1);
     let course = course_for(&student_group(GROUP_CODE), &teacher);
     let mut work = assignment(&course, &teacher)
-        .deadline_at(DateTime::<Utc>::MAX_UTC)
+        .deadline_at(
+            Utc.with_ymd_and_hms(LATEST_TERM_YEAR, 12, 31, 0, 0, 0)
+                .unwrap(),
+        )
         .build();
     let before = work.clone();
     assert_eq!(
