@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use hw_bot::bot::{callbacks, texts};
+use hw_bot::domain::USER_TEXT_MAX_LEN;
 use serde_json::{Value, json};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -442,5 +443,70 @@ async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
             .iter()
             .any(|text| text.contains(app.fixture.subject.name().as_str()) && text.contains('2')),
         "the summary names the subject and the attempt number"
+    );
+}
+
+#[tokio::test]
+async fn a_long_previous_attempt_does_not_hide_the_decision_buttons() {
+    let app = TestApp::start().await;
+    let first = app
+        .queued_submission(app.student(), &"x".repeat(USER_TEXT_MAX_LEN))
+        .await;
+    app.review(first, app.teacher(), "reject", "Fix the tests")
+        .await
+        .ok();
+    let second = app.queued_submission(app.student(), "pull/second").await;
+    let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, second))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn a_failed_previous_attempt_does_not_hide_the_decision_buttons() {
+    let app = TestApp::start().await;
+    let first = app.queued_submission(app.student(), "pull/first").await;
+    app.review(first, app.teacher(), "reject", "Fix the tests")
+        .await
+        .ok();
+    let second = app.queued_submission(app.student(), "pull/second").await;
+    let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(|request: &wiremock::Request| {
+            request.body_json::<Value>().is_ok_and(|body| {
+                body["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("pull/first"))
+            })
+        })
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "ok": false,
+            "error_code": 429,
+            "description": "Too Many Requests: retry after 1",
+            "parameters": {"retry_after": 1}
+        })))
+        .with_priority(1)
+        .mount(&telegram.server)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, second))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        telegram.messages(app.teacher()).iter().any(|message| {
+            message["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with(texts::PREVIOUS_ATTEMPTS_INCOMPLETE))
+        }),
+        "the reviewer is told that the history is incomplete"
     );
 }

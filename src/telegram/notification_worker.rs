@@ -237,7 +237,7 @@ fn render_review_notification(
         review_comment,
     );
 
-    if text.chars().count() <= MESSAGE_LIMIT {
+    if text.encode_utf16().count() <= MESSAGE_LIMIT {
         text
     } else {
         truncate(&text, MESSAGE_LIMIT - 3, true)
@@ -273,10 +273,10 @@ mod tests {
             "Backend development",
             "Ownership",
             None,
-            &"x".repeat(MESSAGE_LIMIT * 2),
+            &"🦀".repeat(MESSAGE_LIMIT),
         );
 
-        assert_eq!(message.chars().count(), MESSAGE_LIMIT);
+        assert!(message.encode_utf16().count() <= MESSAGE_LIMIT);
         assert!(message.ends_with("..."));
     }
 

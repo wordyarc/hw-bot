@@ -10,6 +10,8 @@ use serde::{Deserialize, Deserializer};
 use crate::bot::MAX_CONCURRENT_UPDATES;
 use crate::invites::InviteSigningSecret;
 
+const MAX_RATE_LIMIT_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
@@ -296,6 +298,15 @@ fn validate_telegram(config: &TelegramConfig) -> Result<(), ConfigValidationErro
     validate(
         config.max_concurrent_updates.get() <= MAX_CONCURRENT_UPDATES,
         format!("telegram.max_concurrent_updates must not exceed {MAX_CONCURRENT_UPDATES}"),
+    )?;
+    validate(
+        u64::from(config.rate_limit_burst.get())
+            .checked_mul(config.rate_limit_replenish_ms.get())
+            .is_some_and(|window| window <= MAX_RATE_LIMIT_WINDOW_MS),
+        format!(
+            "telegram.rate_limit_burst * telegram.rate_limit_replenish_ms must not exceed \
+             {MAX_RATE_LIMIT_WINDOW_MS} ms"
+        ),
     )
 }
 
@@ -673,6 +684,31 @@ mod tests {
         assert!(config.clone().validate().is_err());
         config.notification_worker.lease_duration_ms = NonZeroU64::new(21_000).unwrap();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_a_rate_limit_refill_window_longer_than_a_day() {
+        let mut config = app_config();
+        config.telegram.rate_limit_burst = NonZeroU32::new(8).unwrap();
+        config.telegram.rate_limit_replenish_ms = NonZeroU64::new(10_800_000).unwrap();
+        assert!(config.clone().validate().is_ok());
+
+        for replenish_ms in [10_800_001, u64::MAX] {
+            config.telegram.rate_limit_replenish_ms = NonZeroU64::new(replenish_ms).unwrap();
+
+            let error = config
+                .clone()
+                .validate()
+                .err()
+                .expect("config must be rejected");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("telegram.rate_limit_replenish_ms"),
+                "{replenish_ms}: {error}"
+            );
+        }
     }
 
     #[test]

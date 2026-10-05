@@ -9,6 +9,8 @@ use super::telegram::{
     callback_update, message_update, mount_startup_mocks, telegram_me_body, wait_for_some,
 };
 
+const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
+
 #[derive(Default)]
 struct State {
     updates: Vec<Value>,
@@ -100,6 +102,16 @@ impl TelegramScenario {
             .and(path("/bottest-token/SendMessage"))
             .respond_with(move |request: &wiremock::Request| {
                 let body: Value = request.body_json().unwrap();
+                if body["text"]
+                    .as_str()
+                    .is_some_and(|text| text.encode_utf16().count() > TELEGRAM_MESSAGE_LIMIT)
+                {
+                    return ResponseTemplate::new(400).set_body_json(json!({
+                        "ok": false,
+                        "error_code": 400,
+                        "description": "Bad Request: message is too long"
+                    }));
+                }
                 let mut state = messages.lock().unwrap();
                 state.next_message += 1;
                 let message = json!({

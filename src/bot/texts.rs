@@ -417,6 +417,8 @@ pub fn assignment_button(subject: &str, title: &str) -> String {
 }
 
 pub const SUBMISSION_HEADER: &str = "📤 Работа студента:";
+pub const PREVIOUS_ATTEMPTS_INCOMPLETE: &str =
+    "Не удалось показать все прошлые попытки. Откройте проверку ещё раз, чтобы повторить.";
 pub const BUTTON_ACCEPT: &str = "✅ Принять";
 pub const BUTTON_REJECT: &str = "❌ Отклонить";
 

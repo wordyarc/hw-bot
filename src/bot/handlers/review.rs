@@ -10,14 +10,14 @@ use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::AmountChoice;
 use crate::bot::context::{Screen, TextStep};
-use crate::bot::errors::send_app_error;
+use crate::bot::errors::{log_handler_error, send_app_error};
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{
     ask_input, review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard,
     teacher_menu,
 };
-use crate::domain::{DomainError, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
+use crate::domain::{DomainError, ReviewDecision, Submission, SubmissionId, USER_TEXT_MAX_LEN};
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let actor = screen.actor();
@@ -67,9 +67,42 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
-    bot.send_message(chat_id, item.assignment.body().as_str())
-        .await?;
-    for attempt in &item.previous_attempts {
+    send_message_chunks(
+        bot,
+        chat_id,
+        item.assignment.body().as_str().to_owned(),
+        None,
+    )
+    .await?;
+    let submission_header =
+        match send_previous_attempts(bot, chat_id, &item.previous_attempts).await {
+            Ok(()) => texts::SUBMISSION_HEADER.to_owned(),
+            Err(error) if error.is_invalid_token() => return Err(error),
+            Err(error) => {
+                log_handler_error(&error);
+                format!(
+                    "{}\n\n{}",
+                    texts::PREVIOUS_ATTEMPTS_INCOMPLETE,
+                    texts::SUBMISSION_HEADER
+                )
+            }
+        };
+    bot.send_message(chat_id, submission_header).await?;
+    send_message_chunks(
+        bot,
+        chat_id,
+        item.submission.content().as_str().to_owned(),
+        Some(keyboard),
+    )
+    .await
+}
+
+async fn send_previous_attempts(
+    bot: &Bot,
+    chat_id: ChatId,
+    attempts: &[Submission],
+) -> HandlerResult {
+    for attempt in attempts {
         let text = texts::previous_attempt(
             attempt.attempt_number(),
             texts::submission_status(attempt.status()),
@@ -78,10 +111,6 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
         );
         send_message_chunks(bot, chat_id, text, None).await?;
     }
-    bot.send_message(chat_id, texts::SUBMISSION_HEADER).await?;
-    bot.send_message(chat_id, item.submission.content().as_str())
-        .reply_markup(keyboard)
-        .await?;
     Ok(())
 }
 

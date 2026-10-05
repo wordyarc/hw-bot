@@ -2,14 +2,14 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardRemove};
 
 use crate::bot::{Bot, HandlerResult, texts};
-use crate::telegram::text::MESSAGE_LIMIT;
+use crate::telegram::text::{MESSAGE_LIMIT, utf16_prefix};
 
 fn message_chunks(text: &str) -> impl Iterator<Item = &str> {
-    let mut boundaries = text.char_indices().step_by(MESSAGE_LIMIT).peekable();
+    let mut rest = text;
     std::iter::from_fn(move || {
-        let (start, _) = boundaries.next()?;
-        let end = boundaries.peek().map_or(text.len(), |&(index, _)| index);
-        Some(&text[start..end])
+        let chunk = utf16_prefix(rest, MESSAGE_LIMIT);
+        rest = &rest[chunk.len()..];
+        (!chunk.is_empty()).then_some(chunk)
     })
 }
 
@@ -51,18 +51,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn long_messages_are_split_without_losing_content() {
-        for source in [
-            String::new(),
-            "я".repeat(MESSAGE_LIMIT),
-            "я🦀a".repeat(MESSAGE_LIMIT),
+    fn long_messages_are_split_by_telegram_length_without_losing_content() {
+        for (source, expected_chunks) in [
+            (String::new(), 0),
+            ("я".repeat(MESSAGE_LIMIT), 1),
+            ("я🦀a".repeat(MESSAGE_LIMIT), 4),
+            ("🦀".repeat(MESSAGE_LIMIT), 2),
+            (format!("🕘{}", "a".repeat(MESSAGE_LIMIT - 1)), 2),
         ] {
             let chunks: Vec<_> = message_chunks(&source).collect();
-            assert_eq!(chunks.len(), source.chars().count().div_ceil(MESSAGE_LIMIT));
+            assert_eq!(chunks.len(), expected_chunks);
             assert!(
                 chunks
                     .iter()
-                    .all(|chunk| chunk.chars().count() <= MESSAGE_LIMIT)
+                    .all(|chunk| chunk.encode_utf16().count() <= MESSAGE_LIMIT)
             );
             assert_eq!(chunks.concat(), source);
         }
