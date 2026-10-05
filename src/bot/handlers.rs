@@ -25,6 +25,7 @@ pub(super) mod home;
 pub(super) mod input;
 mod registration;
 mod review;
+mod sandbox;
 mod student;
 mod teacher;
 
@@ -46,7 +47,7 @@ pub(super) enum Command {
     Archive,
     #[command(description = "✅ проверить следующую работу")]
     Review,
-    #[command(description = "📘 мои курсы")]
+    #[command(description = "📘 мои предметы")]
     Courses,
     #[command(description = "👤 профиль")]
     Profile,
@@ -233,6 +234,9 @@ pub(super) async fn handle_message(
             }) => {
                 review::submit_comment(step, submission_id, decision, score).await?;
             }
+            BotState::Flow(FlowState::AwaitingBulkReviewComment { decision, cutoff }) => {
+                sandbox::submit_comment(step, decision, cutoff).await?;
+            }
             BotState::Flow(FlowState::AwaitingAssignmentFile {
                 assignment_id,
                 expected_revision,
@@ -306,6 +310,7 @@ fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
         MenuAction::Queue => ReplayableAction::Page(PageTarget::Queue, 0),
         MenuAction::Review => ReplayableAction::NextReview,
         MenuAction::Courses => ReplayableAction::Page(PageTarget::Courses, 0),
+        MenuAction::Sandbox => ReplayableAction::Page(PageTarget::Sandbox, 0),
         MenuAction::Profile => ReplayableAction::Profile,
         MenuAction::Help => return None,
     })
@@ -399,6 +404,7 @@ async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) 
                 PageTarget::Archive => student::show_archive_page(screen, page).await,
                 PageTarget::Queue => student::show_queue_page(screen, page).await,
                 PageTarget::Courses => teacher::show_courses_page(screen, page).await,
+                PageTarget::Sandbox => sandbox::show_page(screen, page).await,
                 PageTarget::Course(id) => {
                     teacher::show_course_assignments_page(screen, id, page).await
                 }
@@ -451,6 +457,9 @@ async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) 
         ReplayableAction::Gradebook(course_id) => {
             teacher::show_gradebook_page(screen, course_id, PageRequest::default()).await
         }
+        ReplayableAction::ReviewSubmission(submission_id) => {
+            review::open(screen, submission_id).await
+        }
     }
 }
 
@@ -488,6 +497,9 @@ async fn handle_screen_action(
         }
         ScreenAction::RotateGroupInvite => {
             teacher::ask_invite_rotation(screen, message_id, &state).await
+        }
+        ScreenAction::BulkReview(decision) => {
+            sandbox::ask_comment(screen, message_id, decision, &state).await
         }
     }
 }
@@ -588,7 +600,9 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
         BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
             Some(texts::CHOOSE_ASSIGNMENT_ACTION)
         }
-        BotState::Screen(ScreenState::GroupInvite { .. })
+        BotState::Screen(
+            ScreenState::GroupInvite { .. } | ScreenState::SandboxSubmissions { .. },
+        )
         | BotState::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
             Some(texts::CHOOSE_ACTION_ABOVE)
         }
@@ -607,6 +621,7 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
             | FlowState::AwaitingSubmission { .. }
             | FlowState::AwaitingReviewScore { .. }
             | FlowState::AwaitingReviewComment { .. }
+            | FlowState::AwaitingBulkReviewComment { .. }
             | FlowState::AwaitingAssignmentFile { .. }
             | FlowState::AwaitingAssignmentTitle { .. }
             | FlowState::AwaitingAssignmentBody { .. }
@@ -697,8 +712,8 @@ mod tests {
             calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
             contact_keyboard, course_assignments_keyboard, deadline_options_keyboard,
             gradebook_students_keyboard, grading_keyboard, group_invite_keyboard,
-            late_policy_keyboard, penalty_keyboard, review_score_keyboard, student_grades_keyboard,
-            terms_exit_keyboard, terms_form_view, terms_keyboard,
+            late_policy_keyboard, penalty_keyboard, review_score_keyboard, sandbox_keyboard,
+            student_grades_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
         };
         use crate::domain::{
             FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
@@ -734,6 +749,12 @@ mod tests {
             penalty: Some(1),
             max_periods: Some(4),
             ..AssignmentTerms::editing(&assignment, 0)
+        };
+        let sandbox_submission = crate::app::SandboxSubmission {
+            submission_id: SubmissionId::new(),
+            assignment_title: "Trial".to_owned(),
+            student_name: "Student".to_owned(),
+            submitted_at: Utc::now(),
         };
 
         let mut keyboards = vec![
@@ -772,6 +793,7 @@ mod tests {
             gradebook_students_keyboard(course.id(), &[]),
             group_invite_keyboard(course.id()),
             confirm_invite_rotation_keyboard(),
+            sandbox_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
         ];
 
         for step in [

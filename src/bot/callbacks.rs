@@ -13,6 +13,7 @@ pub const MENU_ARCHIVE: &str = "menu:archive";
 pub const MENU_QUEUE: &str = "menu:queue";
 pub const MENU_PROFILE: &str = "menu:profile";
 pub const MENU_COURSES: &str = "menu:courses";
+pub const MENU_SANDBOX: &str = "menu:sandbox";
 pub const NEXT_REVIEW: &str = "review:next";
 
 pub const COURSE_PREFIX: &str = "course:";
@@ -63,6 +64,9 @@ pub const INVITE_CANCEL_ROTATE: &str = "invite:cancel-rotate";
 
 pub const REVIEW_ACCEPT_PREFIX: &str = "review:accept:";
 pub const REVIEW_REJECT_PREFIX: &str = "review:reject:";
+pub const REVIEW_OPEN_PREFIX: &str = "review:open:";
+pub const SANDBOX_ACCEPT_ALL: &str = "sandbox:accept-all";
+pub const SANDBOX_REJECT_ALL: &str = "sandbox:reject-all";
 
 pub const DEADLINE_CALENDAR: &str = "dl:calendar";
 pub const DEADLINE_MANUAL: &str = "dl:manual";
@@ -138,6 +142,7 @@ pub(super) enum ReplayableAction {
     GrantAttempts(AssignmentId),
     GroupInvite(TeachingCourseId),
     Gradebook(TeachingCourseId),
+    ReviewSubmission(SubmissionId),
 }
 
 impl ReplayableAction {
@@ -147,6 +152,7 @@ impl ReplayableAction {
             Self::Page(PageTarget::Archive, 0) => MENU_ARCHIVE.to_owned(),
             Self::Page(PageTarget::Queue, 0) => MENU_QUEUE.to_owned(),
             Self::Page(PageTarget::Courses, 0) => MENU_COURSES.to_owned(),
+            Self::Page(PageTarget::Sandbox, 0) => MENU_SANDBOX.to_owned(),
             Self::Page(target, page) => target.callback(page),
             Self::Profile => MENU_PROFILE.to_owned(),
             Self::NextReview => NEXT_REVIEW.to_owned(),
@@ -159,6 +165,7 @@ impl ReplayableAction {
             Self::GrantAttempts(id) => format!("{ATTEMPTS_PREFIX}{}", id.as_uuid()),
             Self::GroupInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
             Self::Gradebook(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
+            Self::ReviewSubmission(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
         }
     }
 }
@@ -169,6 +176,7 @@ pub(super) enum PageTarget {
     Archive,
     Queue,
     Courses,
+    Sandbox,
     Course(TeachingCourseId),
     Students(AssignmentId),
     Gradebook(TeachingCourseId),
@@ -184,6 +192,7 @@ impl PageTarget {
             Self::Archive => "ar".to_owned(),
             Self::Queue => "q".to_owned(),
             Self::Courses => "c".to_owned(),
+            Self::Sandbox => "sb".to_owned(),
             Self::Course(course) => format!("ca:{}", id(course.as_uuid())),
             Self::Students(assignment) => format!("s:{}", id(assignment.as_uuid())),
             Self::Gradebook(course) => format!("g:{}", id(course.as_uuid())),
@@ -211,6 +220,7 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
         "ar" => PageTarget::Archive,
         "q" => PageTarget::Queue,
         "c" => PageTarget::Courses,
+        "sb" => PageTarget::Sandbox,
         "ca" => PageTarget::Course(TeachingCourseId::from_uuid(id()?)),
         "s" => PageTarget::Students(AssignmentId::from_uuid(id()?)),
         "g" => PageTarget::Gradebook(TeachingCourseId::from_uuid(id()?)),
@@ -236,6 +246,7 @@ pub(super) enum ScreenAction {
     DeleteFile(usize),
     FinishFileCreation,
     RotateGroupInvite,
+    BulkReview(ReviewDecision),
 }
 
 impl ScreenAction {
@@ -249,6 +260,8 @@ impl ScreenAction {
             Self::DeleteFile(index) => format!("{FILE_DELETE_PREFIX}{index}"),
             Self::FinishFileCreation => FILE_FINISH.to_owned(),
             Self::RotateGroupInvite => INVITE_ROTATE.to_owned(),
+            Self::BulkReview(ReviewDecision::Accept) => SANDBOX_ACCEPT_ALL.to_owned(),
+            Self::BulkReview(ReviewDecision::Reject) => SANDBOX_REJECT_ALL.to_owned(),
         }
     }
 }
@@ -332,10 +345,13 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         MENU_QUEUE => Replayable(ReplayableAction::Page(PageTarget::Queue, 0)),
         MENU_PROFILE => Replayable(ReplayableAction::Profile),
         MENU_COURSES => Replayable(ReplayableAction::Page(PageTarget::Courses, 0)),
+        MENU_SANDBOX => Replayable(ReplayableAction::Page(PageTarget::Sandbox, 0)),
         NEXT_REVIEW => Replayable(ReplayableAction::NextReview),
         FILE_ADD => Screen(ScreenAction::AddFile),
         FILE_FINISH => Screen(ScreenAction::FinishFileCreation),
         INVITE_ROTATE => Screen(ScreenAction::RotateGroupInvite),
+        SANDBOX_ACCEPT_ALL => Screen(ScreenAction::BulkReview(ReviewDecision::Accept)),
+        SANDBOX_REJECT_ALL => Screen(ScreenAction::BulkReview(ReviewDecision::Reject)),
         FILE_CONFIRM_DELETE => Flow(FlowAction::ConfirmFileDeletion),
         FILE_CANCEL_DELETE => Flow(FlowAction::CancelFileDeletion),
         INVITE_CONFIRM_ROTATE => Flow(FlowAction::ConfirmInviteRotation),
@@ -401,6 +417,11 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
     }),
     (GRADES_PREFIX, |id| {
         Replayable(ReplayableAction::Gradebook(TeachingCourseId::from_uuid(id)))
+    }),
+    (REVIEW_OPEN_PREFIX, |id| {
+        Replayable(ReplayableAction::ReviewSubmission(SubmissionId::from_uuid(
+            id,
+        )))
     }),
     (PUBLISH_PREFIX, |id| {
         Screen(ScreenAction::Publish(AssignmentId::from_uuid(id)))
@@ -571,6 +592,7 @@ mod tests {
             PageTarget::Archive,
             PageTarget::Queue,
             PageTarget::Courses,
+            PageTarget::Sandbox,
             PageTarget::Course(TeachingCourseId::new()),
             PageTarget::Students(AssignmentId::new()),
             PageTarget::Gradebook(TeachingCourseId::new()),
@@ -639,6 +661,8 @@ mod tests {
         let student = UserId::new().as_uuid();
         let cases = [
             ("menu:assignments".to_owned(), "replayable"),
+            ("menu:sandbox".to_owned(), "replayable"),
+            (format!("review:open:{submission}"), "replayable"),
             (format!("course:{course}"), "replayable"),
             (format!("assignment:{assignment}"), "replayable"),
             (format!("manage:{assignment}"), "replayable"),
@@ -664,6 +688,8 @@ mod tests {
             ("file:delete:0".to_owned(), "screen"),
             ("file:finish".to_owned(), "screen"),
             ("invite:rotate".to_owned(), "screen"),
+            ("sandbox:accept-all".to_owned(), "screen"),
+            ("sandbox:reject-all".to_owned(), "screen"),
             (format!("review:accept:{submission}"), "flow"),
             ("maxattempts:3".to_owned(), "flow"),
             ("grading:passfail".to_owned(), "flow"),

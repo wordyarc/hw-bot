@@ -19,6 +19,7 @@ create table student_groups (
 create table subjects (
     id uuid primary key default gen_random_uuid(),
     name text not null unique check (btrim(name) <> '' and char_length(name) <= 200),
+    sandbox boolean not null default false,
     created_at timestamptz not null default now()
 );
 

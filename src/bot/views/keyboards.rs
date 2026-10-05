@@ -2,7 +2,9 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup};
 
 use super::render::button_label;
-use crate::app::{AssignmentStudentSummary, CourseStudent, TeachingCourseSummary};
+use crate::app::{
+    AssignmentStudentSummary, CourseStudent, SandboxSubmission, TeachingCourseSummary,
+};
 use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget,
 };
@@ -19,8 +21,8 @@ use crate::bot::callbacks::{
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, Role, StoredFileMetadata, SubmissionId,
-    TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentStatus, ReviewDecision, Role, StoredFileMetadata,
+    SubmissionId, TeachingCourseId, UserId,
 };
 
 type Row = Vec<InlineKeyboardButton>;
@@ -40,6 +42,7 @@ pub(crate) enum MenuAction {
     Queue,
     Review,
     Courses,
+    Sandbox,
     Profile,
     Help,
 }
@@ -51,6 +54,7 @@ pub(crate) fn menu_action(text: &str) -> Option<MenuAction> {
         texts::BUTTON_QUEUE => Some(MenuAction::Queue),
         texts::BUTTON_REVIEW => Some(MenuAction::Review),
         texts::BUTTON_COURSES => Some(MenuAction::Courses),
+        texts::BUTTON_SANDBOX => Some(MenuAction::Sandbox),
         texts::BUTTON_PROFILE => Some(MenuAction::Profile),
         texts::BUTTON_HELP => Some(MenuAction::Help),
         _ => None,
@@ -92,7 +96,10 @@ pub(crate) fn teacher_keyboard() -> KeyboardMarkup {
             KeyboardButton::new(texts::BUTTON_COURSES),
             KeyboardButton::new(texts::BUTTON_PROFILE),
         ],
-        vec![KeyboardButton::new(texts::BUTTON_HELP)],
+        vec![
+            KeyboardButton::new(texts::BUTTON_SANDBOX),
+            KeyboardButton::new(texts::BUTTON_HELP),
+        ],
     ])
 }
 
@@ -191,6 +198,39 @@ pub(crate) fn contact_keyboard(
     }
     rows.push(row(refresh, target.callback()));
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn sandbox_keyboard(
+    submissions: &[SandboxSubmission],
+    page: u32,
+    next: Option<u32>,
+) -> InlineKeyboardMarkup {
+    let rows = submissions.iter().map(|submission| {
+        row(
+            button_label(&texts::sandbox_button(
+                &submission.student_name,
+                &submission.assignment_title,
+            )),
+            ReplayableAction::ReviewSubmission(submission.submission_id).callback(),
+        )
+    });
+    let mut keyboard = paginated_keyboard(
+        InlineKeyboardMarkup::new(rows),
+        PageTarget::Sandbox,
+        page,
+        next,
+    );
+    keyboard.inline_keyboard.push(vec![
+        button(
+            texts::BUTTON_ACCEPT_ALL,
+            ScreenAction::BulkReview(ReviewDecision::Accept).callback(),
+        ),
+        button(
+            texts::BUTTON_REJECT_ALL,
+            ScreenAction::BulkReview(ReviewDecision::Reject).callback(),
+        ),
+    ]);
+    keyboard
 }
 
 pub(crate) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
@@ -1012,6 +1052,10 @@ mod tests {
         );
         assert_eq!(menu_action(texts::BUTTON_QUEUE), Some(MenuAction::Queue));
         assert_eq!(menu_action(texts::BUTTON_REVIEW), Some(MenuAction::Review));
+        assert_eq!(
+            menu_action(texts::BUTTON_SANDBOX),
+            Some(MenuAction::Sandbox)
+        );
         assert_eq!(menu_action("ссылка на pull request"), None);
     }
 

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
@@ -56,6 +57,16 @@ impl BotState {
                 course_id,
                 generation,
             }) if *current == message_id => Some((*course_id, *generation)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sandbox_screen(&self, message_id: MessageId) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Screen(ScreenState::SandboxSubmissions {
+                message_id: current,
+                shown_at,
+            }) if *current == message_id => Some(*shown_at),
             _ => None,
         }
     }
@@ -210,6 +221,10 @@ pub(super) enum ScreenState {
         course_id: TeachingCourseId,
         generation: InviteGeneration,
     },
+    SandboxSubmissions {
+        message_id: MessageId,
+        shown_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Clone)]
@@ -240,6 +255,10 @@ pub(super) enum FlowState {
         submission_id: SubmissionId,
         decision: ReviewDecision,
         score: Option<u16>,
+    },
+    AwaitingBulkReviewComment {
+        decision: ReviewDecision,
+        cutoff: DateTime<Utc>,
     },
     AwaitingAssignmentFile {
         assignment_id: AssignmentId,
@@ -330,5 +349,18 @@ mod tests {
         );
         assert!(state.managing_assignment(MessageId(11), current).is_none());
         assert!(state.managing_assignment(MessageId(10), other).is_none());
+    }
+
+    #[test]
+    fn bulk_review_requires_the_current_sandbox_screen() {
+        let shown_at = crate::test_support::t0();
+        let state = BotState::Screen(ScreenState::SandboxSubmissions {
+            message_id: MessageId(10),
+            shown_at,
+        });
+
+        assert_eq!(state.sandbox_screen(MessageId(10)), Some(shown_at));
+        assert!(state.sandbox_screen(MessageId(11)).is_none());
+        assert!(BotState::Idle.sandbox_screen(MessageId(10)).is_none());
     }
 }

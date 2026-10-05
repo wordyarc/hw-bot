@@ -12,7 +12,7 @@ use crate::domain::{
     SubmissionParts, SubmissionStatus, TeachingCourseId, User, UserId,
 };
 use crate::pagination::PageRequest;
-use crate::read_models::{AssignmentGrade, QueuePlace};
+use crate::read_models::{AssignmentGrade, QueuePlace, SandboxSubmission};
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const STATUS: &str = "submissions.status";
@@ -440,6 +440,8 @@ where
             from mine_page mine
             join assignments mine_assignment
               on mine_assignment.id = mine.assignment_id
+            join subjects mine_subject
+              on mine_subject.id = mine_assignment.subject_id
             join assignments other_assignment
               on exists (
                   select 1
@@ -449,6 +451,9 @@ where
                   where mine_teacher.teaching_course_id = mine_assignment.teaching_course_id
                     and other_teacher.teaching_course_id = other_assignment.teaching_course_id
               )
+            join subjects other_subject
+              on other_subject.id = other_assignment.subject_id
+             and other_subject.sandbox = mine_subject.sandbox
             join submissions other
               on other.assignment_id = other_assignment.id
              and other.status = 'pending_review'
@@ -500,21 +505,32 @@ where
 }
 
 macro_rules! reviewer_scope {
-    ($query:ident $(, $row:ty)?; $select:literal, $tail:literal, $reviewer:expr) => {
+    (
+        $query:ident $(, $row:ty)?;
+        $select:literal, $tail:literal, $reviewer:expr, $sandbox:expr, $cutoff:expr
+        $(, $arg:expr)* $(,)?
+    ) => {
         sqlx::$query!(
             $($row,)?
             $select + r#"
             from submissions
             join assignments
               on assignments.id = submissions.assignment_id
+            join subjects
+              on subjects.id = assignments.subject_id
             left join teaching_course_teachers
               on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
              and teaching_course_teachers.teacher_id = $2
             where submissions.status = 'pending_review'
               and ($1 or teaching_course_teachers.teacher_id is not null)
+              and subjects.sandbox = $3
+              and ($4::timestamptz is null or submissions.submitted_at <= $4)
             "# + $tail,
             matches!($reviewer.role(), Role::Admin),
             $reviewer.id().as_uuid(),
+            $sandbox,
+            $cutoff,
+            $($arg,)*
         )
     };
 }
@@ -523,9 +539,35 @@ pub async fn count_pending_for_reviewer<'e, E>(executor: E, reviewer: &User) -> 
 where
     E: PgExecutor<'e>,
 {
-    let pending = reviewer_scope!(query_scalar; r#"select count(*) as "pending!""#, "", reviewer)
-        .fetch_one(executor)
-        .await?;
+    count_for_reviewer(executor, reviewer, false, None).await
+}
+
+pub async fn count_sandbox_for_reviewer<'e, E>(
+    executor: E,
+    reviewer: &User,
+    cutoff: Option<DateTime<Utc>>,
+) -> DbResult<u32>
+where
+    E: PgExecutor<'e>,
+{
+    count_for_reviewer(executor, reviewer, true, cutoff).await
+}
+
+async fn count_for_reviewer<'e, E>(
+    executor: E,
+    reviewer: &User,
+    sandbox: bool,
+    cutoff: Option<DateTime<Utc>>,
+) -> DbResult<u32>
+where
+    E: PgExecutor<'e>,
+{
+    let pending = reviewer_scope!(
+        query_scalar;
+        r#"select count(*) as "pending!""#, "", reviewer, sandbox, cutoff
+    )
+    .fetch_one(executor)
+    .await?;
 
     checked_num_cast("review_queue.pending", pending)
 }
@@ -548,12 +590,84 @@ pub async fn lock_next_pending_for_reviewer(
         for update of submissions skip locked
         limit 1
         "#,
-        reviewer
+        reviewer,
+        false,
+        None::<DateTime<Utc>>
     )
     .fetch_optional(&mut **tx)
     .await?;
 
     row.map(Submission::try_from).transpose()
+}
+
+pub async fn sandbox_page_for_reviewer<'e, E>(
+    executor: E,
+    reviewer: &User,
+    page: PageRequest,
+) -> DbResult<Vec<SandboxSubmission>>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = reviewer_scope!(query;
+        r#"
+        select
+            submissions.id,
+            submissions.submitted_at,
+            assignments.title as assignment_title,
+            (select display_name from users where users.id = submissions.student_id)
+                as "student_name!"
+        "#,
+        r#"
+        order by submissions.submitted_at, submissions.id
+        limit $5 offset $6
+        "#,
+        reviewer,
+        true,
+        None::<DateTime<Utc>>,
+        PageRequest::FETCH_LIMIT,
+        page.offset(),
+    )
+    .fetch_all(executor)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| SandboxSubmission {
+            submission_id: SubmissionId::from_uuid(row.id),
+            assignment_title: row.assignment_title,
+            student_name: row.student_name,
+            submitted_at: row.submitted_at,
+        })
+        .collect())
+}
+
+pub async fn lock_sandbox_for_reviewer(
+    tx: &mut Transaction<'_, Postgres>,
+    reviewer: &User,
+    cutoff: DateTime<Utc>,
+) -> DbResult<Vec<Submission>> {
+    reviewer_scope!(query_as, SubmissionRow;
+        r#"
+        select
+            submissions.id, submissions.assignment_id, submissions.student_id,
+            submissions.attempt_number, submissions.content, submissions.status,
+            submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
+            submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
+            submissions.late_periods, submissions.penalty, submissions.final_score
+        "#,
+        r#"
+        order by submissions.submitted_at, submissions.id
+        for update of submissions
+        "#,
+        reviewer,
+        true,
+        Some(cutoff)
+    )
+    .fetch_all(&mut **tx)
+    .await?
+    .into_iter()
+    .map(Submission::try_from)
+    .collect()
 }
 
 #[derive(Debug)]

@@ -2,14 +2,15 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::{
     AssignmentStatus, Grade, MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS,
-    MAX_LATENESS_DAYS, Role, SubmissionStatus,
+    MAX_LATENESS_DAYS, ReviewDecision, Role, SubmissionStatus,
 };
 
 pub const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
 pub const BUTTON_ARCHIVE: &str = "🗄 Архив";
 pub const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
 pub const BUTTON_REVIEW: &str = "✅ Проверить работы";
-pub const BUTTON_COURSES: &str = "📘 Мои курсы";
+pub const BUTTON_COURSES: &str = "📘 Мои предметы";
+pub const BUTTON_SANDBOX: &str = "🧪 Песочница";
 pub const BUTTON_PROFILE: &str = "👤 Профиль";
 pub const BUTTON_HELP: &str = "❓ Помощь";
 pub const MENU_PLACEHOLDER: &str = "Выберите пункт меню";
@@ -45,7 +46,7 @@ pub const SUBMISSION_PROMPT: &str =
     "Пришлите ссылку на работу или её текст. Всё должно быть в одном сообщении.";
 pub const STUDENT_QUEUE_EMPTY: &str = "⏳ Сейчас у вас нет работ на проверке.";
 pub const QUEUE_NO_TEACHER: &str =
-    "У этого курса пока нет преподавателя. Попросите администратора бота назначить его.";
+    "У этого предмета пока нет преподавателя. Попросите администратора бота назначить его.";
 pub const QUEUE_FIRST: &str = "Ваша работа первая в очереди.";
 pub const REVIEW_QUEUE_EMPTY: &str = "🎉 Работ на проверку пока нет.";
 pub const REVIEW_COMMENT_PROMPT: &str = "Объясните студенту своё решение. Комментарий обязателен и для принятой, и для отклонённой работы:";
@@ -132,7 +133,7 @@ pub const REGISTRATION_COMPLETE: &str = "🎉 Вы зарегистрирова�
 pub const FILE_SIZE_MISMATCH: &str = "Telegram сообщил другой размер файла, чем получилось скачать. Попробуйте отправить файл снова.";
 pub const INVITE_REUSE_HINT: &str =
     "Перешлите ссылку группе. Каждый студент сможет зарегистрироваться по ней.";
-pub const INVITE_ROTATION_CONFIRM: &str = "После перевыпуска старая ссылка сразу перестанет работать во всех курсах группы. На доступ уже зарегистрированных студентов это не повлияет. Создать новую ссылку?";
+pub const INVITE_ROTATION_CONFIRM: &str = "После перевыпуска старая ссылка сразу перестанет работать во всех предметах группы. На доступ уже зарегистрированных студентов это не повлияет. Создать новую ссылку?";
 pub const REVIEW_SAVED: &str =
     "✅ Проверка сохранена. Студент получит от бота результат вместе с вашим комментарием.";
 
@@ -285,11 +286,12 @@ pub fn student_help() -> String {
 
 pub fn teacher_help() -> String {
     format!(
-        "❓ Как вести курс\n\n\
-        Новое задание создаётся внутри курса в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
-        После проверки условий сохраните черновик и при необходимости прикрепите файлы. На этом этапе задание доступно только преподавателям курса. Студенты увидят его, когда вы нажмёте «{BUTTON_PUBLISH}».\n\n\
+        "❓ Как вести предмет\n\n\
+        Новое задание создаётся внутри предмета в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
+        После проверки условий сохраните черновик и при необходимости прикрепите файлы. На этом этапе задание доступно только преподавателям предмета. Студенты увидят его, когда вы нажмёте «{BUTTON_PUBLISH}».\n\n\
         Для проверки нажмите «{BUTTON_REVIEW}»: бот откроет следующую работу из очереди. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
-        Кнопка «{BUTTON_STUDENT_CONTACT}» есть под работой и в «{BUTTON_COURSES} → Курс → {BUTTON_GRADEBOOK} → Студент». Она сохраняет текущий шаг. Нажмите «{BUTTON_OPEN_TELEGRAM}», чтобы написать со своего личного аккаунта; доступность перехода зависит от Telegram. Если адрес изменился, нажмите «{BUTTON_REFRESH_CONTACT}».\n\n\
+        Работы по предмету-песочнице в очередь не попадают: их список открывает «{BUTTON_SANDBOX}». Работу можно проверить по одной или ответить всем сразу кнопкой «{BUTTON_ACCEPT_ALL}» или «{BUTTON_REJECT_ALL}» с одним комментарием. Такое решение касается работ, отправленных до открытия списка. При принятии оценочные задания получают максимальный балл с учётом штрафа за опоздание.\n\n\
+        Кнопка «{BUTTON_STUDENT_CONTACT}» есть под работой и в «{BUTTON_COURSES} → Предмет → {BUTTON_GRADEBOOK} → Студент». Она сохраняет текущий шаг. Нажмите «{BUTTON_OPEN_TELEGRAM}», чтобы написать со своего личного аккаунта; доступность перехода зависит от Telegram. Если адрес изменился, нажмите «{BUTTON_REFRESH_CONTACT}».\n\n\
         Чтобы изменить условия, воспользуйтесь кнопкой «{BUTTON_EDIT_DATES}» в задании. Перенос срока также сдвигает конец приёма, поэтому перед сохранением сверьте новую дату. Команда /cancel во время настройки возвращает к предыдущему шагу. На первом шаге она завершает настройку."
     )
 }
@@ -316,6 +318,10 @@ pub fn review_queue_line(pending: u32) -> String {
     format!("⏳ Работ в очереди на проверку: {pending}")
 }
 
+pub fn home_sandbox_line(pending: u32) -> String {
+    format!("🧪 Работ в песочнице: {pending}")
+}
+
 pub fn profile_header(name: &str, role: &str) -> String {
     format!("👤 Профиль\n\nИмя: {name}\nРоль: {role}")
 }
@@ -333,7 +339,7 @@ pub fn profile_pending(count: u32) -> String {
 }
 
 pub fn profile_courses(count: u32) -> String {
-    format!("📘 Курсов: {count}")
+    format!("📘 Предметов: {count}")
 }
 
 pub fn profile_review_queue(count: u32) -> String {
@@ -470,19 +476,60 @@ pub fn grade_saved(grade: Grade) -> String {
     )
 }
 
-pub const NO_COURSES: &str = "📘 У вас пока нет учебных курсов.";
-pub const CHOOSE_COURSE: &str = "📘 Выберите курс:";
-pub const NO_COURSE_ASSIGNMENTS: &str = "В этом курсе пока нет заданий.";
-pub const COURSE_ASSIGNMENTS_HEADER: &str = "Задания курса:";
+pub const SANDBOX_EMPTY: &str = "🧪 В песочнице нет работ на проверке.";
+pub const SANDBOX_CHOOSE: &str = "Откройте работу или примите решение сразу по всем:";
+pub const SANDBOX_NOTHING_TO_DECIDE: &str =
+    "В песочнице не осталось работ, отправленных до открытия этого списка: их уже проверили.";
+pub const BUTTON_ACCEPT_ALL: &str = "✅ Принять все";
+pub const BUTTON_REJECT_ALL: &str = "❌ Отклонить все";
+
+pub fn sandbox_header(total: u32) -> String {
+    format!("{BUTTON_SANDBOX}\nРабот на проверке: {total}")
+}
+
+pub fn sandbox_entry(student: &str, title: &str, sent_at: &str) -> String {
+    format!("👤 {student} · {title}\nотправлено {sent_at}")
+}
+
+pub fn sandbox_button(student: &str, title: &str) -> String {
+    format!("👤 {student} · {title}")
+}
+
+pub fn bulk_review_prompt(decision: ReviewDecision, count: u32) -> String {
+    let question = match decision {
+        ReviewDecision::Accept => format!(
+            "Принять все работы в песочнице, отправленные до открытия этого списка: {count}? Оценочные задания получат максимальный балл с учётом штрафа за опоздание, а принятую работу студент пересдать не сможет."
+        ),
+        ReviewDecision::Reject => format!(
+            "Отклонить все работы в песочнице, отправленные до открытия этого списка: {count}? Каждое отклонение тратит одну попытку студента."
+        ),
+    };
+    format!("{question}\n\nНапишите один комментарий для всех студентов:")
+}
+
+pub fn bulk_review_saved(decision: ReviewDecision, count: usize) -> String {
+    let outcome = match decision {
+        ReviewDecision::Accept => "✅ Принято",
+        ReviewDecision::Reject => "❌ Отклонено",
+    };
+    format!(
+        "{outcome} работ в песочнице: {count}. Студенты получат результат вместе с вашим комментарием."
+    )
+}
+
+pub const NO_COURSES: &str = "📘 У вас пока нет предметов.";
+pub const CHOOSE_COURSE: &str = "📘 Выберите предмет:";
+pub const NO_COURSE_ASSIGNMENTS: &str = "По этому предмету пока нет заданий.";
+pub const COURSE_ASSIGNMENTS_HEADER: &str = "Задания по предмету:";
 pub const CHOOSE_ASSIGNMENT: &str = "Выберите задание или создайте новое:";
 pub const ASSIGNMENT_PUBLISHED: &str = "🚀 Задание опубликовано.";
 pub const ASSIGNMENT_ARCHIVED: &str = "📦 Задание архивировано.";
 pub const BUTTON_CREATE_ASSIGNMENT: &str = "➕ Создать задание";
 pub const BUTTON_GRADEBOOK: &str = "📊 Оценки";
 pub const BUTTON_GROUP_INVITE: &str = "🔗 Ссылка для группы";
-pub const BUTTON_BACK_TO_COURSES: &str = "⬅️ К списку курсов";
-pub const BUTTON_BACK_TO_COURSE: &str = "⬅️ К курсу";
-pub const BUTTON_BACK_TO_COURSE_ASSIGNMENTS: &str = "⬅️ К заданиям курса";
+pub const BUTTON_BACK_TO_COURSES: &str = "⬅️ К списку предметов";
+pub const BUTTON_BACK_TO_COURSE: &str = "⬅️ К предмету";
+pub const BUTTON_BACK_TO_COURSE_ASSIGNMENTS: &str = "⬅️ К заданиям предмета";
 pub const BUTTON_PUBLISH: &str = "🚀 Опубликовать";
 pub const BUTTON_PUBLISH_AGAIN: &str = "🚀 Опубликовать снова";
 pub const BUTTON_ARCHIVE_ASSIGNMENT: &str = "📦 Архивировать";
@@ -637,9 +684,9 @@ pub const STUDENT_PENDING_MARK: &str = " · ⏳ сдача на проверке
 pub const STUDENT_ACCEPTED_MARK: &str = " · ✅ работа принята";
 pub const CHOOSE_STUDENT_PROMPT: &str = "Выберите студента:";
 pub const EXTRA_ATTEMPTS_QUESTION: &str = "Сколько дополнительных попыток выдать?";
-pub const GRADEBOOK_CHOOSE_STUDENT: &str = "📊 Оценки курса. Выберите студента:";
-pub const NO_SCORED_ASSIGNMENTS: &str = "В курсе пока нет оценочных заданий.";
-pub const BUTTON_BACK_TO_STUDENTS: &str = "⬅️ К студентам курса";
+pub const GRADEBOOK_CHOOSE_STUDENT: &str = "📊 Оценки по предмету. Выберите студента:";
+pub const NO_SCORED_ASSIGNMENTS: &str = "По этому предмету пока нет оценочных заданий.";
+pub const BUTTON_BACK_TO_STUDENTS: &str = "⬅️ К студентам группы";
 
 pub fn student_entry(name: &str, used: u16, extra: u16, marks: &str) -> String {
     format!("{name} · использовано {used} · дополнительных {extra}{marks}")

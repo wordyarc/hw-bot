@@ -2,13 +2,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use hw_bot::bot::{callbacks, texts};
-use hw_bot::domain::USER_TEXT_MAX_LEN;
+use hw_bot::app::ErrorCode;
+use hw_bot::bot::{app_error_message, callbacks, texts};
+use hw_bot::db;
+use hw_bot::domain::{Assignment, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
+use hw_bot::test_support::submission as submission_of;
 use serde_json::{Value, json};
+use uuid::Uuid;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
+use crate::harness::telegram_scenario::TelegramScenario;
 use crate::harness::{TestApp, submission_id};
 
 #[tokio::test]
@@ -339,7 +344,7 @@ async fn an_empty_review_queue_answers_the_teacher_instead_of_failing() {
     let app = TestApp::start().await;
     let updates = vec![
         message_update(1, app.teacher(), 1, "/menu"),
-        message_update(2, app.teacher(), 2, "✅ Проверить работы"),
+        message_update(2, app.teacher(), 2, texts::BUTTON_REVIEW),
     ];
     let telegram = telegram_server(updates).await;
     let empty = Mock::given(method("POST"))
@@ -509,4 +514,355 @@ async fn a_failed_previous_attempt_does_not_hide_the_decision_buttons() {
         }),
         "the reviewer is told that the history is incomplete"
     );
+}
+
+async fn add_trial(app: &TestApp) -> Assignment {
+    let sandbox = app.add_sandbox_course().await;
+
+    app.add_published_assignment(&sandbox, &app.fixture.teacher, "Trial")
+        .await
+}
+
+async fn submit_trial(app: &TestApp, trial: &Assignment, student: i64) -> Uuid {
+    submission_id(
+        &app.submit(trial.id().as_uuid(), student, "pull/trial")
+            .await
+            .created(),
+    )
+}
+
+fn texts_sent(telegram: &TelegramScenario, user: i64) -> Vec<String> {
+    telegram
+        .messages(user)
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect()
+}
+
+async fn is_pending(app: &TestApp, submission: Uuid) -> bool {
+    db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
+        .await
+        .expect("read submission")
+        .expect("submission exists")
+        .is_pending_review()
+}
+
+#[tokio::test]
+async fn the_sandbox_menu_item_lists_sandbox_submissions_with_bulk_buttons() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_OPEN_PREFIX, submission),
+        )
+        .await;
+    telegram
+        .button(app.teacher(), callbacks::SANDBOX_ACCEPT_ALL)
+        .await;
+    telegram
+        .button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        texts_sent(&telegram, app.teacher())
+            .iter()
+            .any(|text| text.starts_with(&texts::sandbox_header(1)))
+    );
+}
+
+#[tokio::test]
+async fn an_empty_sandbox_is_reported_without_bulk_buttons() {
+    let app = TestApp::start().await;
+    add_trial(&app).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::SANDBOX_EMPTY.to_owned()));
+    assert!(
+        !sent_callbacks(&telegram.server)
+            .await
+            .iter()
+            .any(|data| data == callbacks::SANDBOX_ACCEPT_ALL
+                || data == callbacks::SANDBOX_REJECT_ALL)
+    );
+}
+
+#[tokio::test]
+async fn an_old_sandbox_button_opens_the_review_card_and_saves_the_decision() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    let open = telegram
+        .button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_OPEN_PREFIX, submission),
+        )
+        .await;
+    telegram.message(app.teacher(), "/menu");
+    telegram.flush(app.teacher()).await;
+
+    telegram.click(app.teacher(), &open);
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_REJECT_PREFIX, submission),
+        )
+        .await;
+    telegram.message(app.teacher(), "Учебная сдача");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        reviewed.map(|(status, _, _)| status).as_deref(),
+        Some("rejected")
+    );
+    let notifications: i64 = sqlx::query_scalar(
+        "select count(*) from review_notification_outbox where submission_id = $1",
+    )
+    .bind(submission)
+    .fetch_one(&app.pool)
+    .await
+    .expect("count notifications");
+    assert_eq!(notifications, 1);
+}
+
+#[tokio::test]
+async fn a_reviewed_sandbox_submission_does_not_open_again() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    let open = telegram
+        .button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_OPEN_PREFIX, submission),
+        )
+        .await;
+    app.review(submission, app.teacher(), "reject", "Вручную")
+        .await
+        .ok();
+
+    telegram.click(app.teacher(), &open);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&app_error_message(ErrorCode::SubmissionAlreadyReviewed).to_owned()));
+    assert!(!sent.contains(&texts::SUBMISSION_HEADER.to_owned()));
+}
+
+#[tokio::test]
+async fn the_home_screen_counts_the_sandbox_apart_from_the_queue() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    for name in ["First", "Second", "Third"] {
+        let trainee = app.add_student(name).await;
+        submit_trial(&app, &trial, trainee.telegram_user_id().as_i64()).await;
+    }
+    app.queued_submission(app.student(), "pull/regular").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/menu");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let greeting = texts::home_greeting(app.fixture.teacher.display_name().as_str());
+    let home = texts_sent(&telegram, app.teacher())
+        .into_iter()
+        .find(|text| text.starts_with(&greeting))
+        .expect("the home screen is shown");
+    assert!(home.contains(&texts::review_queue_line(1)), "{home}");
+    assert!(home.contains(&texts::home_sandbox_line(3)), "{home}");
+}
+
+#[tokio::test]
+async fn a_bulk_button_from_an_old_sandbox_screen_is_stale() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    let old = telegram
+        .button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .button_after(app.teacher(), callbacks::SANDBOX_REJECT_ALL, old.message_id)
+        .await;
+
+    telegram.click(app.teacher(), &old);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&texts::STALE_BUTTON.to_owned()));
+    assert!(
+        !sent.contains(&texts::input_prompt(&texts::bulk_review_prompt(
+            ReviewDecision::Reject,
+            1
+        )))
+    );
+    assert!(is_pending(&app, submission).await);
+}
+
+#[tokio::test]
+async fn a_bulk_button_with_nothing_left_skips_the_comment_step() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    let reject_all = telegram
+        .button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+    app.review(submission, app.teacher(), "accept", "Вручную")
+        .await
+        .ok();
+
+    telegram.click(app.teacher(), &reject_all);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&texts::SANDBOX_NOTHING_TO_DECIDE.to_owned()));
+    assert!(
+        !sent.contains(&texts::input_prompt(&texts::bulk_review_prompt(
+            ReviewDecision::Reject,
+            1
+        )))
+    );
+}
+
+#[tokio::test]
+async fn the_accept_all_prompt_warns_before_asking_for_the_comment() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .click_button(app.teacher(), callbacks::SANDBOX_ACCEPT_ALL)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        texts_sent(&telegram, app.teacher()).contains(&texts::input_prompt(
+            &texts::bulk_review_prompt(ReviewDecision::Accept, 1)
+        ))
+    );
+}
+
+#[tokio::test]
+async fn rejecting_all_in_the_bot_rejects_the_sandbox_and_returns_the_menu() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .click_button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+
+    telegram.message(app.teacher(), "Учебная сдача");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        reviewed.map(|(status, _, _)| status).as_deref(),
+        Some("rejected")
+    );
+    let saved = texts::bulk_review_saved(ReviewDecision::Reject, 1);
+    let confirmation = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| message["text"] == saved.as_str())
+        .expect("the bulk decision is confirmed");
+    let menu = confirmation["reply_markup"]["keyboard"].to_string();
+    assert!(menu.contains(texts::BUTTON_SANDBOX), "{menu}");
+}
+
+#[tokio::test]
+async fn cancelling_the_bulk_comment_changes_nothing() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .click_button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+
+    telegram.message(app.teacher(), "/cancel");
+    telegram.message(app.teacher(), "Учебная сдача");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::ACTION_CANCELLED.to_owned()));
+    assert!(is_pending(&app, submission).await);
+}
+
+#[tokio::test]
+async fn a_failed_bulk_confirmation_does_not_repeat_the_decision() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let first = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_partial_json(json!({
+            "text": texts::bulk_review_saved(ReviewDecision::Reject, 1)
+        })))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "ok": false, "error_code": 400, "description": "Bad Request: injected failure",
+        })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&telegram.server)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .click_button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+    telegram.message(app.teacher(), "Учебная сдача");
+    wait_for_review_result(&app.pool, first)
+        .await
+        .expect("the bulk decision is committed");
+    let trainee = app.add_student("Late commit").await;
+    let late = submission_of(&trial, &trainee)
+        .submitted_at(Utc::now() - ChronoDuration::minutes(10))
+        .build();
+    db::submissions::insert(&app.pool, &late)
+        .await
+        .expect("insert a submission committed after the decision");
+
+    telegram.message(app.teacher(), "Учебная сдача");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(is_pending(&app, late.id().as_uuid()).await);
 }

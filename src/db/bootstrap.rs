@@ -61,6 +61,8 @@ struct StudentGroupSeed {
 #[serde(deny_unknown_fields)]
 struct SubjectSeed {
     name: String,
+    #[serde(default)]
+    sandbox: bool,
 }
 
 #[derive(Deserialize)]
@@ -74,8 +76,13 @@ struct CourseSeed {
 struct ValidatedSeed {
     staff: Vec<User>,
     student_groups: Vec<StudentGroup>,
-    subjects: Vec<Subject>,
+    subjects: Vec<ValidatedSubject>,
     courses: Vec<ValidatedCourse>,
+}
+
+struct ValidatedSubject {
+    subject: Subject,
+    sandbox: bool,
 }
 
 struct ValidatedCourse {
@@ -110,7 +117,7 @@ pub async fn run_bootstrap(pool: &PgPool, value: &serde_json::Value) -> Result<(
     let mut subject_ids = HashMap::with_capacity(seed.subjects.len());
     for subject in &seed.subjects {
         let id = ensure_subject(&mut transaction, subject).await?;
-        subject_ids.insert(subject.name().as_str(), id);
+        subject_ids.insert(subject.subject.name().as_str(), id);
     }
 
     for course in &seed.courses {
@@ -168,11 +175,12 @@ fn validate_seed(seed: Seed) -> Result<ValidatedSeed, BootstrapError> {
     let mut subjects = Vec::with_capacity(seed.subjects.len());
     let mut subject_names = HashSet::with_capacity(seed.subjects.len());
     for subject in seed.subjects {
+        let sandbox = subject.sandbox;
         let subject = Subject::new(SubjectId::new(), subject.name)?;
         if !subject_names.insert(subject.name().as_str().to_owned()) {
             return Err(invalid("subject names must be unique"));
         }
-        subjects.push(subject);
+        subjects.push(ValidatedSubject { subject, sandbox });
     }
 
     let mut courses = Vec::with_capacity(seed.courses.len());
@@ -323,23 +331,25 @@ async fn ensure_student_group(
 
 async fn ensure_subject(
     connection: &mut PgConnection,
-    subject: &Subject,
+    seed: &ValidatedSubject,
 ) -> Result<Uuid, BootstrapError> {
+    let subject = &seed.subject;
     sqlx::query!(
         r#"
-        insert into subjects (id, name)
-        values ($1, $2)
+        insert into subjects (id, name, sandbox)
+        values ($1, $2, $3)
         on conflict (name) do nothing
         "#,
         subject.id().as_uuid(),
         subject.name().as_str(),
+        seed.sandbox,
     )
     .execute(&mut *connection)
     .await?;
 
-    Ok(sqlx::query_scalar!(
+    let row = sqlx::query!(
         r#"
-        select id
+        select id, sandbox
         from subjects
         where name = $1
         for share
@@ -347,7 +357,16 @@ async fn ensure_subject(
         subject.name().as_str(),
     )
     .fetch_one(connection)
-    .await?)
+    .await?;
+
+    if row.sandbox != seed.sandbox {
+        return Err(invalid(format!(
+            "existing subject {} conflicts with requested data",
+            subject.name().as_str()
+        )));
+    }
+
+    Ok(row.id)
 }
 
 async fn ensure_course(
@@ -549,6 +568,25 @@ mod tests {
         let mut seed = bootstrap_seed();
         seed["courses"][0]["teacher_telegram_user_ids"] = json!([100000002, 100000002]);
         rejects(seed, "a teacher must not be repeated within a course");
+    }
+
+    #[test]
+    fn the_deployment_example_is_a_valid_seed_with_a_sandbox_course() {
+        let seed: Seed =
+            serde_json::from_str(include_str!("../../tools/deploy/bootstrap.example.json"))
+                .expect("the example matches the seed format");
+        let seed = validate_seed(seed).expect("the example is a valid seed");
+
+        let sandbox = seed
+            .subjects
+            .iter()
+            .find(|subject| subject.sandbox)
+            .expect("the example shows a sandbox subject");
+        assert!(
+            seed.courses
+                .iter()
+                .any(|course| course.subject_name == sandbox.subject.name().as_str())
+        );
     }
 
     #[test]

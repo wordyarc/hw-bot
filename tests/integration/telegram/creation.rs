@@ -803,7 +803,7 @@ async fn a_bottom_menu_misclick_can_be_cancelled_without_losing_input() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     open_periods_step(&app, &telegram, "Menu misclick").await;
-    telegram.message(app.teacher(), "📘 Мои курсы");
+    telegram.message(app.teacher(), texts::BUTTON_COURSES);
     telegram
         .click_button(app.teacher(), callbacks::TERMS_STAY)
         .await;
@@ -823,7 +823,7 @@ async fn confirmed_menu_exit_discards_the_draft_and_opens_the_destination() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     open_periods_step(&app, &telegram, "Confirmed exit").await;
-    telegram.message(app.teacher(), "📘 Мои курсы");
+    telegram.message(app.teacher(), texts::BUTTON_COURSES);
     telegram
         .click_button(app.teacher(), callbacks::TERMS_EXIT)
         .await;

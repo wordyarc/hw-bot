@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use sqlx::{PgConnection, PgPool};
@@ -6,9 +9,11 @@ use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    Assignment, DomainError, ReviewDecision, Subject, Submission, SubmissionId, User,
+    Assignment, AssignmentId, DomainError, ReviewDecision, Subject, Submission, SubmissionId,
+    TeachingCourse, User,
 };
-use crate::pagination::PageRequest;
+use crate::pagination::{Page, PageRequest};
+use crate::read_models::SandboxSubmission;
 
 async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
 where
@@ -32,6 +37,15 @@ pub struct ReviewSubmission {
     pub actor: Actor,
     pub decision: ReviewDecision,
     pub score: Option<u16>,
+    pub comment: String,
+    pub reviewed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReviewSandbox {
+    pub actor: Actor,
+    pub decision: ReviewDecision,
+    pub cutoff: DateTime<Utc>,
     pub comment: String,
     pub reviewed_at: DateTime<Utc>,
 }
@@ -79,6 +93,84 @@ impl ReviewService {
         let reviewer = load_reviewer(&self.pool, actor).await?;
 
         Ok(db::submissions::count_pending_for_reviewer(&self.pool, &reviewer).await?)
+    }
+
+    pub async fn sandbox_size(
+        &self,
+        actor: Actor,
+        cutoff: Option<DateTime<Utc>>,
+    ) -> AppResult<u32> {
+        let reviewer = load_reviewer(&self.pool, actor).await?;
+
+        Ok(db::submissions::count_sandbox_for_reviewer(&self.pool, &reviewer, cutoff).await?)
+    }
+
+    pub async fn sandbox_page(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+    ) -> AppResult<Page<SandboxSubmission>> {
+        let reviewer = load_reviewer(&self.pool, actor).await?;
+
+        Ok(Page::from_rows(
+            db::submissions::sandbox_page_for_reviewer(&self.pool, &reviewer, page).await?,
+            page,
+        ))
+    }
+
+    pub async fn review_sandbox(&self, command: ReviewSandbox) -> AppResult<usize> {
+        let mut tx = self.pool.begin().await?;
+
+        let reviewer = load_reviewer(&mut *tx, command.actor).await?;
+        let submissions =
+            db::submissions::lock_sandbox_for_reviewer(&mut tx, &reviewer, command.cutoff).await?;
+        let reviewed = submissions.len();
+
+        let mut contexts = HashMap::new();
+        for mut submission in submissions {
+            let context = match contexts.entry(submission.assignment_id()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    entry.insert(load_review_context(&mut tx, submission.assignment_id()).await?)
+                }
+            };
+
+            match command.decision {
+                ReviewDecision::Accept => submission.accept(
+                    &context.assignment,
+                    &context.course,
+                    &reviewer,
+                    context.assignment.grading().max_score(),
+                    command.comment.as_str(),
+                    command.reviewed_at,
+                )?,
+                ReviewDecision::Reject => submission.reject(
+                    &context.assignment,
+                    &context.course,
+                    &reviewer,
+                    command.comment.as_str(),
+                    command.reviewed_at,
+                )?,
+            }
+
+            db::submissions::save_review_result(&mut *tx, &submission).await?;
+
+            let student = db::users::find_by_id(&mut *tx, submission.student_id())
+                .await?
+                .required("student")?;
+            db::notifications::enqueue_review_result(
+                &mut *tx,
+                &submission,
+                &context.assignment,
+                &context.subject,
+                &student,
+            )
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(reviewed)
     }
 
     pub async fn review_submission(&self, command: ReviewSubmission) -> AppResult<Submission> {
@@ -166,6 +258,34 @@ impl ReviewService {
         }
         Ok(item)
     }
+}
+
+struct ReviewContext {
+    assignment: Assignment,
+    course: TeachingCourse,
+    subject: Subject,
+}
+
+async fn load_review_context(
+    connection: &mut PgConnection,
+    assignment_id: AssignmentId,
+) -> AppResult<ReviewContext> {
+    let assignment = db::assignments::find_by_id(&mut *connection, assignment_id)
+        .await?
+        .required("assignment")?;
+    let course =
+        db::academic::find_teaching_course_by_id(&mut *connection, assignment.teaching_course_id())
+            .await?
+            .required("teaching course")?;
+    let subject = db::academic::find_subject_by_id(&mut *connection, assignment.subject_id())
+        .await?
+        .required("subject")?;
+
+    Ok(ReviewContext {
+        assignment,
+        course,
+        subject,
+    })
 }
 
 async fn load_queue_item(

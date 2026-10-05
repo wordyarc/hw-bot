@@ -42,7 +42,7 @@ async fn the_bottom_menu_opens_a_screen_even_in_the_middle_of_a_dialogue() {
             &format!("{}{}", callbacks::SUBMIT_PREFIX, app.assignment()),
             BOT_MESSAGE_ID,
         ),
-        message_update(3, app.student(), 2, "⏳ Очередь проверки"),
+        message_update(3, app.student(), 2, texts::BUTTON_QUEUE),
     ];
     let telegram = telegram_server(updates).await;
     let queue = Mock::given(method("POST"))

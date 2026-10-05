@@ -162,15 +162,22 @@ pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
                     }
                 }
                 Role::Teacher | Role::Admin => {
-                    let pending = services
-                        .reviews
-                        .queue_size(Actor::new(registered.user.id()))
-                        .await?;
-                    format!(
+                    let actor = Actor::new(registered.user.id());
+                    let pending = services.reviews.queue_size(actor).await?;
+                    let mut text = format!(
                         "{}\n\n{}",
                         texts::home_greeting(name),
                         texts::review_queue_line(pending)
-                    )
+                    );
+                    let sandbox = optional_stat(
+                        services.reviews.sandbox_size(actor, None).await,
+                        "teacher_sandbox",
+                    );
+                    if let Some(sandbox) = sandbox.filter(|&count| count > 0) {
+                        text.push('\n');
+                        text.push_str(&texts::home_sandbox_line(sandbox));
+                    }
+                    text
                 }
             };
             bot.send_message(chat_id, text)

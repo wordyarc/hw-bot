@@ -37,6 +37,16 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     show_item(screen, item).await
 }
 
+pub(super) async fn open(screen: Screen<'_>, submission_id: SubmissionId) -> HandlerResult {
+    let item = screen
+        .services()
+        .reviews
+        .find_for_review(screen.actor(), submission_id)
+        .await?;
+
+    show_item(screen, item).await
+}
+
 async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
     let bot = screen.bot();
     let chat_id = screen.chat_id();

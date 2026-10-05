@@ -20,14 +20,14 @@ pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
 };
-pub use review::{ReviewQueueItem, ReviewService, ReviewSubmission};
+pub use review::{ReviewQueueItem, ReviewSandbox, ReviewService, ReviewSubmission};
 pub use submissions::{SubmissionService, SubmitHomework};
 pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService};
 
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
-    AssignmentGrade, AssignmentStudentSummary, CourseStudent, QueuePlace, TeachingCourseSummary,
-    UserStatistics, VersionedAssignment,
+    AssignmentGrade, AssignmentStudentSummary, CourseStudent, QueuePlace, SandboxSubmission,
+    TeachingCourseSummary, UserStatistics, VersionedAssignment,
 };
 
 fn on_conflict<T>(result: DbResult<T>, conflict: AppError) -> AppResult<T> {

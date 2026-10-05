@@ -10,7 +10,7 @@ use hw_bot::api::{self, ACTOR_HEADER, AppState};
 use hw_bot::app::{Actor, ApplicationContainer, FilePolicy};
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, EducationLevel, StudentGroup, StudentGroupId, TeachingCourse, User,
+    Assignment, EducationLevel, StudentGroup, StudentGroupId, Subject, TeachingCourse, User,
 };
 use hw_bot::health::HealthState;
 use hw_bot::invites::{GroupInviteCodec, InviteSigningSecret};
@@ -517,6 +517,10 @@ impl TestApp {
     }
 
     pub async fn add_foreign_course(&self) -> CourseFixture {
+        self.add_foreign_course_on(&self.fixture.subject).await
+    }
+
+    pub async fn add_foreign_course_on(&self, subject: &Subject) -> CourseFixture {
         let group = student_group_in(
             &format!("TEST-GROUP-{}", self.next_telegram_id()),
             EducationLevel::Bachelor,
@@ -527,7 +531,7 @@ impl TestApp {
         let teacher = named_teacher(self.next_telegram_id(), "Foreign teacher");
         insert_user(&self.pool, &teacher).await;
 
-        let course = teaching_course(&self.fixture.subject, &group, &teacher);
+        let course = teaching_course(subject, &group, &teacher);
         insert_course(&self.pool, &course).await;
 
         CourseFixture {
@@ -535,6 +539,33 @@ impl TestApp {
             teacher,
             course,
         }
+    }
+
+    pub async fn add_sandbox_subject(&self) -> Subject {
+        let subject = subject("Sandbox");
+        db::academic::insert_subject(&self.pool, &subject)
+            .await
+            .expect("insert subject");
+        sqlx::query("update subjects set sandbox = true where id = $1")
+            .bind(subject.id().as_uuid())
+            .execute(&self.pool)
+            .await
+            .expect("mark the subject as a sandbox");
+
+        subject
+    }
+
+    pub async fn add_course_on(&self, subject: &Subject) -> TeachingCourse {
+        let course = teaching_course(subject, &self.fixture.group, &self.fixture.teacher);
+        insert_course(&self.pool, &course).await;
+
+        course
+    }
+
+    pub async fn add_sandbox_course(&self) -> TeachingCourse {
+        let subject = self.add_sandbox_subject().await;
+
+        self.add_course_on(&subject).await
     }
 
     pub async fn add_subject_course(&self, subject_name: &str) -> TeachingCourse {

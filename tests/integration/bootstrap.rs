@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use hw_bot::db;
 use hw_bot::test_support::bootstrap_seed as seed;
+use serde_json::json;
 use sqlx::PgPool;
 
 use crate::harness::{migrated_database, wait_for_blocked_connection};
@@ -96,6 +97,57 @@ async fn bootstrap_can_be_repeated_without_duplicates() -> anyhow::Result<()> {
     assert_eq!(count(&pool, "users").await?, 2);
     assert_eq!(count(&pool, "teaching_courses").await?, 1);
     assert_eq!(count(&pool, "teaching_course_teachers").await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn bootstrap_creates_a_sandbox_subject() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    let mut seed = seed();
+    seed["subjects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "Sandbox", "sandbox": true}));
+
+    db::run_bootstrap(&pool, &seed).await?;
+
+    assert!(is_sandbox(&pool, "Sandbox").await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_subject_without_the_sandbox_field_is_regular() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+
+    db::run_bootstrap(&pool, &seed()).await?;
+
+    assert!(!is_sandbox(&pool, "Backend Development").await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_conflicting_sandbox_flag_aborts_the_whole_bootstrap() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    db::run_bootstrap(&pool, &seed()).await?;
+    let mut changed = seed();
+    changed["subjects"][0]["sandbox"] = json!(true);
+    changed["student_groups"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "code": "m9241-09.04.03",
+            "education_level": "master",
+            "study_year": 1
+        }));
+
+    let error = db::run_bootstrap(&pool, &changed).await.unwrap_err();
+
+    assert!(
+        matches!(&error, db::BootstrapError::InvalidData(message) if message.contains("Backend Development")),
+        "{error}"
+    );
+    assert!(!is_sandbox(&pool, "Backend Development").await?);
+    assert_eq!(count(&pool, "student_groups").await?, 1);
     Ok(())
 }
 
@@ -204,6 +256,13 @@ async fn bootstrap_waits_for_its_advisory_lock() -> anyhow::Result<()> {
         .expect("bootstrap continues after its advisory lock is released")??;
     assert_eq!(count(&pool, "teaching_courses").await?, 1);
     Ok(())
+}
+
+async fn is_sandbox(pool: &PgPool, subject: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("select sandbox from subjects where name = $1")
+        .bind(subject)
+        .fetch_one(pool)
+        .await
 }
 
 async fn count(pool: &PgPool, table: &str) -> Result<i64, sqlx::Error> {

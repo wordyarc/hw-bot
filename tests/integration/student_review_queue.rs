@@ -132,6 +132,55 @@ async fn the_queue_spans_every_course_of_the_same_teachers() {
 }
 
 #[tokio::test]
+async fn earlier_sandbox_submissions_do_not_delay_a_real_one() {
+    let app = TestApp::start().await;
+    let sandbox = app.add_sandbox_course().await;
+    let trial = app
+        .add_published_assignment(&sandbox, &app.fixture.teacher, "Trial")
+        .await;
+    let trainee = app.add_student("Trainee").await;
+    submit(&app, &trial, &trainee, 2).await;
+    submit(&app, &app.fixture.assignment, &app.fixture.student, 1).await;
+
+    let places = app
+        .application
+        .submissions
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .await
+        .expect("the queue is readable")
+        .items;
+
+    assert_eq!(places[0].position, 1);
+    assert_eq!(places[0].total, 1);
+}
+
+#[tokio::test]
+async fn a_sandbox_submission_is_placed_among_sandbox_submissions_only() {
+    let app = TestApp::start().await;
+    let sandbox = app.add_sandbox_course().await;
+    let trial = app
+        .add_published_assignment(&sandbox, &app.fixture.teacher, "Trial")
+        .await;
+    let trainee = app.add_student("Trainee").await;
+    let ahead = app.add_student("Ahead").await;
+    submit(&app, &trial, &trainee, 3).await;
+    submit(&app, &app.fixture.assignment, &ahead, 2).await;
+    submit(&app, &trial, &app.fixture.student, 1).await;
+
+    let places = app
+        .application
+        .submissions
+        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .await
+        .expect("the queue is readable")
+        .items;
+
+    assert_eq!(places[0].assignment_id, trial.id());
+    assert_eq!(places[0].position, 2, "only the earlier trial is ahead");
+    assert_eq!(places[0].total, 2);
+}
+
+#[tokio::test]
 async fn a_course_without_a_reviewer_reports_no_position() {
     let app = TestApp::start().await;
     sqlx::query("delete from teaching_course_teachers where teaching_course_id = $1")

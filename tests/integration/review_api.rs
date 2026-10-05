@@ -89,6 +89,25 @@ async fn queue_item_carries_assignment_and_student_context() {
 }
 
 #[tokio::test]
+async fn an_earlier_sandbox_submission_stays_out_of_the_queue() {
+    let app = TestApp::start().await;
+    let sandbox = app.add_sandbox_course().await;
+    let trial = app
+        .add_published_assignment(&sandbox, &app.fixture.teacher, "Trial")
+        .await;
+    app.submit(trial.id().as_uuid(), app.student(), "pull/trial")
+        .await
+        .created();
+    let regular = app.queued_submission(app.student(), "pull/1").await;
+
+    let body = app.take_next(app.teacher()).await.ok();
+    assert_eq!(submission_id(&body["submission"]), regular);
+
+    let body = app.review_queue_size(app.teacher()).await.ok();
+    assert_eq!(body["pending"], json!(1));
+}
+
+#[tokio::test]
 async fn student_cannot_take_from_the_queue() {
     let app = TestApp::start().await;
 

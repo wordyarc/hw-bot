@@ -18,6 +18,7 @@ mod notification_worker;
 mod pagination;
 mod resilience;
 mod review_api;
+mod sandbox_review;
 mod student_contacts;
 mod student_read_api;
 mod student_review_queue;
