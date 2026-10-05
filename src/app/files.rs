@@ -34,6 +34,7 @@ pub struct AddAssignmentFile {
     pub presentation: FilePresentation,
     pub filename: String,
     pub mime_type: Option<String>,
+    pub telegram_file_id: Option<String>,
     pub content: Vec<u8>,
 }
 
@@ -43,6 +44,19 @@ pub struct DeleteAssignmentFile {
     pub file_id: StoredFileId,
     pub actor: Actor,
     pub expected_revision: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpenedFile(StoredFile);
+
+impl OpenedFile {
+    pub fn metadata(&self) -> &StoredFileMetadata {
+        &self.0.metadata
+    }
+
+    pub fn telegram_file_id(&self) -> Option<&str> {
+        self.0.telegram_file_id.as_deref()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -131,7 +145,13 @@ impl FileService {
         }
         let position = first_free_position(&files);
         let metadata = metadata.with_position(position);
-        db::files::insert_assignment_file(&mut *tx, &metadata, &command.content).await?;
+        db::files::insert_assignment_file(
+            &mut *tx,
+            &metadata,
+            &command.content,
+            command.telegram_file_id.as_deref(),
+        )
+        .await?;
         tx.commit().await?;
 
         let mut files = files;
@@ -177,7 +197,7 @@ impl FileService {
         actor: Actor,
         assignment_id: AssignmentId,
         file_id: StoredFileId,
-    ) -> AppResult<StoredFile> {
+    ) -> AppResult<OpenedFile> {
         load_managed_versioned_assignment(&self.pool, actor, assignment_id, "open assignment file")
             .await?;
         self.open_assignment_file(assignment_id, file_id).await
@@ -188,19 +208,36 @@ impl FileService {
         actor: Actor,
         assignment_id: AssignmentId,
         file_id: StoredFileId,
-    ) -> AppResult<StoredFile> {
+    ) -> AppResult<OpenedFile> {
         load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
         self.open_assignment_file(assignment_id, file_id).await
+    }
+
+    pub async fn read_content(&self, file: &OpenedFile) -> AppResult<Vec<u8>> {
+        db::files::find_content(&self.pool, file.metadata().id())
+            .await?
+            .required("file")
+    }
+
+    pub async fn remember_telegram_file_id(
+        &self,
+        file: &OpenedFile,
+        telegram_file_id: &str,
+    ) -> AppResult<()> {
+        db::files::remember_telegram_file_id(&self.pool, file.metadata().id(), telegram_file_id)
+            .await?;
+        Ok(())
     }
 
     async fn open_assignment_file(
         &self,
         assignment_id: AssignmentId,
         file_id: StoredFileId,
-    ) -> AppResult<StoredFile> {
+    ) -> AppResult<OpenedFile> {
         db::files::find_assignment_file(&self.pool, assignment_id, file_id)
             .await?
             .required("file")
+            .map(OpenedFile)
     }
 }
 

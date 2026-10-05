@@ -48,6 +48,7 @@ pub async fn insert_assignment_file<'e, E>(
     executor: E,
     metadata: &StoredFileMetadata,
     content: &[u8],
+    telegram_file_id: Option<&str>,
 ) -> DbResult<()>
 where
     E: PgExecutor<'e>,
@@ -63,9 +64,9 @@ where
         r#"
         insert into stored_files (
             id, assignment_id, position, presentation, filename, mime_type, size_bytes,
-            sha256, content, created_at
+            sha256, content, telegram_file_id, created_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         "#,
         metadata.id().as_uuid(),
         assignment_id.as_uuid(),
@@ -76,6 +77,7 @@ where
         checked_num_cast::<_, i64>(SIZE_BYTES, metadata.size_bytes())?,
         sha256.as_slice(),
         content,
+        telegram_file_id,
         metadata.created_at(),
     )
     .execute(executor)
@@ -112,7 +114,7 @@ where
     E: PgExecutor<'e>,
 {
     let row = select_stored_files!(
-        ", content ",
+        ", telegram_file_id ",
         " from stored_files where assignment_id = $1 and id = $2",
         assignment_id.as_uuid(),
         file_id.as_uuid(),
@@ -123,10 +125,41 @@ where
     row.map(|row| {
         Ok(StoredFile {
             metadata: StoredFileMetadata::try_from(stored_file_row!(row))?,
-            content: row.content,
+            telegram_file_id: row.telegram_file_id,
         })
     })
     .transpose()
+}
+
+pub async fn find_content<'e, E>(executor: E, file_id: StoredFileId) -> DbResult<Option<Vec<u8>>>
+where
+    E: PgExecutor<'e>,
+{
+    Ok(sqlx::query_scalar!(
+        "select content from stored_files where id = $1",
+        file_id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
+pub async fn remember_telegram_file_id<'e, E>(
+    executor: E,
+    file_id: StoredFileId,
+    telegram_file_id: &str,
+) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        "update stored_files set telegram_file_id = $2 where id = $1",
+        file_id.as_uuid(),
+        telegram_file_id,
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(())
 }
 
 pub async fn delete_assignment_file<'e, E>(

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, submission_id, position, presentation, filename, mime_type,\n                size_bytes, sha256, created_at\n            , content  from stored_files where assignment_id = $1 and id = $2",
+  "query": "\n            select\n                id, assignment_id, submission_id, position, presentation, filename, mime_type,\n                size_bytes, sha256, created_at\n            , telegram_file_id  from stored_files where assignment_id = $1 and id = $2",
   "describe": {
     "columns": [
       {
@@ -115,12 +115,12 @@
       },
       {
         "ordinal": 10,
-        "name": "content",
-        "type_info": "Bytea",
+        "name": "telegram_file_id",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "stored_files",
-            "name": "content"
+            "name": "telegram_file_id"
           }
         }
       }
@@ -142,8 +142,8 @@
       false,
       false,
       false,
-      false
+      true
     ]
   },
-  "hash": "47f47c0e94d9db620c7dd18e53e3144160e43579d533e1ad8a7a9414ae3301ce"
+  "hash": "0f1d572b999087a5ea98cf2014556f62fdfca61f674fc0478d233213c8c6082e"
 }

@@ -36,6 +36,7 @@ async fn add(
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: content.to_vec(),
         })
         .await
@@ -70,7 +71,10 @@ async fn stored_file_keeps_exact_fixture_bytes_and_computed_metadata() {
         .await
         .unwrap();
 
-    assert_eq!(opened.content, DOCUMENT);
+    assert_eq!(
+        application.files.read_content(&opened).await.unwrap(),
+        DOCUMENT
+    );
     assert_eq!(metadata.size_bytes(), DOCUMENT.len() as u64);
     assert_eq!(
         metadata.sha256(),
@@ -108,7 +112,10 @@ async fn student_opens_a_published_assignment_file() {
         .await
         .unwrap();
 
-    assert_eq!(opened.content, DOCUMENT);
+    assert_eq!(
+        application.files.read_content(&opened).await.unwrap(),
+        DOCUMENT
+    );
 }
 
 #[tokio::test]
@@ -138,7 +145,10 @@ async fn student_keeps_access_to_an_archived_assignment_file() {
         .await
         .unwrap();
 
-    assert_eq!(opened.content, DOCUMENT);
+    assert_eq!(
+        application.files.read_content(&opened).await.unwrap(),
+        DOCUMENT
+    );
 }
 
 #[tokio::test]
@@ -160,6 +170,7 @@ async fn a_draft_assignment_file_does_not_exist_for_a_student() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT.to_vec(),
         })
         .await
@@ -193,6 +204,7 @@ async fn a_never_published_archived_file_does_not_exist_for_a_student() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT.to_vec(),
         })
         .await
@@ -259,6 +271,7 @@ async fn file_size_limit_is_application_configuration() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT.to_vec(),
         })
         .await
@@ -290,6 +303,7 @@ async fn assignment_file_count_limit_is_application_configuration() {
             presentation: FilePresentation::Image,
             filename: "pixel.ppm".to_owned(),
             mime_type: Some("image/x-portable-pixmap".to_owned()),
+            telegram_file_id: None,
             content: IMAGE.to_vec(),
         })
         .await
@@ -311,6 +325,7 @@ async fn concurrent_additions_with_one_revision_have_one_winner() {
         presentation: FilePresentation::Document,
         filename: filename.to_owned(),
         mime_type: None,
+        telegram_file_id: None,
         content: DOCUMENT.to_vec(),
     };
 
@@ -377,6 +392,7 @@ async fn unrelated_teacher_cannot_manage_assignment_files() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: None,
+            telegram_file_id: None,
             content: DOCUMENT.to_vec(),
         })
         .await
@@ -456,6 +472,7 @@ async fn assignment_change_invalidates_an_old_file_card() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT.to_vec(),
         })
         .await

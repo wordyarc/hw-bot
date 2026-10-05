@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select content from stored_files where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "stored_files",
+            "name": "content"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f290e7ba9a619f08c6f492172a29f4fa4535b6c0d50092bf2d06c82bf7eaba63"
+}

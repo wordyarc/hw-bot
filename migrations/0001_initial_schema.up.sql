@@ -156,6 +156,7 @@ create table stored_files (
     size_bytes bigint not null check (size_bytes >= 0),
     sha256 bytea not null check (octet_length(sha256) = 32),
     content bytea not null,
+    telegram_file_id text check (telegram_file_id is null or btrim(telegram_file_id) <> ''),
     created_at timestamptz not null default now(),
     check (num_nonnulls(assignment_id, submission_id) = 1),
     check (octet_length(content)::bigint = size_bytes)

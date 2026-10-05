@@ -408,6 +408,7 @@ async fn add_assignment_document(app: &TestApp) {
             presentation: FilePresentation::Document,
             filename: "assignment.txt".into(),
             mime_type: Some("text/plain".into()),
+            telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
         })
         .await

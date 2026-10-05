@@ -75,6 +75,7 @@ pub(super) async fn submit_file(
             presentation: incoming.presentation,
             filename: incoming.filename,
             mime_type: incoming.mime_type,
+            telegram_file_id: Some(incoming.file_id.0),
             content,
         })
         .await;
@@ -128,15 +129,14 @@ pub(super) async fn open(
     let Some(file_id) = files.file_ids.get(index).copied() else {
         return screen.stale().await;
     };
-    let transfer = screen.transfers().acquire().await?;
-    transfer
-        .send(screen.chat_id(), || {
-            screen.services().files.open_assignment_file_for_teacher(
-                screen.actor(),
-                files.assignment_id,
-                file_id,
-            )
-        })
+    let file = screen
+        .services()
+        .files
+        .open_assignment_file_for_teacher(screen.actor(), files.assignment_id, file_id)
+        .await?;
+    screen
+        .transfers()
+        .send(screen.chat_id(), &screen.services().files, &file)
         .await?;
     Ok(())
 }

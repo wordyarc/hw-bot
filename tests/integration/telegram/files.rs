@@ -81,16 +81,12 @@ async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
     assert_eq!(content, DOCUMENT_FIXTURE);
     assert_eq!(size_bytes, DOCUMENT_FIXTURE.len() as i64);
     assert_eq!(presentation, "document");
-    let upload = requests
+    let resend = requests
         .iter()
         .find(|request| request.url.path() == "/bottest-token/SendDocument")
         .expect("SendDocument request");
-    assert!(
-        upload
-            .body
-            .windows(DOCUMENT_FIXTURE.len())
-            .any(|window| window == DOCUMENT_FIXTURE)
-    );
+    assert!(contains(&resend.body, b"fixture-document"));
+    assert!(!contains(&resend.body, DOCUMENT_FIXTURE));
 }
 
 #[tokio::test]
@@ -338,6 +334,7 @@ async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
         })
         .await
@@ -386,6 +383,7 @@ async fn stale_file_callback_does_not_delete_the_attachment() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
         })
         .await
@@ -463,6 +461,7 @@ async fn student_receives_assignment_attachments_after_the_text() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
         })
         .await
@@ -476,6 +475,7 @@ async fn student_receives_assignment_attachments_after_the_text() {
             presentation: FilePresentation::Image,
             filename: "pixel.ppm".to_owned(),
             mime_type: Some("image/x-portable-pixmap".to_owned()),
+            telegram_file_id: None,
             content: IMAGE_FIXTURE.to_vec(),
         })
         .await
@@ -548,4 +548,165 @@ async fn student_receives_assignment_attachments_after_the_text() {
             .windows(IMAGE_FIXTURE.len())
             .any(|window| window == IMAGE_FIXTURE)
     );
+}
+
+#[tokio::test]
+async fn an_uploaded_attachment_is_resent_by_its_telegram_file_id() {
+    let app = TestApp::start().await;
+    add_document(&app, None).await;
+    let open = cb(callbacks::ASSIGNMENT_PREFIX, app.assignment());
+    let telegram = telegram_server(vec![
+        callback_update(1, app.student(), &open, BOT_MESSAGE_ID),
+        callback_update(2, app.student(), &open, BOT_MESSAGE_ID),
+    ])
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(telegram_document_response())
+        .expect(2)
+        .mount(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_request_count(&telegram, "/bottest-token/SendDocument", 2).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let documents = sent_documents(&telegram).await;
+    assert!(contains(&documents[0], DOCUMENT_FIXTURE));
+    assert!(contains(&documents[1], b"sent-document"));
+    assert!(!contains(&documents[1], DOCUMENT_FIXTURE));
+}
+
+#[tokio::test]
+async fn a_rejected_telegram_file_id_falls_back_to_the_stored_bytes() {
+    let app = TestApp::start().await;
+    add_document(&app, Some("foreign-file")).await;
+    let telegram = telegram_server(vec![callback_update(
+        1,
+        app.student(),
+        &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        BOT_MESSAGE_ID,
+    )])
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .and(|request: &wiremock::Request| contains(&request.body, b"foreign-file"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "ok": false,
+            "error_code": 400,
+            "description": "Bad Request: wrong file identifier/HTTP URL specified"
+        })))
+        .expect(1)
+        .with_priority(1)
+        .mount(&telegram)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(telegram_document_response())
+        .expect(1)
+        .mount(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    let replaced = wait_until(Duration::from_secs(5), || async {
+        stored_telegram_file_id(&app).await.as_deref() == Some("sent-document")
+    })
+    .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(replaced, "the uploaded copy replaced the rejected file id");
+    let documents = sent_documents(&telegram).await;
+    assert!(contains(&documents[1], DOCUMENT_FIXTURE));
+}
+
+#[tokio::test]
+async fn a_resend_is_not_repeated_as_an_upload_unless_the_file_id_was_rejected() {
+    let app = TestApp::start().await;
+    add_document(&app, Some("limited-file")).await;
+    let telegram = telegram_server(vec![callback_update(
+        1,
+        app.student(),
+        &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        BOT_MESSAGE_ID,
+    )])
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "ok": false,
+            "error_code": 429,
+            "description": "Too Many Requests: retry after 5",
+            "parameters": {"retry_after": 5}
+        })))
+        .mount(&telegram)
+        .await;
+    let failed = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_partial_json(json!({
+            "chat_id": app.student(),
+            "text": texts::ASSIGNMENT_FILES_SEND_FAILED
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    tokio::time::timeout(Duration::from_secs(5), failed.wait_until_satisfied())
+        .await
+        .expect("the failed delivery is reported");
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(sent_documents(&telegram).await.len(), 1);
+}
+
+async fn add_document(app: &TestApp, telegram_file_id: Option<&str>) {
+    use hw_bot::app::AddAssignmentFile;
+    use hw_bot::domain::FilePresentation;
+
+    let assignment = app.fixture.assignment.id();
+    let card = app
+        .application
+        .files
+        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
+        .await
+        .unwrap();
+    app.application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: app.teacher_actor(),
+            expected_revision: card.revision,
+            presentation: FilePresentation::Document,
+            filename: "assignment-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: telegram_file_id.map(str::to_owned),
+            content: DOCUMENT_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+}
+
+async fn stored_telegram_file_id(app: &TestApp) -> Option<String> {
+    sqlx::query_scalar("select telegram_file_id from stored_files where assignment_id = $1")
+        .bind(app.assignment())
+        .fetch_one(&app.pool)
+        .await
+        .unwrap()
+}
+
+async fn sent_documents(telegram: &wiremock::MockServer) -> Vec<Vec<u8>> {
+    telegram
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/bottest-token/SendDocument")
+        .map(|request| request.body)
+        .collect()
+}
+
+fn contains(body: &[u8], needle: &[u8]) -> bool {
+    body.windows(needle.len()).any(|window| window == needle)
 }

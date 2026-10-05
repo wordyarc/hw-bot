@@ -242,6 +242,7 @@ async fn the_card_carries_assignment_file_metadata_without_content() {
             presentation: FilePresentation::Document,
             filename: "assignment-note.txt".to_owned(),
             mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
             content: b"read the notes".to_vec(),
         })
         .await

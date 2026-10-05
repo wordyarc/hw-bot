@@ -285,15 +285,14 @@ async fn send_assignment_files(
         .send_message(screen.chat_id(), texts::FILES_ATTACHED_HEADER)
         .await?;
     for metadata in files {
-        let transfer = screen.transfers().acquire().await?;
-        transfer
-            .send(screen.chat_id(), || {
-                screen.services().files.open_assignment_file_for_student(
-                    screen.actor(),
-                    assignment_id,
-                    metadata.id(),
-                )
-            })
+        let file = screen
+            .services()
+            .files
+            .open_assignment_file_for_student(screen.actor(), assignment_id, metadata.id())
+            .await?;
+        screen
+            .transfers()
+            .send(screen.chat_id(), &screen.services().files, &file)
             .await?;
     }
     Ok(())

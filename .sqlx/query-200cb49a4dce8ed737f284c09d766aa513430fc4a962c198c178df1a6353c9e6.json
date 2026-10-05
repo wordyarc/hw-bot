@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update stored_files set telegram_file_id = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "200cb49a4dce8ed737f284c09d766aa513430fc4a962c198c178df1a6353c9e6"
+}

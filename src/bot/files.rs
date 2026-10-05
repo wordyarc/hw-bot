@@ -2,17 +2,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use teloxide::RequestError;
 use teloxide::net::Download;
 use teloxide::prelude::{Bot, ChatId, Requester};
-use teloxide::types::{FileId, InputFile, Message};
+use teloxide::types::{FileId, InputFile, Message, PhotoSize};
+use teloxide::{ApiError, RequestError};
 use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::errors::BotError;
-use crate::app::{AppError, AppResult, StoredFile};
-use crate::domain::{FILE_NAME_MAX_LEN, FilePresentation};
+use crate::app::{AppError, AppResult, FileService, OpenedFile};
+use crate::domain::{FILE_NAME_MAX_LEN, FilePresentation, StoredFileMetadata};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum TransferError {
@@ -52,7 +52,7 @@ pub(super) struct FileTransfers {
     timeout: Duration,
 }
 
-/// Слот передачи. Скачать или отправить файл можно только через него, поэтому обойти
+/// Слот передачи. Скачать файл или загрузить его байты можно только через него, поэтому обойти
 /// предел параллельных передач и общий deadline одной передачи нельзя.
 pub(super) struct FileTransfer<'a> {
     bot: &'a Bot,
@@ -78,7 +78,10 @@ impl FileTransfers {
     }
 
     pub async fn acquire(&self) -> Result<FileTransfer<'_>, TransferError> {
-        let deadline = Instant::now() + self.timeout;
+        self.acquire_until(Instant::now() + self.timeout).await
+    }
+
+    async fn acquire_until(&self, deadline: Instant) -> Result<FileTransfer<'_>, TransferError> {
         let permit = tokio::time::timeout_at(deadline, self.semaphore.acquire())
             .await
             .map_err(|_| TransferError::Deadline)?
@@ -90,6 +93,41 @@ impl FileTransfers {
             deadline,
         })
     }
+
+    pub async fn send(
+        &self,
+        chat_id: ChatId,
+        files: &FileService,
+        file: &OpenedFile,
+    ) -> Result<(), TransferError> {
+        let deadline = Instant::now() + self.timeout;
+        let metadata = file.metadata();
+        if let Some(telegram_file_id) = file.telegram_file_id() {
+            let input = InputFile::file_id(FileId(telegram_file_id.to_owned()));
+            let resent = send_file(&self.bot, chat_id, metadata.presentation(), input);
+            match within(deadline, resent).await {
+                Ok(_) => return Ok(()),
+                Err(TransferError::Telegram(error)) if is_rejected_file_id(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let sent = self
+            .acquire_until(deadline)
+            .await?
+            .upload(chat_id, metadata, || files.read_content(file))
+            .await?;
+        if let Some(telegram_file_id) = sent_file_id(&sent)
+            && let Err(error) = files
+                .remember_telegram_file_id(file, &telegram_file_id)
+                .await
+        {
+            tracing::warn!(
+                code = error.code().as_str(),
+                "Telegram file id was not saved"
+            );
+        }
+        Ok(())
+    }
 }
 
 impl FileTransfer<'_> {
@@ -98,7 +136,7 @@ impl FileTransfer<'_> {
         file_id: &FileId,
         max_size: usize,
     ) -> Result<Vec<u8>, TransferError> {
-        self.within(async {
+        within(self.deadline, async {
             let file = self.bot.get_file(file_id.clone()).await?;
             let mut stream = self.bot.download_file_stream(&file.path);
             let mut content = Vec::with_capacity((file.size as usize).min(max_size));
@@ -116,39 +154,72 @@ impl FileTransfer<'_> {
 
     /// Чтение файла из БД входит в тот же deadline, что и отправка, поэтому файл открывает
     /// переданное замыкание.
-    pub async fn send<F>(
+    async fn upload<F>(
         &self,
         chat_id: ChatId,
-        open: impl FnOnce() -> F,
-    ) -> Result<(), TransferError>
+        metadata: &StoredFileMetadata,
+        read: impl FnOnce() -> F,
+    ) -> Result<Message, TransferError>
     where
-        F: Future<Output = AppResult<StoredFile>>,
+        F: Future<Output = AppResult<Vec<u8>>>,
     {
-        self.within(async {
-            let file = open().await?;
-            let input = InputFile::memory(file.content)
-                .file_name(file.metadata.filename().as_str().to_owned());
-            match file.metadata.presentation() {
-                FilePresentation::Document => {
-                    self.bot.send_document(chat_id, input).await?;
-                }
-                FilePresentation::Image => {
-                    self.bot.send_photo(chat_id, input).await?;
-                }
-            }
-            Ok(())
+        within(self.deadline, async {
+            let input =
+                InputFile::memory(read().await?).file_name(metadata.filename().as_str().to_owned());
+            send_file(self.bot, chat_id, metadata.presentation(), input).await
         })
         .await
     }
+}
 
-    async fn within<T>(
-        &self,
-        future: impl Future<Output = Result<T, TransferError>>,
-    ) -> Result<T, TransferError> {
-        tokio::time::timeout_at(self.deadline, future)
-            .await
-            .map_err(|_| TransferError::Deadline)?
+async fn within<T>(
+    deadline: Instant,
+    future: impl Future<Output = Result<T, TransferError>>,
+) -> Result<T, TransferError> {
+    tokio::time::timeout_at(deadline, future)
+        .await
+        .map_err(|_| TransferError::Deadline)?
+}
+
+async fn send_file(
+    bot: &Bot,
+    chat_id: ChatId,
+    presentation: FilePresentation,
+    input: InputFile,
+) -> Result<Message, TransferError> {
+    Ok(match presentation {
+        FilePresentation::Document => bot.send_document(chat_id, input).await?,
+        FilePresentation::Image => bot.send_photo(chat_id, input).await?,
+    })
+}
+
+fn is_rejected_file_id(error: &RequestError) -> bool {
+    match error {
+        RequestError::Api(
+            ApiError::WrongFileId | ApiError::WrongFileIdOrUrl | ApiError::FileIdInvalid,
+        ) => true,
+        RequestError::Api(ApiError::Unknown(description)) => {
+            description.starts_with("Bad Request: wrong remote file identifier specified")
+        }
+        _ => false,
     }
+}
+
+fn sent_file_id(message: &Message) -> Option<String> {
+    let file = match message.document() {
+        Some(document) => &document.file,
+        None => &largest_photo(message.photo()?)?.file,
+    };
+    Some(file.id.0.clone())
+}
+
+fn largest_photo(photos: &[PhotoSize]) -> Option<&PhotoSize> {
+    photos.iter().max_by_key(|photo| {
+        (
+            photo.file.size,
+            u64::from(photo.width) * u64::from(photo.height),
+        )
+    })
 }
 
 pub(super) fn incoming_file(message: &Message) -> Option<IncomingFile> {
@@ -167,12 +238,7 @@ pub(super) fn incoming_file(message: &Message) -> Option<IncomingFile> {
             mime_type: document.mime_type.as_ref().map(ToString::to_string),
         });
     }
-    let photo = message.photo()?.iter().max_by_key(|photo| {
-        (
-            photo.file.size,
-            u64::from(photo.width) * u64::from(photo.height),
-        )
-    })?;
+    let photo = largest_photo(message.photo()?)?;
     Some(IncomingFile {
         file_id: photo.file.id.clone(),
         declared_size: declared_file_size(photo.file.size),
@@ -212,6 +278,28 @@ mod tests {
 
         assert!(!safe.contains(['/', '\\', '\0']));
         assert_eq!(safe.chars().count(), FILE_NAME_MAX_LEN);
+    }
+
+    #[test]
+    fn only_a_definite_rejection_of_a_file_id_falls_back_to_the_upload() {
+        for rejected in [
+            ApiError::WrongFileIdOrUrl,
+            ApiError::WrongFileId,
+            ApiError::FileIdInvalid,
+            ApiError::Unknown(
+                "Bad Request: wrong remote file identifier specified: Wrong string length".into(),
+            ),
+        ] {
+            assert!(is_rejected_file_id(&RequestError::Api(rejected)));
+        }
+        for unknown in [
+            RequestError::RetryAfter(teloxide::types::Seconds::from_seconds(5)),
+            RequestError::Io(Arc::new(std::io::Error::from(std::io::ErrorKind::TimedOut))),
+            RequestError::Api(ApiError::BotBlocked),
+            RequestError::Api(ApiError::InvalidToken),
+        ] {
+            assert!(!is_rejected_file_id(&unknown), "{unknown:?}");
+        }
     }
 
     #[tokio::test(start_paused = true)]

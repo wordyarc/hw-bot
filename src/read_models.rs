@@ -1,5 +1,3 @@
-use std::fmt;
-
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
@@ -50,18 +48,10 @@ pub struct VersionedAssignment {
     pub revision: i64,
 }
 
+#[derive(Clone, Debug)]
 pub struct StoredFile {
     pub metadata: StoredFileMetadata,
-    pub content: Vec<u8>,
-}
-
-impl fmt::Debug for StoredFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StoredFile")
-            .field("metadata", &self.metadata)
-            .field("content_len", &self.content.len())
-            .finish()
-    }
+    pub telegram_file_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
