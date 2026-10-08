@@ -1,8 +1,9 @@
 use chrono::{DateTime, Datelike, Duration, Utc};
 
 use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, AssignmentId, DomainError, DomainResult, Grade, NonEmptyString,
-    StudentGroupId, SubjectId, TeachingCourse, TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
+    ASSIGNMENT_TITLE_MAX_LEN, Acceptance, AssignmentId, CourseMakeup, DomainError, DomainResult,
+    Grade, MakeupTerms, NonEmptyString, StudentGroupId, SubjectId, TeachingCourse,
+    TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -111,6 +112,7 @@ pub struct Assignment {
     max_attempts: u16,
     grading: Grading,
     late_policy: Option<LatePolicy>,
+    makeup: Option<MakeupTerms>,
     status: AssignmentStatus,
     created_by: UserId,
     created_at: DateTime<Utc>,
@@ -292,11 +294,20 @@ pub(crate) struct AssignmentParts {
     pub max_attempts: u16,
     pub grading: Grading,
     pub late_policy: Option<LatePolicy>,
+    pub makeup: Option<MakeupTerms>,
     pub status: AssignmentStatus,
     pub created_by: UserId,
     pub created_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
     pub published_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Copy)]
+struct ProposedTerms {
+    grading: Grading,
+    late_policy: Option<LatePolicy>,
+    deadline_at: DateTime<Utc>,
+    makeup: Option<MakeupTerms>,
 }
 
 #[derive(Clone, Debug)]
@@ -306,6 +317,7 @@ pub struct NewAssignment {
     pub max_attempts: u16,
     pub grading: Grading,
     pub late_policy: Option<LatePolicy>,
+    pub makeup: Option<MakeupTerms>,
     pub created_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
 }
@@ -326,6 +338,9 @@ impl Assignment {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
         Self::closing_for(parts.deadline_at, parts.late_policy)?;
+        if let Some(terms) = parts.makeup {
+            terms.ensure_fits(parts.grading)?;
+        }
 
         // У архивного задания может не быть published_at, если его убрали туда из черновика.
         match parts.status {
@@ -352,6 +367,7 @@ impl Assignment {
             max_attempts: parts.max_attempts,
             grading: parts.grading,
             late_policy: parts.late_policy,
+            makeup: parts.makeup,
             status: parts.status,
             created_by: parts.created_by,
             created_at: parts.created_at,
@@ -386,6 +402,7 @@ impl Assignment {
             max_attempts: input.max_attempts,
             grading: input.grading,
             late_policy: input.late_policy,
+            makeup: input.makeup,
             status: AssignmentStatus::Draft,
             created_by: created_by.id(),
             created_at: input.created_at,
@@ -436,7 +453,13 @@ impl Assignment {
         actor: &User,
         new_deadline_at: DateTime<Utc>,
     ) -> DomainResult<()> {
-        self.change_terms(teaching_course, actor, new_deadline_at, self.late_policy)
+        self.change_terms(
+            teaching_course,
+            actor,
+            new_deadline_at,
+            self.late_policy,
+            self.makeup,
+        )
     }
 
     pub fn change_terms(
@@ -445,17 +468,22 @@ impl Assignment {
         actor: &User,
         new_deadline_at: DateTime<Utc>,
         late_policy: Option<LatePolicy>,
+        makeup: Option<MakeupTerms>,
     ) -> DomainResult<()> {
         self.ensure_terms_change(
             teaching_course,
             actor,
             "change assignment deadline",
-            self.grading,
-            late_policy,
-            new_deadline_at,
+            ProposedTerms {
+                grading: self.grading,
+                late_policy,
+                deadline_at: new_deadline_at,
+                makeup,
+            },
         )?;
         self.late_policy = late_policy;
         self.deadline_at = new_deadline_at;
+        self.makeup = makeup;
 
         Ok(())
     }
@@ -471,12 +499,32 @@ impl Assignment {
             teaching_course,
             actor,
             "change assignment grading",
-            grading,
-            late_policy,
-            self.deadline_at,
+            ProposedTerms {
+                grading,
+                late_policy,
+                deadline_at: self.deadline_at,
+                makeup: self.makeup,
+            },
         )?;
         self.grading = grading;
         self.late_policy = late_policy;
+
+        Ok(())
+    }
+
+    pub fn decide_makeup(
+        &mut self,
+        teaching_course: &TeachingCourse,
+        actor: &User,
+        terms: MakeupTerms,
+    ) -> DomainResult<()> {
+        self.ensure_managed_by(teaching_course, actor, "decide assignment makeup")?;
+
+        if self.status == AssignmentStatus::Archived {
+            return Err(DomainError::AssignmentIsArchived);
+        }
+        terms.ensure_fits(self.grading)?;
+        self.makeup = Some(terms);
 
         Ok(())
     }
@@ -486,9 +534,7 @@ impl Assignment {
         teaching_course: &TeachingCourse,
         actor: &User,
         action: &'static str,
-        grading: Grading,
-        late_policy: Option<LatePolicy>,
-        deadline_at: DateTime<Utc>,
+        terms: ProposedTerms,
     ) -> DomainResult<()> {
         self.ensure_managed_by(teaching_course, actor, action)?;
 
@@ -496,17 +542,20 @@ impl Assignment {
             return Err(DomainError::AssignmentIsArchived);
         }
 
-        if deadline_at <= self.created_at {
+        if terms.deadline_at <= self.created_at {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
 
-        if late_policy.is_some() && !grading.is_scored() {
+        if terms.late_policy.is_some() && !terms.grading.is_scored() {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
 
-        Self::closing_for(deadline_at, late_policy)?;
-        if let Some(policy) = late_policy {
-            policy.validate_horizon(deadline_at)?;
+        Self::closing_for(terms.deadline_at, terms.late_policy)?;
+        if let Some(policy) = terms.late_policy {
+            policy.validate_horizon(terms.deadline_at)?;
+        }
+        if let Some(makeup) = terms.makeup {
+            makeup.ensure_fits(terms.grading)?;
         }
 
         Ok(())
@@ -571,6 +620,10 @@ impl Assignment {
         self.late_policy
     }
 
+    pub fn makeup(&self) -> Option<MakeupTerms> {
+        self.makeup
+    }
+
     pub fn closes_at(&self) -> DateTime<Utc> {
         Self::closing_for(self.deadline_at, self.late_policy).expect("validated assignment horizon")
     }
@@ -617,6 +670,30 @@ impl Assignment {
                 submitted_at: at,
             },
         })
+    }
+
+    pub fn acceptance_at(
+        &self,
+        at: DateTime<Utc>,
+        course_makeup: Option<CourseMakeup>,
+    ) -> DomainResult<Acceptance> {
+        let Err(closed) = self.ensure_open_for_submission(at) else {
+            return Ok(Acceptance::Regular);
+        };
+        let Some(course_makeup) = course_makeup else {
+            return Err(closed);
+        };
+        let credit = match self.makeup {
+            Some(MakeupTerms::Credit(credit)) => Some(credit),
+            Some(MakeupTerms::PassFail) => None,
+            Some(MakeupTerms::NotOffered) | None => return Err(closed),
+        };
+        let opens_at = self.closes_at().max(course_makeup.opened_at());
+        if at < opens_at || at >= course_makeup.until() {
+            return Err(closed);
+        }
+
+        Ok(Acceptance::Makeup { credit })
     }
 
     pub fn status(&self) -> AssignmentStatus {
@@ -668,6 +745,7 @@ mod tests {
             max_attempts,
             grading: Grading::PassFail,
             late_policy: None,
+            makeup: None,
             status,
             created_by: UserId::new(),
             created_at,
@@ -829,6 +907,7 @@ mod tests {
             max_attempts: work.max_attempts,
             grading: Grading::scored(10).unwrap(),
             late_policy: Some(LatePolicy::new(365, 1, 100, DeductedFrom::WorkScore).unwrap()),
+            makeup: None,
             status: work.status,
             created_by: work.created_by,
             created_at: work.created_at,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            submissions.id, submissions.assignment_id, submissions.student_id,\n            submissions.attempt_number, submissions.content, submissions.status,\n            submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,\n            submissions.review_comment, submissions.raw_score, submissions.grade_max_score,\n            submissions.late_periods, submissions.penalty, submissions.penalty_deducted_from,\n            submissions.work_score, submissions.course_total_penalty\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            left join teaching_course_teachers\n              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id\n             and teaching_course_teachers.teacher_id = $2\n            where submissions.status = 'pending_review'\n              and ($1 or teaching_course_teachers.teacher_id is not null)\n              and subjects.sandbox = $3\n              and ($4::timestamptz is null or submissions.submitted_at <= $4)\n            \n        order by submissions.submitted_at, submissions.id\n        for update of submissions skip locked\n        limit 1\n        ",
+  "query": "\n        select\n            submissions.id, submissions.assignment_id, submissions.student_id,\n            submissions.kind, submissions.attempt_number, submissions.content,\n            submissions.status, submissions.submitted_at, submissions.reviewed_by,\n            submissions.reviewed_at, submissions.review_comment, submissions.raw_score,\n            submissions.grade_max_score, submissions.late_periods, submissions.penalty,\n            submissions.penalty_deducted_from, submissions.work_score,\n            submissions.course_total_penalty\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            left join teaching_course_teachers\n              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id\n             and teaching_course_teachers.teacher_id = $2\n            where submissions.status = 'pending_review'\n              and ($1 or teaching_course_teachers.teacher_id is not null)\n              and subjects.sandbox = $3\n              and ($4::text is null or submissions.kind = $4)\n              and ($5::timestamptz is null or submissions.submitted_at <= $5)\n            \n        order by submissions.submitted_at, submissions.id\n        for update of submissions skip locked\n        limit 1\n        ",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "attempt_number",
         "type_info": "Int2",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "content",
         "type_info": "Text",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "submitted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "reviewed_by",
         "type_info": "Uuid",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "reviewed_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "review_comment",
         "type_info": "Text",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "raw_score",
         "type_info": "Int2",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "grade_max_score",
         "type_info": "Int2",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "late_periods",
         "type_info": "Int4",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "penalty",
         "type_info": "Int2",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "penalty_deducted_from",
         "type_info": "Text",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "work_score",
         "type_info": "Int2",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "course_total_penalty",
         "type_info": "Int2",
         "origin": {
@@ -196,10 +207,12 @@
         "Bool",
         "Uuid",
         "Bool",
+        "Text",
         "Timestamptz"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -219,5 +232,5 @@
       true
     ]
   },
-  "hash": "f899ebe0fd665c549472095c5c82e164a99661031a921c82f673848d03214fbe"
+  "hash": "18480c13da4ce00826f856b2c53944d0a2798a75b75e8ded3f8dccf0547adfda"
 }

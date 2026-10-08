@@ -84,13 +84,19 @@ pub(crate) async fn select_student(
     student_id: UserId,
     state: BotState,
 ) -> HandlerResult {
-    let Some(purpose) = state.choosing_student(message_id, student_id) else {
+    let Some((purpose, list)) = state.choosing_student(message_id, student_id) else {
         return screen.stale().await;
     };
     let assignment_id = match purpose {
         StudentChoice::Grades { course_id } => {
-            return show_student_grades_page(screen, course_id, student_id, PageRequest::default())
-                .await;
+            return show_student_grades_page(
+                screen,
+                course_id,
+                student_id,
+                PageRequest::default(),
+                Some(list),
+            )
+            .await;
         }
         StudentChoice::ExtraAttempts { assignment_id } => assignment_id,
     };

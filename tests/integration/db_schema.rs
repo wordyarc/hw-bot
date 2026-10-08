@@ -1,7 +1,8 @@
 use chrono::{Duration, Utc};
 use hw_bot::db;
 use hw_bot::domain::{
-    AssignmentStatus, DeductedFrom, EducationLevel, FilePresentation, SubmissionStatus,
+    AssignmentStatus, DeductedFrom, EducationLevel, FilePresentation, SubmissionKind,
+    SubmissionStatus,
 };
 use sqlx::postgres::PgQueryResult;
 use uuid::Uuid;
@@ -75,10 +76,10 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         sqlx::query(
             r#"
             insert into submissions (
-                assignment_id, student_id, attempt_number, content, status,
+                assignment_id, student_id, kind, attempt_number, content, status,
                 reviewed_by, reviewed_at, review_comment
             )
-            values ($1, $2, $3, 'https://example.test/pr', $4, $5, $6, $7)
+            values ($1, $2, 'regular', $3, 'https://example.test/pr', $4, $5, $6, $7)
             "#,
         )
         .bind(fixture.assignment.id().as_uuid())
@@ -91,6 +92,18 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         .execute(&app.pool)
         .await
         .unwrap_or_else(|error| panic!("submission status {} rejected: {error}", status.as_str()));
+    }
+
+    for kind in SubmissionKind::ALL {
+        sqlx::query(
+            "update submissions set kind = $3 where assignment_id = $1 and student_id = $2 and attempt_number = 1",
+        )
+        .bind(fixture.assignment.id().as_uuid())
+        .bind(fixture.student.id().as_uuid())
+        .bind(kind.as_str())
+        .execute(&app.pool)
+        .await
+        .unwrap_or_else(|error| panic!("submission kind {} rejected: {error}", kind.as_str()));
     }
 
     let trainee = app.add_student("Deduction trainee").await;
@@ -173,10 +186,10 @@ async fn completed_review_requires_a_comment() {
         let error = sqlx::query(
             r#"
             insert into submissions (
-                assignment_id, student_id, attempt_number, content, status,
+                assignment_id, student_id, kind, attempt_number, content, status,
                 reviewed_by, reviewed_at, review_comment
             )
-            values ($1, $2, 1, 'https://example.test/pr', $3, $4, now(), null)
+            values ($1, $2, 'regular', 1, 'https://example.test/pr', $3, $4, now(), null)
             "#,
         )
         .bind(app.fixture.assignment.id().as_uuid())
@@ -624,17 +637,21 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     .await;
     assert_check(assignment.unwrap_err(), None);
 
-    let submission = sqlx::query(
-        r#"
-        insert into submissions (assignment_id, student_id, attempt_number, content, status)
-        values ($1, $2, 1, 'https://example.test/pr', 'maybe')
-        "#,
-    )
-    .bind(fixture.assignment.id().as_uuid())
-    .bind(fixture.student.id().as_uuid())
-    .execute(&app.pool)
-    .await;
-    assert_check(submission.unwrap_err(), None);
+    for (kind, status) in [("regular", "maybe"), ("bonus", "pending_review")] {
+        let submission = sqlx::query(
+            r#"
+            insert into submissions (assignment_id, student_id, kind, attempt_number, content, status)
+            values ($1, $2, $3, 1, 'https://example.test/pr', $4)
+            "#,
+        )
+        .bind(fixture.assignment.id().as_uuid())
+        .bind(fixture.student.id().as_uuid())
+        .bind(kind)
+        .bind(status)
+        .execute(&app.pool)
+        .await;
+        assert_check(submission.unwrap_err(), None);
+    }
 
     let deducted_from = sqlx::query(
         r#"
@@ -650,6 +667,147 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     assert_check(deducted_from.unwrap_err(), None);
 
     Ok(())
+}
+
+async fn store_makeup_terms(
+    app: &TestApp,
+    max_score: Option<i16>,
+    offered: Option<bool>,
+    credit: Option<i16>,
+) -> Result<PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        "update assignments set max_score = $2, makeup_offered = $3, makeup_credit = $4 where id = $1",
+    )
+    .bind(app.assignment())
+    .bind(max_score)
+    .bind(offered)
+    .bind(credit)
+    .execute(&app.pool)
+    .await
+}
+
+#[tokio::test]
+async fn a_stored_makeup_credit_lies_within_the_scale_of_an_offered_makeup() {
+    let app = TestApp::start().await;
+
+    for (max_score, offered, credit) in [
+        (Some(10), Some(true), Some(11)),
+        (Some(10), None, Some(6)),
+        (Some(10), Some(false), Some(6)),
+        (None, Some(true), Some(6)),
+    ] {
+        let error = store_makeup_terms(&app, max_score, offered, credit)
+            .await
+            .unwrap_err();
+        assert_check(error, Some("assignments_makeup_credit_fits_the_scale"));
+    }
+}
+
+#[tokio::test]
+async fn an_offered_makeup_carries_a_credit_exactly_on_a_scored_scale() {
+    let app = TestApp::start().await;
+
+    let error = store_makeup_terms(&app, Some(10), Some(true), None)
+        .await
+        .unwrap_err();
+    assert_check(error, Some("assignments_makeup_credit_follows_the_scale"));
+    for (max_score, offered, credit) in [
+        (Some(10), Some(true), Some(6)),
+        (None, Some(true), None),
+        (Some(10), Some(false), None),
+        (None, None, None),
+    ] {
+        store_makeup_terms(&app, max_score, offered, credit)
+            .await
+            .unwrap_or_else(|error| panic!("{max_score:?} {offered:?} {credit:?}: {error}"));
+    }
+}
+
+#[tokio::test]
+async fn a_makeup_grade_has_no_lateness() {
+    let app = TestApp::start().await;
+    let submission = accepted_submission(&app).await;
+    sqlx::query("update submissions set kind = 'makeup' where id = $1")
+        .bind(submission)
+        .execute(&app.pool)
+        .await
+        .expect("an ungraded makeup is valid");
+
+    let error = store_grade(&app, submission, 2, 2, Some("work_score"), 2, 0)
+        .await
+        .unwrap_err();
+    assert_check(error, Some("submissions_makeup_is_not_late"));
+    store_grade(&app, submission, 0, 0, None, 4, 0)
+        .await
+        .expect("a makeup grade without lateness is valid");
+}
+
+#[tokio::test]
+async fn course_makeup_settings_are_stored_whole_and_end_after_their_opening() {
+    let app = TestApp::start().await;
+    let update = |until: Option<chrono::DateTime<Utc>>, attempts: Option<i16>, opened_at| {
+        sqlx::query(
+            "update teaching_courses set makeup_until = $2, makeup_attempts = $3, makeup_opened_at = $4 where id = $1",
+        )
+        .bind(app.course())
+        .bind(until)
+        .bind(attempts)
+        .bind(opened_at)
+        .execute(&app.pool)
+    };
+    let now = Utc::now();
+
+    for (until, attempts, opened_at) in [
+        (Some(now + Duration::days(30)), None, Some(now)),
+        (None, Some(3), Some(now)),
+        (Some(now + Duration::days(30)), Some(3), None),
+    ] {
+        assert_check(
+            update(until, attempts, opened_at).await.unwrap_err(),
+            Some("teaching_courses_makeup_is_complete"),
+        );
+    }
+    assert_check(
+        update(Some(now), Some(3), Some(now)).await.unwrap_err(),
+        Some("teaching_courses_makeup_ends_after_opening"),
+    );
+    update(Some(now + Duration::days(30)), Some(3), Some(now))
+        .await
+        .expect("complete settings are valid");
+}
+
+#[tokio::test]
+async fn only_one_accepted_submission_of_each_kind_exists_per_assignment() {
+    let app = TestApp::start().await;
+    accepted_submission(&app).await;
+    let insert = |kind: &'static str, attempt: i16| {
+        sqlx::query(
+            r#"
+            insert into submissions (
+                assignment_id, student_id, kind, attempt_number, content, status,
+                reviewed_by, reviewed_at, review_comment
+            )
+            values ($1, $2, $3, $4, 'https://example.test/pr', 'accepted', $5, now(), 'ok')
+            "#,
+        )
+        .bind(app.assignment())
+        .bind(app.fixture.student.id().as_uuid())
+        .bind(kind)
+        .bind(attempt)
+        .bind(app.fixture.teacher.id().as_uuid())
+        .execute(&app.pool)
+    };
+
+    let error = insert("regular", 2).await.unwrap_err();
+    let database = error.as_database_error().unwrap();
+    assert_eq!(database.code().as_deref(), Some("23505"), "{error}");
+    assert_eq!(
+        database.constraint(),
+        Some("submissions_one_accepted_per_student_assignment_kind_idx")
+    );
+    insert("makeup", 2)
+        .await
+        .expect("an accepted makeup sits next to an accepted regular submission");
 }
 
 /// Верхняя граница курса задана и в `max_study_year()`, и в CHECK миграции; значения должны совпадать.

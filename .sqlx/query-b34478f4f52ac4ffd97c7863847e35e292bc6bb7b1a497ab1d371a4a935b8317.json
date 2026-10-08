@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, status, created_by, created_at, deadline_at, published_at\n             from assignments where id = $1",
+  "query": "\n            select\n                assignments.id, assignments.teaching_course_id, assignments.subject_id,\n                assignments.student_group_id, assignments.title, assignments.body,\n                assignments.max_attempts, assignments.max_score, assignments.late_period_days,\n                assignments.late_penalty_per_period, assignments.late_max_periods,\n                assignments.late_deducted_from, assignments.makeup_offered,\n                assignments.makeup_credit, assignments.status, assignments.created_by,\n                assignments.created_at, assignments.deadline_at, assignments.published_at,\n                subjects.name as subject_name\n            from assignments\n            join subjects\n              on subjects.id = assignments.subject_id\n             where assignments.student_group_id = $1\n           and assignments.status = 'archived'\n           and assignments.published_at is not null\n         order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
   "describe": {
     "columns": [
       {
@@ -137,6 +137,28 @@
       },
       {
         "ordinal": 12,
+        "name": "makeup_offered",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "makeup_offered"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "makeup_credit",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "makeup_credit"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -147,7 +169,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 15,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -158,7 +180,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 16,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +191,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 17,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,7 +202,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 18,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -189,11 +211,24 @@
             "name": "published_at"
           }
         }
+      },
+      {
+        "ordinal": 19,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -209,12 +244,15 @@
       true,
       true,
       true,
+      true,
+      true,
       false,
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "e725fd4fbe35111dd8a6fca2f81e2671015f377b856202627f477fe47846a3de"
+  "hash": "b34478f4f52ac4ffd97c7863847e35e292bc6bb7b1a497ab1d371a4a935b8317"
 }

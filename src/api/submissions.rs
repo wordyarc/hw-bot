@@ -8,7 +8,9 @@ use uuid::Uuid;
 use super::ApiPath as Path;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::SubmitHomework;
-use crate::domain::{AssignmentId, DeductedFrom, Grade, Submission, SubmissionStatus, UserId};
+use crate::domain::{
+    AssignmentId, DeductedFrom, Grade, Submission, SubmissionKind, SubmissionStatus, UserId,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,6 +23,7 @@ pub struct SubmissionResponse {
     id: Uuid,
     assignment_id: Uuid,
     student_id: Uuid,
+    kind: SubmissionKind,
     attempt_number: u16,
     content: String,
     status: SubmissionStatus,
@@ -43,6 +46,7 @@ impl From<&Submission> for SubmissionResponse {
             id: submission.id().as_uuid(),
             assignment_id: submission.assignment_id().as_uuid(),
             student_id: submission.student_id().as_uuid(),
+            kind: submission.kind(),
             attempt_number: submission.attempt_number(),
             content: submission.content().as_str().to_owned(),
             status: submission.status(),
@@ -74,9 +78,10 @@ pub async fn submit_homework(
         actor,
         content: request.content,
         submitted_at: Utc::now(),
+        allow_makeup: true,
     };
 
-    let submission = state
+    let submitted = state
         .application
         .submissions
         .submit_homework(command)
@@ -84,6 +89,6 @@ pub async fn submit_homework(
 
     Ok((
         StatusCode::CREATED,
-        Json(SubmissionResponse::from(&submission)),
+        Json(SubmissionResponse::from(&submitted.submission)),
     ))
 }

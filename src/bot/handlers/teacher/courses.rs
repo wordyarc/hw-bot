@@ -56,6 +56,7 @@ pub(crate) async fn show_course_assignments_page(
         .assignments
         .list_for_course(actor, course_id, page)
         .await?;
+    let makeup = services.courses.active_makeup(actor, course_id).await?;
 
     if assignments.items.is_empty() {
         bot.send_message(chat_id, texts::NO_COURSE_ASSIGNMENTS)
@@ -74,7 +75,7 @@ pub(crate) async fn show_course_assignments_page(
 
     bot.send_message(chat_id, texts::CHOOSE_ASSIGNMENT)
         .reply_markup(paginated_keyboard(
-            course_assignments_keyboard(course_id, &assignments.items),
+            course_assignments_keyboard(course_id, &assignments.items, makeup, timezone),
             PageTarget::Course(course_id),
             assignments.page,
             assignments.next_page,

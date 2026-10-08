@@ -9,13 +9,14 @@ use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     AssignmentId, DeductedFrom, DomainError, GradeParts, Role, StudentGroupId, Submission,
-    SubmissionHistory, SubmissionId, SubmissionParts, SubmissionStatus, TeachingCourseId, User,
-    UserId,
+    SubmissionHistory, SubmissionHistoryParts, SubmissionId, SubmissionKind, SubmissionParts,
+    SubmissionStatus, TeachingCourseId, User, UserId,
 };
 use crate::pagination::PageRequest;
 use crate::read_models::{AssignmentGrade, GradebookScore, QueuePlace, SandboxSubmission};
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
+const KIND: &str = "submissions.kind";
 const STATUS: &str = "submissions.status";
 const RAW_SCORE: &str = "submissions.raw_score";
 const GRADE_MAX_SCORE: &str = "submissions.grade_max_score";
@@ -82,15 +83,48 @@ impl GradeColumns {
     }
 }
 
+pub(super) struct HistoryColumns {
+    pub used_attempts: i64,
+    pub submission_count: i64,
+    pub extra_attempts: i16,
+    pub has_accepted_regular: bool,
+    pub accepted_regular_score: Option<i16>,
+    pub has_accepted_makeup: bool,
+    pub has_pending_submission: bool,
+}
+
+impl HistoryColumns {
+    pub(super) fn history(self) -> DbResult<SubmissionHistory> {
+        Ok(SubmissionHistory::restore(SubmissionHistoryParts {
+            used_attempts: checked_num_cast(
+                "submission_history.used_attempts",
+                self.used_attempts,
+            )?,
+            extra_attempts: checked_num_cast(
+                "student_assignment_progress.extra_attempts",
+                self.extra_attempts,
+            )?,
+            submission_count: checked_num_cast(
+                "submission_history.submission_count",
+                self.submission_count,
+            )?,
+            has_accepted_regular: self.has_accepted_regular,
+            accepted_regular_score: cast_score(WORK_SCORE, self.accepted_regular_score)?,
+            has_accepted_makeup: self.has_accepted_makeup,
+            has_pending_submission: self.has_pending_submission,
+        }))
+    }
+}
+
 macro_rules! select_submissions {
     ($tail:literal $(, $arg:expr)* $(,)?) => {
         sqlx::query_as!(
             SubmissionRow,
             r#"
             select
-                id, assignment_id, student_id, attempt_number, content, status, submitted_at,
-                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
-                penalty, penalty_deducted_from, work_score, course_total_penalty
+                id, assignment_id, student_id, kind, attempt_number, content, status,
+                submitted_at, reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score,
+                late_periods, penalty, penalty_deducted_from, work_score, course_total_penalty
             from submissions
             "# + $tail
             $(, $arg)*
@@ -118,15 +152,18 @@ where
     sqlx::query!(
         r#"
         insert into submissions (
-            id, assignment_id, student_id, attempt_number, content, status, submitted_at,
+            id, assignment_id, student_id, kind, attempt_number, content, status, submitted_at,
             reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
             penalty, penalty_deducted_from, work_score, course_total_penalty
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        values (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+        )
         "#,
         submission.id().as_uuid(),
         submission.assignment_id().as_uuid(),
         submission.student_id().as_uuid(),
+        submission.kind().as_str(),
         checked_num_cast::<_, i16>(ATTEMPT_NUMBER, submission.attempt_number())?,
         submission.content().as_str(),
         submission.status().as_str(),
@@ -214,9 +251,14 @@ where
             select
                 assignment_id,
                 count(*) filter (
-                    where status in ('accepted', 'rejected')
+                    where kind = 'regular' and status in ('accepted', 'rejected')
                 )::bigint as used_attempts,
-                bool_or(status = 'accepted') as has_accepted_submission,
+                count(*)::bigint as submission_count,
+                bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,
+                max(work_score) filter (
+                    where kind = 'regular' and status = 'accepted'
+                ) as accepted_regular_score,
+                bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,
                 bool_or(status = 'pending_review') as has_pending_submission
             from submissions
             where student_id = $2
@@ -226,8 +268,11 @@ where
         select
             requested.assignment_id as "assignment_id!",
             coalesce(history.used_attempts, 0) as "used_attempts!",
+            coalesce(history.submission_count, 0) as "submission_count!",
             coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
-            coalesce(history.has_accepted_submission, false) as "has_accepted_submission!",
+            coalesce(history.has_accepted_regular, false) as "has_accepted_regular!",
+            history.accepted_regular_score as "accepted_regular_score?",
+            coalesce(history.has_accepted_makeup, false) as "has_accepted_makeup!",
             coalesce(history.has_pending_submission, false) as "has_pending_submission!"
         from unnest($1::uuid[]) as requested (assignment_id)
         left join history
@@ -244,12 +289,16 @@ where
 
     rows.into_iter()
         .map(|row| {
-            let history = SubmissionHistory::new(
-                checked_num_cast("submission_history.used_attempts", row.used_attempts)?,
-                checked_num_cast("submission_history.extra_attempts", row.extra_attempts)?,
-                row.has_accepted_submission,
-                row.has_pending_submission,
-            );
+            let history = HistoryColumns {
+                used_attempts: row.used_attempts,
+                submission_count: row.submission_count,
+                extra_attempts: row.extra_attempts,
+                has_accepted_regular: row.has_accepted_regular,
+                accepted_regular_score: row.accepted_regular_score,
+                has_accepted_makeup: row.has_accepted_makeup,
+                has_pending_submission: row.has_pending_submission,
+            }
+            .history()?;
 
             Ok((AssignmentId::from_uuid(row.assignment_id), history))
         })
@@ -361,6 +410,17 @@ where
             where role = 'student' and student_group_id = $2
               and ($5::uuid is null or id = $5)
             order by display_name, id limit $3 offset $4
+        ), best as (
+            select distinct on (s.student_id, s.assignment_id)
+                s.student_id, s.assignment_id, s.grade_max_score, s.work_score,
+                s.course_total_penalty, s.kind
+            from submissions s
+            join students_page on students_page.id = s.student_id
+            join assignments a on a.id = s.assignment_id
+            where a.teaching_course_id = $1 and s.status = 'accepted'
+            order by s.student_id, s.assignment_id,
+                     s.work_score - s.course_total_penalty desc nulls last,
+                     s.kind = 'regular' desc
         )
         select
             students.id as "student_id!",
@@ -370,28 +430,27 @@ where
             grades.max_score as "max_score?",
             grades.work_score as "work_score?",
             grades.course_total_penalty as "course_total_penalty?",
+            grades.makeup as "makeup?",
             coalesce(totals.work_total, 0)::bigint as "work_total!",
             coalesce(totals.penalty_total, 0)::bigint as "penalty_total!",
             coalesce(totals.max_total, 0)::bigint as "max_total!"
         from students_page students
         cross join lateral (
-            select sum(s.work_score) as work_total,
-                   sum(s.course_total_penalty) as penalty_total,
-                   sum(coalesce(s.grade_max_score, a.max_score)) as max_total
+            select sum(best.work_score) as work_total,
+                   sum(best.course_total_penalty) as penalty_total,
+                   sum(coalesce(best.grade_max_score, a.max_score)) as max_total
             from assignments a
-            left join submissions s on s.assignment_id = a.id
-                and s.student_id = students.id and s.status = 'accepted'
+            left join best on best.assignment_id = a.id and best.student_id = students.id
             where a.teaching_course_id = $1 and a.published_at is not null
         ) totals
         left join lateral (
             select a.id, a.title, a.deadline_at,
-                   coalesce(s.grade_max_score, a.max_score) as max_score, s.work_score,
-                   s.course_total_penalty
+                   coalesce(best.grade_max_score, a.max_score) as max_score, best.work_score,
+                   best.course_total_penalty, best.kind = 'makeup' as makeup
             from assignments a
-            left join submissions s on s.assignment_id = a.id
-                and s.student_id = students.id and s.status = 'accepted'
+            left join best on best.assignment_id = a.id and best.student_id = students.id
             where a.teaching_course_id = $1 and a.published_at is not null
-              and coalesce(s.grade_max_score, a.max_score) is not null
+              and coalesce(best.grade_max_score, a.max_score) is not null
             order by a.deadline_at, a.id limit $6 offset $7
         ) grades on true
         order by students.display_name, students.id, grades.deadline_at, grades.id
@@ -416,13 +475,15 @@ where
                 score: row
                     .work_score
                     .zip(row.course_total_penalty)
-                    .map(|(work_score, course_total_penalty)| {
+                    .zip(row.makeup)
+                    .map(|((work_score, course_total_penalty), makeup)| {
                         Ok::<_, DbError>(GradebookScore {
                             work_score: checked_num_cast(WORK_SCORE, work_score)?,
                             course_total_penalty: checked_num_cast(
                                 COURSE_TOTAL_PENALTY,
                                 course_total_penalty,
                             )?,
+                            makeup,
                         })
                     })
                     .transpose()?,
@@ -509,6 +570,7 @@ where
             join submissions other
               on other.assignment_id = other_assignment.id
              and other.status = 'pending_review'
+             and (mine_subject.sandbox or other.kind = mine.kind)
             where mine.student_id = $1
               and mine.status = 'pending_review'
         )
@@ -556,10 +618,31 @@ where
     .collect()
 }
 
+#[derive(Clone, Copy)]
+enum ReviewStream {
+    Main,
+    Makeup,
+    Sandbox,
+}
+
+impl ReviewStream {
+    fn sandbox(self) -> bool {
+        matches!(self, Self::Sandbox)
+    }
+
+    fn kind(self) -> Option<&'static str> {
+        match self {
+            Self::Main => Some(SubmissionKind::Regular.as_str()),
+            Self::Makeup => Some(SubmissionKind::Makeup.as_str()),
+            Self::Sandbox => None,
+        }
+    }
+}
+
 macro_rules! reviewer_scope {
     (
         $query:ident $(, $row:ty)?;
-        $select:literal, $tail:literal, $reviewer:expr, $sandbox:expr, $cutoff:expr
+        $select:literal, $tail:literal, $reviewer:expr, $stream:expr, $cutoff:expr
         $(, $arg:expr)* $(,)?
     ) => {
         sqlx::$query!(
@@ -576,11 +659,13 @@ macro_rules! reviewer_scope {
             where submissions.status = 'pending_review'
               and ($1 or teaching_course_teachers.teacher_id is not null)
               and subjects.sandbox = $3
-              and ($4::timestamptz is null or submissions.submitted_at <= $4)
+              and ($4::text is null or submissions.kind = $4)
+              and ($5::timestamptz is null or submissions.submitted_at <= $5)
             "# + $tail,
             matches!($reviewer.role(), Role::Admin),
             $reviewer.id().as_uuid(),
-            $sandbox,
+            $stream.sandbox(),
+            $stream.kind(),
             $cutoff,
             $($arg,)*
         )
@@ -591,7 +676,14 @@ pub async fn count_pending_for_reviewer<'e, E>(executor: E, reviewer: &User) -> 
 where
     E: PgExecutor<'e>,
 {
-    count_for_reviewer(executor, reviewer, false, None).await
+    count_for_reviewer(executor, reviewer, ReviewStream::Main, None).await
+}
+
+pub async fn count_makeup_for_reviewer<'e, E>(executor: E, reviewer: &User) -> DbResult<u32>
+where
+    E: PgExecutor<'e>,
+{
+    count_for_reviewer(executor, reviewer, ReviewStream::Makeup, None).await
 }
 
 pub async fn count_sandbox_for_reviewer<'e, E>(
@@ -602,13 +694,13 @@ pub async fn count_sandbox_for_reviewer<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    count_for_reviewer(executor, reviewer, true, cutoff).await
+    count_for_reviewer(executor, reviewer, ReviewStream::Sandbox, cutoff).await
 }
 
 async fn count_for_reviewer<'e, E>(
     executor: E,
     reviewer: &User,
-    sandbox: bool,
+    stream: ReviewStream,
     cutoff: Option<DateTime<Utc>>,
 ) -> DbResult<u32>
 where
@@ -616,7 +708,7 @@ where
 {
     let pending = reviewer_scope!(
         query_scalar;
-        r#"select count(*) as "pending!""#, "", reviewer, sandbox, cutoff
+        r#"select count(*) as "pending!""#, "", reviewer, stream, cutoff
     )
     .fetch_one(executor)
     .await?;
@@ -628,15 +720,31 @@ pub async fn lock_next_pending_for_reviewer(
     tx: &mut Transaction<'_, Postgres>,
     reviewer: &User,
 ) -> DbResult<Option<Submission>> {
+    lock_next_for_reviewer(tx, reviewer, ReviewStream::Main).await
+}
+
+pub async fn lock_next_makeup_for_reviewer(
+    tx: &mut Transaction<'_, Postgres>,
+    reviewer: &User,
+) -> DbResult<Option<Submission>> {
+    lock_next_for_reviewer(tx, reviewer, ReviewStream::Makeup).await
+}
+
+async fn lock_next_for_reviewer(
+    tx: &mut Transaction<'_, Postgres>,
+    reviewer: &User,
+    stream: ReviewStream,
+) -> DbResult<Option<Submission>> {
     let row = reviewer_scope!(query_as, SubmissionRow;
         r#"
         select
             submissions.id, submissions.assignment_id, submissions.student_id,
-            submissions.attempt_number, submissions.content, submissions.status,
-            submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
-            submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
-            submissions.late_periods, submissions.penalty, submissions.penalty_deducted_from,
-            submissions.work_score, submissions.course_total_penalty
+            submissions.kind, submissions.attempt_number, submissions.content,
+            submissions.status, submissions.submitted_at, submissions.reviewed_by,
+            submissions.reviewed_at, submissions.review_comment, submissions.raw_score,
+            submissions.grade_max_score, submissions.late_periods, submissions.penalty,
+            submissions.penalty_deducted_from, submissions.work_score,
+            submissions.course_total_penalty
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
@@ -644,7 +752,7 @@ pub async fn lock_next_pending_for_reviewer(
         limit 1
         "#,
         reviewer,
-        false,
+        stream,
         None::<DateTime<Utc>>
     )
     .fetch_optional(&mut **tx)
@@ -665,6 +773,7 @@ where
         r#"
         select
             submissions.id,
+            submissions.kind,
             submissions.submitted_at,
             assignments.title as assignment_title,
             (select display_name from users where users.id = submissions.student_id)
@@ -672,10 +781,10 @@ where
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
-        limit $5 offset $6
+        limit $6 offset $7
         "#,
         reviewer,
-        true,
+        ReviewStream::Sandbox,
         None::<DateTime<Utc>>,
         PageRequest::FETCH_LIMIT,
         page.offset(),
@@ -683,15 +792,17 @@ where
     .fetch_all(executor)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| SandboxSubmission {
-            submission_id: SubmissionId::from_uuid(row.id),
-            assignment_title: row.assignment_title,
-            student_name: row.student_name,
-            submitted_at: row.submitted_at,
+    rows.into_iter()
+        .map(|row| {
+            Ok(SandboxSubmission {
+                submission_id: SubmissionId::from_uuid(row.id),
+                kind: parse_kind(&row.kind)?,
+                assignment_title: row.assignment_title,
+                student_name: row.student_name,
+                submitted_at: row.submitted_at,
+            })
         })
-        .collect())
+        .collect()
 }
 
 pub async fn lock_sandbox_for_reviewer(
@@ -703,18 +814,19 @@ pub async fn lock_sandbox_for_reviewer(
         r#"
         select
             submissions.id, submissions.assignment_id, submissions.student_id,
-            submissions.attempt_number, submissions.content, submissions.status,
-            submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
-            submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
-            submissions.late_periods, submissions.penalty, submissions.penalty_deducted_from,
-            submissions.work_score, submissions.course_total_penalty
+            submissions.kind, submissions.attempt_number, submissions.content,
+            submissions.status, submissions.submitted_at, submissions.reviewed_by,
+            submissions.reviewed_at, submissions.review_comment, submissions.raw_score,
+            submissions.grade_max_score, submissions.late_periods, submissions.penalty,
+            submissions.penalty_deducted_from, submissions.work_score,
+            submissions.course_total_penalty
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
         for update of submissions
         "#,
         reviewer,
-        true,
+        ReviewStream::Sandbox,
         Some(cutoff)
     )
     .fetch_all(&mut **tx)
@@ -729,6 +841,7 @@ struct SubmissionRow {
     id: Uuid,
     assignment_id: Uuid,
     student_id: Uuid,
+    kind: String,
     attempt_number: i16,
     content: String,
     status: String,
@@ -751,6 +864,10 @@ fn cast_score(column: &'static str, value: Option<i16>) -> DbResult<Option<u16>>
         .transpose()
 }
 
+pub(super) fn parse_kind(value: &str) -> DbResult<SubmissionKind> {
+    SubmissionKind::parse_str(value).ok_or_else(|| DbError::invalid_value(KIND, value))
+}
+
 impl TryFrom<SubmissionRow> for Submission {
     type Error = DbError;
 
@@ -763,6 +880,7 @@ impl TryFrom<SubmissionRow> for Submission {
             id: SubmissionId::from_uuid(row.id),
             assignment_id: AssignmentId::from_uuid(row.assignment_id),
             student_id: UserId::from_uuid(row.student_id),
+            kind: parse_kind(&row.kind)?,
             attempt_number,
             content: row.content,
             status,

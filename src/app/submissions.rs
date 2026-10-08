@@ -5,7 +5,10 @@ use crate::app::access::load_student;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
-use crate::domain::{AssignmentId, Submission, SubmissionId};
+use crate::domain::{
+    Acceptance, AssignmentId, MakeupBalance, MakeupRequest, Submission, SubmissionId,
+    SubmissionKind,
+};
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::QueuePlace;
 
@@ -15,6 +18,13 @@ pub struct SubmitHomework {
     pub actor: Actor,
     pub content: String,
     pub submitted_at: DateTime<Utc>,
+    pub allow_makeup: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SubmittedHomework {
+    pub submission: Submission,
+    pub makeup_balance: Option<MakeupBalance>,
 }
 
 #[derive(Clone, Debug)]
@@ -27,7 +37,7 @@ impl SubmissionService {
         Self { pool }
     }
 
-    pub async fn submit_homework(&self, command: SubmitHomework) -> AppResult<Submission> {
+    pub async fn submit_homework(&self, command: SubmitHomework) -> AppResult<SubmittedHomework> {
         let mut tx = self.pool.begin().await?;
 
         let student = load_actor(&mut *tx, command.actor, "student").await?;
@@ -42,6 +52,21 @@ impl SubmissionService {
                 .remove(&assignment.id())
                 .unwrap_or_default();
 
+        let course_id = assignment.teaching_course_id();
+        let mut makeup = MakeupRequest {
+            course: db::makeup::find_course(&mut *tx, course_id).await?,
+            consent: command.allow_makeup,
+            balance: MakeupBalance::default(),
+        };
+        let acceptance =
+            Submission::admit(&assignment, &student, history, command.submitted_at, makeup)?;
+        if acceptance != Acceptance::Regular {
+            db::makeup::lock_pool(&mut tx, course_id, student.id()).await?;
+            let pool = db::makeup::pool_for_student(&mut *tx, course_id, student.id()).await?;
+            makeup.course = pool.map(|pool| pool.course);
+            makeup.balance = pool.map(|pool| pool.balance).unwrap_or_default();
+        }
+
         let submission = Submission::submit(
             SubmissionId::new(),
             &assignment,
@@ -49,13 +74,18 @@ impl SubmissionService {
             history,
             command.content,
             command.submitted_at,
+            makeup,
         )?;
 
         db::submissions::insert(&mut *tx, &submission).await?;
 
         tx.commit().await?;
 
-        Ok(submission)
+        Ok(SubmittedHomework {
+            makeup_balance: (submission.kind() == SubmissionKind::Makeup)
+                .then(|| makeup.balance.spend()),
+            submission,
+        })
     }
 
     pub async fn pending_queue(

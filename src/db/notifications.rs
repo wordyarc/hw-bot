@@ -3,10 +3,11 @@ use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use super::error::ensure_updated;
-use super::submissions::GradeColumns;
+use super::submissions::{GradeColumns, parse_kind};
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    Assignment, Grade, Subject, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User,
+    Assignment, Grade, Subject, Submission, SubmissionId, SubmissionKind, SubmissionStatus,
+    TelegramUserId, User,
 };
 use crate::string_enum::str_enum;
 
@@ -34,6 +35,7 @@ pub struct ClaimedReviewNotification {
     pub assignment_title: String,
     pub outcome: ReviewOutcome,
     pub review_comment: String,
+    pub kind: SubmissionKind,
     pub grade: Option<Grade>,
     pub attempt_count: u32,
     pub lease_token: Uuid,
@@ -140,6 +142,7 @@ where
             notification.assignment_title,
             notification.outcome,
             notification.review_comment,
+            submissions.kind,
             submissions.raw_score,
             submissions.grade_max_score,
             submissions.late_periods,
@@ -261,6 +264,7 @@ struct ClaimedReviewNotificationRow {
     assignment_title: String,
     outcome: String,
     review_comment: String,
+    kind: String,
     raw_score: Option<i16>,
     grade_max_score: Option<i16>,
     late_periods: Option<i32>,
@@ -287,6 +291,7 @@ impl TryFrom<ClaimedReviewNotificationRow> for ClaimedReviewNotification {
             assignment_title: row.assignment_title,
             outcome,
             review_comment: row.review_comment,
+            kind: parse_kind(&row.kind)?,
             grade: Grade::restore(
                 GradeColumns {
                     raw_score: row.raw_score,

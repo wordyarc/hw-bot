@@ -5,7 +5,10 @@ use chrono::{Duration as ChronoDuration, Utc};
 use hw_bot::app::ErrorCode;
 use hw_bot::bot::{app_error_message, callbacks, texts};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, DeductedFrom, ReviewDecision, SubmissionId, USER_TEXT_MAX_LEN};
+use hw_bot::domain::{
+    Assignment, DeductedFrom, Grade, ReviewDecision, SubmissionId, SubmissionKind,
+    USER_TEXT_MAX_LEN,
+};
 use hw_bot::test_support::submission as submission_of;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -15,6 +18,10 @@ use wiremock::{Mock, ResponseTemplate};
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
 use crate::harness::{TestApp, submission_id};
+
+fn regular_grade(grade: Grade) -> String {
+    texts::grade_line(SubmissionKind::Regular, Some(grade)).unwrap()
+}
 
 #[tokio::test]
 async fn review_restarts_when_the_selected_score_exceeds_the_new_scale() {
@@ -303,7 +310,7 @@ async fn review_confirmation_uses_the_grade_saved_after_a_deadline_change() {
     assert!(telegram.messages(app.teacher()).iter().any(|message| {
         message["text"]
             .as_str()
-            .is_some_and(|text| text.contains(&texts::grade_line(saved)))
+            .is_some_and(|text| text.contains(&regular_grade(saved)))
     }));
 }
 
@@ -353,7 +360,7 @@ async fn an_empty_review_queue_answers_the_teacher_instead_of_failing() {
             "chat_id": app.teacher(),
             "text": texts::REVIEW_QUEUE_EMPTY
         })))
-        .and(|request: &wiremock::Request| has_callback_button(request, callbacks::NEXT_REVIEW))
+        .and(|request: &wiremock::Request| has_callback_button(request, callbacks::REVIEW_HUB))
         .respond_with(telegram_message_response())
         .expect(1)
         .with_priority(1)
@@ -460,11 +467,17 @@ async fn the_student_card_shows_penalties_to_the_course_total() {
         .find(|text| text.starts_with(&header))
         .unwrap_or_else(|| panic!("the card does not sum the penalties: {sent:#?}"));
     assert!(
-        card.contains(&texts::grade_entry("To total", "8", 10, 4)),
+        card.contains(&texts::grade_entry("To total", "8", 10, 4, false)),
         "{card}"
     );
     assert!(
-        card.contains(&texts::grade_entry(on_time.title().as_str(), "6", 10, 0)),
+        card.contains(&texts::grade_entry(
+            on_time.title().as_str(),
+            "6",
+            10,
+            0,
+            false
+        )),
         "{card}"
     );
 }
@@ -1168,7 +1181,7 @@ async fn the_confirmation_shows_the_deduction_saved_after_a_policy_change() {
         .unwrap();
     assert_eq!(saved.deducted_from(), Some(DeductedFrom::WorkScore));
     assert_eq!(saved.work_score(), 4);
-    let line = texts::grade_line(saved);
+    let line = regular_grade(saved);
     assert!(!preview.contains(&line), "{preview}");
     let sent = texts_sent(&telegram, app.teacher());
     let confirmation = sent

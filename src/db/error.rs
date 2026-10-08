@@ -124,7 +124,7 @@ fn unique_violation(error: &sqlx::Error) -> Option<DbError> {
         "submissions_one_pending_per_student_assignment_idx" => {
             rule(DomainError::SubmissionAlreadyPendingReview)
         }
-        "submissions_one_accepted_per_student_assignment_idx" => {
+        "submissions_one_accepted_per_student_assignment_kind_idx" => {
             rule(DomainError::SubmissionAlreadyAccepted)
         }
         // При двойном тапе первым срабатывает этот ключ, не индекс по pending.

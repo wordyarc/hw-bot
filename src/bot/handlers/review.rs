@@ -1,26 +1,45 @@
 use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::ChatId;
+use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 
 use super::home::show_home;
 use super::input::{ensure_text_limit, parse_number, require_text};
 use super::reset_dialogue;
+use super::teacher::show_student_grades_page;
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::AmountChoice;
-use crate::bot::context::{Screen, TextStep};
+use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::{log_handler_error, send_app_error};
-use crate::bot::state::{BotDialogue, BotState, FlowState};
+use crate::bot::state::{BotState, FlowState, GrantOrigin, ReviewTarget, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{
-    ask_input, review_decision_keyboard, review_keyboard, review_score_keyboard,
-    send_message_chunks, teacher_keyboard, teacher_menu,
+    SCORE_BUTTONS_LIMIT, makeup_followup_keyboard, review_decision_keyboard, review_hub_keyboard,
+    review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
 };
 use crate::domain::{
-    DomainError, Grade, LatePenalty, ReviewDecision, Submission, SubmissionId, TelegramUserId,
-    USER_TEXT_MAX_LEN,
+    DomainError, Grade, Grading, LatePenalty, MakeupTerms, ReviewDecision, Submission,
+    SubmissionId, SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId,
+    USER_TEXT_MAX_LEN, UserId,
 };
+use crate::pagination::PageRequest;
+
+pub(super) async fn show_hub(screen: Screen<'_>) -> HandlerResult {
+    let reviews = &screen.services().reviews;
+    let makeups = reviews.makeup_size(screen.actor()).await?;
+    if makeups == 0 {
+        return show_next(screen).await;
+    }
+    let queue = reviews.queue_size(screen.actor()).await?;
+    reset_dialogue(screen.dialogue()).await?;
+    screen
+        .bot()
+        .send_message(screen.chat_id(), texts::review_hub(queue, makeups))
+        .reply_markup(review_hub_keyboard(queue, makeups))
+        .await?;
+    Ok(())
+}
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let actor = screen.actor();
@@ -30,9 +49,43 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let services = screen.services();
     let item = services.reviews.take_next_from_queue(actor).await?;
     let Some(item) = item else {
+        let makeups = services.reviews.makeup_size(actor).await?;
         reset_dialogue(dialogue).await?;
-        bot.send_message(chat_id, texts::REVIEW_QUEUE_EMPTY)
-            .reply_markup(teacher_menu(Some(0)))
+        let (text, menu) = match makeups {
+            0 => (texts::REVIEW_QUEUE_EMPTY.to_owned(), teacher_menu(Some(0))),
+            _ => (
+                format!(
+                    "{}\n{}",
+                    texts::REVIEW_QUEUE_EMPTY,
+                    texts::home_makeup_line(makeups)
+                ),
+                teacher_menu(None),
+            ),
+        };
+        bot.send_message(chat_id, text).reply_markup(menu).await?;
+        return Ok(());
+    };
+
+    show_item(screen, item).await
+}
+
+pub(super) async fn show_next_makeup(screen: Screen<'_>) -> HandlerResult {
+    let reviews = &screen.services().reviews;
+    let Some(item) = reviews.take_next_makeup(screen.actor()).await? else {
+        let queue = reviews.queue_size(screen.actor()).await?;
+        reset_dialogue(screen.dialogue()).await?;
+        let text = match queue {
+            0 => texts::MAKEUP_QUEUE_EMPTY.to_owned(),
+            _ => format!(
+                "{}\n{}",
+                texts::MAKEUP_QUEUE_EMPTY,
+                texts::review_queue_line(queue)
+            ),
+        };
+        screen
+            .bot()
+            .send_message(screen.chat_id(), text)
+            .reply_markup(teacher_menu(Some(queue)))
             .await?;
         return Ok(());
     };
@@ -50,26 +103,59 @@ pub(super) async fn open(screen: Screen<'_>, submission_id: SubmissionId) -> Han
     show_item(screen, item).await
 }
 
-async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
-    let bot = screen.bot();
-    let chat_id = screen.chat_id();
-    let dialogue = screen.dialogue();
-    let late = item
-        .assignment
-        .late_penalty_at(item.submission.submitted_at());
-    dialogue
-        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
-            submission_id: item.submission.id(),
+fn review_target(item: &ReviewQueueItem) -> ReviewTarget {
+    match item.submission.kind() {
+        SubmissionKind::Regular => ReviewTarget::Regular {
             grading: item.assignment.grading(),
-            late,
-        }))
-        .await?;
-    let keyboard = review_keyboard(
+            late: item
+                .assignment
+                .late_penalty_at(item.submission.submitted_at()),
+        },
+        SubmissionKind::Makeup => ReviewTarget::Makeup,
+    }
+}
+
+fn makeup_grade(item: &ReviewQueueItem) -> Option<Option<Grade>> {
+    match (item.assignment.makeup(), item.assignment.grading()) {
+        (Some(MakeupTerms::Credit(credit)), Grading::Score { max_score }) => {
+            Some(Some(Grade::new(credit.get(), max_score.get(), None)))
+        }
+        (Some(MakeupTerms::PassFail), Grading::PassFail) => Some(None),
+        _ => None,
+    }
+}
+
+fn accept_label(item: &ReviewQueueItem) -> Option<String> {
+    match item.submission.kind() {
+        SubmissionKind::Regular => Some(texts::BUTTON_ACCEPT.to_owned()),
+        SubmissionKind::Makeup => makeup_grade(item).map(|grade| match grade {
+            Some(grade) => texts::accept_makeup_button(grade.raw_score()),
+            None => texts::BUTTON_ACCEPT_MAKEUP.to_owned(),
+        }),
+    }
+}
+
+fn item_keyboard(item: &ReviewQueueItem) -> InlineKeyboardMarkup {
+    review_keyboard(
         item.submission.id(),
         item.assignment.teaching_course_id(),
         item.student.id(),
-    );
-    bot.send_message(chat_id, review_card_summary(&item, late))
+        accept_label(item),
+    )
+}
+
+async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
+    let bot = screen.bot();
+    let chat_id = screen.chat_id();
+    let target = review_target(&item);
+    screen
+        .dialogue()
+        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
+            submission_id: item.submission.id(),
+            target,
+        }))
+        .await?;
+    bot.send_message(chat_id, review_card_summary(&item, target))
         .await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
@@ -98,23 +184,38 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
         bot,
         chat_id,
         item.submission.content().as_str().to_owned(),
-        Some(keyboard),
+        Some(item_keyboard(&item)),
     )
     .await
 }
 
-fn review_card_summary(item: &ReviewQueueItem, late: Option<LatePenalty>) -> String {
-    let mut summary = texts::review_summary(
+fn review_card_summary(item: &ReviewQueueItem, target: ReviewTarget) -> String {
+    let mut lines = vec![texts::review_summary(
         item.subject.name().as_str(),
         item.assignment.title().as_str(),
         item.student.display_name().as_str(),
         item.submission.attempt_number(),
-    );
-    if let (Some(late), Some(max_score)) = (late, item.assignment.grading().max_score()) {
-        summary.push('\n');
-        summary.push_str(&texts::late_submission_line(late, max_score));
+    )];
+    match target {
+        ReviewTarget::Regular {
+            grading: Grading::Score { max_score },
+            late: Some(late),
+        } => lines.push(texts::late_submission_line(late, max_score.get())),
+        ReviewTarget::Regular { .. } => {}
+        ReviewTarget::Makeup => {
+            lines.push(texts::makeup_review_line(
+                item.assignment.makeup(),
+                item.assignment.grading(),
+            ));
+            if let Some(pool) = item.makeup {
+                lines.push(texts::review_makeup_attempts(
+                    pool.balance.remaining(),
+                    pool.balance.allowed(),
+                ));
+            }
+        }
     }
-    summary
+    lines.join("\n")
 }
 
 async fn send_previous_attempts(
@@ -143,7 +244,6 @@ pub(super) async fn submit_score_text(
     let bot = step.bot();
     let message = step.message();
     let chat_id = step.chat_id();
-    let dialogue = step.dialogue();
 
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
@@ -154,12 +254,11 @@ pub(super) async fn submit_score_text(
         return Ok(());
     };
     ask_review_comment(
-        bot,
-        chat_id,
+        step.chat(),
         submission_id,
         ReviewDecision::Accept,
+        SubmissionKind::Regular,
         Some(Grade::new(score, max_score, late)),
-        dialogue,
     )
     .await
 }
@@ -199,15 +298,28 @@ pub(super) async fn submit_comment(
         .await;
 
     match result {
-        Ok(submission) => {
+        Ok(reviewed) => {
             reset_dialogue(dialogue).await?;
-            let saved = submission
-                .grade()
-                .map(|grade| format!("\n{}", texts::grade_line(grade)))
+            let submission = &reviewed.submission;
+            let saved = texts::grade_line(submission.kind(), submission.grade())
+                .map(|line| format!("\n{line}"))
                 .unwrap_or_default();
             bot.send_message(chat_id, format!("{}{saved}", texts::REVIEW_SAVED))
                 .reply_markup(teacher_keyboard())
                 .await?;
+            if submission.kind() == SubmissionKind::Makeup {
+                send_makeup_followup(
+                    screen,
+                    MakeupFollowup {
+                        course_id: reviewed.course_id,
+                        student_id: submission.student_id(),
+                        offer_grant: submission.status() == SubmissionStatus::Rejected,
+                        sandbox: reviewed.sandbox,
+                    },
+                    None,
+                )
+                .await?;
+            }
         }
         Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
             reset_dialogue(dialogue).await?;
@@ -219,7 +331,10 @@ pub(super) async fn submit_comment(
             | DomainError::ScoreNotAllowed
             | DomainError::ScoreOutOfRange { .. },
         )) => {
-            restart_review(screen, submission_id).await?;
+            restart_review(screen, submission_id, texts::REVIEW_GRADING_CHANGED).await?;
+        }
+        Err(AppError::Domain(DomainError::MakeupNotOffered)) => {
+            restart_review(screen, submission_id, texts::REVIEW_MAKEUP_WITHDRAWN).await?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -227,20 +342,121 @@ pub(super) async fn submit_comment(
     Ok(())
 }
 
-async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> HandlerResult {
+struct MakeupFollowup {
+    course_id: TeachingCourseId,
+    student_id: UserId,
+    offer_grant: bool,
+    sandbox: bool,
+}
+
+async fn send_makeup_followup(
+    screen: Screen<'_>,
+    followup: MakeupFollowup,
+    notice: Option<&str>,
+) -> HandlerResult {
+    let services = screen.services();
+    let makeups = match followup.sandbox {
+        true => None,
+        false => Some(services.reviews.makeup_size(screen.actor()).await?),
+    };
+    let pool = match followup.offer_grant {
+        true => {
+            services
+                .courses
+                .student_makeup(screen.actor(), followup.course_id, followup.student_id)
+                .await?
+        }
+        false => None,
+    };
+    let mut lines: Vec<String> = notice.map(str::to_owned).into_iter().collect();
+    lines.extend(makeups.map(texts::makeups_left));
+    lines.extend(pool.map(|pool| {
+        texts::review_makeup_attempts(pool.balance.remaining(), pool.balance.allowed())
+    }));
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let text = lines.join("\n");
+    let next = makeups.is_some_and(|makeups| makeups > 0);
+    if !next && pool.is_none() {
+        screen.bot().send_message(screen.chat_id(), text).await?;
+        return Ok(());
+    }
+    let sent = screen
+        .bot()
+        .send_message(screen.chat_id(), text)
+        .reply_markup(makeup_followup_keyboard(next, pool.is_some()))
+        .await?;
+    if pool.is_some() {
+        screen
+            .dialogue()
+            .update(BotState::Screen(ScreenState::MakeupReviewed {
+                message_id: sent.id,
+                course_id: followup.course_id,
+                student_id: followup.student_id,
+                sandbox: followup.sandbox,
+            }))
+            .await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn grant_makeup_attempt(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: &BotState,
+) -> HandlerResult {
+    let Some(grant) = state.makeup_grant(message_id) else {
+        return screen.stale().await;
+    };
+    screen
+        .services()
+        .courses
+        .grant_makeup_attempt(screen.actor(), grant.course_id, grant.student_id)
+        .await?;
+    reset_dialogue(screen.dialogue()).await?;
+    match grant.origin {
+        GrantOrigin::Review { sandbox } => {
+            send_makeup_followup(
+                screen,
+                MakeupFollowup {
+                    course_id: grant.course_id,
+                    student_id: grant.student_id,
+                    offer_grant: true,
+                    sandbox,
+                },
+                Some(texts::MAKEUP_ATTEMPT_GRANTED),
+            )
+            .await
+        }
+        GrantOrigin::Grades { list } => {
+            screen
+                .bot()
+                .send_message(screen.chat_id(), texts::MAKEUP_ATTEMPT_GRANTED)
+                .await?;
+            show_student_grades_page(
+                screen,
+                grant.course_id,
+                grant.student_id,
+                PageRequest::default(),
+                list,
+            )
+            .await
+        }
+    }
+}
+
+async fn reload_item(
+    screen: Screen<'_>,
+    submission_id: SubmissionId,
+) -> HandlerResult<ReviewQueueItem> {
     match screen
         .services()
         .reviews
         .find_for_review(screen.actor(), submission_id)
         .await
     {
-        Ok(item) => {
-            screen
-                .bot()
-                .send_message(screen.chat_id(), texts::REVIEW_GRADING_CHANGED)
-                .await?;
-            show_item(screen, item).await
-        }
+        Ok(item) => Ok(item),
         Err(error) => {
             if matches!(
                 error.code(),
@@ -255,6 +471,15 @@ async fn restart_review(screen: Screen<'_>, submission_id: SubmissionId) -> Hand
     }
 }
 
+async fn restart_review(
+    screen: Screen<'_>,
+    submission_id: SubmissionId,
+    reason: &str,
+) -> HandlerResult {
+    let item = reload_item(screen, submission_id).await?;
+    restart_with(screen, item, reason).await
+}
+
 pub(super) async fn handle_decision(
     screen: Screen<'_>,
     callback_submission_id: SubmissionId,
@@ -263,8 +488,7 @@ pub(super) async fn handle_decision(
 ) -> HandlerResult {
     let BotState::Flow(FlowState::AwaitingReviewDecision {
         submission_id,
-        grading,
-        late,
+        target,
     }) = state
     else {
         return screen.stale().await;
@@ -272,43 +496,43 @@ pub(super) async fn handle_decision(
     if submission_id != callback_submission_id {
         return screen.stale().await;
     }
-    match (decision, grading.max_score()) {
-        (ReviewDecision::Accept, Some(max_score)) => {
-            ask_review_score(
-                screen.bot(),
-                screen.chat_id(),
-                submission_id,
-                max_score,
+    let chat = screen.chat();
+    match (decision, target) {
+        (
+            ReviewDecision::Accept,
+            ReviewTarget::Regular {
+                grading: Grading::Score { max_score },
                 late,
-                screen.dialogue(),
-            )
-            .await
+            },
+        ) => ask_review_score(chat, submission_id, max_score.get(), late).await,
+        (_, ReviewTarget::Regular { .. }) => {
+            ask_review_comment(chat, submission_id, decision, SubmissionKind::Regular, None).await
         }
-        _ => {
-            ask_review_comment(
-                screen.bot(),
-                screen.chat_id(),
-                submission_id,
-                decision,
-                None,
-                screen.dialogue(),
-            )
-            .await
+        (ReviewDecision::Accept, ReviewTarget::Makeup) => {
+            let item = reload_item(screen, submission_id).await?;
+            let Some(grade) = makeup_grade(&item) else {
+                return restart_with(screen, item, texts::REVIEW_MAKEUP_WITHDRAWN).await;
+            };
+            ask_review_comment(chat, submission_id, decision, SubmissionKind::Makeup, grade).await
+        }
+        (ReviewDecision::Reject, ReviewTarget::Makeup) => {
+            ask_review_comment(chat, submission_id, decision, SubmissionKind::Makeup, None).await
         }
     }
 }
 
-const SCORE_BUTTONS_LIMIT: u16 = 10;
+async fn restart_with(screen: Screen<'_>, item: ReviewQueueItem, reason: &str) -> HandlerResult {
+    screen.bot().send_message(screen.chat_id(), reason).await?;
+    show_item(screen, item).await
+}
 
 async fn ask_review_score(
-    bot: &Bot,
-    chat_id: ChatId,
+    chat: Chat<'_>,
     submission_id: SubmissionId,
     max_score: u16,
     late: Option<LatePenalty>,
-    dialogue: &BotDialogue,
 ) -> HandlerResult {
-    dialogue
+    chat.dialogue()
         .update(BotState::Flow(FlowState::AwaitingReviewScore {
             submission_id,
             max_score,
@@ -317,38 +541,42 @@ async fn ask_review_score(
         .await?;
     let question = texts::review_score_question(max_score, late);
     if max_score <= SCORE_BUTTONS_LIMIT {
-        bot.send_message(chat_id, question)
+        chat.bot()
+            .send_message(chat.chat_id(), question)
             .reply_markup(review_score_keyboard(submission_id, max_score))
             .await?;
         return Ok(());
     }
-    ask_input(
-        bot,
-        chat_id,
-        &format!("{question} {}", texts::score_prompt(max_score)),
-    )
-    .await
+    chat.ask(&format!("{question} {}", texts::score_prompt(max_score)))
+        .await
 }
 
 async fn ask_review_comment(
-    bot: &Bot,
-    chat_id: ChatId,
+    chat: Chat<'_>,
     submission_id: SubmissionId,
     decision: ReviewDecision,
+    kind: SubmissionKind,
     grade: Option<Grade>,
-    dialogue: &BotDialogue,
 ) -> HandlerResult {
-    dialogue
+    let score = match kind {
+        SubmissionKind::Regular => grade.map(Grade::raw_score),
+        SubmissionKind::Makeup => None,
+    };
+    chat.dialogue()
         .update(BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id,
             decision,
-            score: grade.map(Grade::raw_score),
+            score,
         }))
         .await?;
-    bot.send_message(chat_id, texts::review_decision(decision, grade))
+    chat.bot()
+        .send_message(
+            chat.chat_id(),
+            texts::review_decision(decision, kind, grade),
+        )
         .reply_markup(review_decision_keyboard(submission_id))
         .await?;
-    ask_input(bot, chat_id, texts::REVIEW_COMMENT_PROMPT).await
+    chat.ask(texts::REVIEW_COMMENT_PROMPT).await
 }
 
 pub(super) async fn change_decision(
@@ -381,15 +609,12 @@ pub(super) async fn change_decision(
         }
         Err(error) => return Err(error.into()),
     };
-    let late = item
-        .assignment
-        .late_penalty_at(item.submission.submitted_at());
+    let target = review_target(&item);
     screen
         .dialogue()
         .update(BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id,
-            grading: item.assignment.grading(),
-            late,
+            target,
         }))
         .await?;
     screen
@@ -399,12 +624,8 @@ pub(super) async fn change_decision(
         .await?;
     screen
         .bot()
-        .send_message(screen.chat_id(), review_card_summary(&item, late))
-        .reply_markup(review_keyboard(
-            item.submission.id(),
-            item.assignment.teaching_course_id(),
-            item.student.id(),
-        ))
+        .send_message(screen.chat_id(), review_card_summary(&item, target))
+        .reply_markup(item_keyboard(&item))
         .await?;
     Ok(())
 }
@@ -433,12 +654,11 @@ pub(super) async fn handle_review_score(
         }
     };
     ask_review_comment(
-        screen.bot(),
-        screen.chat_id(),
+        screen.chat(),
         submission_id,
         ReviewDecision::Accept,
+        SubmissionKind::Regular,
         Some(Grade::new(score, max_score, late)),
-        screen.dialogue(),
     )
     .await
 }

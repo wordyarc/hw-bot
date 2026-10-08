@@ -102,6 +102,22 @@ where
         .map_err(DbError::from)
 }
 
+pub async fn find_subject_sandbox<'e, E>(executor: E, id: SubjectId) -> DbResult<Option<bool>>
+where
+    E: PgExecutor<'e>,
+{
+    Ok(sqlx::query_scalar!(
+        r#"
+        select sandbox
+        from subjects
+        where id = $1
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
 /// Вызывающий обязан объединить оба INSERT транзакцией: нельзя оставить курс без преподавателей.
 pub async fn insert_teaching_course(
     conn: &mut PgConnection,

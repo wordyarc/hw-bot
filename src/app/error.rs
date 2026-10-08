@@ -20,6 +20,7 @@ str_enum! {
         SubmissionAlreadyAccepted => "submission_already_accepted",
         SubmissionPendingReview => "submission_pending_review",
         SubmissionAlreadyReviewed => "submission_already_reviewed",
+        MakeupAttemptsExhausted => "makeup_attempts_exhausted",
         AlreadyRegistered => "already_registered",
         ConcurrentModification => "concurrent_modification",
         InviteInvalid => "invite_invalid",
@@ -42,6 +43,9 @@ pub enum AppError {
 
     #[error("group invite was rotated by a concurrent request")]
     GroupInviteChangedConcurrently,
+
+    #[error("course makeup settings were changed by a concurrent request")]
+    CourseMakeupChangedConcurrently,
 
     #[error("group invite is not valid")]
     InviteInvalid,
@@ -82,13 +86,20 @@ impl AppError {
                 | DomainError::ScoreNotAllowed
                 | DomainError::AssignmentClosingOutOfRange
                 | DomainError::LateHorizonTooLong { .. }
-                | DomainError::AssignmentDeadlineMustBeAfterCreatedAt => ErrorCode::InvalidInput,
+                | DomainError::AssignmentDeadlineMustBeAfterCreatedAt
+                | DomainError::MakeupNotOffered
+                | DomainError::MakeupTermsDoNotFitGrading
+                | DomainError::InvalidMakeupCredit { .. }
+                | DomainError::InvalidMakeupAttempts { .. }
+                | DomainError::MakeupUntilOutOfRange { .. }
+                | DomainError::MakeupGrantLimitExceeded { .. } => ErrorCode::InvalidInput,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }
                 | DomainError::AssignmentIsArchived => ErrorCode::AssignmentUnavailable,
                 DomainError::AssignmentDeadlineExceeded { .. } => ErrorCode::DeadlineExceeded,
                 DomainError::SubmissionWindowClosed { .. } => ErrorCode::SubmissionClosed,
                 DomainError::AttemptsExhausted { .. } => ErrorCode::AttemptsExhausted,
+                DomainError::MakeupAttemptsExhausted { .. } => ErrorCode::MakeupAttemptsExhausted,
                 DomainError::SubmissionAlreadyAccepted => ErrorCode::SubmissionAlreadyAccepted,
                 DomainError::SubmissionAlreadyPendingReview => ErrorCode::SubmissionPendingReview,
                 DomainError::SubmissionIsNotPendingReview => ErrorCode::SubmissionAlreadyReviewed,
@@ -103,13 +114,14 @@ impl AppError {
                 | DomainError::InvalidSubmissionAttemptNumber { .. }
                 | DomainError::InvalidSubmissionReviewState
                 | DomainError::InvalidSubmissionGradeState
+                | DomainError::InvalidCourseMakeupState
                 | DomainError::SubmissionDoesNotBelongToAssignment
                 | DomainError::StudentProgressDoesNotBelongToAssignment => ErrorCode::InternalError,
             },
             Self::NotFound { .. } => ErrorCode::NotFound,
-            Self::AssignmentChangedConcurrently | Self::GroupInviteChangedConcurrently => {
-                ErrorCode::ConcurrentModification
-            }
+            Self::AssignmentChangedConcurrently
+            | Self::GroupInviteChangedConcurrently
+            | Self::CourseMakeupChangedConcurrently => ErrorCode::ConcurrentModification,
             Self::InviteInvalid => ErrorCode::InviteInvalid,
             Self::FileTooLarge { .. } => ErrorCode::FileTooLarge,
             Self::AssignmentFileLimitReached { .. } => ErrorCode::FileLimitReached,
@@ -180,6 +192,36 @@ mod tests {
         });
 
         assert_eq!(error.code(), ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn makeup_rules_share_the_validation_code_except_the_empty_pool() {
+        for rule in [
+            DomainError::MakeupNotOffered,
+            DomainError::MakeupTermsDoNotFitGrading,
+            DomainError::InvalidMakeupCredit { value: 11, max: 10 },
+            DomainError::InvalidMakeupAttempts { value: 0, max: 100 },
+            DomainError::MakeupUntilOutOfRange { max_days: 366 },
+            DomainError::MakeupGrantLimitExceeded { max: 100 },
+        ] {
+            assert_eq!(
+                AppError::from(rule.clone()).code(),
+                ErrorCode::InvalidInput,
+                "{rule}"
+            );
+        }
+        assert_eq!(
+            AppError::from(DomainError::MakeupAttemptsExhausted {
+                allowed: 3,
+                used: 3
+            })
+            .code(),
+            ErrorCode::MakeupAttemptsExhausted
+        );
+        assert_eq!(
+            AppError::CourseMakeupChangedConcurrently.code(),
+            ErrorCode::ConcurrentModification
+        );
     }
 
     #[test]

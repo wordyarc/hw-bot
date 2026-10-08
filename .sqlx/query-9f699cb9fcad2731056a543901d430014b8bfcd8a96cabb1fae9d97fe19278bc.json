@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, penalty_deducted_from, work_score, course_total_penalty\n            from submissions\n            where id = $1",
+  "query": "\n            select\n                id, assignment_id, student_id, kind, attempt_number, content, status,\n                submitted_at, reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score,\n                late_periods, penalty, penalty_deducted_from, work_score, course_total_penalty\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "attempt_number",
         "type_info": "Int2",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "content",
         "type_info": "Text",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "submitted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "reviewed_by",
         "type_info": "Uuid",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "reviewed_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "review_comment",
         "type_info": "Text",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "raw_score",
         "type_info": "Int2",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "grade_max_score",
         "type_info": "Int2",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "late_periods",
         "type_info": "Int4",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "penalty",
         "type_info": "Int2",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "penalty_deducted_from",
         "type_info": "Text",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "work_score",
         "type_info": "Int2",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "course_total_penalty",
         "type_info": "Int2",
         "origin": {
@@ -193,10 +204,14 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -216,5 +231,5 @@
       true
     ]
   },
-  "hash": "839e5ccfcb08bd45e2bcaba7ea252446067f005a17d91bf43a690d07d540e9d6"
+  "hash": "9f699cb9fcad2731056a543901d430014b8bfcd8a96cabb1fae9d97fe19278bc"
 }

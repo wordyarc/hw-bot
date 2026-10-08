@@ -6,7 +6,7 @@ use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     Assignment, AssignmentId, AssignmentParts, AssignmentStatus, DeductedFrom, Grading, LatePolicy,
-    StudentGroupId, Subject, SubjectId, TeachingCourseId, UserId,
+    MakeupTerms, StudentGroupId, Subject, SubjectId, TeachingCourseId, UserId,
 };
 use crate::pagination::PageRequest;
 use crate::read_models::VersionedAssignment;
@@ -17,6 +17,7 @@ const LATE_PERIOD_DAYS: &str = "assignments.late_period_days";
 const LATE_PENALTY_PER_PERIOD: &str = "assignments.late_penalty_per_period";
 const LATE_MAX_PERIODS: &str = "assignments.late_max_periods";
 const LATE_DEDUCTED_FROM: &str = "assignments.late_deducted_from";
+const MAKEUP_CREDIT: &str = "assignments.makeup_credit";
 const STATUS: &str = "assignments.status";
 
 fn max_score_param(assignment: &Assignment) -> DbResult<Option<i16>> {
@@ -53,6 +54,25 @@ impl LatePolicyColumns {
             )?),
             max_periods: Some(checked_num_cast(LATE_MAX_PERIODS, policy.max_periods())?),
             deducted_from: Some(policy.deducted_from().as_str()),
+        })
+    }
+}
+
+struct MakeupColumns {
+    offered: Option<bool>,
+    credit: Option<i16>,
+}
+
+impl MakeupColumns {
+    fn of(assignment: &Assignment) -> DbResult<Self> {
+        let terms = assignment.makeup();
+
+        Ok(Self {
+            offered: terms.map(MakeupTerms::is_offered),
+            credit: terms
+                .and_then(MakeupTerms::credit)
+                .map(|credit| checked_num_cast(MAKEUP_CREDIT, credit.get()))
+                .transpose()?,
         })
     }
 }
@@ -94,6 +114,8 @@ macro_rules! assignment_row {
             late_penalty_per_period: $row.late_penalty_per_period,
             late_max_periods: $row.late_max_periods,
             late_deducted_from: $row.late_deducted_from,
+            makeup_offered: $row.makeup_offered,
+            makeup_credit: $row.makeup_credit,
             status: $row.status,
             created_by: $row.created_by,
             created_at: $row.created_at,
@@ -110,7 +132,8 @@ macro_rules! select_assignments {
             select
                 id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
                 max_score, late_period_days, late_penalty_per_period, late_max_periods,
-                late_deducted_from, status, created_by, created_at, deadline_at, published_at
+                late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,
+                deadline_at, published_at
             "# + $extra + $tail
             $(, $arg)*
         )
@@ -126,7 +149,8 @@ macro_rules! select_assignment_cards {
                 assignments.student_group_id, assignments.title, assignments.body,
                 assignments.max_attempts, assignments.max_score, assignments.late_period_days,
                 assignments.late_penalty_per_period, assignments.late_max_periods,
-                assignments.late_deducted_from, assignments.status, assignments.created_by,
+                assignments.late_deducted_from, assignments.makeup_offered,
+                assignments.makeup_credit, assignments.status, assignments.created_by,
                 assignments.created_at, assignments.deadline_at, assignments.published_at,
                 subjects.name as subject_name
             from assignments
@@ -143,15 +167,19 @@ where
     E: PgExecutor<'e>,
 {
     let late_policy = LatePolicyColumns::of(assignment)?;
+    let makeup = MakeupColumns::of(assignment)?;
 
     sqlx::query!(
         r#"
         insert into assignments (
             id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
             max_score, late_period_days, late_penalty_per_period, late_max_periods,
-            late_deducted_from, status, created_by, created_at, deadline_at, published_at
+            late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,
+            deadline_at, published_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        values (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+        )
         "#,
         assignment.id().as_uuid(),
         assignment.teaching_course_id().as_uuid(),
@@ -165,6 +193,8 @@ where
         late_policy.penalty_per_period,
         late_policy.max_periods,
         late_policy.deducted_from,
+        makeup.offered,
+        makeup.credit,
         assignment.status().as_str(),
         assignment.created_by().as_uuid(),
         assignment.created_at(),
@@ -186,6 +216,7 @@ where
     E: PgExecutor<'e>,
 {
     let late_policy = LatePolicyColumns::of(assignment)?;
+    let makeup = MakeupColumns::of(assignment)?;
 
     let result = sqlx::query!(
         r#"
@@ -199,9 +230,11 @@ where
             late_penalty_per_period = $7,
             late_max_periods = $8,
             late_deducted_from = $9,
+            makeup_offered = $10,
+            makeup_credit = $11,
             revision = revision + 1
         where id = $1
-          and revision = $10
+          and revision = $12
         "#,
         assignment.id().as_uuid(),
         assignment.status().as_str(),
@@ -212,6 +245,8 @@ where
         late_policy.penalty_per_period,
         late_policy.max_periods,
         late_policy.deducted_from,
+        makeup.offered,
+        makeup.credit,
         expected_revision,
     )
     .execute(executor)
@@ -380,6 +415,8 @@ struct AssignmentRow {
     late_penalty_per_period: Option<i16>,
     late_max_periods: Option<i16>,
     late_deducted_from: Option<String>,
+    makeup_offered: Option<bool>,
+    makeup_credit: Option<i16>,
     status: String,
     created_by: Uuid,
     created_at: DateTime<Utc>,
@@ -404,6 +441,11 @@ impl TryFrom<AssignmentRow> for Assignment {
             .transpose()?;
         let status = AssignmentStatus::parse_str(&row.status)
             .ok_or_else(|| DbError::invalid_value(STATUS, &row.status))?;
+        let grading = Grading::from_max_score(max_score)?;
+        let makeup_credit = row
+            .makeup_credit
+            .map(|value| checked_num_cast::<_, u16>(MAKEUP_CREDIT, value))
+            .transpose()?;
 
         Ok(Assignment::restore(AssignmentParts {
             id: AssignmentId::from_uuid(row.id),
@@ -413,13 +455,14 @@ impl TryFrom<AssignmentRow> for Assignment {
             title: row.title,
             body: row.body,
             max_attempts,
-            grading: Grading::from_max_score(max_score)?,
+            grading,
             late_policy: late_policy_from_row(
                 row.late_period_days,
                 row.late_penalty_per_period,
                 row.late_max_periods,
                 row.late_deducted_from,
             )?,
+            makeup: MakeupTerms::restore(row.makeup_offered, makeup_credit, grading)?,
             status,
             created_by: UserId::from_uuid(row.created_by),
             created_at: row.created_at,

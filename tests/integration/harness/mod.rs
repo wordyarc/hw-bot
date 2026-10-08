@@ -5,18 +5,19 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::request::Builder;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SubsecRound, Utc};
 use hw_bot::api::{self, ACTOR_HEADER, AppState};
-use hw_bot::app::{Actor, ApplicationContainer, FilePolicy};
+use hw_bot::app::{Actor, ApplicationContainer, ConfigureMakeup, FilePolicy, MakeupSettings};
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, DeductedFrom, EducationLevel, StudentGroup, StudentGroupId, Subject,
-    TeachingCourse, User,
+    Assignment, CourseMakeup, DeductedFrom, EducationLevel, Grading, MakeupTerms, StudentGroup,
+    StudentGroupId, Subject, TeachingCourse, User,
 };
 use hw_bot::health::HealthState;
 use hw_bot::invites::{GroupInviteCodec, InviteSigningSecret};
 use hw_bot::test_support::{
-    named_admin, named_student, named_teacher, student_group_in, subject, teaching_course,
+    assignment as assignment_of, named_admin, named_student, named_teacher, student_group_in,
+    subject, teaching_course,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -604,6 +605,88 @@ impl TestApp {
         insert_course(&self.pool, &course).await;
 
         course
+    }
+
+    pub async fn enable_makeup(&self, attempts: u16) -> CourseMakeup {
+        self.enable_makeup_on(&self.fixture.course, attempts).await
+    }
+
+    pub async fn enable_makeup_on(&self, course: &TeachingCourse, attempts: u16) -> CourseMakeup {
+        self.open_makeup(course, attempts, Utc::now()).await
+    }
+
+    pub async fn open_makeup(
+        &self,
+        course: &TeachingCourse,
+        attempts: u16,
+        now: DateTime<Utc>,
+    ) -> CourseMakeup {
+        self.application
+            .courses
+            .configure_makeup(ConfigureMakeup {
+                course_id: course.id(),
+                actor: self.teacher_actor(),
+                expected: None,
+                settings: Some(MakeupSettings {
+                    until: now + Duration::days(30),
+                    attempts,
+                }),
+                decisions: Vec::new(),
+                now,
+            })
+            .await
+            .expect("enable makeup")
+            .expect("makeup is enabled")
+    }
+
+    pub async fn add_makeup_assignment(
+        &self,
+        title: &str,
+        grading: Grading,
+        makeup: MakeupTerms,
+        deadline_at: DateTime<Utc>,
+    ) -> Assignment {
+        self.add_makeup_assignment_on(&self.fixture.course, title, grading, makeup, deadline_at)
+            .await
+    }
+
+    pub async fn add_makeup_assignment_on(
+        &self,
+        course: &TeachingCourse,
+        title: &str,
+        grading: Grading,
+        makeup: MakeupTerms,
+        deadline_at: DateTime<Utc>,
+    ) -> Assignment {
+        let assignment = assignment_of(course, &self.fixture.teacher)
+            .title(title)
+            .created_at(deadline_at.min(Utc::now()).trunc_subsecs(6) - Duration::days(1))
+            .deadline_at(deadline_at)
+            .grading(grading)
+            .makeup(makeup)
+            .published()
+            .build();
+        db::assignments::insert(&self.pool, &assignment)
+            .await
+            .expect("insert makeup assignment");
+
+        assignment
+    }
+
+    pub async fn add_closed_assignment(
+        &self,
+        title: &str,
+        max_score: u16,
+        credit: u16,
+    ) -> Assignment {
+        let grading = Grading::scored(max_score).expect("valid scale");
+        self.add_makeup_assignment(
+            title,
+            grading,
+            MakeupTerms::scored(credit, grading).expect("valid credit"),
+            Utc::now() - Duration::days(1),
+        )
+        .await
     }
 
     pub async fn add_published_assignment(

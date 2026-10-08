@@ -1,0 +1,73 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with history as (\n            select\n                assignment_id,\n                count(*) filter (\n                    where kind = 'regular' and status in ('accepted', 'rejected')\n                )::bigint as used_attempts,\n                count(*)::bigint as submission_count,\n                bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,\n                max(work_score) filter (\n                    where kind = 'regular' and status = 'accepted'\n                ) as accepted_regular_score,\n                bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,\n                bool_or(status = 'pending_review') as has_pending_submission\n            from submissions\n            where student_id = $2\n              and assignment_id = any($1)\n            group by assignment_id\n        )\n        select\n            requested.assignment_id as \"assignment_id!\",\n            coalesce(history.used_attempts, 0) as \"used_attempts!\",\n            coalesce(history.submission_count, 0) as \"submission_count!\",\n            coalesce(progress.extra_attempts, 0)::smallint as \"extra_attempts!\",\n            coalesce(history.has_accepted_regular, false) as \"has_accepted_regular!\",\n            history.accepted_regular_score as \"accepted_regular_score?\",\n            coalesce(history.has_accepted_makeup, false) as \"has_accepted_makeup!\",\n            coalesce(history.has_pending_submission, false) as \"has_pending_submission!\"\n        from unnest($1::uuid[]) as requested (assignment_id)\n        left join history\n          on history.assignment_id = requested.assignment_id\n        left join student_assignment_progress progress\n          on progress.assignment_id = requested.assignment_id\n         and progress.student_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignment_id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "used_attempts!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "submission_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "extra_attempts!",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "has_accepted_regular!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "accepted_regular_score?",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "has_accepted_makeup!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "has_pending_submission!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      null,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "4161e948a31d87a882aa0286e068a6a5b255aa9aea25b9e62d90d23a3b73e650"
+}

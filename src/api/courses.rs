@@ -68,6 +68,7 @@ struct AssignmentGradeResponse {
     max_score: u16,
     work_score: Option<u16>,
     course_total_penalty: Option<u16>,
+    makeup: Option<bool>,
 }
 
 impl From<&Page<StudentGrades>> for CourseGradebookResponse {
@@ -98,6 +99,7 @@ impl From<&StudentGrades> for StudentGradesResponse {
                     max_score: grade.max_score,
                     work_score: grade.score.map(|score| score.work_score),
                     course_total_penalty: grade.score.map(|score| score.course_total_penalty),
+                    makeup: grade.score.map(|score| score.makeup),
                 })
                 .collect(),
         }

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select makeup_until, makeup_attempts, makeup_opened_at\n        from teaching_courses\n        where id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "makeup_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "makeup_until"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "makeup_attempts",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "makeup_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "makeup_opened_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "makeup_opened_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9b9a24d3d73e63eaaa2a498e8aef153904b8173a6825ccdcfc3ceff755be8be1"
+}

@@ -123,7 +123,7 @@ pub async fn review_submission(
         reviewed_at: Utc::now(),
     };
 
-    let submission = state.application.reviews.review_submission(command).await?;
+    let reviewed = state.application.reviews.review_submission(command).await?;
 
-    Ok(Json(SubmissionResponse::from(&submission)))
+    Ok(Json(SubmissionResponse::from(&reviewed.submission)))
 }

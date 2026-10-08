@@ -13,6 +13,7 @@ mod db_schema;
 mod grading_api;
 mod group_invites;
 mod health_api;
+mod makeup;
 mod notification_outbox;
 mod notification_worker;
 mod pagination;

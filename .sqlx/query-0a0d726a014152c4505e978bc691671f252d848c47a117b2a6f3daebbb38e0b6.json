@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select min(makeup_credit) as lowest, max(makeup_credit) as highest\n        from assignments\n        where teaching_course_id = $1\n          and max_score = $2\n          and makeup_credit is not null\n          and status <> 'archived'\n          and ($3::uuid is null or id <> $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lowest",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "highest",
+        "type_info": "Int2",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int2",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "0a0d726a014152c4505e978bc691671f252d848c47a117b2a6f3daebbb38e0b6"
+}

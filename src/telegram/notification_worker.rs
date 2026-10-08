@@ -13,7 +13,7 @@ use super::{DeliveryFailure, delivery_failure, request_error_kind};
 use crate::bot::texts;
 use crate::db::notifications::ReviewOutcome;
 use crate::db::{self, DbError};
-use crate::domain::Grade;
+use crate::domain::{Grade, SubmissionKind};
 use crate::health::ComponentHealth;
 
 #[derive(Clone, Debug)]
@@ -77,6 +77,7 @@ impl NotificationWorker {
 
         let text = render_review_notification(
             notification.outcome,
+            notification.kind,
             &notification.subject_name,
             &notification.assignment_title,
             notification.grade,
@@ -221,6 +222,7 @@ impl NotificationWorker {
 
 fn render_review_notification(
     outcome: ReviewOutcome,
+    kind: SubmissionKind,
     subject_name: &str,
     assignment_title: &str,
     grade: Option<Grade>,
@@ -234,6 +236,7 @@ fn render_review_notification(
         verdict,
         subject_name,
         assignment_title,
+        kind,
         grade,
         review_comment,
     );
@@ -272,6 +275,7 @@ mod tests {
     fn review_message_is_bounded_by_telegram_limit() {
         let message = render_review_notification(
             ReviewOutcome::Rejected,
+            SubmissionKind::Regular,
             "Backend development",
             "Ownership",
             None,
@@ -286,6 +290,7 @@ mod tests {
     fn review_message_names_the_subject_the_assignment_belongs_to() {
         let message = render_review_notification(
             ReviewOutcome::Accepted,
+            SubmissionKind::Regular,
             "Backend development",
             "Ownership",
             None,
@@ -297,13 +302,22 @@ mod tests {
     }
 
     fn accepted(grade: Option<Grade>) -> String {
+        accepted_as(SubmissionKind::Regular, grade)
+    }
+
+    fn accepted_as(kind: SubmissionKind, grade: Option<Grade>) -> String {
         render_review_notification(
             ReviewOutcome::Accepted,
+            kind,
             "Backend development",
             "Ownership",
             grade,
             "Хорошо",
         )
+    }
+
+    fn grade_line(grade: Grade) -> String {
+        texts::grade_line(SubmissionKind::Regular, Some(grade)).unwrap()
     }
 
     fn late_by_one_period(deducted_from: DeductedFrom) -> Option<LatePenalty> {
@@ -317,7 +331,21 @@ mod tests {
         let grade = Grade::new(4, 5, None);
         let message = accepted(Some(grade));
 
-        assert!(message.contains(&texts::grade_line(grade)), "{message}");
+        assert!(message.contains(&grade_line(grade)), "{message}");
+    }
+
+    #[test]
+    fn a_credited_makeup_is_named_with_its_credit_and_without_a_penalty() {
+        let grade = Grade::new(6, 10, None);
+        let message = accepted_as(SubmissionKind::Makeup, Some(grade));
+
+        assert!(
+            message.contains(&texts::grade_line(SubmissionKind::Makeup, Some(grade)).unwrap()),
+            "{message}"
+        );
+        assert!(message.contains(texts::MAKEUP_MARK), "{message}");
+        assert!(message.contains("6 из 10"), "{message}");
+        assert!(!message.contains('−'), "{message}");
     }
 
     #[test]
@@ -325,7 +353,7 @@ mod tests {
         let grade = Grade::new(8, 10, late_by_one_period(DeductedFrom::WorkScore));
         let message = accepted(Some(grade));
 
-        assert!(message.contains(&texts::grade_line(grade)), "{message}");
+        assert!(message.contains(&grade_line(grade)), "{message}");
         assert!(message.contains("4 из 10"), "{message}");
     }
 
@@ -334,7 +362,7 @@ mod tests {
         let grade = Grade::new(8, 10, late_by_one_period(DeductedFrom::CourseTotal));
         let message = accepted(Some(grade));
 
-        assert!(message.contains(&texts::grade_line(grade)), "{message}");
+        assert!(message.contains(&grade_line(grade)), "{message}");
         assert!(message.contains("8 из 10"), "{message}");
         assert!(message.contains("−4"), "{message}");
     }
@@ -342,7 +370,7 @@ mod tests {
     #[test]
     fn a_pass_fail_review_names_no_score() {
         let grade = Grade::new(4, 5, None);
-        let line = format!("\n{}", texts::grade_line(grade));
+        let line = format!("\n{}", grade_line(grade));
 
         assert_eq!(accepted(Some(grade)).replace(&line, ""), accepted(None));
     }

@@ -1,11 +1,15 @@
 use chrono::{DateTime, Utc};
 use teloxide::types::InlineKeyboardMarkup;
 
-use super::keyboards::terms_form_keyboard;
-use crate::bot::assignment_form::{CompleteTerms, TermsForm, TermsStep, TermsTarget};
+use super::keyboards::{makeup_form_keyboard, terms_form_keyboard};
+use crate::app::StudentMakeup;
+use crate::bot::assignment_form::{CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget};
+use crate::bot::makeup_form::{MakeupForm, MakeupStep};
 use crate::bot::{texts, timezone::BotTimezone};
-use crate::domain::{Assignment, DeductedFrom, Grading, LatePolicy, MaxScore};
+use crate::domain::{Assignment, DeductedFrom, Grading, LatePolicy, MakeupCredit, MaxScore};
 use crate::telegram::text::truncate;
+
+const MAKEUP_TITLES_SHOWN: usize = 10;
 
 /// `None` означает, что в форме нет значений, без которых её шаг не показать.
 pub(crate) fn terms_form_view(
@@ -29,6 +33,7 @@ pub(crate) fn terms_form_view(
         })
         .unwrap_or_default();
     let text = match form.step {
+        TermsStep::Makeup => texts::makeup_terms_question(terms.grading()),
         TermsStep::Policy => format!(
             "{}\n\n{}",
             texts::LATE_POLICY_QUESTION,
@@ -99,6 +104,12 @@ fn terms_summary(
         texts::TERMS_CONFIRM,
         terms_lines(terms.grading(), deadline, policy, closing, timezone)
     );
+    if terms.makeup_enabled {
+        text.push_str(&format!(
+            "\n{}",
+            texts::makeup_terms_line(terms.makeup, terms.grading())
+        ));
+    }
     if let (Some(policy), Grading::Score { max_score }) = (policy, terms.grading()) {
         text.push_str(&format!(
             "\n{}",
@@ -194,6 +205,15 @@ pub(crate) fn grading_lines(
     now: DateTime<Utc>,
     timezone: &BotTimezone,
 ) -> String {
+    student_grading_lines(assignment, None, now, timezone)
+}
+
+pub(crate) fn student_grading_lines(
+    assignment: &Assignment,
+    makeup: Option<StudentMakeup>,
+    now: DateTime<Utc>,
+    timezone: &BotTimezone,
+) -> String {
     let closes_at = assignment.closes_at();
     let mut lines = format!(
         "\n{}",
@@ -205,18 +225,125 @@ pub(crate) fn grading_lines(
             timezone,
         )
     );
-    if now >= closes_at {
-        lines.push_str(&format!(
-            "\n{} {}.",
-            texts::CLOSED_ON,
-            timezone.format_closed_since(closes_at)
-        ));
+    match makeup {
+        Some(makeup) if now >= closes_at => {
+            lines.push_str(&format!(
+                "\n{}",
+                student_makeup_lines(makeup, assignment.grading(), timezone)
+            ));
+        }
+        _ if now >= closes_at => {
+            lines.push_str(&format!(
+                "\n{} {}.",
+                texts::CLOSED_ON,
+                timezone.format_closed_since(closes_at)
+            ));
+        }
+        _ => {}
     }
     let penalty = assignment.penalty_at(now);
     if penalty > 0 && now < closes_at {
         lines.push_str(&format!("\n{} −{penalty}", texts::LATE_PENALTY_LABEL));
     }
     lines
+}
+
+pub(crate) fn student_makeup_lines(
+    makeup: StudentMakeup,
+    grading: Grading,
+    timezone: &BotTimezone,
+) -> String {
+    let offer = texts::makeup_offer(
+        &timezone.format(makeup.until),
+        &makeup_credit_terms(makeup.credit, grading),
+    );
+    let balance = makeup.balance;
+    let attempts = match balance.remaining() {
+        0 => texts::MAKEUP_ATTEMPTS_EXHAUSTED.to_owned(),
+        remaining => texts::card_makeup_attempts(remaining, balance.allowed()),
+    };
+    format!("{offer}\n{attempts}")
+}
+
+pub(crate) fn makeup_credit_terms(credit: Option<MakeupCredit>, grading: Grading) -> String {
+    texts::makeup_credit_text(credit.map(MakeupCredit::get).zip(grading.max_score()))
+}
+
+pub(crate) fn makeup_form_view(
+    form: &MakeupForm,
+    timezone: &BotTimezone,
+    now: DateTime<Utc>,
+) -> Option<(String, InlineKeyboardMarkup)> {
+    let text = match form.step {
+        MakeupStep::Date => {
+            let current = form
+                .until
+                .map(|until| texts::makeup_until_line(&timezone.format(until)));
+            let ended = form
+                .ended()
+                .map(|makeup| texts::makeup_ended_line(&timezone.format(makeup.until())));
+            let context = current
+                .or(ended)
+                .map(|line| format!("{line}.\n"))
+                .unwrap_or_default();
+            format!(
+                "{context}{}\n{} {} {}.\n{}",
+                texts::MAKEUP_DATE_QUESTION,
+                texts::WHOLE_DAY_HINT,
+                texts::TIMEZONE_LABEL,
+                timezone.label(),
+                texts::DATE_FORMAT,
+            )
+        }
+        MakeupStep::Attempts => texts::makeup_attempts_question(),
+        MakeupStep::Scale(_) => {
+            let scale = form.current_scale()?;
+            let titles: Vec<String> = scale
+                .assignments
+                .iter()
+                .take(MAKEUP_TITLES_SHOWN)
+                .map(|(_, title)| button_label(title))
+                .collect();
+            let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+            texts::makeup_scale_question(
+                scale.grading,
+                scale.assignments.len(),
+                &titles,
+                scale.assignments.len().saturating_sub(MAKEUP_TITLES_SHOWN),
+            )
+        }
+        MakeupStep::Summary => makeup_summary(form, timezone)?,
+    };
+    let keyboard = match form.mode {
+        InputMode::Manual => InlineKeyboardMarkup::default(),
+        InputMode::Buttons | InputMode::Calendar(_) => makeup_form_keyboard(form, timezone, now)?,
+    };
+    Some((text, keyboard))
+}
+
+fn makeup_summary(form: &MakeupForm, timezone: &BotTimezone) -> Option<String> {
+    let mut lines = vec![texts::MAKEUP_SUMMARY_HEADER.to_owned()];
+    if form.disabling {
+        lines.push(texts::MAKEUP_WILL_BE_DISABLED.to_owned());
+    } else {
+        lines.push(format!(
+            "{}.",
+            texts::makeup_until_line(&timezone.format(form.until?))
+        ));
+        lines.push(texts::makeup_attempts_line(form.attempts?));
+    }
+    for scale in &form.scales {
+        let answer = texts::makeup_answer(scale.answer?, scale.grading);
+        lines.push(texts::makeup_scale_answer(
+            scale.grading,
+            scale.assignments.len(),
+            &answer,
+        ));
+    }
+    if !form.active && !form.disabling {
+        lines.push(texts::MAKEUP_NEW_POOL.to_owned());
+    }
+    Some(lines.join("\n"))
 }
 
 fn terms_lines(
@@ -268,6 +395,7 @@ mod tests {
     use chrono_tz::Tz;
 
     use super::*;
+    use crate::app::MakeupQuestion;
     use crate::bot::assignment_form::AssignmentTerms;
     use crate::bot::callbacks::TermsAction;
     use crate::domain::DeductedFrom;
@@ -284,7 +412,10 @@ mod tests {
                 builder = builder.late_policy(7, 1, 4, DeductedFrom::WorkScore);
             }
             let assignment = builder.build();
-            let form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
+            let form = TermsForm::new(
+                AssignmentTerms::editing(&assignment, 0, MakeupQuestion::default()),
+                TermsStep::Summary,
+            );
             let before = terms_form_view(
                 &form,
                 &timezone,
@@ -318,7 +449,10 @@ mod tests {
             .late_policy(7, 2, 4, DeductedFrom::WorkScore)
             .build();
         let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
-        let mut form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
+        let mut form = TermsForm::new(
+            AssignmentTerms::editing(&assignment, 0, MakeupQuestion::default()),
+            TermsStep::Summary,
+        );
         assert!(form.edit_summary(TermsAction::Period));
         form.apply_number(10).unwrap();
 
@@ -347,7 +481,10 @@ mod tests {
                 .scored(10)
                 .late_policy(7, 2, 4, deducted_from)
                 .build();
-            let form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
+            let form = TermsForm::new(
+                AssignmentTerms::editing(&assignment, 0, MakeupQuestion::default()),
+                TermsStep::Summary,
+            );
 
             let (summary, keyboard) = terms_form_view(&form, &timezone, t0()).unwrap();
             let card = grading_lines(&assignment, t0(), &timezone);
@@ -389,5 +526,120 @@ mod tests {
         let closed = grading_lines(&assignment, assignment.closes_at(), &timezone);
         assert!(closed.contains(texts::CLOSED_ON), "{closed}");
         assert!(!closed.contains(texts::LATE_PENALTY_LABEL), "{closed}");
+    }
+
+    #[test]
+    fn an_ended_makeup_is_named_at_the_date_step_and_announced_as_a_new_pool() {
+        use crate::bot::makeup_form::MakeupForm;
+        use crate::domain::{CourseMakeup, TeachingCourseId};
+
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let ended = CourseMakeup::open(t0() + Duration::days(30), 3, t0()).unwrap();
+        let now = ended.until() + Duration::days(1);
+        let mut form = MakeupForm::new(TeachingCourseId::new(), Some(ended), Vec::new(), now);
+
+        let (date_step, _) = makeup_form_view(&form, &timezone, now).unwrap();
+        assert!(
+            date_step.contains(&texts::makeup_ended_line(&timezone.format(ended.until()))),
+            "{date_step}"
+        );
+        form.apply_date(now + Duration::days(30), now).unwrap();
+        form.apply_attempts(2).unwrap();
+        let (summary, _) = makeup_form_view(&form, &timezone, now).unwrap();
+        assert!(summary.contains(texts::MAKEUP_NEW_POOL), "{summary}");
+    }
+
+    #[test]
+    fn the_summary_names_the_makeup_terms_only_on_a_course_with_makeup() {
+        use crate::domain::{Grading, MakeupTerms};
+
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let scored = assignment(&course, &teacher).scored(10).build();
+        let pass_fail = assignment(&course, &teacher).build();
+        let six = MakeupTerms::scored(6, Grading::scored(10).unwrap()).unwrap();
+        let summary = |assignment: &Assignment, makeup, enabled| {
+            let mut terms = AssignmentTerms::editing(
+                assignment,
+                0,
+                MakeupQuestion {
+                    enabled,
+                    hint: None,
+                },
+            );
+            terms.makeup = makeup;
+            let form = TermsForm::new(terms, TermsStep::Summary);
+            terms_form_view(&form, &timezone, t0()).unwrap()
+        };
+
+        for (assignment, makeup) in [
+            (&scored, Some(six)),
+            (&scored, Some(MakeupTerms::NotOffered)),
+            (&pass_fail, Some(MakeupTerms::PassFail)),
+            (&scored, None),
+        ] {
+            let line = texts::makeup_terms_line(makeup, assignment.grading());
+            let (text, keyboard) = summary(assignment, makeup, true);
+            assert!(text.contains(&line), "{text}");
+            assert!(
+                keyboard
+                    .inline_keyboard
+                    .iter()
+                    .flatten()
+                    .any(|button| button.text == line),
+                "{line}"
+            );
+        }
+        assert!(
+            texts::makeup_terms_line(Some(six), scored.grading()).contains("6 из 10"),
+            "the credit is named out of the scale"
+        );
+        let (text, _) = summary(&scored, Some(six), false);
+        assert!(!text.contains(texts::MAKEUP_MARK), "{text}");
+    }
+
+    #[test]
+    fn a_closed_card_shows_the_makeup_instead_of_the_closing_or_says_the_pool_is_empty() {
+        use crate::app::StudentMakeup;
+        use crate::domain::{CourseMakeup, MakeupTerms};
+
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let work = assignment(&course, &teacher)
+            .scored(10)
+            .makeup_credit(6)
+            .build();
+        let closed = work.closes_at() + Duration::days(1);
+        let window = CourseMakeup::open(closed + Duration::days(30), 3, work.closes_at()).unwrap();
+        let offer = |used| StudentMakeup {
+            until: window.until(),
+            credit: work.makeup().and_then(MakeupTerms::credit),
+            balance: window.balance(0, used),
+        };
+        let offer_line = texts::makeup_offer(
+            &timezone.format(window.until()),
+            &texts::makeup_credit_text(Some((6, 10))),
+        );
+
+        let available = student_grading_lines(&work, Some(offer(1)), closed, &timezone);
+        assert!(available.contains(&offer_line), "{available}");
+        assert!(
+            available.contains(&texts::card_makeup_attempts(2, 3)),
+            "{available}"
+        );
+        assert!(!available.contains(texts::CLOSED_ON), "{available}");
+
+        let exhausted = student_grading_lines(&work, Some(offer(3)), closed, &timezone);
+        assert!(exhausted.contains(&offer_line), "{exhausted}");
+        assert!(
+            exhausted.contains(texts::MAKEUP_ATTEMPTS_EXHAUSTED),
+            "{exhausted}"
+        );
+
+        let none = student_grading_lines(&work, None, closed, &timezone);
+        assert!(none.contains(texts::CLOSED_ON), "{none}");
+        assert!(!none.contains(texts::MAKEUP_MARK), "{none}");
     }
 }

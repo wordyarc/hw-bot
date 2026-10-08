@@ -91,6 +91,9 @@ pub fn app_error_message(code: ErrorCode) -> &'static str {
         ErrorCode::DeadlineExceeded => "Приём по этому заданию завершён: срок сдачи истёк.",
         ErrorCode::SubmissionClosed => "Приём работ по этому заданию закрыт.",
         ErrorCode::AttemptsExhausted => "Попыток на сдачу больше не осталось.",
+        ErrorCode::MakeupAttemptsExhausted => {
+            "Попытки досдачи по предмету закончились. Добавить попытку может преподаватель предмета."
+        }
         ErrorCode::SubmissionAlreadyAccepted => "Работа уже принята.",
         ErrorCode::SubmissionPendingReview => "Предыдущая работа ещё на проверке.",
         ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",

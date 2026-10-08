@@ -3,6 +3,7 @@ mod contacts;
 mod creation;
 mod failures;
 mod files;
+mod makeup;
 mod navigation;
 mod registration;
 mod review;

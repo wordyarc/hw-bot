@@ -1,13 +1,13 @@
 use teloxide::payloads::SendMessageSetters;
 
-use crate::app::CourseStudent;
+use crate::app::{CourseStudent, StudentGradesCard};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::Screen;
-use crate::bot::state::{BotState, FlowState, StudentChoice};
+use crate::bot::state::{BotState, FlowState, ScreenState, StudentChoice, StudentList};
 use crate::bot::texts;
 use crate::bot::views::{
-    gradebook_students_keyboard, paginated_keyboard, send_message_chunks, student_grades_keyboard,
+    gradebook_students_keyboard, paginated_keyboard, send_screen, student_grades_keyboard,
 };
 use crate::domain::{TeachingCourseId, UserId};
 use crate::pagination::{Page, PageRequest};
@@ -69,23 +69,31 @@ pub(crate) async fn show_student_grades_page(
     course_id: TeachingCourseId,
     student_id: UserId,
     page: PageRequest,
+    list: Option<StudentList>,
 ) -> HandlerResult {
-    let student = screen
+    let StudentGradesCard {
+        grades: student,
+        makeup,
+    } = screen
         .services()
         .courses
-        .student_grades(screen.actor(), course_id, student_id, page)
+        .student_grades_card(screen.actor(), course_id, student_id, page)
         .await?;
 
-    let mut lines = vec![
-        texts::grades_header(
-            &student.display_name,
-            student.work_total(),
-            student.penalty_total(),
-            student.total(),
-            student.max_total(),
-        ),
-        String::new(),
-    ];
+    let mut lines = vec![texts::grades_header(
+        &student.display_name,
+        student.work_total(),
+        student.penalty_total(),
+        student.total(),
+        student.max_total(),
+    )];
+    if let Some(pool) = makeup {
+        lines.push(texts::gradebook_makeup_attempts(
+            pool.balance.remaining(),
+            pool.balance.allowed(),
+        ));
+    }
+    lines.push(String::new());
     if student.grades.is_empty() {
         lines.push(texts::NO_SCORED_ASSIGNMENTS.to_owned());
     }
@@ -98,23 +106,28 @@ pub(crate) async fn show_student_grades_page(
             &score,
             grade.max_score,
             grade.score.map_or(0, |score| score.course_total_penalty),
+            grade.score.is_some_and(|score| score.makeup),
         ));
     }
     let text = lines.join("\n");
 
-    let keyboard = student_grades_keyboard(course_id, student_id);
-    send_message_chunks(
-        screen.bot(),
-        screen.chat_id(),
-        text,
-        Some(paginated_keyboard(
-            keyboard,
-            PageTarget::StudentGrades(course_id, student_id),
-            student.grade_page,
-            student.next_grade_page,
-        )),
-    )
-    .await
+    let keyboard = paginated_keyboard(
+        student_grades_keyboard(course_id, student_id, makeup.is_some()),
+        PageTarget::StudentGrades(course_id, student_id),
+        student.grade_page,
+        student.next_grade_page,
+    );
+    let message_id = send_screen(screen.bot(), screen.chat_id(), text, keyboard).await?;
+    screen
+        .dialogue()
+        .update(BotState::Screen(ScreenState::StudentGrades {
+            message_id,
+            course_id,
+            student_id,
+            list,
+        }))
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -139,8 +152,8 @@ mod tests {
 
     #[test]
     fn an_assignment_line_names_only_a_penalty_to_the_total() {
-        let to_total = texts::grade_entry("Ownership", "8", 10, 4);
-        let to_work = texts::grade_entry("Traits", "4", 10, 0);
+        let to_total = texts::grade_entry("Ownership", "8", 10, 4, false);
+        let to_work = texts::grade_entry("Traits", "4", 10, 0, false);
 
         assert!(to_total.contains("8 из 10"), "{to_total}");
         assert!(to_total.contains("−4"), "{to_total}");

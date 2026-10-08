@@ -1,0 +1,140 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with history as (\n            select\n                student_id,\n                count(*) filter (\n                    where kind = 'regular' and status in ('accepted', 'rejected')\n                )::bigint as used_attempts,\n                count(*)::bigint as submission_count,\n                bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,\n                max(work_score) filter (\n                    where kind = 'regular' and status = 'accepted'\n                ) as accepted_regular_score,\n                bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,\n                bool_or(status = 'pending_review') as has_pending_submission\n            from submissions\n            where assignment_id = $1\n            group by student_id\n        )\n        select\n            users.id,\n            users.telegram_user_id,\n            users.role,\n            users.display_name,\n            users.student_group_id,\n            users.registered_at,\n            coalesce(history.used_attempts, 0)::bigint as \"used_attempts!\",\n            coalesce(history.submission_count, 0)::bigint as \"submission_count!\",\n            coalesce(progress.extra_attempts, 0)::smallint as \"extra_attempts!\",\n            coalesce(history.has_accepted_regular, false) as \"has_accepted_regular!\",\n            history.accepted_regular_score as \"accepted_regular_score?\",\n            coalesce(history.has_accepted_makeup, false) as \"has_accepted_makeup!\",\n            coalesce(history.has_pending_submission, false) as \"has_pending_submission!\"\n        from users\n        left join history\n          on history.student_id = users.id\n        left join student_assignment_progress progress\n          on progress.assignment_id = $1\n         and progress.student_id = users.id\n        where users.role = 'student'\n          and users.student_group_id = $2\n        order by users.display_name, users.id\n        limit $3 offset $4\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "telegram_user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "telegram_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "student_group_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "student_group_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "registered_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "registered_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "used_attempts!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "submission_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "extra_attempts!",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "has_accepted_regular!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "accepted_regular_score?",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "has_accepted_makeup!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "has_pending_submission!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "bf0aa629bd755940f04f8b2d965a2d50c70b3296dccf3253dee03869d79b9f02"
+}

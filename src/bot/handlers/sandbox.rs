@@ -38,6 +38,7 @@ pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerR
             &submission.student_name,
             &submission.assignment_title,
             &timezone.format_short(submission.submitted_at),
+            submission.kind,
         )
     });
     let text = list_text(&texts::sandbox_header(total), entries);

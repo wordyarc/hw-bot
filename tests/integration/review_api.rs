@@ -1,4 +1,6 @@
 use axum::http::StatusCode;
+use hw_bot::app::ChangeTerms;
+use hw_bot::domain::{Assignment, MakeupTerms};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -425,4 +427,86 @@ async fn attempts_run_out_after_the_last_rejection() {
     app.submit(app.assignment(), app.student(), "pull/3")
         .await
         .error(StatusCode::CONFLICT, "attempts_exhausted");
+}
+
+async fn pending_makeup(app: &TestApp) -> (Assignment, Uuid) {
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    app.enable_makeup(3).await;
+    let makeup = submission_id(
+        &app.submit(closed.id().as_uuid(), app.student(), "pull/makeup")
+            .await
+            .created(),
+    );
+
+    (closed, makeup)
+}
+
+#[tokio::test]
+async fn a_makeup_accepted_without_a_score_is_credited_by_its_terms() {
+    let app = TestApp::start().await;
+    let (_, makeup) = pending_makeup(&app).await;
+
+    let reviewed = app
+        .review(makeup, app.teacher(), "accept", "Досдано")
+        .await
+        .ok();
+
+    assert_eq!(reviewed["kind"], "makeup");
+    assert_eq!(reviewed["work_score"], 6);
+    assert_eq!(reviewed["max_score"], 10);
+    assert_eq!(reviewed["course_total_penalty"], 0);
+    assert_eq!(reviewed["penalty_deducted_from"], json!(null));
+}
+
+#[tokio::test]
+async fn a_score_in_a_makeup_review_is_invalid_input() {
+    let app = TestApp::start().await;
+    let (_, makeup) = pending_makeup(&app).await;
+
+    app.review_with_score(makeup, app.teacher(), "accept", 6, "Досдано")
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+
+    app.review(makeup, app.teacher(), "reject", "Не то")
+        .await
+        .ok();
+}
+
+#[tokio::test]
+async fn a_makeup_with_withdrawn_terms_can_be_rejected_but_not_accepted() {
+    let app = TestApp::start().await;
+    let (closed, makeup) = pending_makeup(&app).await;
+    app.application
+        .assignments
+        .change_terms(ChangeTerms {
+            assignment_id: closed.id(),
+            actor: app.teacher_actor(),
+            deadline_at: closed.deadline_at(),
+            late_policy: None,
+            makeup: Some(MakeupTerms::NotOffered),
+            expected_revision: 0,
+        })
+        .await
+        .unwrap();
+
+    app.review(makeup, app.teacher(), "accept", "Досдано")
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    let rejected = app
+        .review(makeup, app.teacher(), "reject", "Условия сняты")
+        .await
+        .ok();
+    assert_eq!(rejected["status"], "rejected");
+}
+
+#[tokio::test]
+async fn the_queue_and_its_counter_stay_empty_while_only_makeups_wait() {
+    let app = TestApp::start().await;
+    pending_makeup(&app).await;
+
+    app.take_next(app.teacher()).await.no_content();
+    assert_eq!(
+        app.review_queue_size(app.teacher()).await.ok()["pending"],
+        0
+    );
 }

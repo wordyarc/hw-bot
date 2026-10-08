@@ -99,6 +99,7 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         | ErrorCode::DeadlineExceeded
         | ErrorCode::SubmissionClosed
         | ErrorCode::AttemptsExhausted
+        | ErrorCode::MakeupAttemptsExhausted
         | ErrorCode::SubmissionAlreadyAccepted
         | ErrorCode::SubmissionPendingReview
         | ErrorCode::SubmissionAlreadyReviewed
@@ -148,6 +149,17 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
         assert_eq!(error.code(), "attempts_exhausted");
+    }
+
+    #[test]
+    fn an_empty_makeup_pool_is_a_conflict_distinct_from_spent_attempts() {
+        let error = api_error(DomainError::MakeupAttemptsExhausted {
+            allowed: 3,
+            used: 3,
+        });
+
+        assert_eq!(error.status(), StatusCode::CONFLICT);
+        assert_eq!(error.code(), "makeup_attempts_exhausted");
     }
 
     #[test]

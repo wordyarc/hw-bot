@@ -14,6 +14,7 @@ mod enums;
 pub(crate) mod error;
 pub mod files;
 pub mod group_invites;
+pub mod makeup;
 pub mod notifications;
 pub mod submissions;
 pub mod users;

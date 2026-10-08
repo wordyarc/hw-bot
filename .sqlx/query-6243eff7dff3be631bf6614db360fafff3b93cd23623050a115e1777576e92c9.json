@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, status, created_by, created_at, deadline_at, published_at\n            , revision  from assignments where id = $1",
+  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,\n                deadline_at, published_at\n            , revision  from assignments where id = $1",
   "describe": {
     "columns": [
       {
@@ -137,6 +137,28 @@
       },
       {
         "ordinal": 12,
+        "name": "makeup_offered",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "makeup_offered"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "makeup_credit",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "makeup_credit"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -147,7 +169,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 15,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -158,7 +180,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 16,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +191,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 17,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,7 +202,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 18,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -191,7 +213,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 19,
         "name": "revision",
         "type_info": "Int8",
         "origin": {
@@ -220,6 +242,8 @@
       true,
       true,
       true,
+      true,
+      true,
       false,
       false,
       false,
@@ -228,5 +252,5 @@
       false
     ]
   },
-  "hash": "05d89b832bb03e4bb7a97d57edcff2fd43be54cbdba7ae286b64b6ae671c82f0"
+  "hash": "6243eff7dff3be631bf6614db360fafff3b93cd23623050a115e1777576e92c9"
 }

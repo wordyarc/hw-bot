@@ -3,6 +3,7 @@ use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
 use super::assignment_form::{AssignmentText, DraftAssignment, InputMode, TermsForm, TermsStep};
+use super::makeup_form::{MakeupForm, MakeupStep};
 use super::views::MenuAction;
 use crate::domain::{
     AssignmentId, Grading, InviteGeneration, LatePenalty, ReviewDecision, StoredFileId,
@@ -133,15 +134,33 @@ impl BotState {
         &self,
         message_id: MessageId,
         student_id: UserId,
-    ) -> Option<StudentChoice> {
-        match self {
+    ) -> Option<(StudentChoice, StudentList)> {
+        let (purpose, list) = match self {
             Self::Flow(FlowState::ChoosingStudent {
-                message_id: current,
+                message_id,
                 purpose,
                 student_ids,
-            }) if *current == message_id && student_ids.contains(&student_id) => Some(*purpose),
-            _ => None,
-        }
+            }) => (
+                *purpose,
+                StudentList {
+                    message_id: *message_id,
+                    student_ids: student_ids.clone(),
+                },
+            ),
+            Self::Screen(ScreenState::StudentGrades {
+                course_id,
+                list: Some(list),
+                ..
+            }) => (
+                StudentChoice::Grades {
+                    course_id: *course_id,
+                },
+                list.clone(),
+            ),
+            _ => return None,
+        };
+        (list.message_id == message_id && list.student_ids.contains(&student_id))
+            .then_some((purpose, list))
     }
 
     pub(super) fn awaiting_attempt_amount(
@@ -198,6 +217,87 @@ impl BotState {
             _ => None,
         }
     }
+
+    pub(super) fn makeup_form(self, message_id: MessageId, step: MakeupStep) -> Option<MakeupForm> {
+        match self {
+            Self::Flow(FlowState::ConfiguringMakeup(form))
+                if form.message_id == Some(message_id)
+                    && form.step == step
+                    && form.mode != InputMode::Manual =>
+            {
+                Some(form)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn active_makeup(&self) -> Option<&MakeupForm> {
+        match self {
+            Self::Flow(FlowState::ConfiguringMakeup(form)) => Some(form),
+            _ => None,
+        }
+    }
+
+    pub(super) fn makeup_grant(&self, message_id: MessageId) -> Option<MakeupGrant> {
+        let (current, course_id, student_id, origin) = match self {
+            Self::Screen(ScreenState::MakeupReviewed {
+                message_id,
+                course_id,
+                student_id,
+                sandbox,
+            }) => (
+                message_id,
+                course_id,
+                student_id,
+                GrantOrigin::Review { sandbox: *sandbox },
+            ),
+            Self::Screen(ScreenState::StudentGrades {
+                message_id,
+                course_id,
+                student_id,
+                list,
+            }) => (
+                message_id,
+                course_id,
+                student_id,
+                GrantOrigin::Grades { list: list.clone() },
+            ),
+            _ => return None,
+        };
+        (*current == message_id).then_some(MakeupGrant {
+            course_id: *course_id,
+            student_id: *student_id,
+            origin,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum GrantOrigin {
+    Review { sandbox: bool },
+    Grades { list: Option<StudentList> },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MakeupGrant {
+    pub course_id: TeachingCourseId,
+    pub student_id: UserId,
+    pub origin: GrantOrigin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct StudentList {
+    pub message_id: MessageId,
+    pub student_ids: Vec<UserId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ReviewTarget {
+    Regular {
+        grading: Grading,
+        late: Option<LatePenalty>,
+    },
+    Makeup,
 }
 
 #[derive(Clone, Copy)]
@@ -238,6 +338,18 @@ pub(super) enum ScreenState {
         message_id: MessageId,
         shown_at: DateTime<Utc>,
     },
+    MakeupReviewed {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+        student_id: UserId,
+        sandbox: bool,
+    },
+    StudentGrades {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+        student_id: UserId,
+        list: Option<StudentList>,
+    },
 }
 
 #[derive(Clone)]
@@ -253,11 +365,11 @@ pub(super) enum FlowState {
     },
     AwaitingSubmission {
         assignment_id: AssignmentId,
+        makeup: bool,
     },
     AwaitingReviewDecision {
         submission_id: SubmissionId,
-        grading: Grading,
-        late: Option<LatePenalty>,
+        target: ReviewTarget,
     },
     AwaitingReviewScore {
         submission_id: SubmissionId,
@@ -301,6 +413,7 @@ pub(super) enum FlowState {
         draft: DraftAssignment,
     },
     ConfiguringTerms(TermsForm),
+    ConfiguringMakeup(MakeupForm),
     ConfirmingTermsExit {
         message_id: MessageId,
         form: TermsForm,
@@ -380,12 +493,91 @@ mod tests {
         assert!(
             BotState::Flow(FlowState::AwaitingReviewDecision {
                 submission_id: current,
-                grading: Grading::PassFail,
-                late: None,
+                target: ReviewTarget::Regular {
+                    grading: Grading::PassFail,
+                    late: None,
+                },
             })
             .awaiting_review_comment(current)
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_makeup_grant_requires_the_current_screen_of_either_origin() {
+        let course_id = TeachingCourseId::new();
+        let student_id = UserId::new();
+        let list = StudentList {
+            message_id: MessageId(9),
+            student_ids: vec![student_id],
+        };
+        for (state, origin) in [
+            (
+                ScreenState::MakeupReviewed {
+                    message_id: MessageId(10),
+                    course_id,
+                    student_id,
+                    sandbox: true,
+                },
+                GrantOrigin::Review { sandbox: true },
+            ),
+            (
+                ScreenState::StudentGrades {
+                    message_id: MessageId(10),
+                    course_id,
+                    student_id,
+                    list: Some(list.clone()),
+                },
+                GrantOrigin::Grades {
+                    list: Some(list.clone()),
+                },
+            ),
+        ] {
+            let state = BotState::Screen(state);
+            assert_eq!(
+                state.makeup_grant(MessageId(10)),
+                Some(MakeupGrant {
+                    course_id,
+                    student_id,
+                    origin,
+                })
+            );
+            assert!(state.makeup_grant(MessageId(11)).is_none());
+        }
+        assert!(BotState::Idle.makeup_grant(MessageId(10)).is_none());
+    }
+
+    #[test]
+    fn the_student_list_stays_usable_under_an_opened_grades_card() {
+        let course_id = TeachingCourseId::new();
+        let (shown, other) = (UserId::new(), UserId::new());
+        let list = StudentList {
+            message_id: MessageId(9),
+            student_ids: vec![shown, other],
+        };
+        let card = BotState::Screen(ScreenState::StudentGrades {
+            message_id: MessageId(10),
+            course_id,
+            student_id: shown,
+            list: Some(list.clone()),
+        });
+
+        let Some((StudentChoice::Grades { course_id: chosen }, kept)) =
+            card.choosing_student(MessageId(9), other)
+        else {
+            panic!("the list under the card must stay usable");
+        };
+        assert_eq!((chosen, kept), (course_id, list));
+        assert!(card.choosing_student(MessageId(10), other).is_none());
+        assert!(card.choosing_student(MessageId(9), UserId::new()).is_none());
+
+        let without_list = BotState::Screen(ScreenState::StudentGrades {
+            message_id: MessageId(10),
+            course_id,
+            student_id: shown,
+            list: None,
+        });
+        assert!(without_list.choosing_student(MessageId(9), other).is_none());
     }
 
     #[test]

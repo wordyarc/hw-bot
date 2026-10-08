@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use hw_bot::db;
-use hw_bot::domain::DeductedFrom;
+use hw_bot::domain::{DeductedFrom, SubmissionKind};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -120,4 +120,31 @@ async fn a_claimed_notification_names_the_scale_and_deduction_in_force_at_review
     assert_eq!(grade.max_score(), 10);
     assert_eq!(grade.deducted_from(), Some(DeductedFrom::CourseTotal));
     assert_eq!((grade.work_score(), grade.course_total_penalty()), (8, 4));
+}
+
+#[tokio::test]
+async fn a_claimed_notification_names_the_kind_of_the_reviewed_submission() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    app.enable_makeup(3).await;
+    let makeup = submission_id(
+        &app.submit(closed.id().as_uuid(), app.student(), "pull/makeup")
+            .await
+            .created(),
+    );
+    app.review(makeup, app.teacher(), "accept", "Досдано")
+        .await
+        .ok();
+    let now = Utc::now();
+
+    let notification =
+        db::notifications::claim_next(&app.pool, now, Uuid::new_v4(), now + Duration::seconds(10))
+            .await
+            .expect("claim notification")
+            .expect("notification exists");
+
+    assert_eq!(notification.kind, SubmissionKind::Makeup);
+    let grade = notification.grade.expect("a credited makeup has a grade");
+    assert_eq!((grade.work_score(), grade.max_score()), (6, 10));
+    assert_eq!(grade.late(), None);
 }

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into student_course_progress (teaching_course_id, student_id, extra_makeup_attempts)\n        values ($1, $2, 0)\n        on conflict (teaching_course_id, student_id) do update\n        set extra_makeup_attempts = student_course_progress.extra_makeup_attempts\n        returning extra_makeup_attempts\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "extra_makeup_attempts",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "student_course_progress",
+            "name": "extra_makeup_attempts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "46b6e8777015d58a064815713f5df55a4e2b09592a5c21e23a3727d242c7c0d4"
+}

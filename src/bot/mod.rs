@@ -33,6 +33,7 @@ mod errors;
 mod files;
 mod handlers;
 mod invites;
+mod makeup_form;
 mod state;
 pub mod texts;
 mod timezone;
@@ -638,6 +639,7 @@ mod tests {
         dialogue
             .update(BotState::Flow(FlowState::AwaitingSubmission {
                 assignment_id: AssignmentId::new(),
+                makeup: false,
             }))
             .await
             .unwrap();

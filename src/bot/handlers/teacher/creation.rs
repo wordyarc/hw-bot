@@ -3,9 +3,7 @@ use teloxide::types::MessageId;
 
 use super::attempts::chosen_amount;
 use crate::bot::HandlerResult;
-use crate::bot::assignment_form::{
-    AssignmentTerms, AssignmentText, DraftAssignment, TermsForm, TermsStep,
-};
+use crate::bot::assignment_form::{AssignmentTerms, AssignmentText, DraftAssignment, TermsForm};
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::handlers::input::{
@@ -74,25 +72,27 @@ pub(crate) async fn handle_grading(
         }
     };
 
-    apply_grading(screen.chat(), draft, grading, Some(message_id)).await
+    apply_grading(screen, draft, grading, Some(message_id)).await
 }
 
 pub(super) async fn apply_grading(
-    chat: Chat<'_>,
+    screen: Screen<'_>,
     draft: DraftAssignment,
     grading: Grading,
     message_id: Option<MessageId>,
 ) -> HandlerResult {
     let draft = DraftAssignment { grading, ..draft };
+    let question = screen
+        .services()
+        .courses
+        .makeup_question(screen.actor(), draft.text.course_id, grading, None)
+        .await?;
 
-    let step = if grading.is_scored() {
-        TermsStep::Policy
-    } else {
-        TermsStep::Deadline
-    };
-    let mut form = TermsForm::new(AssignmentTerms::creating(draft), step);
+    let terms = AssignmentTerms::creating(draft, question);
+    let step = terms.first_step();
+    let mut form = TermsForm::new(terms, step);
     form.message_id = message_id;
-    super::terms::render(chat, form, None).await
+    super::terms::render(screen.chat(), form, None).await
 }
 
 pub(super) async fn ask_max_attempts(chat: Chat<'_>, text: AssignmentText) -> HandlerResult {
@@ -212,7 +212,10 @@ pub(crate) async fn submit_grading_text(
             .await?;
         return Ok(());
     };
-    apply_grading(step.chat(), draft, grading, None).await?;
+    let Some(screen) = step.resolve().await? else {
+        return Ok(());
+    };
+    apply_grading(screen, draft, grading, None).await?;
 
     Ok(())
 }

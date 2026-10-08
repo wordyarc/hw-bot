@@ -4,9 +4,9 @@ pub mod telegram;
 
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainResult, EducationLevel, Grading, LatePolicy,
-    NewAssignment, Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId,
-    Submission, SubmissionHistory, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId,
-    User, UserId,
+    MakeupRequest, MakeupTerms, NewAssignment, Role, StudentGroup, StudentGroupId, StudyProgram,
+    Subject, SubjectId, Submission, SubmissionHistory, SubmissionHistoryParts, SubmissionId,
+    TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
 };
 
 #[cfg(test)]
@@ -133,6 +133,7 @@ pub fn assignment<'a>(course: &'a TeachingCourse, author: &'a User) -> Assignmen
         max_attempts: 2,
         grading: Grading::PassFail,
         late_policy: None,
+        makeup: None,
         created_at: t0(),
         deadline_at: None,
         deadline_offset: Duration::days(7),
@@ -148,6 +149,7 @@ pub struct AssignmentBuilder<'a> {
     max_attempts: u16,
     grading: Grading,
     late_policy: Option<LatePolicy>,
+    makeup: Option<MakeupTerms>,
     created_at: DateTime<Utc>,
     deadline_at: Option<DateTime<Utc>>,
     deadline_offset: Duration,
@@ -201,6 +203,17 @@ impl<'a> AssignmentBuilder<'a> {
         self
     }
 
+    pub fn makeup(mut self, terms: MakeupTerms) -> Self {
+        self.makeup = Some(terms);
+        self
+    }
+
+    #[track_caller]
+    pub fn makeup_credit(self, credit: u16) -> Self {
+        let terms = MakeupTerms::scored(credit, self.grading).expect("valid makeup credit");
+        self.makeup(terms)
+    }
+
     /// Смещение дедлайна позволяет вызвать `.created_at()` после `.deadline_in()`:
     /// срок пересчитается относительно новой даты создания.
     pub fn deadline_in(mut self, offset: Duration) -> Self {
@@ -239,6 +252,7 @@ impl<'a> AssignmentBuilder<'a> {
                 max_attempts: self.max_attempts,
                 grading: self.grading,
                 late_policy: self.late_policy,
+                makeup: self.makeup,
                 created_at: self.created_at,
                 deadline_at,
             },
@@ -259,6 +273,7 @@ pub fn submission<'a>(assignment: &'a Assignment, student: &'a User) -> Submissi
         history: SubmissionHistory::default(),
         content: PULL_REQUEST_URL.to_owned(),
         submitted_at: assignment.created_at() + Duration::hours(1),
+        makeup: MakeupRequest::default(),
     }
 }
 
@@ -268,6 +283,7 @@ pub struct SubmissionBuilder<'a> {
     history: SubmissionHistory,
     content: String,
     submitted_at: DateTime<Utc>,
+    makeup: MakeupRequest,
 }
 
 impl<'a> SubmissionBuilder<'a> {
@@ -286,6 +302,11 @@ impl<'a> SubmissionBuilder<'a> {
         self
     }
 
+    pub fn makeup(mut self, value: MakeupRequest) -> Self {
+        self.makeup = value;
+        self
+    }
+
     #[track_caller]
     pub fn build(self) -> Submission {
         self.try_build().expect("valid submission")
@@ -299,6 +320,7 @@ impl<'a> SubmissionBuilder<'a> {
             self.history,
             self.content,
             self.submitted_at,
+            self.makeup,
         )
     }
 }
@@ -309,39 +331,48 @@ pub fn history() -> HistoryBuilder {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HistoryBuilder {
-    used_attempts: u16,
-    extra_attempts: u16,
-    has_accepted: bool,
-    has_pending: bool,
+    parts: SubmissionHistoryParts,
 }
 
 impl HistoryBuilder {
     pub fn used(mut self, value: u16) -> Self {
-        self.used_attempts = value;
+        self.parts.used_attempts = value;
+        self.parts.submission_count = value;
+        self
+    }
+
+    pub fn submissions(mut self, value: u16) -> Self {
+        self.parts.submission_count = value;
         self
     }
 
     pub fn extra(mut self, value: u16) -> Self {
-        self.extra_attempts = value;
+        self.parts.extra_attempts = value;
         self
     }
 
     pub fn accepted(mut self) -> Self {
-        self.has_accepted = true;
+        self.parts.has_accepted_regular = true;
+        self
+    }
+
+    pub fn accepted_with(mut self, work_score: u16) -> Self {
+        self.parts.has_accepted_regular = true;
+        self.parts.accepted_regular_score = Some(work_score);
+        self
+    }
+
+    pub fn accepted_makeup(mut self) -> Self {
+        self.parts.has_accepted_makeup = true;
         self
     }
 
     pub fn pending(mut self) -> Self {
-        self.has_pending = true;
+        self.parts.has_pending_submission = true;
         self
     }
 
     pub fn build(self) -> SubmissionHistory {
-        SubmissionHistory::new(
-            self.used_attempts,
-            self.extra_attempts,
-            self.has_accepted,
-            self.has_pending,
-        )
+        SubmissionHistory::restore(self.parts)
     }
 }

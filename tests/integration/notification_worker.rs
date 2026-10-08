@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use hw_bot::bot::texts;
+use hw_bot::domain::SubmissionKind;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::telegram::{
     DeliveryOutcome, NotificationWorker, NotificationWorkerError, NotificationWorkerSettings,
@@ -32,6 +33,7 @@ async fn successful_telegram_delivery_completes_notification() {
                 texts::REVIEW_ACCEPTED,
                 SUBJECT_NAME,
                 ASSIGNMENT_TITLE,
+                SubmissionKind::Regular,
                 None,
                 "95/100",
             )

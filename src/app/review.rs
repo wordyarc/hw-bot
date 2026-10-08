@@ -5,15 +5,16 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use sqlx::{PgConnection, PgPool};
 
+use crate::app::courses::active_makeup_pool;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, ReviewDecision, Subject, Submission, SubmissionId,
-    TeachingCourse, User,
+    SubmissionKind, TeachingCourse, TeachingCourseId, User,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::SandboxSubmission;
+use crate::read_models::{MakeupPool, SandboxSubmission};
 
 async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
 where
@@ -51,12 +52,20 @@ pub struct ReviewSandbox {
 }
 
 #[derive(Clone, Debug)]
+pub struct ReviewedSubmission {
+    pub submission: Submission,
+    pub course_id: TeachingCourseId,
+    pub sandbox: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct ReviewQueueItem {
     pub submission: Submission,
     pub assignment: Assignment,
     pub subject: Subject,
     pub student: User,
     pub previous_attempts: Vec<Submission>,
+    pub makeup: Option<MakeupPool>,
 }
 
 #[derive(Clone, Debug)]
@@ -88,11 +97,33 @@ impl ReviewService {
         Ok(Some(item))
     }
 
+    pub async fn take_next_makeup(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
+        let mut tx = self.pool.begin().await?;
+
+        let reviewer = load_reviewer(&mut *tx, actor).await?;
+
+        let Some(submission) =
+            db::submissions::lock_next_makeup_for_reviewer(&mut tx, &reviewer).await?
+        else {
+            return Ok(None);
+        };
+
+        let item = load_queue_item(&mut tx, submission).await?;
+        tx.commit().await?;
+        Ok(Some(item))
+    }
+
     /// Между подсчётом и `take_next_from_queue` работы могут разобрать; ненулевого счётчика недостаточно.
     pub async fn queue_size(&self, actor: Actor) -> AppResult<u32> {
         let reviewer = load_reviewer(&self.pool, actor).await?;
 
         Ok(db::submissions::count_pending_for_reviewer(&self.pool, &reviewer).await?)
+    }
+
+    pub async fn makeup_size(&self, actor: Actor) -> AppResult<u32> {
+        let reviewer = load_reviewer(&self.pool, actor).await?;
+
+        Ok(db::submissions::count_makeup_for_reviewer(&self.pool, &reviewer).await?)
     }
 
     pub async fn sandbox_size(
@@ -124,7 +155,7 @@ impl ReviewService {
         let reviewer = load_reviewer(&mut *tx, command.actor).await?;
         let submissions =
             db::submissions::lock_sandbox_for_reviewer(&mut tx, &reviewer, command.cutoff).await?;
-        let reviewed = submissions.len();
+        let mut reviewed = 0;
 
         let mut contexts = HashMap::new();
         for mut submission in submissions {
@@ -135,23 +166,32 @@ impl ReviewService {
                 }
             };
 
-            match command.decision {
+            let score = match submission.kind() {
+                SubmissionKind::Regular => context.assignment.grading().max_score(),
+                SubmissionKind::Makeup => None,
+            };
+            let decided = match command.decision {
                 ReviewDecision::Accept => submission.accept(
                     &context.assignment,
                     &context.course,
                     &reviewer,
-                    context.assignment.grading().max_score(),
+                    score,
                     command.comment.as_str(),
                     command.reviewed_at,
-                )?,
+                ),
                 ReviewDecision::Reject => submission.reject(
                     &context.assignment,
                     &context.course,
                     &reviewer,
                     command.comment.as_str(),
                     command.reviewed_at,
-                )?,
+                ),
+            };
+            match decided {
+                Err(DomainError::MakeupNotOffered) => continue,
+                decided => decided?,
             }
+            reviewed += 1;
 
             db::submissions::save_review_result(&mut *tx, &submission).await?;
 
@@ -173,7 +213,10 @@ impl ReviewService {
         Ok(reviewed)
     }
 
-    pub async fn review_submission(&self, command: ReviewSubmission) -> AppResult<Submission> {
+    pub async fn review_submission(
+        &self,
+        command: ReviewSubmission,
+    ) -> AppResult<ReviewedSubmission> {
         let mut tx = self.pool.begin().await?;
 
         let reviewer = load_reviewer(&mut *tx, command.actor).await?;
@@ -220,6 +263,9 @@ impl ReviewService {
         let subject = db::academic::find_subject_by_id(&mut *tx, teaching_course.subject_id())
             .await?
             .required("subject")?;
+        let sandbox = db::academic::find_subject_sandbox(&mut *tx, subject.id())
+            .await?
+            .required("subject")?;
         db::notifications::enqueue_review_result(
             &mut *tx,
             &submission,
@@ -231,7 +277,11 @@ impl ReviewService {
 
         tx.commit().await?;
 
-        Ok(submission)
+        Ok(ReviewedSubmission {
+            submission,
+            course_id: teaching_course.id(),
+            sandbox,
+        })
     }
 
     pub async fn find_for_review(
@@ -312,11 +362,24 @@ async fn load_queue_item(
     .filter(|attempt| attempt.attempt_number() < submission.attempt_number())
     .collect();
     previous_attempts.reverse();
+    let makeup = match submission.kind() {
+        SubmissionKind::Makeup => {
+            active_makeup_pool(
+                &mut *connection,
+                assignment.teaching_course_id(),
+                student.id(),
+                Utc::now(),
+            )
+            .await?
+        }
+        SubmissionKind::Regular => None,
+    };
     Ok(ReviewQueueItem {
         submission,
         assignment,
         subject,
         student,
         previous_attempts,
+        makeup,
     })
 }

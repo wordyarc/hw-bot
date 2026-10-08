@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update teaching_courses\n        set\n            makeup_until = $2,\n            makeup_attempts = $3,\n            makeup_opened_at = $4\n        where id = $1\n          and makeup_until is not distinct from $5\n          and makeup_attempts is not distinct from $6\n          and makeup_opened_at is not distinct from $7\n        returning makeup_until, makeup_attempts, makeup_opened_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "makeup_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "makeup_until"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "makeup_attempts",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "makeup_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "makeup_opened_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "makeup_opened_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int2",
+        "Timestamptz",
+        "Timestamptz",
+        "Int2",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "4aa0282d741bfed5dfb24d689feb4fb4c504e6fc41ecfb1e29508df145ed9cec"
+}

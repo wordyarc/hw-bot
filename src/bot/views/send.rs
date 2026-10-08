@@ -1,5 +1,6 @@
+use anyhow::Context;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardRemove};
+use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardRemove, MessageId};
 
 use crate::bot::{Bot, HandlerResult, texts};
 use crate::telegram::text::{MESSAGE_LIMIT, utf16_prefix};
@@ -17,21 +18,44 @@ pub(crate) async fn send_message_chunks(
     bot: &Bot,
     chat_id: ChatId,
     text: String,
-    mut keyboard: Option<InlineKeyboardMarkup>,
+    keyboard: Option<InlineKeyboardMarkup>,
 ) -> HandlerResult {
+    send_chunks(bot, chat_id, text, keyboard).await?;
+    Ok(())
+}
+
+pub(crate) async fn send_screen(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: String,
+    keyboard: InlineKeyboardMarkup,
+) -> HandlerResult<MessageId> {
+    Ok(send_chunks(bot, chat_id, text, Some(keyboard))
+        .await?
+        .context("a screen has no text to carry its keyboard")?)
+}
+
+async fn send_chunks(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: String,
+    mut keyboard: Option<InlineKeyboardMarkup>,
+) -> HandlerResult<Option<MessageId>> {
+    let mut last = None;
     let mut chunks = message_chunks(&text).peekable();
     while let Some(chunk) = chunks.next() {
-        if chunks.peek().is_none()
+        let sent = if chunks.peek().is_none()
             && let Some(keyboard) = keyboard.take()
         {
             bot.send_message(chat_id, chunk)
                 .reply_markup(keyboard)
-                .await?;
+                .await?
         } else {
-            bot.send_message(chat_id, chunk).await?;
-        }
+            bot.send_message(chat_id, chunk).await?
+        };
+        last = Some(sent.id);
     }
-    Ok(())
+    Ok(last)
 }
 
 pub(crate) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {

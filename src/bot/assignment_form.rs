@@ -2,9 +2,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use teloxide::types::MessageId;
 
 use super::callbacks::TermsAction;
+use crate::app::MakeupQuestion;
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, Grading, LatePolicy,
-    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_PENALTY_PER_PERIOD, TeachingCourseId,
+    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_PENALTY_PER_PERIOD, MakeupTerms, TeachingCourseId,
 };
 
 const DEFAULT_PERIOD_DAYS: u16 = 7;
@@ -53,6 +54,9 @@ pub(super) struct AssignmentTerms {
     pub period_days: u16,
     pub penalty_per_period: Option<u16>,
     pub max_periods: Option<u16>,
+    pub makeup: Option<MakeupTerms>,
+    pub makeup_enabled: bool,
+    pub makeup_hint: Option<u16>,
 }
 
 /// Условия, по которым можно показать итог и сохранить задание: срок задан, политика опозданий
@@ -65,7 +69,7 @@ pub(super) struct CompleteTerms {
 }
 
 impl AssignmentTerms {
-    pub fn creating(draft: DraftAssignment) -> Self {
+    pub fn creating(draft: DraftAssignment, question: MakeupQuestion) -> Self {
         Self {
             target: TermsTarget::Create(draft),
             deadline_at: None,
@@ -73,10 +77,13 @@ impl AssignmentTerms {
             period_days: DEFAULT_PERIOD_DAYS,
             penalty_per_period: None,
             max_periods: None,
+            makeup: None,
+            makeup_enabled: question.enabled,
+            makeup_hint: question.hint,
         }
     }
 
-    pub fn editing(assignment: &Assignment, revision: i64) -> Self {
+    pub fn editing(assignment: &Assignment, revision: i64, question: MakeupQuestion) -> Self {
         let policy = assignment.late_policy();
 
         Self {
@@ -92,6 +99,19 @@ impl AssignmentTerms {
             period_days: policy.map_or(DEFAULT_PERIOD_DAYS, LatePolicy::period_days),
             penalty_per_period: policy.map(LatePolicy::penalty_per_period),
             max_periods: policy.map(LatePolicy::max_periods),
+            makeup: assignment.makeup(),
+            makeup_enabled: question.enabled,
+            makeup_hint: question.hint,
+        }
+    }
+
+    pub fn first_step(&self) -> TermsStep {
+        if self.makeup_enabled {
+            TermsStep::Makeup
+        } else if self.grading().is_scored() {
+            TermsStep::Policy
+        } else {
+            TermsStep::Deadline
         }
     }
 
@@ -177,6 +197,7 @@ impl AssignmentTerms {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TermsStep {
+    Makeup,
     Policy,
     Deadline,
     Penalty,
@@ -193,7 +214,8 @@ pub(super) enum TermsStep {
 impl TermsStep {
     pub fn next(self, terms: &AssignmentTerms) -> Self {
         match self {
-            Self::Policy => terms.first_incomplete_step(),
+            Self::Makeup if terms.grading().is_scored() => Self::Policy,
+            Self::Makeup | Self::Policy => terms.first_incomplete_step(),
             Self::Deadline if terms.deducted_from.is_some() => Self::Penalty,
             Self::Deadline => Self::Summary,
             Self::Period => Self::Penalty,
@@ -204,9 +226,12 @@ impl TermsStep {
     }
 
     pub fn previous(self, terms: &AssignmentTerms) -> Option<Self> {
+        let makeup = terms.makeup_enabled.then_some(Self::Makeup);
         match self {
-            Self::Policy => None,
-            Self::Deadline => terms.grading().is_scored().then_some(Self::Policy),
+            Self::Makeup => None,
+            Self::Policy => makeup,
+            Self::Deadline if terms.grading().is_scored() => Some(Self::Policy),
+            Self::Deadline => makeup,
             Self::Penalty => Some(Self::Deadline),
             Self::Period | Self::Periods => Some(Self::Penalty),
             Self::DurationDate => Some(Self::Periods),
@@ -222,7 +247,8 @@ impl TermsStep {
             Self::Deadline => terms.deadline_at.is_some(),
             Self::Penalty => terms.penalty_per_period.is_some(),
             Self::Periods => terms.max_periods.is_some(),
-            Self::Policy
+            Self::Makeup
+            | Self::Policy
             | Self::Period
             | Self::DurationDate
             | Self::DurationConfirm { .. }
@@ -237,6 +263,7 @@ impl TermsStep {
             TermsAction::Penalty if terms.deducted_from.is_some() => Some(Self::Penalty),
             TermsAction::Period if terms.deducted_from.is_some() => Some(Self::Period),
             TermsAction::Periods if terms.deducted_from.is_some() => Some(Self::Periods),
+            TermsAction::Makeup if terms.makeup_enabled => Some(Self::Makeup),
             _ => None,
         }
     }
@@ -337,6 +364,18 @@ impl TermsForm {
             ));
         }
         self.terms = terms;
+        self.advance();
+        Ok(())
+    }
+
+    pub fn choose_makeup(&mut self, makeup: MakeupTerms) -> Result<(), TermsInputError> {
+        if self.step != TermsStep::Makeup || !self.terms.makeup_enabled {
+            return Err(TermsInputError::UnexpectedStep);
+        }
+        makeup
+            .ensure_fits(self.terms.grading())
+            .map_err(TermsInputError::Domain)?;
+        self.terms.makeup = Some(makeup);
         self.advance();
         Ok(())
     }
@@ -481,7 +520,7 @@ mod tests {
             1,
         );
         draft.grading = Grading::scored(5).unwrap();
-        AssignmentTerms::creating(draft)
+        AssignmentTerms::creating(draft, MakeupQuestion::default())
     }
 
     fn complete_form() -> TermsForm {
@@ -704,7 +743,7 @@ mod tests {
         let course = course_for(&student_group("test"), &teacher);
         let assignment = assignment(&course, &teacher).build();
         let mut edit = TermsForm::new(
-            AssignmentTerms::editing(&assignment, 0),
+            AssignmentTerms::editing(&assignment, 0, MakeupQuestion::default()),
             TermsStep::Deadline,
         );
         edit.apply_date(past, now).unwrap();
@@ -812,11 +851,11 @@ mod tests {
             .late_policy(3, 2, 5, DeductedFrom::CourseTotal)
             .build();
 
-        let terms = AssignmentTerms::editing(&strict, 4);
+        let terms = AssignmentTerms::editing(&strict, 4, MakeupQuestion::default());
         assert_eq!(terms.deducted_from, None);
         assert_eq!(terms.complete().unwrap().closes_at, strict.closes_at());
 
-        let terms = AssignmentTerms::editing(&late, 4);
+        let terms = AssignmentTerms::editing(&late, 4, MakeupQuestion::default());
         assert_eq!(terms.deducted_from, Some(DeductedFrom::CourseTotal));
         assert_eq!(terms.complete().unwrap().late_policy, late.late_policy());
         assert_eq!(terms.complete().unwrap().closes_at, late.closes_at());
@@ -849,5 +888,97 @@ mod tests {
             form.terms.complete().unwrap().late_policy,
             Some(LatePolicy::new(7, 2, 4, DeductedFrom::WorkScore).unwrap())
         );
+    }
+
+    fn makeup_terms(enabled: bool) -> AssignmentTerms {
+        let mut draft = DraftAssignment::new(
+            AssignmentText {
+                course_id: TeachingCourseId::new(),
+                title: "Title".into(),
+                body: "Body".into(),
+            },
+            1,
+        );
+        draft.grading = Grading::scored(10).unwrap();
+        AssignmentTerms::creating(
+            draft,
+            MakeupQuestion {
+                enabled,
+                hint: None,
+            },
+        )
+    }
+
+    #[test]
+    fn the_makeup_question_follows_the_scale_only_on_a_course_with_makeup() {
+        let enabled = makeup_terms(true);
+        assert_eq!(enabled.first_step(), TermsStep::Makeup);
+        let mut form = TermsForm::new(enabled, TermsStep::Makeup);
+        assert!(!form.can_go_back());
+        form.choose_makeup(MakeupTerms::scored(6, form.terms.grading()).unwrap())
+            .unwrap();
+        assert_eq!(form.step, TermsStep::Policy);
+        assert!(form.back());
+        assert_eq!(form.step, TermsStep::Makeup);
+        assert_eq!(
+            form.terms.makeup,
+            Some(MakeupTerms::scored(6, form.terms.grading()).unwrap())
+        );
+
+        let disabled = makeup_terms(false);
+        assert_eq!(disabled.first_step(), TermsStep::Policy);
+        let mut form = TermsForm::new(disabled, TermsStep::Policy);
+        assert_eq!(
+            form.choose_makeup(MakeupTerms::NotOffered),
+            Err(TermsInputError::UnexpectedStep)
+        );
+        assert!(!form.back());
+    }
+
+    #[test]
+    fn a_pass_fail_assignment_goes_from_the_makeup_question_to_the_strict_deadline() {
+        let mut terms = makeup_terms(true);
+        if let TermsTarget::Create(draft) = &mut terms.target {
+            draft.grading = Grading::PassFail;
+        }
+        let mut form = TermsForm::new(terms, TermsStep::Makeup);
+
+        assert_eq!(
+            form.choose_makeup(MakeupTerms::scored(6, Grading::scored(10).unwrap()).unwrap()),
+            Err(TermsInputError::Domain(
+                DomainError::MakeupTermsDoNotFitGrading
+            ))
+        );
+        form.choose_makeup(MakeupTerms::PassFail).unwrap();
+        assert_eq!(form.step, TermsStep::Deadline);
+        assert!(form.back());
+        assert_eq!(form.step, TermsStep::Makeup);
+    }
+
+    #[test]
+    fn changing_the_makeup_terms_from_the_summary_returns_to_the_summary() {
+        let mut form = TermsForm::new(
+            AssignmentTerms {
+                deadline_at: Some(t0() + Duration::days(7)),
+                makeup: Some(MakeupTerms::scored(6, Grading::scored(10).unwrap()).unwrap()),
+                ..makeup_terms(true)
+            },
+            TermsStep::Summary,
+        );
+
+        assert!(form.edit_summary(TermsAction::Makeup));
+        assert_eq!(form.step, TermsStep::Makeup);
+        form.choose_makeup(MakeupTerms::NotOffered).unwrap();
+
+        assert_eq!(form.step, TermsStep::Summary);
+        assert_eq!(form.terms.makeup, Some(MakeupTerms::NotOffered));
+        let mut without = TermsForm::new(
+            AssignmentTerms {
+                deadline_at: Some(t0() + Duration::days(7)),
+                ..makeup_terms(false)
+            },
+            TermsStep::Summary,
+        );
+        assert!(!without.edit_summary(TermsAction::Makeup));
     }
 }

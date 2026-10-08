@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        with next_notification as (\n            select id\n            from review_notification_outbox\n            where delivered_at is null\n              and failed_at is null\n              and available_at <= $1\n              and (lease_expires_at is null or lease_expires_at <= $1)\n            order by available_at, created_at, id\n            for update skip locked\n            limit 1\n        )\n        update review_notification_outbox notification\n        set\n            lease_token = $2,\n            lease_expires_at = $3,\n            attempt_count = notification.attempt_count + 1\n        from next_notification, submissions\n        where notification.id = next_notification.id\n          and submissions.id = notification.submission_id\n        returning\n            notification.id,\n            notification.submission_id,\n            notification.recipient_telegram_user_id,\n            notification.subject_name,\n            notification.assignment_title,\n            notification.outcome,\n            notification.review_comment,\n            submissions.raw_score,\n            submissions.grade_max_score,\n            submissions.late_periods,\n            submissions.penalty,\n            submissions.penalty_deducted_from,\n            submissions.work_score,\n            submissions.course_total_penalty,\n            notification.attempt_count,\n            notification.lease_token as \"lease_token!\"\n        ",
+  "query": "\n        with next_notification as (\n            select id\n            from review_notification_outbox\n            where delivered_at is null\n              and failed_at is null\n              and available_at <= $1\n              and (lease_expires_at is null or lease_expires_at <= $1)\n            order by available_at, created_at, id\n            for update skip locked\n            limit 1\n        )\n        update review_notification_outbox notification\n        set\n            lease_token = $2,\n            lease_expires_at = $3,\n            attempt_count = notification.attempt_count + 1\n        from next_notification, submissions\n        where notification.id = next_notification.id\n          and submissions.id = notification.submission_id\n        returning\n            notification.id,\n            notification.submission_id,\n            notification.recipient_telegram_user_id,\n            notification.subject_name,\n            notification.assignment_title,\n            notification.outcome,\n            notification.review_comment,\n            submissions.kind,\n            submissions.raw_score,\n            submissions.grade_max_score,\n            submissions.late_periods,\n            submissions.penalty,\n            submissions.penalty_deducted_from,\n            submissions.work_score,\n            submissions.course_total_penalty,\n            notification.attempt_count,\n            notification.lease_token as \"lease_token!\"\n        ",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,17 @@
       },
       {
         "ordinal": 7,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
         "name": "raw_score",
         "type_info": "Int2",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "grade_max_score",
         "type_info": "Int2",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "late_periods",
         "type_info": "Int4",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "penalty",
         "type_info": "Int2",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "penalty_deducted_from",
         "type_info": "Text",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "work_score",
         "type_info": "Int2",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "course_total_penalty",
         "type_info": "Int2",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "attempt_count",
         "type_info": "Int4",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "lease_token!",
         "type_info": "Uuid",
         "origin": {
@@ -195,6 +206,7 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -206,5 +218,5 @@
       true
     ]
   },
-  "hash": "15bd06e0ecf0b8df05cde23da2ca3187114dc2d8ae77255bae76847dd3e0f4e2"
+  "hash": "343d8fc13bf25943a030581f00109432bea04387f35a1db2b70a712aa9abd08c"
 }

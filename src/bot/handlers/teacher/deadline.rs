@@ -1,9 +1,11 @@
 use teloxide::types::MessageId;
 
+use super::makeup::handle_date;
 use super::terms::{apply_date, render};
 use crate::bot::assignment_form::{InputMode, TermsStep};
 use crate::bot::callbacks::DeadlineAction;
 use crate::bot::context::Screen;
+use crate::bot::makeup_form::MakeupStep;
 use crate::bot::state::BotState;
 use crate::bot::{HandlerResult, texts};
 
@@ -13,6 +15,12 @@ pub(crate) async fn handle_deadline(
     action: DeadlineAction,
     state: BotState,
 ) -> HandlerResult {
+    if state.active_makeup().is_some() {
+        return match state.makeup_form(message_id, MakeupStep::Date) {
+            Some(form) => handle_date(screen, form, action).await,
+            None => screen.stale().await,
+        };
+    }
     let Some(active) = state.active_terms() else {
         return screen.stale().await;
     };

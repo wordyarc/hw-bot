@@ -359,3 +359,43 @@ async fn a_teacher_has_no_student_archive() {
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
 }
+
+#[tokio::test]
+async fn a_makeup_leaves_the_regular_attempts_of_the_progress_alone() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    app.enable_makeup(3).await;
+    let rejected = crate::harness::submission_id(
+        &app.submit(closed.id().as_uuid(), app.student(), "pull/makeup")
+            .await
+            .created(),
+    );
+    app.review(rejected, app.teacher(), "reject", "Не то")
+        .await
+        .ok();
+
+    let after_rejection = progress(&app, closed.id().as_uuid()).await;
+    assert_eq!(after_rejection["used_attempts"], json!(0));
+    assert_eq!(
+        after_rejection["remaining_attempts"],
+        after_rejection["allowed_attempts"]
+    );
+    assert_eq!(after_rejection["has_accepted_submission"], json!(false));
+
+    let accepted = crate::harness::submission_id(
+        &app.submit(closed.id().as_uuid(), app.student(), "pull/makeup-2")
+            .await
+            .created(),
+    );
+    app.review(accepted, app.teacher(), "accept", "Досдано")
+        .await
+        .ok();
+
+    let after_acceptance = progress(&app, closed.id().as_uuid()).await;
+    assert_eq!(after_acceptance["used_attempts"], json!(0));
+    assert_eq!(after_acceptance["has_accepted_submission"], json!(true));
+}
+
+async fn progress(app: &TestApp, assignment: Uuid) -> Value {
+    app.student_assignment(assignment, app.student()).await.ok()["progress"].clone()
+}

@@ -133,6 +133,18 @@ pub(super) async fn handle_command(
             reset_dialogue(&dialogue).await?;
             teacher::abandon(&bot, chat_id, form).await?;
         }
+        if let Some(form) = state.active_makeup()
+            && !matches!(command, Command::Help)
+        {
+            if matches!(command, Command::Cancel) {
+                let Some(screen) = chat.resolve(telegram_user_id).await? else {
+                    return Ok(());
+                };
+                return teacher::makeup_back(screen, form.clone()).await;
+            }
+            reset_dialogue(&dialogue).await?;
+            teacher::abandon_makeup(&bot, chat_id, form).await?;
+        }
 
         if let Some(action) = menu_action_for(&command) {
             reset_dialogue(&dialogue).await?;
@@ -201,6 +213,9 @@ pub(super) async fn handle_message(
                 return teacher::confirm_exit(screen, form.clone(), action, telegram_user_id).await;
             }
             reset_dialogue(&dialogue).await?;
+            if let Some(form) = state.active_makeup() {
+                teacher::abandon_makeup(&bot, chat_id, form).await?;
+            }
             return run_menu_action(step.chat(), telegram_user_id, action).await;
         }
 
@@ -217,8 +232,11 @@ pub(super) async fn handle_message(
             BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
                 registration::submit_name(step, invite).await?;
             }
-            BotState::Flow(FlowState::AwaitingSubmission { assignment_id }) => {
-                student::submit_homework_text(step, assignment_id).await?;
+            BotState::Flow(FlowState::AwaitingSubmission {
+                assignment_id,
+                makeup,
+            }) => {
+                student::submit_homework_text(step, assignment_id, makeup).await?;
             }
             BotState::Flow(FlowState::AwaitingReviewScore {
                 submission_id,
@@ -266,6 +284,9 @@ pub(super) async fn handle_message(
             BotState::Flow(FlowState::ConfiguringTerms(form)) => {
                 teacher::submit_terms(step, form).await?;
             }
+            BotState::Flow(FlowState::ConfiguringMakeup(form)) => {
+                teacher::submit_makeup_text(step, form).await?;
+            }
             BotState::Flow(FlowState::AwaitingAttemptAmount {
                 assignment_id,
                 student_id,
@@ -308,7 +329,7 @@ fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
         MenuAction::Assignments => ReplayableAction::Page(PageTarget::Assignments, 0),
         MenuAction::Archive => ReplayableAction::Page(PageTarget::Archive, 0),
         MenuAction::Queue => ReplayableAction::Page(PageTarget::Queue, 0),
-        MenuAction::Review => ReplayableAction::NextReview,
+        MenuAction::Review => ReplayableAction::ReviewHub,
         MenuAction::Courses => ReplayableAction::Page(PageTarget::Courses, 0),
         MenuAction::Sandbox => ReplayableAction::Page(PageTarget::Sandbox, 0),
         MenuAction::Profile => ReplayableAction::Profile,
@@ -365,6 +386,9 @@ pub(super) async fn handle_callback(
             if let Some(form) = state.active_terms() {
                 teacher::abandon(&bot, chat_id, form).await?;
             }
+            if let Some(form) = state.active_makeup() {
+                teacher::abandon_makeup(&bot, chat_id, form).await?;
+            }
         }
 
         let deps = Deps {
@@ -412,15 +436,18 @@ async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) 
                 PageTarget::Gradebook(id) => teacher::show_gradebook_page(screen, id, page).await,
                 PageTarget::History(id) => student::show_history(screen, id, page).await,
                 PageTarget::StudentGrades(course, student) => {
-                    teacher::show_student_grades_page(screen, course, student, page).await
+                    teacher::show_student_grades_page(screen, course, student, page, None).await
                 }
             }
         }
         ReplayableAction::Profile => show_profile(screen).await,
+        ReplayableAction::ReviewHub => review::show_hub(screen).await,
         ReplayableAction::NextReview => review::show_next(screen).await,
+        ReplayableAction::NextMakeupReview => review::show_next_makeup(screen).await,
         ReplayableAction::Course(course_id) => {
             teacher::show_course_assignments_page(screen, course_id, PageRequest::default()).await
         }
+        ReplayableAction::CourseMakeup(course_id) => teacher::open_makeup(screen, course_id).await,
         ReplayableAction::Assignment(assignment_id) => {
             student::show_assignment(screen, assignment_id).await
         }
@@ -437,13 +464,7 @@ async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) 
             screen.ask(texts::ASSIGNMENT_TITLE_PROMPT).await
         }
         ReplayableAction::StartSubmission(assignment_id) => {
-            screen
-                .dialogue()
-                .update(BotState::Flow(FlowState::AwaitingSubmission {
-                    assignment_id,
-                }))
-                .await?;
-            screen.ask(texts::SUBMISSION_PROMPT).await
+            student::start_submission(screen, assignment_id).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await
@@ -500,6 +521,9 @@ async fn handle_screen_action(
         }
         ScreenAction::BulkReview(decision) => {
             sandbox::ask_comment(screen, message_id, decision, &state).await
+        }
+        ScreenAction::GrantMakeupAttempt => {
+            review::grant_makeup_attempt(screen, message_id, &state).await
         }
     }
 }
@@ -567,6 +591,19 @@ async fn handle_flow_action(
         FlowAction::CancelInviteRotation => {
             teacher::cancel_invite_rotation(screen, message_id, &state).await?;
         }
+        FlowAction::MakeupAnswer(choice) => {
+            if state.active_makeup().is_some() {
+                teacher::handle_makeup_answer(screen, message_id, choice, state).await?;
+            } else {
+                teacher::handle_makeup(screen, message_id, choice, state).await?;
+            }
+        }
+        FlowAction::MakeupAttempts(choice) => {
+            teacher::handle_makeup_attempts(screen, message_id, choice, state).await?;
+        }
+        FlowAction::MakeupForm(action) => {
+            teacher::handle_makeup_form(screen, message_id, action, state).await?;
+        }
     }
 
     Ok(())
@@ -605,7 +642,10 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
             Some(texts::CHOOSE_ASSIGNMENT_ACTION)
         }
         BotState::Screen(
-            ScreenState::GroupInvite { .. } | ScreenState::SandboxSubmissions { .. },
+            ScreenState::GroupInvite { .. }
+            | ScreenState::SandboxSubmissions { .. }
+            | ScreenState::MakeupReviewed { .. }
+            | ScreenState::StudentGrades { .. },
         )
         | BotState::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
             Some(texts::CHOOSE_ACTION_ABOVE)
@@ -633,6 +673,7 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
             | FlowState::ChoosingGrading { .. }
             | FlowState::AwaitingGradingText { .. }
             | FlowState::ConfiguringTerms(_)
+            | FlowState::ConfiguringMakeup(_)
             | FlowState::AwaitingAttemptAmount { .. },
         ) => None,
     }
@@ -710,19 +751,23 @@ mod tests {
 
     #[test]
     fn every_button_the_bot_sends_is_routable() {
+        use crate::app::{MakeupQuestion, UndecidedAssignment};
         use crate::bot::assignment_form::{AssignmentTerms, TermsForm, TermsStep};
+        use crate::bot::callbacks::MakeupFormAction;
+        use crate::bot::makeup_form::{MakeupForm, MakeupStep};
         use crate::bot::views::{
             assignment_files_keyboard, assignment_students_keyboard, attempts_keyboard,
             calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
             contact_keyboard, course_assignments_keyboard, deadline_options_keyboard,
             gradebook_students_keyboard, grading_keyboard, group_invite_keyboard,
-            late_policy_keyboard, penalty_keyboard, review_decision_keyboard,
-            review_score_keyboard, sandbox_keyboard, student_grades_keyboard, terms_exit_keyboard,
-            terms_form_view, terms_keyboard,
+            late_policy_keyboard, makeup_answer_keyboard, makeup_attempts_keyboard,
+            makeup_followup_keyboard, makeup_form_view, penalty_keyboard, review_decision_keyboard,
+            review_hub_keyboard, review_score_keyboard, sandbox_keyboard, student_grades_keyboard,
+            terms_exit_keyboard, terms_form_view, terms_keyboard,
         };
         use crate::domain::{
-            DeductedFrom, FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner,
-            StoredFileParts,
+            CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
+            StoredFileMetadata, StoredFileOwner, StoredFileParts,
         };
         use crate::test_support::{assignment, course_for, student_group, teacher};
 
@@ -754,10 +799,18 @@ mod tests {
             deducted_from: Some(DeductedFrom::CourseTotal),
             penalty_per_period: Some(1),
             max_periods: Some(4),
-            ..AssignmentTerms::editing(&assignment, 0)
+            ..AssignmentTerms::editing(
+                &assignment,
+                0,
+                MakeupQuestion {
+                    enabled: true,
+                    hint: Some(3),
+                },
+            )
         };
         let sandbox_submission = crate::app::SandboxSubmission {
             submission_id: SubmissionId::new(),
+            kind: crate::domain::SubmissionKind::Makeup,
             assignment_title: "Trial".to_owned(),
             student_name: "Student".to_owned(),
             submitted_at: Utc::now(),
@@ -766,9 +819,17 @@ mod tests {
         let mut keyboards = vec![
             student_menu(),
             teacher_menu(Some(1)),
-            review_keyboard(SubmissionId::new(), course.id(), student_id),
+            review_keyboard(
+                SubmissionId::new(),
+                course.id(),
+                student_id,
+                Some(texts::BUTTON_ACCEPT.to_owned()),
+            ),
+            review_keyboard(SubmissionId::new(), course.id(), student_id, None),
             review_decision_keyboard(SubmissionId::new()),
-            student_grades_keyboard(course.id(), student_id),
+            review_hub_keyboard(12, 5),
+            makeup_followup_keyboard(true, true),
+            student_grades_keyboard(course.id(), student_id, true),
             contact_keyboard(
                 contact,
                 Some("https://t.me/student_name".parse().unwrap()),
@@ -781,7 +842,29 @@ mod tests {
             ),
             contact_keyboard(contact, None, texts::BUTTON_REFRESH_CONTACT),
             contact_keyboard(contact, None, texts::BUTTON_RETRY_CONTACT),
-            course_assignments_keyboard(course.id(), std::slice::from_ref(&assignment)),
+            course_assignments_keyboard(
+                course.id(),
+                std::slice::from_ref(&assignment),
+                None,
+                &timezone,
+            ),
+            course_assignments_keyboard(
+                course.id(),
+                &[],
+                Some(
+                    CourseMakeup::open(
+                        crate::test_support::t0() + chrono::Duration::days(30),
+                        3,
+                        crate::test_support::t0(),
+                    )
+                    .unwrap(),
+                ),
+                &timezone,
+            ),
+            makeup_attempts_keyboard(),
+            makeup_answer_keyboard(Grading::scored(10).unwrap(), Some(6)),
+            makeup_answer_keyboard(Grading::scored(20).unwrap(), Some(12)),
+            makeup_answer_keyboard(Grading::PassFail, None),
             assignment_actions_keyboard(&assignment),
             attempts_keyboard(MAX_ATTEMPTS_PREFIX),
             attempts_keyboard(EXTRA_ATTEMPTS_PREFIX),
@@ -803,7 +886,54 @@ mod tests {
             sandbox_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
         ];
 
+        let opened = CourseMakeup::open(
+            crate::test_support::t0() + chrono::Duration::days(30),
+            3,
+            crate::test_support::t0(),
+        )
+        .unwrap();
+        let undecided = vec![UndecidedAssignment {
+            assignment_id: assignment.id(),
+            title: "Lab".to_owned(),
+            grading: assignment.grading(),
+        }];
+        let mut forms = vec![MakeupForm::new(
+            course.id(),
+            None,
+            undecided.clone(),
+            crate::test_support::t0(),
+        )];
+        for step in [MakeupStep::Attempts, MakeupStep::Scale(0)] {
+            let mut form = MakeupForm::new(
+                course.id(),
+                None,
+                undecided.clone(),
+                crate::test_support::t0(),
+            );
+            form.go(step);
+            forms.push(form);
+        }
+        let mut summary = MakeupForm::new(
+            course.id(),
+            Some(opened),
+            Vec::new(),
+            crate::test_support::t0(),
+        );
+        forms.push(summary.clone());
+        assert!(summary.edit(MakeupFormAction::Disable));
+        forms.push(summary);
+        let mut calendar =
+            MakeupForm::new(course.id(), None, Vec::new(), crate::test_support::t0());
+        calendar.mode = crate::bot::assignment_form::InputMode::Calendar(today);
+        forms.push(calendar);
+        for form in forms {
+            let (_, keyboard) =
+                makeup_form_view(&form, &timezone, crate::test_support::t0()).unwrap();
+            keyboards.push(keyboard);
+        }
+
         for step in [
+            TermsStep::Makeup,
             TermsStep::Policy,
             TermsStep::Deadline,
             TermsStep::Penalty,
@@ -875,7 +1005,12 @@ mod tests {
     #[test]
     fn review_callbacks_carry_the_submission_the_buttons_belong_to() {
         let submission_id = SubmissionId::new();
-        let keyboard = review_keyboard(submission_id, TeachingCourseId::new(), UserId::new());
+        let keyboard = review_keyboard(
+            submission_id,
+            TeachingCourseId::new(),
+            UserId::new(),
+            Some(texts::BUTTON_ACCEPT.to_owned()),
+        );
         let json = serde_json::to_value(keyboard).unwrap();
         let accept = json["inline_keyboard"][0][0]["callback_data"]
             .as_str()

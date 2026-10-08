@@ -1,8 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
-use hw_bot::app::{Actor, ReviewSandbox};
+use hw_bot::app::{Actor, ChangeTerms, ReviewSandbox};
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, DeductedFrom, ReviewDecision, Submission, SubmissionId, SubmissionStatus, User,
+    Assignment, DeductedFrom, Grading, MakeupTerms, ReviewDecision, Submission, SubmissionId,
+    SubmissionStatus, TeachingCourse, User,
 };
 use hw_bot::test_support::assignment;
 use serde_json::json;
@@ -324,4 +325,69 @@ async fn nothing_to_decide_changes_nothing() {
         .await
         .expect("count notifications");
     assert_eq!(notifications, 0);
+}
+
+async fn sandbox_makeup(app: &TestApp) -> (TeachingCourse, Assignment, Uuid) {
+    let sandbox = app.add_sandbox_course().await;
+    let ten = Grading::scored(10).unwrap();
+    let trial = app
+        .add_makeup_assignment_on(
+            &sandbox,
+            "Closed trial",
+            ten,
+            MakeupTerms::scored(6, ten).unwrap(),
+            Utc::now() - Duration::days(1),
+        )
+        .await;
+    app.enable_makeup_on(&sandbox, 3).await;
+    let makeup = submit(app, &trial, &app.fixture.student).await;
+
+    (sandbox, trial, makeup)
+}
+
+#[tokio::test]
+async fn bulk_acceptance_credits_a_makeup_by_its_terms_instead_of_the_maximum() {
+    let app = TestApp::start().await;
+    let (_, _, makeup) = sandbox_makeup(&app).await;
+
+    assert_eq!(review_sandbox(&app, ReviewDecision::Accept).await, 1);
+
+    let grade = find(&app, makeup)
+        .await
+        .grade()
+        .expect("the makeup is credited");
+    assert_eq!((grade.work_score(), grade.max_score()), (6, 10));
+}
+
+#[tokio::test]
+async fn bulk_acceptance_leaves_a_makeup_with_withdrawn_terms_pending_and_uncounted() {
+    let app = TestApp::start().await;
+    let (sandbox, trial, makeup) = sandbox_makeup(&app).await;
+    let regular_trial = app
+        .add_published_assignment(&sandbox, &app.fixture.teacher, "Trial")
+        .await;
+    let regular = submit(&app, &regular_trial, &app.fixture.student).await;
+    app.application
+        .assignments
+        .change_terms(ChangeTerms {
+            assignment_id: trial.id(),
+            actor: app.teacher_actor(),
+            deadline_at: trial.deadline_at(),
+            late_policy: None,
+            makeup: Some(MakeupTerms::NotOffered),
+            expected_revision: 0,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(review_sandbox(&app, ReviewDecision::Accept).await, 1);
+
+    assert_eq!(
+        find(&app, makeup).await.status(),
+        SubmissionStatus::PendingReview
+    );
+    assert_eq!(
+        find(&app, regular).await.status(),
+        SubmissionStatus::Accepted
+    );
 }

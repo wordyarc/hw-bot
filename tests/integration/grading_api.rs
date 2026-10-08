@@ -2,12 +2,12 @@ use axum::http::StatusCode;
 use chrono::{Duration, Utc};
 use hw_bot::app::{GradebookScore, StudentGrades};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, DeductedFrom, Grading};
+use hw_bot::domain::{Assignment, DeductedFrom, Grading, MakeupTerms};
 use hw_bot::pagination::PageRequest;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, assignment_id, submission_id};
 
 async fn scored_submission(app: &TestApp, max_score: u16) -> uuid::Uuid {
     let assignment = app.add_scored_assignment(max_score).await;
@@ -631,11 +631,13 @@ async fn the_gradebook_sums_work_scores_and_course_penalties_of_both_deductions(
     let scores: Vec<_> = grades.grades.iter().map(|grade| grade.score).collect();
     assert!(scores.contains(&Some(GradebookScore {
         work_score: 8,
-        course_total_penalty: 4
+        course_total_penalty: 4,
+        makeup: false,
     })));
     assert!(scores.contains(&Some(GradebookScore {
         work_score: 4,
-        course_total_penalty: 0
+        course_total_penalty: 0,
+        makeup: false,
     })));
 }
 
@@ -681,7 +683,8 @@ async fn a_submission_awaiting_review_has_no_gradebook_score_unlike_a_given_zero
         score(&zero),
         Some(GradebookScore {
             work_score: 0,
-            course_total_penalty: 0
+            course_total_penalty: 0,
+            makeup: false,
         })
     );
 }
@@ -868,4 +871,119 @@ async fn moving_the_deadline_does_not_change_a_grade_that_was_already_given() {
     assert_eq!(stored["late_periods"], json!(1));
     assert_eq!(stored["penalty"], json!(1));
     assert_eq!(stored["work_score"], json!(4));
+}
+
+#[tokio::test]
+async fn the_assignment_contract_reports_each_makeup_state() {
+    let app = TestApp::start().await;
+    let ten = Grading::scored(10).unwrap();
+    let deadline = Utc::now() + Duration::days(7);
+    let created = assignment_id(
+        &app.create_assignment(app.course(), app.teacher())
+            .await
+            .created(),
+    );
+    let declined = app
+        .add_makeup_assignment("Declined", ten, MakeupTerms::NotOffered, deadline)
+        .await;
+    let credited = app
+        .add_makeup_assignment(
+            "Credited",
+            ten,
+            MakeupTerms::scored(6, ten).unwrap(),
+            deadline,
+        )
+        .await;
+    let pass_fail = app
+        .add_makeup_assignment(
+            "Pass/fail",
+            Grading::PassFail,
+            MakeupTerms::PassFail,
+            deadline,
+        )
+        .await;
+
+    let listed = app
+        .course_assignments(app.course(), app.teacher())
+        .await
+        .ok();
+    let terms = |id: Uuid| {
+        let item = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .expect("the assignment is listed");
+        (
+            item["makeup_offered"].clone(),
+            item["makeup_credit"].clone(),
+        )
+    };
+
+    assert_eq!(terms(created), (json!(null), json!(null)));
+    assert_eq!(terms(declined.id().as_uuid()), (json!(false), json!(null)));
+    assert_eq!(terms(credited.id().as_uuid()), (json!(true), json!(6)));
+    assert_eq!(terms(pass_fail.id().as_uuid()), (json!(true), json!(null)));
+}
+
+#[tokio::test]
+async fn a_scale_change_breaking_the_makeup_credit_is_invalid_input() {
+    let app = TestApp::start().await;
+    let ten = Grading::scored(10).unwrap();
+    let credited = app
+        .add_makeup_assignment(
+            "Credited",
+            ten,
+            MakeupTerms::scored(6, ten).unwrap(),
+            Utc::now() + Duration::days(7),
+        )
+        .await;
+
+    app.change_grading(credited.id().as_uuid(), app.teacher(), Some(5))
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+
+    let stored = db::assignments::find_by_id(&app.pool, credited.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.grading(), ten);
+    assert_eq!(stored.makeup(), credited.makeup());
+}
+
+#[tokio::test]
+async fn the_gradebook_contract_marks_a_grade_given_by_a_makeup() {
+    let app = TestApp::start().await;
+    let regular = app.add_scored_assignment(5).await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    let pending = app.add_scored_assignment(10).await;
+    reviewed(&app, &regular, 4).await;
+    app.enable_makeup(3).await;
+    let makeup = submission_id(
+        &app.submit(closed.id().as_uuid(), app.student(), "pull/makeup")
+            .await
+            .created(),
+    );
+    app.review(makeup, app.teacher(), "accept", "Досдано")
+        .await
+        .ok();
+    app.submit(pending.id().as_uuid(), app.student(), "pull/pending")
+        .await
+        .created();
+
+    let body = gradebook(&app, app.teacher()).await.ok();
+
+    let grade = |assignment: &Assignment| {
+        body["students"][0]["grades"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|grade| grade["assignment_id"] == json!(assignment.id().as_uuid()))
+            .cloned()
+            .expect("the assignment is in the gradebook")
+    };
+    assert_eq!(grade(&closed)["work_score"], json!(6));
+    assert_eq!(grade(&closed)["makeup"], json!(true));
+    assert_eq!(grade(&regular)["makeup"], json!(false));
+    assert_eq!(grade(&pending)["makeup"], json!(null));
 }

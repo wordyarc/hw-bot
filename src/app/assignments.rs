@@ -10,11 +10,12 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    NewAssignment, StoredFileMetadata, StudentAssignmentProgress, StudentGroupId, Subject,
-    Submission, SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
+    MakeupBalance, MakeupCredit, MakeupRequest, MakeupTerms, NewAssignment, Offer,
+    StoredFileMetadata, StudentAssignmentProgress, StudentGroupId, Subject, Submission,
+    SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::{AssignmentStudentSummary, VersionedAssignment};
+use crate::read_models::{AssignmentStudentSummary, MakeupPool, VersionedAssignment};
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
@@ -25,6 +26,7 @@ pub struct CreateAssignment {
     pub max_attempts: u16,
     pub grading: Grading,
     pub late_policy: Option<LatePolicy>,
+    pub makeup: Option<MakeupTerms>,
     pub created_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
 }
@@ -43,6 +45,7 @@ pub struct ChangeTerms {
     pub actor: Actor,
     pub deadline_at: DateTime<Utc>,
     pub late_policy: Option<LatePolicy>,
+    pub makeup: Option<MakeupTerms>,
     pub expected_revision: i64,
 }
 
@@ -68,6 +71,41 @@ pub struct StudentAssignment {
     pub assignment: Assignment,
     pub subject: Subject,
     pub history: SubmissionHistory,
+    pub makeup: Option<StudentMakeup>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StudentMakeup {
+    pub until: DateTime<Utc>,
+    pub credit: Option<MakeupCredit>,
+    pub balance: MakeupBalance,
+}
+
+impl StudentMakeup {
+    fn offered(
+        assignment: &Assignment,
+        history: SubmissionHistory,
+        pool: Option<MakeupPool>,
+        at: DateTime<Utc>,
+    ) -> Option<Self> {
+        let pool = pool?;
+        match history.offer_at(
+            assignment,
+            at,
+            MakeupRequest::consented(Some(pool.course), pool.balance),
+        )? {
+            Offer::Makeup {
+                credit,
+                until,
+                balance,
+            } => Some(Self {
+                until,
+                credit,
+                balance,
+            }),
+            Offer::Regular => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +152,7 @@ impl AssignmentService {
                 max_attempts: command.max_attempts,
                 grading: command.grading,
                 late_policy: command.late_policy,
+                makeup: command.makeup,
                 created_at: command.created_at,
                 deadline_at: command.deadline_at,
             },
@@ -177,7 +216,13 @@ impl AssignmentService {
             command.actor,
             Some(command.expected_revision),
             |assignment, course, actor| {
-                assignment.change_terms(course, actor, command.deadline_at, command.late_policy)
+                assignment.change_terms(
+                    course,
+                    actor,
+                    command.deadline_at,
+                    command.late_policy,
+                    command.makeup,
+                )
             },
         )
         .await
@@ -265,14 +310,27 @@ impl AssignmentService {
             .iter()
             .map(|card| card.assignment.id().as_uuid())
             .collect();
+        let mut courses: Vec<_> = cards
+            .iter()
+            .map(|card| card.assignment.teaching_course_id().as_uuid())
+            .collect();
+        courses.sort_unstable();
+        courses.dedup();
         let mut histories = db::submissions::load_histories(&self.pool, &ids, student_id).await?;
+        let pools = db::makeup::pools_for_student(&self.pool, &courses, student_id).await?;
+        let now = Utc::now();
 
         Ok(cards
             .into_iter()
-            .map(|card| StudentAssignment {
-                history: histories.remove(&card.assignment.id()).unwrap_or_default(),
-                assignment: card.assignment,
-                subject: card.subject,
+            .map(|card| {
+                let history = histories.remove(&card.assignment.id()).unwrap_or_default();
+                let pool = pools.get(&card.assignment.teaching_course_id()).copied();
+                StudentAssignment {
+                    makeup: StudentMakeup::offered(&card.assignment, history, pool, now),
+                    history,
+                    assignment: card.assignment,
+                    subject: card.subject,
+                }
             })
             .collect())
     }
@@ -296,9 +354,13 @@ impl AssignmentService {
         let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
             .await?
             .required("subject")?;
+        let pool =
+            db::makeup::pool_for_student(&self.pool, assignment.teaching_course_id(), student.id())
+                .await?;
 
         Ok(StudentAssignmentDetails {
             assignment: StudentAssignment {
+                makeup: StudentMakeup::offered(&assignment, history, pool, Utc::now()),
                 assignment,
                 subject,
                 history,

@@ -17,6 +17,8 @@ pub const MENU_PROFILE: &str = "menu:profile";
 pub const MENU_COURSES: &str = "menu:courses";
 pub const MENU_SANDBOX: &str = "menu:sandbox";
 pub const NEXT_REVIEW: &str = "review:next";
+pub const REVIEW_HUB: &str = "review:hub";
+pub const NEXT_MAKEUP_REVIEW: &str = "review:makeup";
 
 pub const COURSE_PREFIX: &str = "course:";
 pub const ASSIGNMENT_PREFIX: &str = "assignment:";
@@ -28,6 +30,7 @@ pub const ATTEMPTS_PREFIX: &str = "attempts:";
 pub const INVITE_PREFIX: &str = "invite:";
 pub const GRADES_PREFIX: &str = "grades:";
 pub const CONTACT_PREFIX: &str = "contact:";
+pub const MAKEUP_PREFIX: &str = "makeup:";
 pub const PUBLISH_PREFIX: &str = "publish:";
 pub const ARCHIVE_PREFIX: &str = "archive:";
 pub const DEADLINE_PREFIX: &str = "deadline:";
@@ -53,6 +56,19 @@ pub const TERMS_EXIT: &str = "terms:exit";
 pub const TERMS_STAY: &str = "terms:stay";
 pub const LATE_PERIODS_PREFIX: &str = "periods:";
 pub const TERMS_CANCEL: &str = "terms:cancel";
+pub const TERMS_MAKEUP: &str = "terms:makeup";
+
+pub const MAKEUP_ANSWER_PREFIX: &str = "makeup-answer:";
+const MAKEUP_ANSWER_MANUAL: &str = "manual";
+const MAKEUP_ANSWER_NOT_OFFERED: &str = "off";
+const MAKEUP_ANSWER_PASS_FAIL: &str = "pass";
+pub const MAKEUP_ATTEMPTS_PREFIX: &str = "makeup-attempts:";
+pub const MAKEUP_DATE: &str = "makeup-form:date";
+pub const MAKEUP_ATTEMPTS: &str = "makeup-form:attempts";
+pub const MAKEUP_DISABLE: &str = "makeup-form:disable";
+pub const MAKEUP_SAVE: &str = "makeup-form:save";
+pub const MAKEUP_CANCEL: &str = "makeup-form:cancel";
+pub const MAKEUP_GRANT: &str = "makeup-grant";
 
 pub const FILE_ADD: &str = "file:add";
 pub const FILE_FINISH: &str = "file:finish";
@@ -136,8 +152,11 @@ fn parse_contact(data: &str) -> Option<InformationalAction> {
 pub(super) enum ReplayableAction {
     Page(PageTarget, u32),
     Profile,
+    ReviewHub,
     NextReview,
+    NextMakeupReview,
     Course(TeachingCourseId),
+    CourseMakeup(TeachingCourseId),
     Assignment(AssignmentId),
     ManageAssignment(AssignmentId),
     StartAssignmentCreation(TeachingCourseId),
@@ -159,8 +178,11 @@ impl ReplayableAction {
             Self::Page(PageTarget::Sandbox, 0) => MENU_SANDBOX.to_owned(),
             Self::Page(target, page) => target.callback(page),
             Self::Profile => MENU_PROFILE.to_owned(),
+            Self::ReviewHub => REVIEW_HUB.to_owned(),
             Self::NextReview => NEXT_REVIEW.to_owned(),
+            Self::NextMakeupReview => NEXT_MAKEUP_REVIEW.to_owned(),
             Self::Course(id) => format!("{COURSE_PREFIX}{}", id.as_uuid()),
+            Self::CourseMakeup(id) => format!("{MAKEUP_PREFIX}{}", id.as_uuid()),
             Self::Assignment(id) => format!("{ASSIGNMENT_PREFIX}{}", id.as_uuid()),
             Self::ManageAssignment(id) => format!("{MANAGE_PREFIX}{}", id.as_uuid()),
             Self::StartAssignmentCreation(id) => format!("{CREATE_PREFIX}{}", id.as_uuid()),
@@ -251,6 +273,7 @@ pub(super) enum ScreenAction {
     FinishFileCreation,
     RotateGroupInvite,
     BulkReview(ReviewDecision),
+    GrantMakeupAttempt,
 }
 
 impl ScreenAction {
@@ -266,6 +289,7 @@ impl ScreenAction {
             Self::RotateGroupInvite => INVITE_ROTATE.to_owned(),
             Self::BulkReview(ReviewDecision::Accept) => SANDBOX_ACCEPT_ALL.to_owned(),
             Self::BulkReview(ReviewDecision::Reject) => SANDBOX_REJECT_ALL.to_owned(),
+            Self::GrantMakeupAttempt => MAKEUP_GRANT.to_owned(),
         }
     }
 }
@@ -295,6 +319,38 @@ pub(super) enum FlowAction {
     CancelFileDeletion,
     ConfirmInviteRotation,
     CancelInviteRotation,
+    MakeupAnswer(MakeupChoice),
+    MakeupAttempts(AmountChoice),
+    MakeupForm(MakeupFormAction),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MakeupChoice {
+    Credit(u16),
+    Manual,
+    NotOffered,
+    PassFail,
+}
+
+impl MakeupChoice {
+    pub fn callback(self) -> String {
+        let value = match self {
+            Self::Credit(credit) => credit.to_string(),
+            Self::Manual => MAKEUP_ANSWER_MANUAL.to_owned(),
+            Self::NotOffered => MAKEUP_ANSWER_NOT_OFFERED.to_owned(),
+            Self::PassFail => MAKEUP_ANSWER_PASS_FAIL.to_owned(),
+        };
+        format!("{MAKEUP_ANSWER_PREFIX}{value}")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MakeupFormAction {
+    Date,
+    Attempts,
+    Disable,
+    Save,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,6 +403,7 @@ pub(super) enum TermsAction {
     Exit,
     Stay,
     Cancel,
+    Makeup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -368,12 +425,15 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         MENU_PROFILE => Replayable(ReplayableAction::Profile),
         MENU_COURSES => Replayable(ReplayableAction::Page(PageTarget::Courses, 0)),
         MENU_SANDBOX => Replayable(ReplayableAction::Page(PageTarget::Sandbox, 0)),
+        REVIEW_HUB => Replayable(ReplayableAction::ReviewHub),
         NEXT_REVIEW => Replayable(ReplayableAction::NextReview),
+        NEXT_MAKEUP_REVIEW => Replayable(ReplayableAction::NextMakeupReview),
         FILE_ADD => Screen(ScreenAction::AddFile),
         FILE_FINISH => Screen(ScreenAction::FinishFileCreation),
         INVITE_ROTATE => Screen(ScreenAction::RotateGroupInvite),
         SANDBOX_ACCEPT_ALL => Screen(ScreenAction::BulkReview(ReviewDecision::Accept)),
         SANDBOX_REJECT_ALL => Screen(ScreenAction::BulkReview(ReviewDecision::Reject)),
+        MAKEUP_GRANT => Screen(ScreenAction::GrantMakeupAttempt),
         FILE_CONFIRM_DELETE => Flow(FlowAction::ConfirmFileDeletion),
         FILE_CANCEL_DELETE => Flow(FlowAction::CancelFileDeletion),
         INVITE_CONFIRM_ROTATE => Flow(FlowAction::ConfirmInviteRotation),
@@ -391,6 +451,12 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         TERMS_EXIT => Flow(FlowAction::Terms(TermsAction::Exit)),
         TERMS_STAY => Flow(FlowAction::Terms(TermsAction::Stay)),
         TERMS_CANCEL => Flow(FlowAction::Terms(TermsAction::Cancel)),
+        TERMS_MAKEUP => Flow(FlowAction::Terms(TermsAction::Makeup)),
+        MAKEUP_DATE => Flow(FlowAction::MakeupForm(MakeupFormAction::Date)),
+        MAKEUP_ATTEMPTS => Flow(FlowAction::MakeupForm(MakeupFormAction::Attempts)),
+        MAKEUP_DISABLE => Flow(FlowAction::MakeupForm(MakeupFormAction::Disable)),
+        MAKEUP_SAVE => Flow(FlowAction::MakeupForm(MakeupFormAction::Save)),
+        MAKEUP_CANCEL => Flow(FlowAction::MakeupForm(MakeupFormAction::Cancel)),
         DEADLINE_CALENDAR => Flow(FlowAction::Deadline(DeadlineAction::Calendar)),
         DEADLINE_MANUAL => Flow(FlowAction::Deadline(DeadlineAction::Manual)),
         DEADLINE_OPTIONS => Flow(FlowAction::Deadline(DeadlineAction::Options)),
@@ -405,6 +471,11 @@ type Route<V, A> = (&'static str, fn(V) -> A);
 const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
     (COURSE_PREFIX, |id| {
         Replayable(ReplayableAction::Course(TeachingCourseId::from_uuid(id)))
+    }),
+    (MAKEUP_PREFIX, |id| {
+        Replayable(ReplayableAction::CourseMakeup(TeachingCourseId::from_uuid(
+            id,
+        )))
     }),
     (ASSIGNMENT_PREFIX, |id| {
         Replayable(ReplayableAction::Assignment(AssignmentId::from_uuid(id)))
@@ -481,6 +552,7 @@ const AMOUNT_ROUTES: &[Route<AmountChoice, FlowAction>] = &[
     (EXTRA_ATTEMPTS_PREFIX, FlowAction::ExtraAttempts),
     (PENALTY_PREFIX, FlowAction::Penalty),
     (LATE_PERIODS_PREFIX, FlowAction::Periods),
+    (MAKEUP_ATTEMPTS_PREFIX, FlowAction::MakeupAttempts),
 ];
 
 const INDEX_ROUTES: &[Route<usize, ScreenAction>] = &[
@@ -511,6 +583,8 @@ fn route<V, A>(routes: &[Route<V, A>], data: &str, parse: impl Fn(&str) -> Optio
 fn parse_flow(data: &str) -> Option<FlowAction> {
     if data.starts_with(GRADING_PREFIX) {
         parse_grading(data).map(FlowAction::Grading)
+    } else if data.starts_with(MAKEUP_ANSWER_PREFIX) {
+        parse_makeup_answer(data).map(FlowAction::MakeupAnswer)
     } else if data.starts_with(LATE_POLICY_PREFIX) {
         parse_late_policy(data).map(FlowAction::LatePolicy)
     } else if data.starts_with(REVIEW_SCORE_PREFIX) {
@@ -537,6 +611,15 @@ fn parse_grading(data: &str) -> Option<GradingChoice> {
         "passfail" => Some(GradingChoice::PassFail),
         "manual" => Some(GradingChoice::Manual),
         value => parse_u16(value).map(GradingChoice::Preset),
+    }
+}
+
+fn parse_makeup_answer(data: &str) -> Option<MakeupChoice> {
+    match data.strip_prefix(MAKEUP_ANSWER_PREFIX)? {
+        MAKEUP_ANSWER_MANUAL => Some(MakeupChoice::Manual),
+        MAKEUP_ANSWER_NOT_OFFERED => Some(MakeupChoice::NotOffered),
+        MAKEUP_ANSWER_PASS_FAIL => Some(MakeupChoice::PassFail),
+        value => parse_u16(value).map(MakeupChoice::Credit),
     }
 }
 
@@ -689,6 +772,26 @@ mod tests {
             ("menu:sandbox".to_owned(), "replayable"),
             (format!("review:open:{submission}"), "replayable"),
             (format!("course:{course}"), "replayable"),
+            (format!("makeup:{course}"), "replayable"),
+            ("review:hub".to_owned(), "replayable"),
+            ("review:makeup".to_owned(), "replayable"),
+            ("makeup-grant".to_owned(), "screen"),
+            ("makeup-answer:6".to_owned(), "flow"),
+            ("makeup-answer:manual".to_owned(), "flow"),
+            ("makeup-answer:off".to_owned(), "flow"),
+            ("makeup-answer:pass".to_owned(), "flow"),
+            ("makeup-answer:".to_owned(), "invalid"),
+            ("makeup-answer:-1".to_owned(), "invalid"),
+            ("makeup-attempts:3".to_owned(), "flow"),
+            ("makeup-attempts:manual".to_owned(), "flow"),
+            ("makeup-form:date".to_owned(), "flow"),
+            ("makeup-form:attempts".to_owned(), "flow"),
+            ("makeup-form:disable".to_owned(), "flow"),
+            ("makeup-form:save".to_owned(), "flow"),
+            ("makeup-form:cancel".to_owned(), "flow"),
+            ("makeup-form:enable".to_owned(), "invalid"),
+            ("makeup:grant".to_owned(), "invalid"),
+            (TERMS_MAKEUP.to_owned(), "flow"),
             (format!("assignment:{assignment}"), "replayable"),
             (format!("manage:{assignment}"), "replayable"),
             (format!("create:{course}"), "replayable"),
@@ -794,6 +897,49 @@ mod tests {
         assert_eq!(
             LatePolicyChoice::Penalty(DeductedFrom::CourseTotal).deducted_from(),
             Some(DeductedFrom::CourseTotal)
+        );
+    }
+
+    #[test]
+    fn makeup_buttons_fit_telegram_and_round_trip() {
+        let course = TeachingCourseId::new();
+        let opened = ReplayableAction::CourseMakeup(course).callback();
+        assert_eq!(opened.len(), 43);
+        assert_eq!(
+            parse(&opened),
+            Some(Replayable(ReplayableAction::CourseMakeup(course)))
+        );
+        for choice in [
+            MakeupChoice::Credit(100),
+            MakeupChoice::Manual,
+            MakeupChoice::NotOffered,
+            MakeupChoice::PassFail,
+        ] {
+            let data = choice.callback();
+            assert!(data.len() <= 20, "{data}");
+            assert_eq!(parse(&data), Some(Flow(FlowAction::MakeupAnswer(choice))));
+        }
+        for (data, action) in [
+            (MAKEUP_DATE, MakeupFormAction::Date),
+            (MAKEUP_ATTEMPTS, MakeupFormAction::Attempts),
+            (MAKEUP_DISABLE, MakeupFormAction::Disable),
+            (MAKEUP_SAVE, MakeupFormAction::Save),
+            (MAKEUP_CANCEL, MakeupFormAction::Cancel),
+        ] {
+            assert!(data.len() <= 20, "{data}");
+            assert_eq!(parse(data), Some(Flow(FlowAction::MakeupForm(action))));
+        }
+        assert_eq!(
+            parse(&format!("{MAKEUP_ATTEMPTS_PREFIX}5")),
+            Some(Flow(FlowAction::MakeupAttempts(AmountChoice::Preset(5))))
+        );
+        assert_eq!(
+            parse(MAKEUP_GRANT),
+            Some(Screen(ScreenAction::GrantMakeupAttempt))
+        );
+        assert_eq!(
+            ScreenAction::GrantMakeupAttempt.callback(),
+            MAKEUP_GRANT.to_owned()
         );
     }
 

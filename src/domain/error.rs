@@ -133,6 +133,30 @@ pub enum DomainError {
     #[error("student assignment progress does not belong to assignment")]
     StudentProgressDoesNotBelongToAssignment,
 
+    #[error("makeup is not offered")]
+    MakeupNotOffered,
+
+    #[error("makeup terms do not fit the assignment grading")]
+    MakeupTermsDoNotFitGrading,
+
+    #[error("makeup credit must be in 1..={max}, got {value}")]
+    InvalidMakeupCredit { value: u16, max: u16 },
+
+    #[error("makeup attempts must be in 1..={max}, got {value}")]
+    InvalidMakeupAttempts { value: u16, max: u16 },
+
+    #[error("makeup must end in the future and at most {max_days} days ahead")]
+    MakeupUntilOutOfRange { max_days: i64 },
+
+    #[error("makeup attempts exhausted: allowed {allowed}, used {used}")]
+    MakeupAttemptsExhausted { allowed: u16, used: u16 },
+
+    #[error("at most {max} extra makeup attempts can be granted")]
+    MakeupGrantLimitExceeded { max: u16 },
+
+    #[error("stored course makeup settings are inconsistent")]
+    InvalidCourseMakeupState,
+
     #[error("telegram user is already registered")]
     UserAlreadyRegistered,
 

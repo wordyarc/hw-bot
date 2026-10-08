@@ -60,7 +60,7 @@ async fn pending_submission_blocks_but_does_not_spend_an_attempt() -> anyhow::Re
     .remove(&app.fixture.assignment.id())
     .expect("requested assignment history");
 
-    assert_eq!(stored, history().pending().build());
+    assert_eq!(stored, history().pending().submissions(1).build());
 
     Ok(())
 }
@@ -288,6 +288,7 @@ async fn concurrent_double_submit_creates_one_pending_submission() -> anyhow::Re
         actor: app.student_actor(),
         content: "pull/1".to_owned(),
         submitted_at: Utc::now(),
+        allow_makeup: false,
     };
 
     let (first, second) = tokio::join!(

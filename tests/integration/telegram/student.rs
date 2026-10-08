@@ -3,7 +3,9 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use hw_bot::bot::{callbacks, texts};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, DeductedFrom, Submission, SubmissionId, SubmissionStatus};
+use hw_bot::domain::{
+    Assignment, DeductedFrom, Submission, SubmissionId, SubmissionKind, SubmissionStatus,
+};
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, method, path};
@@ -174,7 +176,7 @@ async fn the_history_shows_a_penalty_to_the_course_total_next_to_the_work_score(
     let attempt = texts::attempt_line(
         1,
         texts::submission_status(SubmissionStatus::Accepted),
-        Some(&texts::grade_line(grade)),
+        texts::grade_line(SubmissionKind::Regular, Some(grade)).as_deref(),
     );
     assert!(sent[opened..].contains(&attempt), "{sent:#?}");
     assert_eq!(grade.deducted_from(), Some(DeductedFrom::CourseTotal));

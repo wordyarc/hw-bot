@@ -4,15 +4,16 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
-use crate::app::{ErrorCode, StudentAssignment, SubmitHomework};
+use crate::app::{ErrorCode, StudentAssignment, StudentMakeup, SubmitHomework};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
-use crate::bot::errors::log_handler_error;
+use crate::bot::errors::{app_error_message, log_handler_error};
+use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{
-    button_label, grading_lines, list_text, paginated_keyboard, send_message_chunks,
-    student_keyboard, student_menu,
+    button_label, list_text, makeup_credit_terms, paginated_keyboard, send_message_chunks,
+    student_grading_lines, student_keyboard, student_menu,
 };
 use crate::domain::{
     AssignmentId, AssignmentStatus, StoredFileMetadata, Submission, USER_TEXT_MAX_LEN,
@@ -92,12 +93,15 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
             let closing = assignment
                 .late_policy()
                 .map(|_| texts::closing_line(&timezone.format(assignment.closes_at())));
+            let makeup = available(item.makeup)
+                .map(|makeup| texts::makeup_until_line(&timezone.format(makeup.until)));
             texts::assignment_entry(
                 assignment.title().as_str(),
                 status,
                 &until,
                 &texts::deadline_left(assignment.deadline_at(), now),
                 closing.as_deref(),
+                makeup.as_deref(),
                 item.history.remaining_attempts_for(assignment),
             )
         },
@@ -197,10 +201,12 @@ pub(super) async fn show_assignment(
         .await?;
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
+    let makeup = details.assignment.makeup;
+    let now = Utc::now();
     let mut summary = texts::assignment_card(
         details.assignment.subject.name().as_str(),
         assignment.title().as_str(),
-        &grading_lines(assignment, Utc::now(), timezone),
+        &student_grading_lines(assignment, makeup, now, timezone),
         history.used_attempts(),
         history.allowed_attempts_for(assignment),
         history.remaining_attempts_for(assignment),
@@ -228,9 +234,14 @@ pub(super) async fn show_assignment(
             PageTarget::History(assignment_id).callback(0),
         )]);
     }
-    if history.accepts_new_attempt_for(assignment, Utc::now()) {
+    let submit = if history.accepts_new_attempt_for(assignment, now) {
+        Some(texts::BUTTON_SUBMIT)
+    } else {
+        available(makeup).map(|_| texts::BUTTON_SUBMIT_MAKEUP)
+    };
+    if let Some(label) = submit {
         rows.push(vec![InlineKeyboardButton::callback(
-            texts::BUTTON_SUBMIT,
+            label,
             ReplayableAction::StartSubmission(assignment.id()).callback(),
         )]);
     }
@@ -301,7 +312,7 @@ async fn send_assignment_files(
 async fn send_submission(screen: Screen<'_>, submission: &Submission) -> HandlerResult {
     let bot = screen.bot();
     let chat_id = screen.chat_id();
-    let grade = submission.grade().map(texts::grade_line);
+    let grade = texts::grade_line(submission.kind(), submission.grade());
     bot.send_message(
         chat_id,
         texts::attempt_line(
@@ -359,9 +370,42 @@ pub(super) async fn show_history(
     Ok(())
 }
 
+fn available(makeup: Option<StudentMakeup>) -> Option<StudentMakeup> {
+    makeup.filter(|makeup| makeup.balance.remaining() > 0)
+}
+
+pub(super) async fn start_submission(
+    screen: Screen<'_>,
+    assignment_id: AssignmentId,
+) -> HandlerResult {
+    let details = screen
+        .services()
+        .assignments
+        .find_for_student(screen.actor(), assignment_id)
+        .await?;
+    let makeup = available(details.assignment.makeup);
+    screen
+        .dialogue()
+        .update(BotState::Flow(FlowState::AwaitingSubmission {
+            assignment_id,
+            makeup: makeup.is_some(),
+        }))
+        .await?;
+    match makeup {
+        Some(makeup) => {
+            let terms = makeup_credit_terms(makeup.credit, details.assignment.assignment.grading());
+            screen
+                .ask(&texts::makeup_prompt(&terms, makeup.balance.remaining()))
+                .await
+        }
+        None => screen.ask(texts::SUBMISSION_PROMPT).await,
+    }
+}
+
 pub(super) async fn submit_homework_text(
     step: TextStep<'_>,
     assignment_id: AssignmentId,
+    makeup: bool,
 ) -> HandlerResult {
     let bot = step.bot();
     let chat_id = step.chat_id();
@@ -390,15 +434,32 @@ pub(super) async fn submit_homework_text(
             actor: screen.actor(),
             content: text.to_owned(),
             submitted_at: step.message().date,
+            allow_makeup: makeup,
         })
         .await;
     match submitted {
-        Ok(_) => {
+        Ok(submitted) => {
             reset_dialogue(step.dialogue()).await?;
-            bot.send_message(chat_id, texts::submission_queued())
+            let confirmation = match submitted.makeup_balance {
+                Some(balance) => texts::makeup_queued(balance.remaining()),
+                None => texts::submission_queued(),
+            };
+            bot.send_message(chat_id, confirmation)
                 .reply_markup(student_keyboard())
                 .await?;
             Ok(())
+        }
+        Err(error)
+            if matches!(
+                error.code(),
+                ErrorCode::DeadlineExceeded | ErrorCode::SubmissionClosed
+            ) =>
+        {
+            reset_dialogue(step.dialogue()).await?;
+            bot.send_message(chat_id, app_error_message(error.code()))
+                .reply_markup(student_keyboard())
+                .await?;
+            show_assignment(screen, assignment_id).await
         }
         Err(error)
             if matches!(

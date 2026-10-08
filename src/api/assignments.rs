@@ -16,7 +16,8 @@ use crate::app::{
 };
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DeductedFrom, FilePresentation, Grading,
-    LatePolicy, StoredFileMetadata, StudentAssignmentProgress, TeachingCourseId, UserId,
+    LatePolicy, MakeupCredit, MakeupTerms, StoredFileMetadata, StudentAssignmentProgress,
+    TeachingCourseId, UserId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +136,8 @@ pub struct AssignmentResponse {
     #[serde(flatten)]
     late_policy: LatePolicyRequest,
     closes_at: DateTime<Utc>,
+    makeup_offered: Option<bool>,
+    makeup_credit: Option<u16>,
     status: AssignmentStatus,
     created_by: Uuid,
     created_at: DateTime<Utc>,
@@ -155,6 +158,11 @@ impl From<&Assignment> for AssignmentResponse {
             max_score: assignment.grading().max_score(),
             late_policy: LatePolicyRequest::of(assignment),
             closes_at: assignment.closes_at(),
+            makeup_offered: assignment.makeup().map(MakeupTerms::is_offered),
+            makeup_credit: assignment
+                .makeup()
+                .and_then(MakeupTerms::credit)
+                .map(MakeupCredit::get),
             status: assignment.status(),
             created_by: assignment.created_by().as_uuid(),
             created_at: assignment.created_at(),
@@ -225,6 +233,7 @@ impl From<&StudentAssignment> for ProgressResponse {
             assignment,
             subject: _,
             history,
+            makeup: _,
         } = view;
 
         Self {
@@ -333,6 +342,7 @@ pub async fn create_assignment(
         max_attempts: request.max_attempts,
         grading: Grading::from_max_score(request.max_score)?,
         late_policy: request.late_policy.parse()?,
+        makeup: None,
         created_at: Utc::now(),
         deadline_at: request.deadline_at,
     };

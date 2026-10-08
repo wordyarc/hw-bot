@@ -2,10 +2,9 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
+use crate::db::submissions::HistoryColumns;
 use crate::db::{DbError, DbResult, checked_num_cast};
-use crate::domain::{
-    AssignmentId, Role, StudentGroupId, SubmissionHistory, TelegramUserId, User, UserId,
-};
+use crate::domain::{AssignmentId, Role, StudentGroupId, TelegramUserId, User, UserId};
 use crate::pagination::PageRequest;
 use crate::read_models::{AssignmentStudentSummary, CourseStudent, UserStatistics};
 
@@ -90,9 +89,14 @@ where
             select
                 student_id,
                 count(*) filter (
-                    where status in ('accepted', 'rejected')
+                    where kind = 'regular' and status in ('accepted', 'rejected')
                 )::bigint as used_attempts,
-                bool_or(status = 'accepted') as has_accepted_submission,
+                count(*)::bigint as submission_count,
+                bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,
+                max(work_score) filter (
+                    where kind = 'regular' and status = 'accepted'
+                ) as accepted_regular_score,
+                bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,
                 bool_or(status = 'pending_review') as has_pending_submission
             from submissions
             where assignment_id = $1
@@ -106,8 +110,11 @@ where
             users.student_group_id,
             users.registered_at,
             coalesce(history.used_attempts, 0)::bigint as "used_attempts!",
+            coalesce(history.submission_count, 0)::bigint as "submission_count!",
             coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
-            coalesce(history.has_accepted_submission, false) as "has_accepted_submission!",
+            coalesce(history.has_accepted_regular, false) as "has_accepted_regular!",
+            history.accepted_regular_score as "accepted_regular_score?",
+            coalesce(history.has_accepted_makeup, false) as "has_accepted_makeup!",
             coalesce(history.has_pending_submission, false) as "has_pending_submission!"
         from users
         left join history
@@ -228,8 +235,11 @@ struct AssignmentStudentCardRow {
     student_group_id: Option<Uuid>,
     registered_at: DateTime<Utc>,
     used_attempts: i64,
+    submission_count: i64,
     extra_attempts: i16,
-    has_accepted_submission: bool,
+    has_accepted_regular: bool,
+    accepted_regular_score: Option<i16>,
+    has_accepted_makeup: bool,
     has_pending_submission: bool,
 }
 
@@ -262,15 +272,16 @@ impl TryFrom<AssignmentStudentCardRow> for AssignmentStudentSummary {
             student_group_id: row.student_group_id,
             registered_at: row.registered_at,
         })?;
-        let history = SubmissionHistory::new(
-            checked_num_cast("submission_history.used_attempts", row.used_attempts)?,
-            checked_num_cast(
-                "student_assignment_progress.extra_attempts",
-                row.extra_attempts,
-            )?,
-            row.has_accepted_submission,
-            row.has_pending_submission,
-        );
+        let history = HistoryColumns {
+            used_attempts: row.used_attempts,
+            submission_count: row.submission_count,
+            extra_attempts: row.extra_attempts,
+            has_accepted_regular: row.has_accepted_regular,
+            accepted_regular_score: row.accepted_regular_score,
+            has_accepted_makeup: row.has_accepted_makeup,
+            has_pending_submission: row.has_pending_submission,
+        }
+        .history()?;
 
         Ok(Self { student, history })
     }

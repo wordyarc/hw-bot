@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, LatePenalty, MAX_SCORE,
-    NonEmptyString, SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
+    Acceptance, Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, Grading,
+    LatePenalty, MAX_ATTEMPTS, MAX_SCORE, MakeupRequest, MakeupTerms, NonEmptyString, Offer,
+    SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -10,22 +11,34 @@ use crate::string_enum::str_enum;
 pub struct SubmissionHistory {
     used_attempts: u16,
     extra_attempts: u16,
-    has_accepted_submission: bool,
+    submission_count: u16,
+    has_accepted_regular: bool,
+    accepted_regular_score: Option<u16>,
+    has_accepted_makeup: bool,
     has_pending_submission: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SubmissionHistoryParts {
+    pub used_attempts: u16,
+    pub extra_attempts: u16,
+    pub submission_count: u16,
+    pub has_accepted_regular: bool,
+    pub accepted_regular_score: Option<u16>,
+    pub has_accepted_makeup: bool,
+    pub has_pending_submission: bool,
+}
+
 impl SubmissionHistory {
-    pub fn new(
-        used_attempts: u16,
-        extra_attempts: u16,
-        has_accepted_submission: bool,
-        has_pending_submission: bool,
-    ) -> Self {
+    pub(crate) fn restore(parts: SubmissionHistoryParts) -> Self {
         Self {
-            used_attempts,
-            extra_attempts,
-            has_accepted_submission,
-            has_pending_submission,
+            used_attempts: parts.used_attempts,
+            extra_attempts: parts.extra_attempts,
+            submission_count: parts.submission_count,
+            has_accepted_regular: parts.has_accepted_regular,
+            accepted_regular_score: parts.accepted_regular_score,
+            has_accepted_makeup: parts.has_accepted_makeup,
+            has_pending_submission: parts.has_pending_submission,
         }
     }
 
@@ -38,7 +51,7 @@ impl SubmissionHistory {
     }
 
     pub fn has_accepted_submission(self) -> bool {
-        self.has_accepted_submission
+        self.has_accepted_regular || self.has_accepted_makeup
     }
 
     pub fn has_pending_submission(self) -> bool {
@@ -56,11 +69,77 @@ impl SubmissionHistory {
     }
 
     pub fn accepts_new_attempt_for(self, assignment: &Assignment, at: DateTime<Utc>) -> bool {
-        assignment.is_published()
-            && assignment.ensure_open_for_submission(at).is_ok()
-            && !self.has_accepted_submission
-            && !self.has_pending_submission
-            && self.remaining_attempts_for(assignment) > 0
+        self.offer_at(assignment, at, MakeupRequest::default()) == Some(Offer::Regular)
+    }
+
+    pub fn offer_at(
+        self,
+        assignment: &Assignment,
+        at: DateTime<Utc>,
+        makeup: MakeupRequest,
+    ) -> Option<Offer> {
+        if !assignment.is_published() {
+            return None;
+        }
+        let acceptance = assignment
+            .acceptance_at(at, makeup.consented_course())
+            .ok()?;
+        self.ensure_admits(assignment, acceptance).ok()?;
+
+        Some(match acceptance {
+            Acceptance::Regular => Offer::Regular,
+            Acceptance::Makeup { credit } => Offer::Makeup {
+                credit,
+                until: makeup.course?.until(),
+                balance: makeup.balance,
+            },
+        })
+    }
+
+    fn ensure_admits(self, assignment: &Assignment, acceptance: Acceptance) -> DomainResult<()> {
+        if self.closed_for(acceptance) {
+            return Err(DomainError::SubmissionAlreadyAccepted);
+        }
+
+        if self.has_pending_submission {
+            return Err(DomainError::SubmissionAlreadyPendingReview);
+        }
+
+        if acceptance == Acceptance::Regular {
+            let allowed = self.allowed_attempts_for(assignment);
+            if self.used_attempts >= allowed {
+                return Err(DomainError::AttemptsExhausted {
+                    allowed,
+                    used: self.used_attempts,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn closed_for(self, acceptance: Acceptance) -> bool {
+        match acceptance {
+            Acceptance::Regular => self.has_accepted_submission(),
+            Acceptance::Makeup { credit } => {
+                self.has_accepted_makeup
+                    || (self.has_accepted_regular
+                        && credit.is_none_or(|credit| {
+                            self.accepted_regular_score
+                                .is_none_or(|score| score >= credit.get())
+                        }))
+            }
+        }
+    }
+
+    fn next_attempt_number(self) -> DomainResult<u16> {
+        self.submission_count
+            .checked_add(1)
+            .filter(|number| *number <= MAX_ATTEMPTS)
+            .ok_or(DomainError::AttemptLimitExceeded {
+                value: u32::from(self.submission_count) + 1,
+                max: MAX_ATTEMPTS,
+            })
     }
 }
 
@@ -70,6 +149,14 @@ str_enum! {
         PendingReview => "pending_review",
         Accepted => "accepted",
         Rejected => "rejected",
+    }
+}
+
+str_enum! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum SubmissionKind {
+        Regular => "regular",
+        Makeup => "makeup",
     }
 }
 
@@ -325,6 +412,7 @@ pub struct Submission {
     id: SubmissionId,
     assignment_id: AssignmentId,
     student_id: UserId,
+    kind: SubmissionKind,
     attempt_number: u16,
     content: NonEmptyString,
     status: SubmissionStatus,
@@ -339,6 +427,7 @@ pub(crate) struct SubmissionParts {
     pub id: SubmissionId,
     pub assignment_id: AssignmentId,
     pub student_id: UserId,
+    pub kind: SubmissionKind,
     pub attempt_number: u16,
     pub content: String,
     pub status: SubmissionStatus,
@@ -379,11 +468,15 @@ impl Submission {
         if grade.is_some() && parts.status != SubmissionStatus::Accepted {
             return Err(DomainError::InvalidSubmissionGradeState);
         }
+        if parts.kind == SubmissionKind::Makeup && grade.and_then(Grade::late).is_some() {
+            return Err(DomainError::InvalidSubmissionGradeState);
+        }
 
         Ok(Self {
             id: parts.id,
             assignment_id: parts.assignment_id,
             student_id: parts.student_id,
+            kind: parts.kind,
             attempt_number: parts.attempt_number,
             content: NonEmptyString::new_bounded(
                 "submission.content",
@@ -408,14 +501,13 @@ impl Submission {
         })
     }
 
-    pub fn submit(
-        id: SubmissionId,
+    pub fn admit(
         assignment: &Assignment,
         student: &User,
         history: SubmissionHistory,
-        content: impl Into<String>,
         submitted_at: DateTime<Utc>,
-    ) -> DomainResult<Self> {
+        makeup: MakeupRequest,
+    ) -> DomainResult<Acceptance> {
         if !student.role().can_submit_homework() {
             return Err(DomainError::PermissionDenied {
                 action: "submit homework",
@@ -426,33 +518,37 @@ impl Submission {
             return Err(DomainError::AssignmentIsNotPublished);
         }
 
-        assignment.ensure_open_for_submission(submitted_at)?;
+        let acceptance = assignment.acceptance_at(submitted_at, makeup.consented_course())?;
 
         if student.student_group_id() != Some(assignment.student_group_id()) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
         }
 
-        if history.has_accepted_submission {
-            return Err(DomainError::SubmissionAlreadyAccepted);
-        }
+        history.ensure_admits(assignment, acceptance)?;
 
-        if history.has_pending_submission {
-            return Err(DomainError::SubmissionAlreadyPendingReview);
-        }
+        Ok(acceptance)
+    }
 
-        let allowed = history.allowed_attempts_for(assignment);
-        if history.used_attempts >= allowed {
-            return Err(DomainError::AttemptsExhausted {
-                allowed,
-                used: history.used_attempts,
-            });
+    pub fn submit(
+        id: SubmissionId,
+        assignment: &Assignment,
+        student: &User,
+        history: SubmissionHistory,
+        content: impl Into<String>,
+        submitted_at: DateTime<Utc>,
+        makeup: MakeupRequest,
+    ) -> DomainResult<Self> {
+        let acceptance = Self::admit(assignment, student, history, submitted_at, makeup)?;
+        if acceptance != Acceptance::Regular {
+            makeup.balance.ensure_available()?;
         }
 
         Self::restore(SubmissionParts {
             id,
             assignment_id: assignment.id(),
             student_id: student.id(),
-            attempt_number: history.used_attempts + 1,
+            kind: acceptance.kind(),
+            attempt_number: history.next_attempt_number()?,
             content: content.into(),
             status: SubmissionStatus::PendingReview,
             submitted_at,
@@ -529,8 +625,8 @@ impl Submission {
             return Err(DomainError::SubmissionIsNotPendingReview);
         }
 
-        let grade = match status {
-            SubmissionStatus::Accepted => {
+        let grade = match (status, self.kind) {
+            (SubmissionStatus::Accepted, SubmissionKind::Regular) => {
                 // Берём время отправки, чтобы длительность проверки не влияла на штраф студенту.
                 let late = assignment.late_penalty_at(self.submitted_at);
                 let max_score = assignment.grading().max_score();
@@ -545,6 +641,18 @@ impl Submission {
                             late,
                         )
                     })
+            }
+            (SubmissionStatus::Accepted, SubmissionKind::Makeup) => {
+                if score.is_some() {
+                    return Err(DomainError::ScoreNotAllowed);
+                }
+                match (assignment.makeup(), assignment.grading()) {
+                    (Some(MakeupTerms::Credit(credit)), Grading::Score { max_score }) => {
+                        Some(Grade::new(credit.get(), max_score.get(), None))
+                    }
+                    (Some(MakeupTerms::PassFail), Grading::PassFail) => None,
+                    _ => return Err(DomainError::MakeupNotOffered),
+                }
             }
             _ => None,
         };
@@ -571,6 +679,10 @@ impl Submission {
 
     pub fn student_id(&self) -> UserId {
         self.student_id
+    }
+
+    pub fn kind(&self) -> SubmissionKind {
+        self.kind
     }
 
     pub fn attempt_number(&self) -> u16 {
@@ -620,6 +732,7 @@ mod tests {
             id: SubmissionId::new(),
             assignment_id: AssignmentId::new(),
             student_id: UserId::new(),
+            kind: SubmissionKind::Regular,
             attempt_number: 1,
             content: "https://github.com/course/hw/pull/1".to_owned(),
             status: SubmissionStatus::PendingReview,
@@ -742,6 +855,31 @@ mod tests {
         assert_eq!(grade.deducted_from(), Some(DeductedFrom::WorkScore));
         assert_eq!(grade.work_score(), 2);
         assert_eq!(grade.course_total_penalty(), 0);
+    }
+
+    #[test]
+    fn restore_rejects_a_late_grade_of_a_makeup() {
+        let makeup = |grade| SubmissionParts {
+            kind: SubmissionKind::Makeup,
+            grade,
+            ..accepted_parts()
+        };
+
+        assert_eq!(
+            Submission::restore(makeup(grade(4, 5))).unwrap_err(),
+            DomainError::InvalidSubmissionGradeState
+        );
+        let on_time = GradeParts {
+            late_periods: Some(0),
+            penalty: Some(0),
+            deducted_from: None,
+            work_score: Some(4),
+            ..grade(4, 5)
+        };
+        assert_eq!(
+            Submission::restore(makeup(on_time)).unwrap().kind(),
+            SubmissionKind::Makeup
+        );
     }
 
     #[test]

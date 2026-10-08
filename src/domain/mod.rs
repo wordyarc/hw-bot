@@ -5,6 +5,7 @@ mod error;
 mod files;
 mod ids;
 mod invites;
+mod makeup;
 mod submission;
 mod text;
 mod user;
@@ -28,7 +29,13 @@ pub use ids::{
     TelegramUserId, UserId,
 };
 pub use invites::InviteGeneration;
-pub use submission::{Grade, ReviewDecision, Submission, SubmissionHistory, SubmissionStatus};
+pub use makeup::{
+    Acceptance, CourseMakeup, MAX_MAKEUP_ATTEMPTS, MAX_MAKEUP_DAYS, MakeupBalance, MakeupCredit,
+    MakeupRequest, MakeupTerms, Offer,
+};
+pub use submission::{
+    Grade, ReviewDecision, Submission, SubmissionHistory, SubmissionKind, SubmissionStatus,
+};
 pub use text::{
     ASSIGNMENT_TITLE_MAX_LEN, DISPLAY_NAME_MAX_LEN, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN,
     SUBJECT_NAME_MAX_LEN, USER_TEXT_MAX_LEN,
@@ -37,4 +44,4 @@ pub use user::{Role, StaffRole, User};
 
 pub(crate) use assignment::AssignmentParts;
 pub(crate) use files::StoredFileParts;
-pub(crate) use submission::{GradeParts, SubmissionParts};
+pub(crate) use submission::{GradeParts, SubmissionHistoryParts, SubmissionParts};

@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into submissions (\n            id, assignment_id, student_id, kind, attempt_number, content, status, submitted_at,\n            reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n            penalty, penalty_deducted_from, work_score, course_total_penalty\n        )\n        values (\n            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int2",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Int2",
+        "Int2",
+        "Int4",
+        "Int2",
+        "Text",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "108773f7965417bc965a2b38be172a8b5a468fc00b444b273cac0ec1bd875f84"
+}

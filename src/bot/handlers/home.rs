@@ -169,6 +169,12 @@ pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
                         texts::home_greeting(name),
                         texts::review_queue_line(pending)
                     );
+                    let makeups =
+                        optional_stat(services.reviews.makeup_size(actor).await, "teacher_makeups");
+                    if let Some(makeups) = makeups.filter(|&count| count > 0) {
+                        text.push('\n');
+                        text.push_str(&texts::home_makeup_line(makeups));
+                    }
                     let sandbox = optional_stat(
                         services.reviews.sandbox_size(actor, None).await,
                         "teacher_sandbox",
@@ -276,6 +282,10 @@ mod tests {
         );
         let guest = format!("{}{}", help_for(None), help_commands(None));
 
+        assert!(student.contains(texts::BUTTON_SUBMIT_MAKEUP), "{student}");
+        assert!(teacher.contains("Досдача включается"), "{teacher}");
+        assert!(teacher.contains(texts::BUTTON_REVIEW), "{teacher}");
+        assert!(!student.contains("Досдача включается"), "{student}");
         assert!(student.contains("/queue"), "{student}");
         assert!(!student.contains("/review"), "{student}");
         assert!(!student.contains("/courses"), "{student}");

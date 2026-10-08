@@ -13,16 +13,19 @@ use crate::bot::callbacks::{
     DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL, DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS,
     FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GRADING_PREFIX, INVITE_CANCEL_ROTATE,
     INVITE_CONFIRM_ROTATE, InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice,
-    PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REVIEW_ACCEPT_PREFIX, REVIEW_CHANGE_PREFIX,
-    REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, ReplayableAction, STUDENT_PREFIX, ScreenAction,
-    TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE, TERMS_DURATION_APPLY, TERMS_DURATION_DATE,
-    TERMS_EXIT, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
+    MAKEUP_ATTEMPTS, MAKEUP_ATTEMPTS_PREFIX, MAKEUP_CANCEL, MAKEUP_DATE, MAKEUP_DISABLE,
+    MAKEUP_SAVE, MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REVIEW_ACCEPT_PREFIX,
+    REVIEW_CHANGE_PREFIX, REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, ReplayableAction,
+    STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE, TERMS_DURATION_APPLY,
+    TERMS_DURATION_DATE, TERMS_EXIT, TERMS_MAKEUP, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS,
+    TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
 };
+use crate::bot::makeup_form::{MakeupForm, MakeupStep};
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DeductedFrom, ReviewDecision, Role,
-    StoredFileMetadata, SubmissionId, TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom, Grading,
+    ReviewDecision, Role, StoredFileMetadata, SubmissionId, TeachingCourseId, UserId,
 };
 
 type Row = Vec<InlineKeyboardButton>;
@@ -134,7 +137,7 @@ pub(crate) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
     let review_label =
         pending.map_or_else(|| texts::BUTTON_REVIEW.to_owned(), texts::review_button);
     InlineKeyboardMarkup::new(vec![
-        row(review_label, ReplayableAction::NextReview.callback()),
+        row(review_label, ReplayableAction::ReviewHub.callback()),
         row(
             texts::BUTTON_COURSES,
             ReplayableAction::Page(PageTarget::Courses, 0).callback(),
@@ -147,20 +150,54 @@ pub(crate) fn review_keyboard(
     submission_id: SubmissionId,
     course_id: TeachingCourseId,
     student_id: UserId,
+    accept: Option<String>,
 ) -> InlineKeyboardMarkup {
+    let accept = accept.map(|label| {
+        button(
+            label,
+            format!("{REVIEW_ACCEPT_PREFIX}{}", submission_id.as_uuid()),
+        )
+    });
+    let reject = button(
+        texts::BUTTON_REJECT,
+        format!("{REVIEW_REJECT_PREFIX}{}", submission_id.as_uuid()),
+    );
     InlineKeyboardMarkup::new(vec![
-        vec![
-            button(
-                texts::BUTTON_ACCEPT,
-                format!("{REVIEW_ACCEPT_PREFIX}{}", submission_id.as_uuid()),
-            ),
-            button(
-                texts::BUTTON_REJECT,
-                format!("{REVIEW_REJECT_PREFIX}{}", submission_id.as_uuid()),
-            ),
-        ],
+        accept.into_iter().chain([reject]).collect(),
         vec![student_contact_button(course_id, student_id)],
     ])
+}
+
+pub(crate) fn review_hub_keyboard(queue: u32, makeups: u32) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+    if queue > 0 {
+        rows.push(row(
+            texts::queue_review_button(queue),
+            ReplayableAction::NextReview.callback(),
+        ));
+    }
+    rows.push(row(
+        texts::makeup_review_button(makeups),
+        ReplayableAction::NextMakeupReview.callback(),
+    ));
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn makeup_followup_keyboard(next: bool, grant: bool) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+    if next {
+        rows.push(row(
+            texts::BUTTON_NEXT_MAKEUP,
+            ReplayableAction::NextMakeupReview.callback(),
+        ));
+    }
+    if grant {
+        rows.push(row(
+            texts::BUTTON_GRANT_MAKEUP,
+            ScreenAction::GrantMakeupAttempt.callback(),
+        ));
+    }
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub(crate) fn review_decision_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
@@ -181,14 +218,20 @@ fn student_contact_button(course_id: TeachingCourseId, student_id: UserId) -> In
 pub(crate) fn student_grades_keyboard(
     course_id: TeachingCourseId,
     student_id: UserId,
+    grant_makeup: bool,
 ) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![
-        vec![student_contact_button(course_id, student_id)],
-        row(
-            texts::BUTTON_BACK_TO_STUDENTS,
-            PageTarget::Gradebook(course_id).callback(0),
-        ),
-    ])
+    let mut rows = vec![vec![student_contact_button(course_id, student_id)]];
+    if grant_makeup {
+        rows.push(row(
+            texts::BUTTON_GRANT_MAKEUP,
+            ScreenAction::GrantMakeupAttempt.callback(),
+        ));
+    }
+    rows.push(row(
+        texts::BUTTON_BACK_TO_STUDENTS,
+        PageTarget::Gradebook(course_id).callback(0),
+    ));
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub(crate) fn contact_keyboard(
@@ -255,6 +298,8 @@ pub(crate) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeybo
 pub(crate) fn course_assignments_keyboard(
     course_id: TeachingCourseId,
     assignments: &[Assignment],
+    makeup: Option<CourseMakeup>,
+    timezone: &BotTimezone,
 ) -> InlineKeyboardMarkup {
     let mut rows: Vec<Row> = assignments
         .iter()
@@ -276,6 +321,18 @@ pub(crate) fn course_assignments_keyboard(
         row(
             texts::BUTTON_GRADEBOOK,
             ReplayableAction::Gradebook(course_id).callback(),
+        ),
+        row(
+            makeup.map_or_else(
+                || texts::BUTTON_MAKEUP_OFF.to_owned(),
+                |makeup| {
+                    texts::makeup_button(
+                        &texts::until(&timezone.format_until_short(makeup.until())),
+                        makeup.attempts(),
+                    )
+                },
+            ),
+            ReplayableAction::CourseMakeup(course_id).callback(),
         ),
         row(
             texts::BUTTON_GROUP_INVITE,
@@ -592,6 +649,12 @@ pub(crate) fn terms_keyboard(
             TERMS_POLICY,
         ));
     }
+    if terms.makeup_enabled {
+        rows.push(row(
+            texts::makeup_terms_line(terms.makeup, terms.grading()),
+            TERMS_MAKEUP,
+        ));
+    }
     rows.push(row(
         if creating {
             texts::BUTTON_CANCEL_CREATION
@@ -602,6 +665,102 @@ pub(crate) fn terms_keyboard(
     ));
 
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn makeup_answer_keyboard(grading: Grading, hint: Option<u16>) -> InlineKeyboardMarkup {
+    let answer = |label: String, choice: MakeupChoice| button(label, choice.callback());
+    let mut rows: Vec<Row> = match grading.max_score() {
+        Some(max_score) if max_score <= SCORE_BUTTONS_LIMIT => (1..=max_score)
+            .collect::<Vec<_>>()
+            .chunks(5)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|&credit| answer(credit.to_string(), MakeupChoice::Credit(credit)))
+                    .collect()
+            })
+            .collect(),
+        Some(_) => vec![vec![answer(
+            texts::BUTTON_OTHER_AMOUNT.to_owned(),
+            MakeupChoice::Manual,
+        )]],
+        None => vec![vec![answer(
+            texts::BUTTON_OFFER_MAKEUP.to_owned(),
+            MakeupChoice::PassFail,
+        )]],
+    };
+    if let Some(credit) = hint.filter(|_| grading.is_scored()) {
+        rows.push(vec![answer(
+            texts::makeup_hint_button(credit),
+            MakeupChoice::Credit(credit),
+        )]);
+    }
+    rows.push(vec![answer(
+        texts::BUTTON_NO_MAKEUP.to_owned(),
+        MakeupChoice::NotOffered,
+    )]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn makeup_attempts_keyboard() -> InlineKeyboardMarkup {
+    let amount = |amount: u16| {
+        button(
+            amount.to_string(),
+            format!("{MAKEUP_ATTEMPTS_PREFIX}{amount}"),
+        )
+    };
+
+    InlineKeyboardMarkup::new(vec![
+        [1, 2, 3, 5].into_iter().map(amount).collect(),
+        row(
+            texts::BUTTON_OTHER_AMOUNT,
+            format!("{MAKEUP_ATTEMPTS_PREFIX}manual"),
+        ),
+    ])
+}
+
+fn makeup_summary_keyboard(form: &MakeupForm, timezone: &BotTimezone) -> InlineKeyboardMarkup {
+    let mut rows = vec![row(texts::BUTTON_SAVE_MAKEUP, MAKEUP_SAVE)];
+    if let (false, Some(until), Some(attempts)) = (form.disabling, form.until, form.attempts) {
+        rows.push(row(
+            texts::makeup_date_button(&texts::until(&timezone.format_until_short(until))),
+            MAKEUP_DATE,
+        ));
+        rows.push(row(
+            texts::makeup_attempts_button(attempts),
+            MAKEUP_ATTEMPTS,
+        ));
+    }
+    if form.active {
+        rows.push(row(
+            if form.disabling {
+                texts::BUTTON_KEEP_MAKEUP
+            } else {
+                texts::BUTTON_DISABLE_MAKEUP
+            },
+            MAKEUP_DISABLE,
+        ));
+    }
+    rows.push(row(texts::BUTTON_CANCEL_MAKEUP, MAKEUP_CANCEL));
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(super) fn makeup_form_keyboard(
+    form: &MakeupForm,
+    timezone: &BotTimezone,
+    now: DateTime<Utc>,
+) -> Option<InlineKeyboardMarkup> {
+    Some(match form.step {
+        MakeupStep::Date => match form.mode {
+            InputMode::Calendar(month) => {
+                calendar_keyboard(month, timezone.first_date_ending_after(now))
+            }
+            InputMode::Buttons | InputMode::Manual => deadline_options_keyboard(timezone),
+        },
+        MakeupStep::Attempts => makeup_attempts_keyboard(),
+        MakeupStep::Scale(_) => makeup_answer_keyboard(form.current_scale()?.grading, None),
+        MakeupStep::Summary => makeup_summary_keyboard(form, timezone),
+    })
 }
 
 pub(crate) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
@@ -619,6 +778,7 @@ pub(super) fn terms_form_keyboard(
     let terms = &form.terms;
     let calendar = |month, after| calendar_keyboard(month, timezone.first_date_ending_after(after));
     let mut keyboard = match form.step {
+        TermsStep::Makeup => makeup_answer_keyboard(terms.grading(), terms.makeup_hint),
         TermsStep::Policy => late_policy_keyboard(),
         TermsStep::Deadline => match (form.mode, &terms.target) {
             (InputMode::Calendar(month), TermsTarget::Edit { created_at, .. }) => {
@@ -676,6 +836,8 @@ pub(super) fn terms_form_keyboard(
     }
     Some(keyboard)
 }
+
+pub(crate) const SCORE_BUTTONS_LIMIT: u16 = 10;
 
 /// Для длинной шкалы нужен ручной ввод: кнопки на весь диапазон `0..=100` не помещаются.
 pub(crate) fn review_score_keyboard(
@@ -861,7 +1023,7 @@ mod tests {
             period_days: 1,
             penalty_per_period: Some(1),
             max_periods: Some(100),
-            ..AssignmentTerms::creating(draft)
+            ..AssignmentTerms::creating(draft, crate::app::MakeupQuestion::default())
         }
     }
 
@@ -1215,5 +1377,79 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_makeup_question_offers_the_common_credit_as_a_separate_button() {
+        let ten = Grading::scored(10).unwrap();
+        let buttons = |keyboard: InlineKeyboardMarkup| -> Vec<(String, String)> {
+            let json = serde_json::to_value(keyboard).unwrap();
+            json["inline_keyboard"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|row| row.as_array().unwrap().clone())
+                .map(|button| {
+                    (
+                        button["text"].as_str().unwrap().to_owned(),
+                        button["callback_data"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect()
+        };
+        let six = MakeupChoice::Credit(6).callback();
+
+        let with_hint = buttons(makeup_answer_keyboard(ten, Some(6)));
+        assert!(with_hint.contains(&(texts::makeup_hint_button(6), six.clone())));
+        assert!(with_hint.contains(&("6".to_owned(), six.clone())));
+        assert!(
+            !buttons(makeup_answer_keyboard(ten, None))
+                .contains(&(texts::makeup_hint_button(6), six))
+        );
+
+        let long = buttons(makeup_answer_keyboard(
+            Grading::scored(20).unwrap(),
+            Some(12),
+        ));
+        assert!(long.contains(&(
+            texts::makeup_hint_button(12),
+            MakeupChoice::Credit(12).callback()
+        )));
+        assert!(long.contains(&(
+            texts::BUTTON_OTHER_AMOUNT.to_owned(),
+            MakeupChoice::Manual.callback()
+        )));
+        assert!(
+            buttons(makeup_answer_keyboard(Grading::PassFail, Some(6)))
+                .iter()
+                .all(|(_, data)| !data.ends_with(":6"))
+        );
+    }
+
+    #[test]
+    fn the_review_hub_offers_the_queue_only_when_it_has_work() {
+        let callbacks = |keyboard: InlineKeyboardMarkup| -> Vec<String> {
+            keyboard
+                .inline_keyboard
+                .into_iter()
+                .flatten()
+                .filter_map(|button| match button.kind {
+                    teloxide::types::InlineKeyboardButtonKind::CallbackData(data) => Some(data),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            callbacks(review_hub_keyboard(0, 2)),
+            vec![ReplayableAction::NextMakeupReview.callback()]
+        );
+        assert_eq!(
+            callbacks(review_hub_keyboard(3, 2)),
+            vec![
+                ReplayableAction::NextReview.callback(),
+                ReplayableAction::NextMakeupReview.callback(),
+            ]
+        );
     }
 }

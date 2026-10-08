@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
-use teloxide::types::{ChatId, MessageId};
+use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 use teloxide::{ApiError, RequestError};
 
 use super::courses::show_assignment;
@@ -8,7 +8,7 @@ use crate::app::{ChangeTerms, CreateAssignment, ErrorCode, VersionedAssignment};
 use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsInputError, TermsStep, TermsTarget,
 };
-use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, TermsAction};
+use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, MakeupChoice, TermsAction};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::handlers::input::{parse_number, require_text};
@@ -16,7 +16,7 @@ use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::views::{MenuAction, teacher_keyboard, terms_exit_keyboard, terms_form_view};
 use crate::bot::{Bot, HandlerResult, assignment_files, texts};
-use crate::domain::{AssignmentId, AssignmentStatus, DomainError, TelegramUserId};
+use crate::domain::{AssignmentId, AssignmentStatus, DomainError, MakeupTerms, TelegramUserId};
 
 pub(crate) async fn begin_terms_edit(
     screen: Screen<'_>,
@@ -46,8 +46,18 @@ pub(crate) async fn begin_terms_edit(
         )
         .await;
     }
+    let question = screen
+        .services()
+        .courses
+        .makeup_question(
+            screen.actor(),
+            assignment.teaching_course_id(),
+            assignment.grading(),
+            Some(assignment.id()),
+        )
+        .await?;
     let mut form = TermsForm::new(
-        AssignmentTerms::editing(&assignment, revision),
+        AssignmentTerms::editing(&assignment, revision, question),
         TermsStep::Summary,
     );
     form.message_id = Some(message_id);
@@ -59,8 +69,6 @@ pub(super) async fn render(
     mut form: TermsForm,
     error: Option<&str>,
 ) -> HandlerResult {
-    let bot = chat.bot();
-    let chat_id = chat.chat_id();
     if form.step == TermsStep::Summary {
         form.go(TermsStep::Summary);
     }
@@ -70,38 +78,47 @@ pub(super) async fn render(
     if let Some(error) = error {
         text = format!("{error}\n\n{text}");
     }
-    match form.mode {
-        InputMode::Manual => {
-            detach(bot, chat_id, form.message_id.take()).await?;
-            chat.ask(&text).await?;
-        }
-        InputMode::Buttons | InputMode::Calendar(_) => {
-            if let Some(id) = form.message_id {
-                match bot
-                    .edit_message_text(chat_id, id, &text)
-                    .reply_markup(keyboard.clone())
-                    .await
-                {
-                    Ok(_) | Err(RequestError::Api(ApiError::MessageNotModified)) => {}
-                    Err(RequestError::Api(
-                        ApiError::MessageToEditNotFound | ApiError::MessageCantBeEdited,
-                    )) => form.message_id = None,
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            if form.message_id.is_none() {
-                form.message_id = Some(
-                    bot.send_message(chat_id, text)
-                        .reply_markup(keyboard)
-                        .await?
-                        .id,
-                );
-            }
-        }
-    }
+    show_step(chat, &mut form.message_id, form.mode, text, keyboard).await?;
     chat.dialogue()
         .update(BotState::Flow(FlowState::ConfiguringTerms(form)))
         .await?;
+    Ok(())
+}
+
+pub(super) async fn show_step(
+    chat: Chat<'_>,
+    message_id: &mut Option<MessageId>,
+    mode: InputMode,
+    text: String,
+    keyboard: InlineKeyboardMarkup,
+) -> HandlerResult {
+    let bot = chat.bot();
+    let chat_id = chat.chat_id();
+    if mode == InputMode::Manual {
+        detach(bot, chat_id, message_id.take()).await?;
+        return chat.ask(&text).await;
+    }
+    if let Some(id) = *message_id {
+        match bot
+            .edit_message_text(chat_id, id, &text)
+            .reply_markup(keyboard.clone())
+            .await
+        {
+            Ok(_) | Err(RequestError::Api(ApiError::MessageNotModified)) => {}
+            Err(RequestError::Api(
+                ApiError::MessageToEditNotFound | ApiError::MessageCantBeEdited,
+            )) => *message_id = None,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if message_id.is_none() {
+        *message_id = Some(
+            bot.send_message(chat_id, text)
+                .reply_markup(keyboard)
+                .await?
+                .id,
+        );
+    }
     Ok(())
 }
 
@@ -118,7 +135,11 @@ async fn discard(chat: Chat<'_>, form: TermsForm) -> HandlerResult {
     Ok(())
 }
 
-async fn detach(bot: &Bot, chat_id: ChatId, message_id: Option<MessageId>) -> HandlerResult {
+pub(super) async fn detach(
+    bot: &Bot,
+    chat_id: ChatId,
+    message_id: Option<MessageId>,
+) -> HandlerResult {
     let Some(message_id) = message_id else {
         return Ok(());
     };
@@ -140,9 +161,35 @@ fn validation_message(error: &DomainError) -> String {
         DomainError::AssignmentDeadlineMustBeAfterCreatedAt => {
             texts::DEADLINE_AFTER_CREATION.into()
         }
-        DomainError::InvalidLatePolicy { max, .. } => texts::number_prompt(*max),
+        DomainError::InvalidLatePolicy { max, .. }
+        | DomainError::InvalidMakeupCredit { max, .. } => texts::number_prompt(*max),
+        DomainError::MakeupTermsDoNotFitGrading => texts::CHOOSE_BUTTON.into(),
         _ => texts::INVALID_TERMS.into(),
     }
+}
+
+pub(crate) async fn handle_makeup(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    choice: MakeupChoice,
+    state: BotState,
+) -> HandlerResult {
+    let Some(mut form) = state.terms_form(message_id, TermsStep::Makeup) else {
+        return screen.stale().await;
+    };
+    let makeup = match choice {
+        MakeupChoice::Manual => {
+            form.mode = InputMode::Manual;
+            return render(screen.chat(), form, None).await;
+        }
+        MakeupChoice::NotOffered => Ok(MakeupTerms::NotOffered),
+        MakeupChoice::PassFail => Ok(MakeupTerms::PassFail),
+        MakeupChoice::Credit(credit) => MakeupTerms::scored(credit, form.terms.grading()),
+    };
+    let result = makeup
+        .map_err(TermsInputError::Domain)
+        .and_then(|makeup| form.choose_makeup(makeup));
+    render_input_result(screen, form, result).await
 }
 
 pub(crate) async fn handle_late_policy(
@@ -244,14 +291,16 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> Han
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
-    if !matches!(
-        form.step,
+    let accepts_text = match form.step {
         TermsStep::Deadline
-            | TermsStep::DurationDate
-            | TermsStep::Penalty
-            | TermsStep::Period
-            | TermsStep::Periods
-    ) {
+        | TermsStep::DurationDate
+        | TermsStep::Penalty
+        | TermsStep::Period
+        | TermsStep::Periods => true,
+        TermsStep::Makeup => form.terms.grading().is_scored(),
+        TermsStep::Policy | TermsStep::DurationConfirm { .. } | TermsStep::Summary => false,
+    };
+    if !accepts_text {
         return render(screen.chat(), form, Some(texts::CHOOSE_BUTTON)).await;
     }
     detach(screen.bot(), screen.chat_id(), form.message_id.take()).await?;
@@ -262,6 +311,15 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> Han
                 None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
             }
         }
+        TermsStep::Makeup => match parse_number(text) {
+            Some(value) => {
+                let result = MakeupTerms::scored(value, form.terms.grading())
+                    .map_err(TermsInputError::Domain)
+                    .and_then(|makeup| form.choose_makeup(makeup));
+                render_input_result(screen, form, result).await
+            }
+            None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
+        },
         _ => match parse_number(text) {
             Some(value) => apply_number(screen, form, value).await,
             None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
@@ -409,6 +467,7 @@ async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> H
                     max_attempts: draft.max_attempts,
                     grading: draft.grading,
                     late_policy: complete.late_policy,
+                    makeup: terms.makeup,
                     created_at: Utc::now(),
                     deadline_at: complete.deadline_at,
                 })
@@ -426,6 +485,7 @@ async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> H
                     actor: screen.actor(),
                     deadline_at: complete.deadline_at,
                     late_policy: complete.late_policy,
+                    makeup: terms.makeup,
                     expected_revision: revision,
                 })
                 .await;

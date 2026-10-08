@@ -102,3 +102,21 @@ async fn malformed_body_uses_the_same_error_envelope_as_handlers() {
         .await
         .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
 }
+
+#[tokio::test]
+async fn an_empty_makeup_pool_is_a_conflict_with_its_own_code() {
+    let app = TestApp::start().await;
+    let first = app.add_closed_assignment("First", 10, 6).await;
+    let second = app.add_closed_assignment("Second", 10, 6).await;
+    app.enable_makeup(1).await;
+
+    let spent = app
+        .submit(first.id().as_uuid(), app.student(), "pull/makeup")
+        .await
+        .created();
+    assert_eq!(spent["kind"], json!("makeup"));
+
+    app.submit(second.id().as_uuid(), app.student(), "pull/makeup")
+        .await
+        .error(StatusCode::CONFLICT, "makeup_attempts_exhausted");
+}
