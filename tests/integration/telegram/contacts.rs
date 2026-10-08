@@ -542,7 +542,10 @@ async fn contact_preserves_entered_terms_and_their_active_keyboard() {
         .click_button(app.teacher(), &cb(callbacks::GRADING_PREFIX, 5))
         .await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::LATE_POLICY_PREFIX, "penalty"))
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::LATE_POLICY_PREFIX, "work_score"),
+        )
         .await;
     let deadline = deadline_input(chrono::Utc::now() + chrono::Duration::days(7));
     telegram.message(app.teacher(), &deadline);
@@ -593,7 +596,11 @@ async fn contact_preserves_entered_terms_and_their_active_keyboard() {
     .unwrap();
     let policy = saved.late_policy().unwrap();
     assert_eq!(
-        (policy.period_days(), policy.penalty(), policy.max_periods()),
+        (
+            policy.period_days(),
+            policy.penalty_per_period(),
+            policy.max_periods()
+        ),
         (7, 2, 4)
     );
 }

@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    AssignmentStatus, Grade, MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS,
-    MAX_LATENESS_DAYS, ReviewDecision, Role, SubmissionStatus,
+    AssignmentStatus, DeductedFrom, Grade, LatePenalty, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS,
+    MAX_LATENESS_DAYS, MAX_PENALTY_PER_PERIOD, ReviewDecision, Role, SubmissionStatus,
 };
 
 pub const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
@@ -50,6 +50,7 @@ pub const QUEUE_NO_TEACHER: &str =
 pub const QUEUE_FIRST: &str = "Ваша работа первая в очереди.";
 pub const REVIEW_QUEUE_EMPTY: &str = "🎉 Работ на проверку пока нет.";
 pub const REVIEW_COMMENT_PROMPT: &str = "Объясните студенту своё решение. Комментарий обязателен и для принятой, и для отклонённой работы:";
+pub const REVIEW_DECISION_RESET: &str = "Решение не сохранено. Выберите его заново кнопками ниже.";
 pub const REVIEW_GRADING_CHANGED: &str = "Решение не удалось сохранить: у задания теперь другая шкала оценивания. Ниже обновлённая карточка. Проверьте работу по ней ещё раз.";
 pub const FILE_DOWNLOAD_FAILED: &str = "Файл не скачался. Повторите отправку.";
 pub const ASSIGNMENT_FILES_SEND_FAILED: &str = "Не удалось отправить все вложения. Откройте задание ещё раз, чтобы повторить. Действия с заданием доступны выше.";
@@ -58,6 +59,9 @@ pub const STALE_BUTTON: &str = "Действие не выполнено: эта
 
 pub const FILE_DELETE_CONFIRM: &str = "Задание уже выдано студентам. Удалить из него это вложение?";
 pub const LATE_POLICY_QUESTION: &str = "Разрешить сдавать работы с опозданием?";
+pub const DEDUCTED_FROM_HINT: &str = "За опоздание назначается штраф. Его можно учитывать двумя способами:\n\
+    • в балле работы: опоздавший теряет баллы за эту работу, и для того же балла её нужно сделать лучше;\n\
+    • в итоге по предмету: балл работы отражает только качество, а штрафы копятся отдельно и вычитаются из суммы баллов по предмету.";
 pub const SUBMISSIONS_CLOSE_LABEL: &str = "Приём работ:";
 pub const LATE_PENALTY_LABEL: &str = "Штраф, если сдать сейчас:";
 pub const DEADLINE_QUESTION: &str =
@@ -71,6 +75,7 @@ pub const ASSIGNMENT_TITLE_PROMPT: &str = "Напишите короткое н�
 pub const ASSIGNMENT_BODY_PROMPT: &str = "Пришлите текст задания одним сообщением:";
 pub const TERMS_CONFIRM: &str = "Проверьте условия и сохраните, если всё верно:";
 pub const SCHEDULE_HEADER: &str = "📅 Баллы с учётом опоздания:";
+pub const SCHEDULE_TOTAL_HEADER: &str = "📅 Штраф в итог по предмету с учётом опоздания:";
 pub const TERMS_SAVED: &str = "Новые условия сохранены.";
 pub const DRAFT_CREATED: &str =
     "📝 Задание сохранено как черновик. Проверьте условия, прежде чем публиковать:";
@@ -83,13 +88,15 @@ pub const CONFIRM_FILE_DELETION: &str = "Удаление нужно подтв�
 pub const CHOOSE_STUDENT: &str = "Нажмите на имя студента в списке выше.";
 pub const STRICT_AFTER_DEADLINE: &str = "Позже сдать работу нельзя.";
 pub const BUTTON_STRICT: &str = "Нет, закрыть приём";
-pub const BUTTON_LATE: &str = "Да, со штрафом";
+pub const BUTTON_LATE_WORK_SCORE: &str = "Да, штраф снижает балл работы";
+pub const BUTTON_LATE_COURSE_TOTAL: &str = "Да, штраф вычитается из итога";
 pub const BUTTON_EDIT_DATES: &str = "⏰ Сроки и штраф";
 pub const BUTTON_SAVE_TERMS: &str = "Сохранить условия";
 pub const BUTTON_CANCEL_TERMS: &str = "Отменить изменения";
 pub const SUBMIT_UNTIL: &str = "Срок:";
 pub const NO_PENALTY_UNTIL: &str = "Срок без штрафа:";
 pub const PENALTY_LABEL: &str = "Штраф:";
+pub const DEDUCTED_FROM_LABEL: &str = "Учёт штрафа:";
 pub const PERIOD_LABEL: &str = "Период:";
 pub const LATENESS_LABEL: &str = "Опоздание:";
 pub const CLOSED_ON: &str = "Приём работ закрыт";
@@ -159,8 +166,19 @@ pub fn text_too_long(field: &str, max_len: usize) -> String {
     format!("{field}: текст длиннее {max_len} символов. Пришлите сокращённый вариант.")
 }
 
-pub fn review_score_question(max_score: u16) -> String {
-    format!("Сначала поставьте балл от 0 до {max_score} без учёта штрафа. Бот вычтет штраф сам.")
+pub fn review_score_question(max_score: u16, late: Option<LatePenalty>) -> String {
+    let question = format!("Сначала поставьте балл от 0 до {max_score}.");
+    match late {
+        None => question,
+        Some(late) if late.deducted_from() == DeductedFrom::WorkScore => format!(
+            "{question} Ставьте балл без учёта штрафа: бот сам вычтет штраф −{} из балла работы.",
+            late.points()
+        ),
+        Some(late) => format!(
+            "{question} Штраф −{} балл работы не снижает: бот вычтет его из итога по предмету.",
+            late.points()
+        ),
+    }
 }
 
 pub fn horizon_too_long(max_days: u32) -> String {
@@ -203,6 +221,14 @@ pub fn schedule_penalty_row(until: &str, penalty: u16, score: u16, max_score: u1
     format!("• до {until} — штраф −{penalty}, {score} из {max_score}")
 }
 
+pub fn schedule_free_total_row(until: &str) -> String {
+    format!("• до {until} — без штрафа")
+}
+
+pub fn schedule_total_row(until: &str, penalty: u16) -> String {
+    format!("• до {until} — штраф −{penalty} в итог")
+}
+
 pub fn schedule_skipped(periods: u32) -> String {
     format!(
         "• … ещё {periods} {}",
@@ -243,7 +269,7 @@ pub fn penalty_question(period_days: u16) -> String {
     }
 }
 
-pub fn penalty_rule(period_days: u16, penalty: u16) -> String {
+pub fn penalty_rule(period_days: u16, penalty_per_period: u16) -> String {
     let period = if period_days == 7 {
         "каждую начавшуюся неделю".to_owned()
     } else {
@@ -251,8 +277,16 @@ pub fn penalty_rule(period_days: u16, penalty: u16) -> String {
     };
     format!(
         "{PENALTY_LABEL} −{} за {period} опоздания после срока.",
-        points(penalty)
+        points(penalty_per_period)
     )
+}
+
+pub fn deducted_from_line(deducted_from: DeductedFrom) -> String {
+    let description = match deducted_from {
+        DeductedFrom::WorkScore => "снижает балл работы.",
+        DeductedFrom::CourseTotal => "вычитается из итога по предмету, балл работы не снижает.",
+    };
+    format!("{DEDUCTED_FROM_LABEL} {description}")
 }
 
 pub fn points(value: u16) -> String {
@@ -287,7 +321,7 @@ pub fn student_help() -> String {
 pub fn teacher_help() -> String {
     format!(
         "❓ Как вести предмет\n\n\
-        Новое задание создаётся внутри предмета в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
+        Новое задание создаётся внутри предмета в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Штраф за опоздание снижает балл работы либо вычитается из итога по предмету: способ выбирается вместе с допуском опозданий. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
         После проверки условий сохраните черновик и при необходимости прикрепите файлы. На этом этапе задание доступно только преподавателям предмета. Студенты увидят его, когда вы нажмёте «{BUTTON_PUBLISH}».\n\n\
         Для проверки нажмите «{BUTTON_REVIEW}»: бот откроет следующую работу из очереди. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
         Работы по предмету-песочнице в очередь не попадают: их список открывает «{BUTTON_SANDBOX}». Работу можно проверить по одной или ответить всем сразу кнопкой «{BUTTON_ACCEPT_ALL}» или «{BUTTON_REJECT_ALL}» с одним комментарием. Такое решение касается работ, отправленных до открытия списка. При принятии оценочные задания получают максимальный балл с учётом штрафа за опоздание.\n\n\
@@ -427,6 +461,7 @@ pub const PREVIOUS_ATTEMPTS_INCOMPLETE: &str =
     "Не удалось показать все прошлые попытки. Откройте проверку ещё раз, чтобы повторить.";
 pub const BUTTON_ACCEPT: &str = "✅ Принять";
 pub const BUTTON_REJECT: &str = "❌ Отклонить";
+pub const BUTTON_CHANGE_DECISION: &str = "↩️ Изменить решение";
 
 pub fn review_button(pending: u32) -> String {
     format!("{BUTTON_REVIEW} ({pending})")
@@ -436,12 +471,28 @@ pub fn review_summary(subject: &str, title: &str, student: &str, attempt: u16) -
     format!("📘 {subject} · {title}\n👤 Студент: {student}\n🔁 Попытка {attempt}")
 }
 
-pub fn late_submission_line(penalty: u16) -> String {
-    format!("⏳ Сдана с опозданием, штраф −{penalty}")
+pub fn late_submission_line(late: LatePenalty, max_score: u16) -> String {
+    let points = late.points();
+    match late.deducted_from() {
+        DeductedFrom::WorkScore => format!(
+            "⏳ Сдана с опозданием: штраф −{points} снижает балл работы, максимум {} из {max_score}",
+            Grade::new(max_score, max_score, Some(late)).work_score()
+        ),
+        DeductedFrom::CourseTotal => format!(
+            "⏳ Сдана с опозданием: штраф −{points} вычитается из итога по предмету, балл работы не снижает"
+        ),
+    }
 }
 
-pub fn late_penalty_notice(penalty: u16) -> String {
-    format!("⏳ Работа сдана с опозданием, штраф — {penalty}.")
+pub fn review_decision(decision: ReviewDecision, grade: Option<Grade>) -> String {
+    let decision = match decision {
+        ReviewDecision::Accept => "✅ Решение: принять работу.",
+        ReviewDecision::Reject => "❌ Решение: отклонить работу.",
+    };
+    match grade {
+        Some(grade) => format!("{decision}\n{}", grade_line(grade)),
+        None => decision.to_owned(),
+    }
 }
 
 pub fn previous_attempt(number: u16, status: &str, content: &str, comment: Option<&str>) -> String {
@@ -457,23 +508,6 @@ pub fn score_prompt(max_score: u16) -> String {
 
 pub fn score_error(max_score: u16) -> String {
     format!("Введите целое число от 0 до {max_score}.")
-}
-
-pub fn score_with_penalty(score: u16, penalty: u16, max_score: u16) -> String {
-    format!(
-        "🏅 Итог: {score} − {penalty} = {} из {max_score}.",
-        score.saturating_sub(penalty)
-    )
-}
-
-pub fn grade_saved(grade: Grade) -> String {
-    format!(
-        "🏅 Сохранено: {} − {} = {} из {}.",
-        grade.raw_score(),
-        grade.penalty(),
-        grade.final_score(),
-        grade.max_score(),
-    )
 }
 
 pub const SANDBOX_EMPTY: &str = "🧪 В песочнице нет работ на проверке.";
@@ -576,7 +610,8 @@ pub const BUTTON_MANUAL: &str = "✍️ Ввести вручную";
 pub const BUTTON_PICK_DATE: &str = "Выбрать дату";
 pub const BUTTON_OTHER_PERIODS: &str = "Другое число периодов";
 pub const BUTTON_APPLY_PERIODS: &str = "Применить число периодов";
-pub const BUTTON_POLICY_PENALTY: &str = "После срока: со штрафом";
+pub const BUTTON_POLICY_WORK_SCORE: &str = "После срока: штраф в балл работы";
+pub const BUTTON_POLICY_COURSE_TOTAL: &str = "После срока: штраф в итог";
 pub const BUTTON_POLICY_STRICT: &str = "После срока: не принимать";
 pub const PRESET_WEEK: &str = "Через неделю";
 pub const PRESET_TWO_WEEKS: &str = "Через 2 недели";
@@ -646,7 +681,7 @@ pub fn periods_option(duration: &str, until: &str) -> String {
 
 pub fn penalty_step(question: &str, period_days: u16) -> String {
     format!(
-        "{question}\nНовый штраф начисляется с началом каждого периода в {period_days} дн. Введите его размер целым числом от 1 до {MAX_LATE_PENALTY} баллов:"
+        "{question}\nНовый штраф начисляется с началом каждого периода в {period_days} дн. Введите его размер целым числом от 1 до {MAX_PENALTY_PER_PERIOD} баллов:"
     )
 }
 
@@ -700,12 +735,28 @@ pub fn attempts_granted(amount: u16, total: u16) -> String {
     format!("🎁 Добавлено попыток: {amount}. Всего дополнительных: {total}.")
 }
 
-pub fn grades_header(name: &str, total: u32, max_total: u32) -> String {
-    format!("👤 {name}\n🏅 Итого: {total} из {max_total}")
+pub fn grades_header(
+    name: &str,
+    work_total: u32,
+    penalty_total: u32,
+    total: i64,
+    max_total: u32,
+) -> String {
+    if penalty_total == 0 {
+        return format!("👤 {name}\n🏅 Итого: {total} из {max_total}");
+    }
+    format!(
+        "👤 {name}\n📚 Сумма работ: {work_total}\n⏳ Штрафы за опоздание: −{penalty_total}\n🏅 Итого: {total} из {max_total}"
+    )
 }
 
-pub fn grade_entry(title: &str, score: &str, max_score: u16) -> String {
-    format!("{title} · {score} из {max_score}")
+pub fn grade_entry(title: &str, score: &str, max_score: u16, course_total_penalty: u16) -> String {
+    let penalty = if course_total_penalty > 0 {
+        format!(" · штраф −{course_total_penalty} в итог")
+    } else {
+        String::new()
+    };
+    format!("{title} · {score} из {max_score}{penalty}")
 }
 
 pub const INVITE_ROTATED: &str = "♻️ Прежняя ссылка больше не работает.";
@@ -758,32 +809,33 @@ pub fn review_notification(
     verdict: &str,
     subject: &str,
     title: &str,
-    score: Option<(u16, u16)>,
+    grade: Option<Grade>,
     comment: &str,
 ) -> String {
-    let score = score
-        .map(|(final_score, max_score)| format!("\n{}", score_line(final_score, max_score)))
+    let grade = grade
+        .map(|grade| format!("\n{}", grade_line(grade)))
         .unwrap_or_default();
     format!(
-        "{verdict}\n📘 Предмет: {subject}\n📚 Задание: {title}{score}\n\n{REVIEW_COMMENT_HEADER}\n{comment}"
+        "{verdict}\n📘 Предмет: {subject}\n📚 Задание: {title}{grade}\n\n{REVIEW_COMMENT_HEADER}\n{comment}"
     )
-}
-
-pub fn score_line(score: u16, max_score: u16) -> String {
-    format!("🏅 Балл: {score} из {max_score}")
 }
 
 pub fn grade_line(grade: Grade) -> String {
-    if grade.penalty() == 0 {
-        return score_line(grade.final_score(), grade.max_score());
+    let max_score = grade.max_score();
+    match grade.late() {
+        None => format!("🏅 Балл: {} из {max_score}", grade.work_score()),
+        Some(late) if late.deducted_from() == DeductedFrom::WorkScore => format!(
+            "🏅 Балл: {} − {} = {} из {max_score} (штраф за опоздание)",
+            grade.raw_score(),
+            late.points(),
+            grade.work_score(),
+        ),
+        Some(late) => format!(
+            "🏅 Балл: {} из {max_score} (штраф за опоздание −{} вычитается из итога по предмету)",
+            grade.work_score(),
+            late.points(),
+        ),
     }
-    format!(
-        "🏅 Балл: {} − {} = {} из {} (штраф за опоздание)",
-        grade.raw_score(),
-        grade.penalty(),
-        grade.final_score(),
-        grade.max_score(),
-    )
 }
 
 pub fn deadline_left(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
@@ -809,5 +861,120 @@ pub fn format_file_size(size_bytes: u64) -> String {
         format!("{:.1} КиБ", size_bytes as f64 / 1024.0)
     } else {
         format!("{:.1} МиБ", size_bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{LatePenalty, LatePolicy};
+
+    fn late_by_one_period(deducted_from: DeductedFrom) -> Option<LatePenalty> {
+        LatePolicy::new(7, 4, 4, deducted_from)
+            .unwrap()
+            .late_penalty(1)
+    }
+
+    fn late(penalty_per_period: u16, periods: u32, deducted_from: DeductedFrom) -> LatePenalty {
+        LatePolicy::new(7, penalty_per_period, 4, deducted_from)
+            .unwrap()
+            .late_penalty(periods)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_late_card_shows_the_maximum_left_after_a_penalty_to_the_work_score() {
+        let line = late_submission_line(late(4, 1, DeductedFrom::WorkScore), 10);
+
+        assert!(line.contains("−4"), "{line}");
+        assert!(line.contains("6 из 10"), "{line}");
+    }
+
+    #[test]
+    fn a_penalty_above_the_scale_leaves_a_maximum_of_zero() {
+        let line = late_submission_line(late(6, 2, DeductedFrom::WorkScore), 10);
+
+        assert!(line.contains("−12"), "{line}");
+        assert!(line.contains("0 из 10"), "{line}");
+    }
+
+    #[test]
+    fn a_late_card_with_a_penalty_to_the_course_total_does_not_cap_the_score() {
+        let line = late_submission_line(late(4, 1, DeductedFrom::CourseTotal), 10);
+
+        assert!(line.contains("−4"), "{line}");
+        assert!(!line.contains("из 10"), "{line}");
+        assert_ne!(
+            line,
+            late_submission_line(late(4, 1, DeductedFrom::WorkScore), 10)
+        );
+    }
+
+    #[test]
+    fn the_score_question_explains_where_a_late_penalty_goes() {
+        let on_time = review_score_question(10, None);
+        let to_work = review_score_question(10, Some(late(4, 1, DeductedFrom::WorkScore)));
+        let to_total = review_score_question(10, Some(late(4, 1, DeductedFrom::CourseTotal)));
+
+        assert!(!on_time.contains('−'), "{on_time}");
+        for question in [&to_work, &to_total] {
+            assert!(question.starts_with(&on_time), "{question}");
+            assert!(question.contains("−4"), "{question}");
+        }
+        assert_ne!(to_work, to_total);
+    }
+
+    #[test]
+    fn the_decision_message_previews_the_grade_only_for_a_scored_acceptance() {
+        let grade = Grade::new(8, 10, Some(late(4, 1, DeductedFrom::CourseTotal)));
+
+        let accepted = review_decision(ReviewDecision::Accept, Some(grade));
+
+        assert!(accepted.ends_with(&grade_line(grade)), "{accepted}");
+        assert!(!review_decision(ReviewDecision::Reject, None).contains(&grade_line(grade)));
+        assert_ne!(
+            review_decision(ReviewDecision::Accept, None),
+            review_decision(ReviewDecision::Reject, None)
+        );
+    }
+
+    #[test]
+    fn an_on_time_grade_names_only_the_work_score_and_the_scale() {
+        let line = grade_line(Grade::new(8, 10, None));
+
+        assert!(line.contains("8 из 10"), "{line}");
+        assert!(!line.contains('−'), "{line}");
+    }
+
+    #[test]
+    fn a_penalty_to_the_work_score_shows_the_raw_score_the_penalty_and_the_rest() {
+        let line = grade_line(Grade::new(
+            8,
+            10,
+            late_by_one_period(DeductedFrom::WorkScore),
+        ));
+
+        assert!(line.contains('8'), "{line}");
+        assert!(line.contains("− 4"), "{line}");
+        assert!(line.contains("4 из 10"), "{line}");
+        assert!(!line.contains("8 из 10"), "{line}");
+    }
+
+    #[test]
+    fn a_penalty_to_the_course_total_keeps_the_work_score_and_names_the_penalty() {
+        let line = grade_line(Grade::new(
+            8,
+            10,
+            late_by_one_period(DeductedFrom::CourseTotal),
+        ));
+        let to_work = grade_line(Grade::new(
+            8,
+            10,
+            late_by_one_period(DeductedFrom::WorkScore),
+        ));
+
+        assert!(line.contains("8 из 10"), "{line}");
+        assert!(line.contains("−4"), "{line}");
+        assert_ne!(line, to_work);
     }
 }

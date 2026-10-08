@@ -57,7 +57,7 @@ pub(crate) use str_enum;
 mod tests {
     use crate::app::ErrorCode;
     use crate::db::notifications::ReviewOutcome;
-    use crate::domain::{AssignmentStatus, EducationLevel, SubmissionStatus};
+    use crate::domain::{AssignmentStatus, DeductedFrom, EducationLevel, SubmissionStatus};
 
     macro_rules! assert_round_trips {
         ($($type:ty),+ $(,)?) => {$(
@@ -76,7 +76,8 @@ mod tests {
             AssignmentStatus,
             EducationLevel,
             ErrorCode,
-            ReviewOutcome
+            ReviewOutcome,
+            DeductedFrom
         );
     }
 

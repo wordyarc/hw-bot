@@ -4,7 +4,7 @@ use teloxide::types::InlineKeyboardMarkup;
 use super::keyboards::terms_form_keyboard;
 use crate::bot::assignment_form::{CompleteTerms, TermsForm, TermsStep, TermsTarget};
 use crate::bot::{texts, timezone::BotTimezone};
-use crate::domain::{Assignment, Grading, LatePolicy, MaxScore};
+use crate::domain::{Assignment, DeductedFrom, Grading, LatePolicy, MaxScore};
 use crate::telegram::text::truncate;
 
 /// `None` означает, что в форме нет значений, без которых её шаг не показать.
@@ -19,7 +19,7 @@ pub(crate) fn terms_form_view(
         .map(|deadline| {
             format!(
                 "{} {}.\n",
-                if terms.allow_late {
+                if terms.deducted_from.is_some() {
                     texts::NO_PENALTY_UNTIL
                 } else {
                     texts::SUBMIT_UNTIL
@@ -29,11 +29,15 @@ pub(crate) fn terms_form_view(
         })
         .unwrap_or_default();
     let text = match form.step {
-        TermsStep::Policy => texts::LATE_POLICY_QUESTION.to_owned(),
+        TermsStep::Policy => format!(
+            "{}\n\n{}",
+            texts::LATE_POLICY_QUESTION,
+            texts::DEDUCTED_FROM_HINT
+        ),
         TermsStep::Deadline | TermsStep::DurationDate => {
             let question = if form.step == TermsStep::DurationDate {
                 texts::DURATION_DATE_QUESTION
-            } else if terms.allow_late {
+            } else if terms.deducted_from.is_some() {
                 texts::NO_PENALTY_QUESTION
             } else {
                 texts::DEADLINE_QUESTION
@@ -55,17 +59,16 @@ pub(crate) fn terms_form_view(
         ),
         TermsStep::Period => format!("{context}{}", texts::period_prompt()),
         TermsStep::Periods => {
-            let policy = terms.preview_policy(1).ok()?;
+            let policy = terms.preview_policy(1)?;
             format!(
                 "{context}{}\n{}",
-                texts::penalty_rule(policy.period_days(), policy.penalty()),
+                texts::penalty_rule(policy.period_days(), policy.penalty_per_period()),
                 texts::periods_question(terms.period_days),
             )
         }
         TermsStep::DurationConfirm { selected, periods } => {
             let closing = terms
-                .preview_policy(periods)
-                .ok()?
+                .preview_policy(periods)?
                 .closes_at(terms.deadline_at?)
                 .ok()?;
             texts::duration_confirmation(
@@ -151,10 +154,17 @@ pub(super) fn penalty_schedule(
     timezone: &BotTimezone,
 ) -> String {
     let max = max_score.get();
-    let mut lines = vec![
-        texts::SCHEDULE_HEADER.to_owned(),
-        texts::schedule_free_row(&timezone.format_until(deadline_at), max),
-    ];
+    let free_until = timezone.format_until(deadline_at);
+    let mut lines = match policy.deducted_from() {
+        DeductedFrom::WorkScore => vec![
+            texts::SCHEDULE_HEADER.to_owned(),
+            texts::schedule_free_row(&free_until, max),
+        ],
+        DeductedFrom::CourseTotal => vec![
+            texts::SCHEDULE_TOTAL_HEADER.to_owned(),
+            texts::schedule_free_total_row(&free_until),
+        ],
+    };
     let mut previous = 0;
     for periods in schedule_periods(policy, max_score) {
         let Ok(until) = policy.period_end(deadline_at, periods) else {
@@ -163,13 +173,16 @@ pub(super) fn penalty_schedule(
         if periods > previous + 1 {
             lines.push(texts::schedule_skipped(u32::from(periods - previous - 1)));
         }
-        let score = policy.possible_score(max_score, u32::from(periods));
-        lines.push(texts::schedule_penalty_row(
-            &timezone.format_until(until),
-            max - score,
-            score,
-            max,
-        ));
+        let until = timezone.format_until(until);
+        lines.push(match policy.deducted_from() {
+            DeductedFrom::WorkScore => {
+                let score = policy.possible_score(max_score, u32::from(periods));
+                texts::schedule_penalty_row(&until, max - score, score, max)
+            }
+            DeductedFrom::CourseTotal => {
+                texts::schedule_total_row(&until, policy.penalty_for(u32::from(periods)))
+            }
+        });
         previous = periods;
     }
     lines.push(texts::schedule_closed(&timezone.format_since(closes_at)));
@@ -219,10 +232,11 @@ fn terms_lines(
     };
     match late_policy {
         Some(policy) => format!(
-            "{scale}\n{} {}.\n{}\n{} {}.\n{} {}.",
+            "{scale}\n{} {}.\n{}\n{}\n{} {}.\n{} {}.",
             texts::NO_PENALTY_UNTIL,
             timezone.format(deadline_at),
-            texts::penalty_rule(policy.period_days(), policy.penalty()),
+            texts::penalty_rule(policy.period_days(), policy.penalty_per_period()),
+            texts::deducted_from_line(policy.deducted_from()),
             texts::LATENESS_LABEL,
             texts::lateness_duration(policy.period_days(), policy.max_periods()),
             texts::SUBMISSIONS_CLOSE_LABEL,
@@ -256,6 +270,7 @@ mod tests {
     use super::*;
     use crate::bot::assignment_form::AssignmentTerms;
     use crate::bot::callbacks::TermsAction;
+    use crate::domain::DeductedFrom;
     use crate::test_support::{assignment, course_for, student_group, t0, teacher};
 
     #[test]
@@ -266,7 +281,7 @@ mod tests {
         for allow_late in [false, true] {
             let mut builder = assignment(&course, &teacher).scored(5);
             if allow_late {
-                builder = builder.late_policy(7, 1, 4);
+                builder = builder.late_policy(7, 1, 4, DeductedFrom::WorkScore);
             }
             let assignment = builder.build();
             let form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
@@ -300,7 +315,7 @@ mod tests {
         let course = course_for(&student_group("test"), &teacher);
         let assignment = assignment(&course, &teacher)
             .scored(5)
-            .late_policy(7, 2, 4)
+            .late_policy(7, 2, 4, DeductedFrom::WorkScore)
             .build();
         let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
         let mut form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
@@ -319,12 +334,45 @@ mod tests {
     }
 
     #[test]
+    fn the_summary_its_policy_button_and_the_student_card_name_where_the_penalty_is_deducted_from()
+    {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        for (deducted_from, button) in [
+            (DeductedFrom::WorkScore, texts::BUTTON_POLICY_WORK_SCORE),
+            (DeductedFrom::CourseTotal, texts::BUTTON_POLICY_COURSE_TOTAL),
+        ] {
+            let assignment = assignment(&course, &teacher)
+                .scored(10)
+                .late_policy(7, 2, 4, deducted_from)
+                .build();
+            let form = TermsForm::new(AssignmentTerms::editing(&assignment, 0), TermsStep::Summary);
+
+            let (summary, keyboard) = terms_form_view(&form, &timezone, t0()).unwrap();
+            let card = grading_lines(&assignment, t0(), &timezone);
+
+            let line = texts::deducted_from_line(deducted_from);
+            assert!(summary.contains(&line), "{summary}");
+            assert!(card.contains(&line), "{card}");
+            assert!(
+                keyboard
+                    .inline_keyboard
+                    .iter()
+                    .flatten()
+                    .any(|key| key.text == button),
+                "{deducted_from:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_student_card_shows_the_current_penalty_only_while_submissions_are_open() {
         let teacher = teacher(1);
         let course = course_for(&student_group("test"), &teacher);
         let assignment = assignment(&course, &teacher)
             .scored(5)
-            .late_policy(7, 1, 4)
+            .late_policy(7, 1, 4, DeductedFrom::WorkScore)
             .build();
         let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
         let late = grading_lines(

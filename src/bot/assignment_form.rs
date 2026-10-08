@@ -3,8 +3,8 @@ use teloxide::types::MessageId;
 
 use super::callbacks::TermsAction;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, Grading, LatePolicy, MAX_LATE_PENALTY,
-    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, TeachingCourseId,
+    Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, Grading, LatePolicy,
+    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_PENALTY_PER_PERIOD, TeachingCourseId,
 };
 
 const DEFAULT_PERIOD_DAYS: u16 = 7;
@@ -49,9 +49,9 @@ pub(super) enum TermsTarget {
 pub(super) struct AssignmentTerms {
     pub target: TermsTarget,
     pub deadline_at: Option<DateTime<Utc>>,
-    pub allow_late: bool,
+    pub deducted_from: Option<DeductedFrom>,
     pub period_days: u16,
-    pub penalty: Option<u16>,
+    pub penalty_per_period: Option<u16>,
     pub max_periods: Option<u16>,
 }
 
@@ -69,9 +69,9 @@ impl AssignmentTerms {
         Self {
             target: TermsTarget::Create(draft),
             deadline_at: None,
-            allow_late: false,
+            deducted_from: None,
             period_days: DEFAULT_PERIOD_DAYS,
-            penalty: None,
+            penalty_per_period: None,
             max_periods: None,
         }
     }
@@ -88,9 +88,9 @@ impl AssignmentTerms {
                 original_closes_at: assignment.closes_at(),
             },
             deadline_at: Some(assignment.deadline_at()),
-            allow_late: policy.is_some(),
+            deducted_from: policy.map(LatePolicy::deducted_from),
             period_days: policy.map_or(DEFAULT_PERIOD_DAYS, LatePolicy::period_days),
-            penalty: policy.map(LatePolicy::penalty),
+            penalty_per_period: policy.map(LatePolicy::penalty_per_period),
             max_periods: policy.map(LatePolicy::max_periods),
         }
     }
@@ -105,10 +105,17 @@ impl AssignmentTerms {
 
     pub fn complete(&self) -> Option<CompleteTerms> {
         let deadline_at = self.deadline_at?;
-        let late_policy = if self.allow_late {
-            Some(LatePolicy::new(self.period_days, self.penalty?, self.max_periods?).ok()?)
-        } else {
-            None
+        let late_policy = match self.deducted_from {
+            Some(deducted_from) => Some(
+                LatePolicy::new(
+                    self.period_days,
+                    self.penalty_per_period?,
+                    self.max_periods?,
+                    deducted_from,
+                )
+                .ok()?,
+            ),
+            None => None,
         };
         let closes_at = Assignment::closing_for(deadline_at, late_policy).ok()?;
 
@@ -125,15 +132,18 @@ impl AssignmentTerms {
         self.first_incomplete_step() == TermsStep::Summary && self.complete().is_none()
     }
 
-    pub fn preview_policy(&self, max_periods: u16) -> DomainResult<LatePolicy> {
+    pub fn preview_policy(&self, max_periods: u16) -> Option<LatePolicy> {
         // Пока штраф не введён, это значение нужно лишь для превью и в сохранённые условия
         // не попадёт.
-        const PREVIEW_PENALTY: u16 = 1;
+        const PREVIEW_PENALTY_PER_PERIOD: u16 = 1;
         LatePolicy::new(
             self.period_days,
-            self.penalty.unwrap_or(PREVIEW_PENALTY),
+            self.penalty_per_period
+                .unwrap_or(PREVIEW_PENALTY_PER_PERIOD),
             max_periods,
+            self.deducted_from?,
         )
+        .ok()
     }
 
     /// Проверяет уже введённую часть условий по правилам нового ввода, включая предел
@@ -147,11 +157,11 @@ impl AssignmentTerms {
         {
             return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
         }
-        if self.allow_late {
-            self.preview_policy(self.max_periods.unwrap_or(1))?
-                .validate_horizon(deadline)?;
-        } else {
-            Assignment::closing_for(deadline, None)?;
+        match self.preview_policy(self.max_periods.unwrap_or(1)) {
+            Some(policy) => policy.validate_horizon(deadline)?,
+            None => {
+                Assignment::closing_for(deadline, None)?;
+            }
         }
 
         Ok(())
@@ -184,7 +194,7 @@ impl TermsStep {
     pub fn next(self, terms: &AssignmentTerms) -> Self {
         match self {
             Self::Policy => terms.first_incomplete_step(),
-            Self::Deadline if terms.allow_late => Self::Penalty,
+            Self::Deadline if terms.deducted_from.is_some() => Self::Penalty,
             Self::Deadline => Self::Summary,
             Self::Period => Self::Penalty,
             Self::Penalty => Self::Periods,
@@ -202,7 +212,7 @@ impl TermsStep {
             Self::DurationDate => Some(Self::Periods),
             Self::DurationConfirm { .. } => Some(Self::DurationDate),
             Self::Summary if matches!(terms.target, TermsTarget::Edit { .. }) => None,
-            Self::Summary if terms.allow_late => Some(Self::Periods),
+            Self::Summary if terms.deducted_from.is_some() => Some(Self::Periods),
             Self::Summary => Some(Self::Deadline),
         }
     }
@@ -210,7 +220,7 @@ impl TermsStep {
     fn is_complete(self, terms: &AssignmentTerms) -> bool {
         match self {
             Self::Deadline => terms.deadline_at.is_some(),
-            Self::Penalty => terms.penalty.is_some(),
+            Self::Penalty => terms.penalty_per_period.is_some(),
             Self::Periods => terms.max_periods.is_some(),
             Self::Policy
             | Self::Period
@@ -224,9 +234,9 @@ impl TermsStep {
         match action {
             TermsAction::Deadline => Some(Self::Deadline),
             TermsAction::Policy if terms.grading().is_scored() => Some(Self::Policy),
-            TermsAction::Penalty if terms.allow_late => Some(Self::Penalty),
-            TermsAction::Period if terms.allow_late => Some(Self::Period),
-            TermsAction::Periods if terms.allow_late => Some(Self::Periods),
+            TermsAction::Penalty if terms.deducted_from.is_some() => Some(Self::Penalty),
+            TermsAction::Period if terms.deducted_from.is_some() => Some(Self::Period),
+            TermsAction::Periods if terms.deducted_from.is_some() => Some(Self::Periods),
             _ => None,
         }
     }
@@ -311,12 +321,15 @@ impl TermsForm {
         self.go(step);
     }
 
-    pub fn choose_policy(&mut self, allow_late: bool) -> Result<(), TermsInputError> {
+    pub fn choose_policy(
+        &mut self,
+        deducted_from: Option<DeductedFrom>,
+    ) -> Result<(), TermsInputError> {
         if self.step != TermsStep::Policy || !self.terms.grading().is_scored() {
             return Err(TermsInputError::UnexpectedStep);
         }
         let mut terms = self.terms.clone();
-        terms.allow_late = allow_late;
+        terms.deducted_from = deducted_from;
         // Сохранённый длинный горизонт можно править с итога; непредставимую дату показать нельзя.
         if terms.cannot_be_summarised() {
             return Err(TermsInputError::Domain(
@@ -332,8 +345,8 @@ impl TermsForm {
         let mut terms = self.terms.clone();
         let max = match self.step {
             TermsStep::Penalty => {
-                terms.penalty = Some(value);
-                MAX_LATE_PENALTY
+                terms.penalty_per_period = Some(value);
+                MAX_PENALTY_PER_PERIOD
             }
             TermsStep::Period => {
                 terms.period_days = value;
@@ -366,7 +379,7 @@ impl TermsForm {
             let policy = self
                 .terms
                 .preview_policy(1)
-                .map_err(TermsInputError::Domain)?;
+                .ok_or(TermsInputError::UnexpectedStep)?;
             let periods = u16::try_from(policy.periods_to_close_at(deadline, at))
                 .ok()
                 .filter(|periods| (1..=MAX_LATE_PERIODS).contains(periods))
@@ -420,7 +433,7 @@ impl TermsForm {
                 };
                 // Незавершённую политику нельзя показать в итоге, но её числа пригодятся при повторном включении.
                 if step == TermsStep::Summary && self.terms.complete().is_none() {
-                    self.terms.allow_late = false;
+                    self.terms.deducted_from = None;
                 }
                 self.go(step);
             }
@@ -475,8 +488,8 @@ mod tests {
         TermsForm::new(
             AssignmentTerms {
                 deadline_at: Some(t0() + Duration::days(7)),
-                allow_late: true,
-                penalty: Some(2),
+                deducted_from: Some(DeductedFrom::WorkScore),
+                penalty_per_period: Some(2),
                 max_periods: Some(4),
                 ..scored_terms()
             },
@@ -516,7 +529,7 @@ mod tests {
         assert_eq!(form.step, TermsStep::Summary);
         assert_eq!(
             form.terms.complete().unwrap().late_policy,
-            Some(LatePolicy::new(10, 2, 4).unwrap())
+            Some(LatePolicy::new(10, 2, 4, DeductedFrom::WorkScore).unwrap())
         );
         assert_eq!(form.previous_closes_at, Some(old_closing));
     }
@@ -527,16 +540,58 @@ mod tests {
         terms.deadline_at = Some(t0() + Duration::days(7));
         let mut form = TermsForm::new(terms, TermsStep::Summary);
         assert!(form.edit_summary(TermsAction::Policy));
-        form.choose_policy(true).unwrap();
+        form.choose_policy(Some(DeductedFrom::CourseTotal)).unwrap();
         form.apply_number(2).unwrap();
         assert_eq!(form.step, TermsStep::Periods);
 
         assert!(form.back());
 
         assert_eq!(form.step, TermsStep::Summary);
+        assert_eq!(form.terms.deducted_from, None);
         assert_eq!(form.terms.complete().unwrap().late_policy, None);
-        assert_eq!(form.terms.penalty, Some(2));
+        assert_eq!(form.terms.penalty_per_period, Some(2));
         assert_eq!(form.terms.max_periods, None);
+    }
+
+    #[test]
+    fn the_policy_step_sets_the_deduction_or_closes_submissions_at_the_deadline() {
+        for deducted_from in [
+            None,
+            Some(DeductedFrom::WorkScore),
+            Some(DeductedFrom::CourseTotal),
+        ] {
+            let mut form = TermsForm::new(scored_terms(), TermsStep::Policy);
+
+            form.choose_policy(deducted_from).unwrap();
+
+            assert_eq!(form.terms.deducted_from, deducted_from);
+            assert_eq!(form.step, TermsStep::Deadline);
+            form.apply_date(t0() + Duration::days(7), t0()).unwrap();
+            let next = if deducted_from.is_some() {
+                TermsStep::Penalty
+            } else {
+                TermsStep::Summary
+            };
+            assert_eq!(form.step, next, "{deducted_from:?}");
+        }
+    }
+
+    #[test]
+    fn changing_the_deduction_from_the_summary_keeps_every_other_condition() {
+        let mut form = complete_form();
+        let before = form.terms.complete().unwrap();
+        assert!(form.edit_summary(TermsAction::Policy));
+
+        form.choose_policy(Some(DeductedFrom::CourseTotal)).unwrap();
+
+        assert_eq!(form.step, TermsStep::Summary);
+        let after = form.terms.complete().unwrap();
+        assert_eq!(after.deadline_at, before.deadline_at);
+        assert_eq!(after.closes_at, before.closes_at);
+        assert_eq!(
+            after.late_policy,
+            Some(LatePolicy::new(7, 2, 4, DeductedFrom::CourseTotal).unwrap())
+        );
     }
 
     #[test]
@@ -661,24 +716,25 @@ mod tests {
     fn preview_defaults_never_complete_the_policy_for_saving() {
         let mut terms = scored_terms();
         terms.deadline_at = Some(t0());
-        terms.allow_late = true;
+        assert_eq!(terms.preview_policy(4), None);
+        terms.deducted_from = Some(DeductedFrom::CourseTotal);
 
         assert_eq!(
             terms.preview_policy(4).unwrap(),
-            LatePolicy::new(7, 1, 4).unwrap()
+            LatePolicy::new(7, 1, 4, DeductedFrom::CourseTotal).unwrap()
         );
         assert_eq!(terms.complete(), None);
-        assert_eq!(terms.penalty, None);
+        assert_eq!(terms.penalty_per_period, None);
         assert_eq!(terms.max_periods, None);
 
-        terms.penalty = Some(2);
+        terms.penalty_per_period = Some(2);
         assert_eq!(terms.complete(), None);
         terms.max_periods = Some(3);
         assert_eq!(
             terms.complete().unwrap().late_policy,
             Some(terms.preview_policy(3).unwrap())
         );
-        terms.allow_late = false;
+        terms.deducted_from = None;
         assert_eq!(terms.complete().unwrap().late_policy, None);
     }
 
@@ -690,8 +746,8 @@ mod tests {
         terms.deadline_at = Some(t0());
         assert_eq!(terms.complete().unwrap().closes_at, t0());
 
-        terms.allow_late = true;
-        terms.penalty = Some(1);
+        terms.deducted_from = Some(DeductedFrom::WorkScore);
+        terms.penalty_per_period = Some(1);
         terms.max_periods = Some(4);
         assert_eq!(
             terms.complete().unwrap().closes_at,
@@ -714,12 +770,12 @@ mod tests {
     fn a_policy_restored_over_a_deadline_it_cannot_follow_cannot_be_summarised() {
         let mut terms = scored_terms();
         terms.deadline_at = Some(last_supported_day());
-        terms.penalty = Some(1);
+        terms.penalty_per_period = Some(1);
         terms.max_periods = Some(4);
         assert!(terms.validate().is_ok());
         assert!(!terms.cannot_be_summarised());
 
-        terms.allow_late = true;
+        terms.deducted_from = Some(DeductedFrom::WorkScore);
 
         assert_eq!(
             terms.validate(),
@@ -732,9 +788,9 @@ mod tests {
     fn a_stored_horizon_beyond_the_input_limit_can_still_be_summarised() {
         let mut terms = scored_terms();
         terms.deadline_at = Some(t0());
-        terms.allow_late = true;
+        terms.deducted_from = Some(DeductedFrom::WorkScore);
         terms.period_days = 365;
-        terms.penalty = Some(1);
+        terms.penalty_per_period = Some(1);
         terms.max_periods = Some(100);
 
         assert!(matches!(
@@ -753,14 +809,15 @@ mod tests {
         let strict = assignment(&course, &teacher).build();
         let late = assignment(&course, &teacher)
             .scored(10)
-            .late_policy(3, 2, 5)
+            .late_policy(3, 2, 5, DeductedFrom::CourseTotal)
             .build();
 
         let terms = AssignmentTerms::editing(&strict, 4);
-        assert!(!terms.allow_late);
+        assert_eq!(terms.deducted_from, None);
         assert_eq!(terms.complete().unwrap().closes_at, strict.closes_at());
 
         let terms = AssignmentTerms::editing(&late, 4);
+        assert_eq!(terms.deducted_from, Some(DeductedFrom::CourseTotal));
         assert_eq!(terms.complete().unwrap().late_policy, late.late_policy());
         assert_eq!(terms.complete().unwrap().closes_at, late.closes_at());
         assert!(
@@ -772,7 +829,7 @@ mod tests {
     #[test]
     fn summary_transition_collects_missing_policy_fields_without_defaulting_them() {
         let mut terms = scored_terms();
-        terms.allow_late = true;
+        terms.deducted_from = Some(DeductedFrom::WorkScore);
         let mut form = TermsForm::new(terms, TermsStep::Policy);
 
         form.go(TermsStep::Summary);
@@ -780,8 +837,8 @@ mod tests {
         form.terms.deadline_at = Some(t0());
         form.go(TermsStep::Summary);
         assert_eq!(form.step, TermsStep::Penalty);
-        assert!(form.terms.penalty.is_none());
-        form.terms.penalty = Some(2);
+        assert!(form.terms.penalty_per_period.is_none());
+        form.terms.penalty_per_period = Some(2);
         form.go(TermsStep::Summary);
         assert_eq!(form.step, TermsStep::Periods);
         assert!(form.terms.max_periods.is_none());
@@ -790,7 +847,7 @@ mod tests {
         assert_eq!(form.step, TermsStep::Summary);
         assert_eq!(
             form.terms.complete().unwrap().late_policy,
-            Some(LatePolicy::new(7, 2, 4).unwrap())
+            Some(LatePolicy::new(7, 2, 4, DeductedFrom::WorkScore).unwrap())
         );
     }
 }

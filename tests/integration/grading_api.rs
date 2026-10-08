@@ -1,8 +1,11 @@
 use axum::http::StatusCode;
 use chrono::{Duration, Utc};
+use hw_bot::app::{GradebookScore, StudentGrades};
 use hw_bot::db;
-use hw_bot::domain::Grading;
+use hw_bot::domain::{Assignment, DeductedFrom, Grading};
+use hw_bot::pagination::PageRequest;
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::harness::{TestApp, submission_id};
 
@@ -30,7 +33,143 @@ async fn accepting_with_a_score_stores_the_whole_arithmetic() {
     assert_eq!(body["max_score"], json!(5));
     assert_eq!(body["late_periods"], json!(0));
     assert_eq!(body["penalty"], json!(0));
-    assert_eq!(body["final_score"], json!(4));
+    assert_eq!(body["penalty_deducted_from"], json!(null));
+    assert_eq!(body["work_score"], json!(4));
+    assert_eq!(body["course_total_penalty"], json!(0));
+    assert!(body.get("final_score").is_none());
+}
+
+#[tokio::test]
+async fn a_penalty_to_the_course_total_reaches_the_submission_response() {
+    let app = TestApp::start().await;
+    let assignment = app
+        .add_late_assignment("Course total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+
+    let body = app
+        .review_with_score(submission, app.teacher(), "accept", 8, "Ок")
+        .await
+        .ok();
+
+    assert_eq!(body["raw_score"], json!(8));
+    assert_eq!(body["penalty"], json!(4));
+    assert_eq!(body["penalty_deducted_from"], json!("course_total"));
+    assert_eq!(body["work_score"], json!(8));
+    assert_eq!(body["course_total_penalty"], json!(4));
+}
+
+#[tokio::test]
+async fn where_the_penalty_is_deducted_from_round_trips_through_http() {
+    let app = TestApp::start().await;
+    let created = app
+        .create_assignment_raw(
+            app.course(),
+            app.teacher(),
+            json!({
+                "title": "Penalty deducted_from", "body": "Send a pull request.", "max_attempts": 2,
+                "max_score": 10, "deadline_at": Utc::now() + Duration::days(7),
+                "late_period_days": 7, "late_penalty_per_period": 2, "late_max_periods": 4,
+                "late_deducted_from": "course_total",
+            }),
+        )
+        .await
+        .created();
+    assert_eq!(created["late_deducted_from"], json!("course_total"));
+
+    let listed = app
+        .course_assignments(app.course(), app.teacher())
+        .await
+        .ok();
+    let read = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|assignment| assignment["id"] == created["id"])
+        .expect("the created assignment is listed");
+    assert_eq!(read["late_deducted_from"], json!("course_total"));
+}
+
+#[tokio::test]
+async fn a_policy_and_its_deduction_are_only_accepted_together() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let before = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+
+    for body in [
+        json!({
+            "max_score": 5, "late_period_days": 7, "late_penalty_per_period": 1, "late_max_periods": 4,
+        }),
+        json!({ "max_score": 5, "late_deducted_from": "course_total" }),
+    ] {
+        app.post_as(
+            &format!("/assignments/{}/grading", assignment.id().as_uuid()),
+            app.teacher(),
+            body,
+        )
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    }
+
+    let after = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.assignment, before.assignment);
+}
+
+#[tokio::test]
+async fn the_former_name_of_the_penalty_per_period_is_rejected_by_the_strict_body() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let before = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+
+    app.post_as(
+        &format!("/assignments/{}/grading", assignment.id().as_uuid()),
+        app.teacher(),
+        json!({
+            "max_score": 5, "late_period_days": 7, "late_penalty": 1, "late_max_periods": 4,
+            "late_deducted_from": "work_score",
+        }),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
+
+    let after = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.assignment, before.assignment);
+}
+
+#[tokio::test]
+async fn an_unknown_deduction_is_rejected_by_the_strict_body() {
+    let app = TestApp::start().await;
+
+    app.create_assignment_raw(
+        app.course(),
+        app.teacher(),
+        json!({
+            "title": "Unknown deducted_from", "body": "Send a pull request.", "max_attempts": 2,
+            "max_score": 10, "deadline_at": Utc::now() + Duration::days(7),
+            "late_period_days": 7, "late_penalty_per_period": 2, "late_max_periods": 4,
+            "late_deducted_from": "everything",
+        }),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
 }
 
 #[tokio::test]
@@ -45,7 +184,7 @@ async fn a_submission_awaiting_review_has_no_grade() {
 
     assert_eq!(body["raw_score"], json!(null));
     assert_eq!(body["max_score"], json!(null));
-    assert_eq!(body["final_score"], json!(null));
+    assert_eq!(body["work_score"], json!(null));
 }
 
 #[tokio::test]
@@ -61,7 +200,7 @@ async fn rejecting_a_scored_submission_stores_no_grade() {
     assert_eq!(body["status"], json!("rejected"));
     assert_eq!(body["raw_score"], json!(null));
     assert_eq!(body["max_score"], json!(null));
-    assert_eq!(body["final_score"], json!(null));
+    assert_eq!(body["work_score"], json!(null));
 }
 
 #[tokio::test]
@@ -73,16 +212,20 @@ async fn the_notification_carries_the_score_of_the_review() {
         .await
         .ok();
 
-    let notification = sqlx::query!(
-        "select final_score, max_score from review_notification_outbox where submission_id = $1",
-        submission,
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("notification is enqueued");
+    let grade = claim_notification(&app)
+        .await
+        .grade
+        .expect("a scored review");
 
-    assert_eq!(notification.final_score, Some(4));
-    assert_eq!(notification.max_score, Some(5));
+    assert_eq!((grade.work_score(), grade.max_score()), (4, 5));
+}
+
+async fn claim_notification(app: &TestApp) -> db::notifications::ClaimedReviewNotification {
+    let now = Utc::now();
+    db::notifications::claim_next(&app.pool, now, Uuid::new_v4(), now + Duration::seconds(10))
+        .await
+        .expect("claim notification")
+        .expect("notification is enqueued")
 }
 
 #[tokio::test]
@@ -128,16 +271,7 @@ async fn a_pass_fail_notification_carries_no_score() {
         .await
         .ok();
 
-    let notification = sqlx::query!(
-        "select final_score, max_score from review_notification_outbox where submission_id = $1",
-        submission,
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("notification is enqueued");
-
-    assert_eq!(notification.final_score, None);
-    assert_eq!(notification.max_score, None);
+    assert_eq!(claim_notification(&app).await.grade, None);
 }
 
 #[tokio::test]
@@ -259,7 +393,7 @@ async fn a_late_submission_before_the_horizon_is_accepted_with_a_penalty() {
 
     assert_eq!(body["late_periods"], json!(1));
     assert_eq!(body["penalty"], json!(1));
-    assert_eq!(body["final_score"], json!(4));
+    assert_eq!(body["work_score"], json!(4));
 }
 
 #[tokio::test]
@@ -294,7 +428,7 @@ async fn the_horizon_reaches_the_assignment_response() {
 
     let card = &body["assignment"];
     assert_eq!(card["late_period_days"], json!(7));
-    assert_eq!(card["late_penalty"], json!(1));
+    assert_eq!(card["late_penalty_per_period"], json!(1));
     assert!(card.get("late_closes_at").is_none());
     assert_eq!(card["late_max_periods"], json!(4));
     let closes_at: chrono::DateTime<Utc> =
@@ -317,7 +451,7 @@ async fn a_nonweekly_policy_round_trips_through_http() {
             json!({
                 "title": "Periodic closing", "body": "Send a pull request.", "max_attempts": 2,
                 "max_score": 5, "deadline_at": deadline, "late_period_days": 5,
-                "late_penalty": 1, "late_max_periods": 2,
+                "late_penalty_per_period": 1, "late_max_periods": 2, "late_deducted_from": "work_score",
             }),
         )
         .await
@@ -376,7 +510,8 @@ async fn a_horizon_longer_than_366_days_preserves_conditions_and_revision() {
         &format!("/assignments/{}/grading", assignment.id().as_uuid()),
         app.teacher(),
         json!({
-            "max_score": 5, "late_period_days": 365, "late_penalty": 1, "late_max_periods": 100,
+            "max_score": 5, "late_period_days": 365, "late_penalty_per_period": 1, "late_max_periods": 100,
+            "late_deducted_from": "work_score",
         }),
     )
     .await
@@ -397,7 +532,7 @@ async fn moving_a_deadline_back_does_not_truncate_the_stored_lateness_counter() 
         .created_at(now - Duration::days(70_001))
         .deadline_at(now + Duration::days(1))
         .scored(5)
-        .late_policy(1, 1, 1)
+        .late_policy(1, 1, 1, DeductedFrom::WorkScore)
         .published()
         .build();
     db::assignments::insert(&app.pool, &work).await.unwrap();
@@ -426,7 +561,7 @@ async fn moving_a_deadline_back_does_not_truncate_the_stored_lateness_counter() 
         u64::from(saved.grade().unwrap().late_periods()),
         body["late_periods"].as_u64().unwrap()
     );
-    assert_eq!(saved.grade().unwrap().final_score(), 0);
+    assert_eq!(saved.grade().unwrap().work_score(), 0);
 }
 
 async fn gradebook(app: &TestApp, telegram_id: i64) -> crate::harness::TestResponse {
@@ -448,7 +583,144 @@ async fn a_student_without_submissions_is_still_in_the_gradebook() {
     assert_eq!(students.len(), 1);
     assert_eq!(students[0]["total"], json!(0));
     assert_eq!(students[0]["max_total"], json!(5));
-    assert_eq!(students[0]["grades"][0]["final_score"], json!(null));
+    assert_eq!(students[0]["grades"][0]["work_score"], json!(null));
+}
+
+async fn reviewed(app: &TestApp, assignment: &Assignment, score: u16) {
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    app.review_with_score(submission, app.teacher(), "accept", score, "Ок")
+        .await
+        .ok();
+}
+
+async fn student_grades(app: &TestApp) -> StudentGrades {
+    app.application
+        .courses
+        .student_grades(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            app.fixture.student.id(),
+            PageRequest::default(),
+        )
+        .await
+        .expect("read student grades")
+}
+
+#[tokio::test]
+async fn the_gradebook_sums_work_scores_and_course_penalties_of_both_deductions() {
+    let app = TestApp::start().await;
+    let to_total = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    let to_work = app
+        .add_late_assignment("To work", 10, 2, DeductedFrom::WorkScore)
+        .await;
+    reviewed(&app, &to_total, 8).await;
+    reviewed(&app, &to_work, 6).await;
+
+    let grades = student_grades(&app).await;
+
+    assert_eq!(grades.work_total(), 12);
+    assert_eq!(grades.penalty_total(), 4);
+    assert_eq!(grades.total(), 8);
+    assert_eq!(grades.max_total(), 20);
+    let scores: Vec<_> = grades.grades.iter().map(|grade| grade.score).collect();
+    assert!(scores.contains(&Some(GradebookScore {
+        work_score: 8,
+        course_total_penalty: 4
+    })));
+    assert!(scores.contains(&Some(GradebookScore {
+        work_score: 4,
+        course_total_penalty: 0
+    })));
+}
+
+#[tokio::test]
+async fn the_gradebook_total_goes_below_zero_instead_of_losing_a_penalty() {
+    let app = TestApp::start().await;
+    let to_total = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    reviewed(&app, &to_total, 0).await;
+
+    let grades = student_grades(&app).await;
+
+    assert_eq!(grades.work_total(), 0);
+    assert_eq!(grades.penalty_total(), 4);
+    assert_eq!(grades.total(), -4);
+}
+
+#[tokio::test]
+async fn a_submission_awaiting_review_has_no_gradebook_score_unlike_a_given_zero() {
+    let app = TestApp::start().await;
+    let pending = app.add_scored_assignment(5).await;
+    let zero = app
+        .add_late_assignment("Zero", 10, 4, DeductedFrom::WorkScore)
+        .await;
+    app.submit(pending.id().as_uuid(), app.student(), "pull/pending")
+        .await
+        .created();
+    reviewed(&app, &zero, 2).await;
+
+    let grades = student_grades(&app).await;
+
+    let score = |assignment: &Assignment| {
+        grades
+            .grades
+            .iter()
+            .find(|grade| grade.assignment_id == assignment.id())
+            .expect("the scored assignment is in the gradebook")
+            .score
+    };
+    assert_eq!(score(&pending), None);
+    assert_eq!(
+        score(&zero),
+        Some(GradebookScore {
+            work_score: 0,
+            course_total_penalty: 0
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_gradebook_contract_reports_penalties_to_the_total_and_null_before_review() {
+    let app = TestApp::start().await;
+    let to_total = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    let pending = app.add_scored_assignment(5).await;
+    reviewed(&app, &to_total, 8).await;
+    app.submit(pending.id().as_uuid(), app.student(), "pull/pending")
+        .await
+        .created();
+
+    let body = gradebook(&app, app.teacher()).await.ok();
+
+    let student = &body["students"][0];
+    assert_eq!(student["work_total"], json!(8));
+    assert_eq!(student["penalty_total"], json!(4));
+    assert_eq!(student["total"], json!(4));
+    assert_eq!(student["max_total"], json!(15));
+    let grade = |assignment: &Assignment| {
+        student["grades"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|grade| grade["assignment_id"] == json!(assignment.id().as_uuid()))
+            .cloned()
+            .expect("the assignment is in the gradebook")
+    };
+    let penalized = grade(&to_total);
+    assert_eq!(penalized["work_score"], json!(8));
+    assert_eq!(penalized["course_total_penalty"], json!(4));
+    assert!(penalized.get("final_score").is_none());
+    let awaiting = grade(&pending);
+    assert_eq!(awaiting["work_score"], json!(null));
+    assert_eq!(awaiting["course_total_penalty"], json!(null));
 }
 
 #[tokio::test]
@@ -577,7 +849,7 @@ async fn moving_the_deadline_does_not_change_a_grade_that_was_already_given() {
         .review_with_score(submission, app.teacher(), "accept", 5, "Ок")
         .await
         .ok();
-    assert_eq!(reviewed["final_score"], json!(4));
+    assert_eq!(reviewed["work_score"], json!(4));
 
     app.change_deadline(
         assignment.id().as_uuid(),
@@ -595,5 +867,5 @@ async fn moving_the_deadline_does_not_change_a_grade_that_was_already_given() {
     let stored = &body["submissions"][0];
     assert_eq!(stored["late_periods"], json!(1));
     assert_eq!(stored["penalty"], json!(1));
-    assert_eq!(stored["final_score"], json!(4));
+    assert_eq!(stored["work_score"], json!(4));
 }

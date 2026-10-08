@@ -118,7 +118,7 @@ async fn grade_totals_cover_all_pages_and_student_lookup_stays_authorized() {
     assert_eq!(first.max_total(), (PAGE_SIZE as u32 + 1) * 5);
     assert_eq!(first.max_total(), second.max_total());
     assert_eq!(first.total(), 0);
-    assert!(first.grades.iter().all(|grade| grade.final_score.is_none()));
+    assert!(first.grades.iter().all(|grade| grade.score.is_none()));
     let outsider = app.add_outsider_teacher("Outsider").await;
     assert_eq!(
         app.application

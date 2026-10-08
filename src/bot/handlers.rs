@@ -223,9 +223,9 @@ pub(super) async fn handle_message(
             BotState::Flow(FlowState::AwaitingReviewScore {
                 submission_id,
                 max_score,
-                penalty,
+                late,
             }) => {
-                review::submit_score_text(step, submission_id, max_score, penalty).await?;
+                review::submit_score_text(step, submission_id, max_score, late).await?;
             }
             BotState::Flow(FlowState::AwaitingReviewComment {
                 submission_id,
@@ -382,7 +382,7 @@ pub(super) async fn handle_callback(
                 handle_screen_action(screen, message.id, action, state).await
             }
             CallbackAction::Flow(action) => {
-                handle_flow_action(screen, message.id, action, state).await
+                handle_flow_action(screen, telegram_user_id, message.id, action, state).await
             }
             CallbackAction::Informational(InformationalAction::StudentContact {
                 course_id,
@@ -506,6 +506,7 @@ async fn handle_screen_action(
 
 async fn handle_flow_action(
     screen: Screen<'_>,
+    telegram_user_id: TelegramUserId,
     message_id: MessageId,
     action: FlowAction,
     state: BotState,
@@ -522,6 +523,9 @@ async fn handle_flow_action(
             submission_id,
         } => {
             review::handle_decision(screen, submission_id, decision, state).await?;
+        }
+        FlowAction::ChangeReviewDecision(submission_id) => {
+            review::change_decision(screen, telegram_user_id, submission_id, &state).await?;
         }
         FlowAction::Grading(choice) => {
             teacher::handle_grading(screen, message_id, choice, state).await?;
@@ -712,11 +716,13 @@ mod tests {
             calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
             contact_keyboard, course_assignments_keyboard, deadline_options_keyboard,
             gradebook_students_keyboard, grading_keyboard, group_invite_keyboard,
-            late_policy_keyboard, penalty_keyboard, review_score_keyboard, sandbox_keyboard,
-            student_grades_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
+            late_policy_keyboard, penalty_keyboard, review_decision_keyboard,
+            review_score_keyboard, sandbox_keyboard, student_grades_keyboard, terms_exit_keyboard,
+            terms_form_view, terms_keyboard,
         };
         use crate::domain::{
-            FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
+            DeductedFrom, FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner,
+            StoredFileParts,
         };
         use crate::test_support::{assignment, course_for, student_group, teacher};
 
@@ -745,8 +751,8 @@ mod tests {
         };
 
         let terms = AssignmentTerms {
-            allow_late: true,
-            penalty: Some(1),
+            deducted_from: Some(DeductedFrom::CourseTotal),
+            penalty_per_period: Some(1),
             max_periods: Some(4),
             ..AssignmentTerms::editing(&assignment, 0)
         };
@@ -761,6 +767,7 @@ mod tests {
             student_menu(),
             teacher_menu(Some(1)),
             review_keyboard(SubmissionId::new(), course.id(), student_id),
+            review_decision_keyboard(SubmissionId::new()),
             student_grades_keyboard(course.id(), student_id),
             contact_keyboard(
                 contact,

@@ -12,17 +12,17 @@ use crate::bot::callbacks::{
     CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX, DEADLINE_CALENDAR,
     DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL, DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS,
     FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GRADING_PREFIX, INVITE_CANCEL_ROTATE,
-    INVITE_CONFIRM_ROTATE, InformationalAction, LATE_PERIODS_PREFIX, LATE_POLICY_PREFIX,
-    PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REVIEW_ACCEPT_PREFIX, REVIEW_REJECT_PREFIX,
-    REVIEW_SCORE_PREFIX, ReplayableAction, STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL,
-    TERMS_DEADLINE, TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_EXIT, TERMS_PENALTY,
-    TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
+    INVITE_CONFIRM_ROTATE, InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice,
+    PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REVIEW_ACCEPT_PREFIX, REVIEW_CHANGE_PREFIX,
+    REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, ReplayableAction, STUDENT_PREFIX, ScreenAction,
+    TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE, TERMS_DURATION_APPLY, TERMS_DURATION_DATE,
+    TERMS_EXIT, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
 };
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, ReviewDecision, Role, StoredFileMetadata,
-    SubmissionId, TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DeductedFrom, ReviewDecision, Role,
+    StoredFileMetadata, SubmissionId, TeachingCourseId, UserId,
 };
 
 type Row = Vec<InlineKeyboardButton>;
@@ -161,6 +161,13 @@ pub(crate) fn review_keyboard(
         ],
         vec![student_contact_button(course_id, student_id)],
     ])
+}
+
+pub(crate) fn review_decision_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![row(
+        texts::BUTTON_CHANGE_DECISION,
+        format!("{REVIEW_CHANGE_PREFIX}{}", submission_id.as_uuid()),
+    )])
 }
 
 fn student_contact_button(course_id: TeachingCourseId, student_id: UserId) -> InlineKeyboardButton {
@@ -383,7 +390,7 @@ fn duration_options_keyboard(
         let Some(at) = timezone.end_of(date) else {
             continue;
         };
-        let Ok(policy) = terms.preview_policy(1) else {
+        let Some(policy) = terms.preview_policy(1) else {
             continue;
         };
         let Ok(periods) = u16::try_from(policy.periods_to_close_at(deadline, at)) else {
@@ -391,8 +398,7 @@ fn duration_options_keyboard(
         };
         if terms
             .preview_policy(periods)
-            .and_then(|policy| policy.validate_horizon(deadline))
-            .is_err()
+            .is_none_or(|policy| policy.validate_horizon(deadline).is_err())
         {
             continue;
         }
@@ -504,8 +510,15 @@ pub(crate) fn grading_keyboard() -> InlineKeyboardMarkup {
 
 pub(crate) fn late_policy_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        row(texts::BUTTON_STRICT, format!("{LATE_POLICY_PREFIX}none")),
-        row(texts::BUTTON_LATE, format!("{LATE_POLICY_PREFIX}penalty")),
+        row(texts::BUTTON_STRICT, LatePolicyChoice::Strict.callback()),
+        row(
+            texts::BUTTON_LATE_WORK_SCORE,
+            LatePolicyChoice::Penalty(DeductedFrom::WorkScore).callback(),
+        ),
+        row(
+            texts::BUTTON_LATE_COURSE_TOTAL,
+            LatePolicyChoice::Penalty(DeductedFrom::CourseTotal).callback(),
+        ),
     ])
 }
 
@@ -555,7 +568,7 @@ pub(crate) fn terms_keyboard(
     if let Some(policy) = complete.late_policy {
         rows.push(vec![
             button(
-                format!("{} −{}", texts::PENALTY_LABEL, policy.penalty()),
+                format!("{} −{}", texts::PENALTY_LABEL, policy.penalty_per_period()),
                 TERMS_PENALTY,
             ),
             button(texts::period_summary(policy.period_days()), TERMS_PERIOD),
@@ -571,10 +584,10 @@ pub(crate) fn terms_keyboard(
     }
     if terms.grading().is_scored() {
         rows.push(row(
-            if terms.allow_late {
-                texts::BUTTON_POLICY_PENALTY
-            } else {
-                texts::BUTTON_POLICY_STRICT
+            match terms.deducted_from {
+                Some(DeductedFrom::WorkScore) => texts::BUTTON_POLICY_WORK_SCORE,
+                Some(DeductedFrom::CourseTotal) => texts::BUTTON_POLICY_COURSE_TOTAL,
+                None => texts::BUTTON_POLICY_STRICT,
             },
             TERMS_POLICY,
         ));
@@ -627,9 +640,9 @@ pub(super) fn terms_form_keyboard(
             let mut rows = Vec::new();
             if let Some(deadline) = terms.deadline_at {
                 for periods in [1, 2, 4] {
-                    let Ok(closes_at) = terms.preview_policy(periods).and_then(|policy| {
-                        policy.validate_horizon(deadline)?;
-                        policy.closes_at(deadline)
+                    let Some(closes_at) = terms.preview_policy(periods).and_then(|policy| {
+                        policy.validate_horizon(deadline).ok()?;
+                        policy.closes_at(deadline).ok()
                     }) else {
                         continue;
                     };
@@ -844,9 +857,9 @@ mod tests {
         draft.grading = Grading::scored(10).unwrap();
         AssignmentTerms {
             deadline_at: Some(crate::test_support::t0() + chrono::Duration::days(7)),
-            allow_late: true,
+            deducted_from: Some(DeductedFrom::WorkScore),
             period_days: 1,
-            penalty: Some(1),
+            penalty_per_period: Some(1),
             max_periods: Some(100),
             ..AssignmentTerms::creating(draft)
         }
@@ -860,7 +873,7 @@ mod tests {
         terms.deadline_at = timezone.parse_deadline("20.08.2027");
         terms.period_days = 7;
         let deadline = terms.deadline_at.unwrap();
-        let policy = LatePolicy::new(7, 1, 1).unwrap();
+        let policy = LatePolicy::new(7, 1, 1, DeductedFrom::WorkScore).unwrap();
         let keyboard = duration_options_keyboard(&terms, deadline, &timezone);
         let mut dates = Vec::new();
         for button in keyboard.inline_keyboard.iter().flatten() {
@@ -872,7 +885,7 @@ mod tests {
                 let at = timezone.end_of(date).unwrap();
                 assert!(at > deadline);
                 let periods = u16::try_from(policy.periods_to_close_at(deadline, at)).unwrap();
-                LatePolicy::new(7, 1, periods)
+                LatePolicy::new(7, 1, periods, DeductedFrom::WorkScore)
                     .unwrap()
                     .validate_horizon(deadline)
                     .unwrap();
@@ -924,7 +937,7 @@ mod tests {
     fn the_schedule_names_every_penalty_step_and_the_closing_date() {
         let timezone = timezone();
         let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
-        let policy = LatePolicy::new(7, 1, 3).unwrap();
+        let policy = LatePolicy::new(7, 1, 3, DeductedFrom::WorkScore).unwrap();
         let max_score = MaxScore::new(10).unwrap();
 
         let schedule = schedule(deadline, policy, max_score, &timezone);
@@ -946,7 +959,7 @@ mod tests {
     fn the_schedule_stops_at_the_period_that_zeroes_the_score() {
         let timezone = timezone();
         let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
-        let policy = LatePolicy::new(1, 5, 40).unwrap();
+        let policy = LatePolicy::new(1, 5, 40, DeductedFrom::WorkScore).unwrap();
         let max_score = MaxScore::new(10).unwrap();
 
         let schedule = schedule(deadline, policy, max_score, &timezone);
@@ -964,7 +977,7 @@ mod tests {
     fn a_long_schedule_collapses_its_middle_into_one_line() {
         let timezone = timezone();
         let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
-        let policy = LatePolicy::new(1, 1, 40).unwrap();
+        let policy = LatePolicy::new(1, 1, 40, DeductedFrom::WorkScore).unwrap();
         let max_score = MaxScore::new(100).unwrap();
 
         let schedule = schedule(deadline, policy, max_score, &timezone);
@@ -980,6 +993,44 @@ mod tests {
             lines.last().unwrap(),
             &texts::schedule_closed("29.09.2026 23:59")
         );
+    }
+
+    #[test]
+    fn a_schedule_to_the_course_total_names_the_penalty_without_a_possible_score() {
+        let timezone = timezone();
+        let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
+        let policy = LatePolicy::new(7, 2, 2, DeductedFrom::CourseTotal).unwrap();
+        let max_score = MaxScore::new(10).unwrap();
+
+        let schedule = schedule(deadline, policy, max_score, &timezone);
+
+        assert_eq!(
+            schedule.lines().collect::<Vec<_>>(),
+            [
+                texts::SCHEDULE_TOTAL_HEADER,
+                &texts::schedule_free_total_row("20.08.2026 23:59"),
+                &texts::schedule_total_row("27.08.2026 23:59", 2),
+                &texts::schedule_total_row("03.09.2026 23:59", 4),
+                &texts::schedule_closed("03.09.2026 23:59"),
+            ]
+        );
+        assert!(!schedule.contains("из 10"), "{schedule}");
+    }
+
+    #[test]
+    fn a_schedule_to_the_course_total_runs_to_the_period_limit() {
+        let timezone = timezone();
+        let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
+        let policy = LatePolicy::new(1, 5, 40, DeductedFrom::CourseTotal).unwrap();
+        let max_score = MaxScore::new(10).unwrap();
+
+        let schedule = schedule(deadline, policy, max_score, &timezone);
+        let lines: Vec<_> = schedule.lines().collect();
+
+        assert_eq!(lines.len(), 10, "{schedule}");
+        assert_eq!(lines[7], texts::schedule_skipped(34));
+        assert_eq!(lines[8], texts::schedule_total_row("29.09.2026 23:59", 100));
+        assert_eq!(lines[9], texts::schedule_closed("29.09.2026 23:59"));
     }
 
     #[test]

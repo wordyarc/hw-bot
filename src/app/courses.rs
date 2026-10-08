@@ -31,14 +31,23 @@ pub struct StudentGrades {
     pub grades: Vec<AssignmentGrade>,
     pub grade_page: u32,
     pub next_grade_page: Option<u32>,
-    total: u32,
+    work_total: u32,
+    penalty_total: u32,
     max_total: u32,
 }
 
 impl StudentGrades {
     /// До проверки балл отсутствует, а не равен нулю. Такая сдача не участвует в сумме.
-    pub fn total(&self) -> u32 {
-        self.total
+    pub fn work_total(&self) -> u32 {
+        self.work_total
+    }
+
+    pub fn penalty_total(&self) -> u32 {
+        self.penalty_total
+    }
+
+    pub fn total(&self) -> i64 {
+        i64::from(self.work_total) - i64::from(self.penalty_total)
     }
 
     pub fn max_total(&self) -> u32 {
@@ -215,7 +224,8 @@ fn group_grades(
                 student_id: row.student_id,
                 display_name: row.display_name,
                 grades: row.assignment.into_iter().collect(),
-                total: row.total,
+                work_total: row.work_total,
+                penalty_total: row.penalty_total,
                 max_total: row.max_total,
                 grade_page: page.page,
                 next_grade_page: None,

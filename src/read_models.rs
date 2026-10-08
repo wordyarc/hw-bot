@@ -23,7 +23,13 @@ pub struct AssignmentGrade {
     pub assignment_id: AssignmentId,
     pub title: String,
     pub max_score: u16,
-    pub final_score: Option<u16>,
+    pub score: Option<GradebookScore>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GradebookScore {
+    pub work_score: u16,
+    pub course_total_penalty: u16,
 }
 
 #[derive(Clone, Debug)]

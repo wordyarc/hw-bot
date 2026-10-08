@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, final_score\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit 1",
+  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, penalty_deducted_from, work_score, course_total_penalty\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
   "describe": {
     "columns": [
       {
@@ -159,12 +159,34 @@
       },
       {
         "ordinal": 14,
-        "name": "final_score",
+        "name": "penalty_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "work_score",
         "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "submissions",
-            "name": "final_score"
+            "name": "work_score"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "course_total_penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "course_total_penalty"
           }
         }
       }
@@ -172,7 +194,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid"
+        "Uuid",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -190,8 +214,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "dfa96d5bab990e738c1d785924a4e7c4b82f16362e024e2e4080a98b7cfd5c19"
+  "hash": "3856432a7cd5c23ba8ce0b22f6907a016f70b179a655759c26051901bdbb76cc"
 }

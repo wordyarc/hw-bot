@@ -1,9 +1,10 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, DomainError, Grading, LATEST_TERM_YEAR, LatePolicy,
-    NewAssignment, Role, StaffRole, StudentAssignmentProgress, Submission, SubmissionHistory,
-    SubmissionId, SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DeductedFrom, DomainError, Grading,
+    LATEST_TERM_YEAR, LatePolicy, NewAssignment, Role, StaffRole, StudentAssignmentProgress,
+    Submission, SubmissionHistory, SubmissionId, SubmissionStatus, TeachingCourse, TelegramUserId,
+    User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
@@ -489,7 +490,7 @@ fn weekly_penalty_assignment(
         .created_at(Utc.with_ymd_and_hms(2026, 8, 17, 13, 30, 0).unwrap())
         .deadline_at(deadline_at)
         .scored(5)
-        .late_policy(7, 1, 4)
+        .late_policy(7, 1, 4, DeductedFrom::WorkScore)
         .published()
         .build();
 
@@ -517,7 +518,7 @@ fn creating_an_assignment_rejects_a_horizon_longer_than_366_days() {
     assert_eq!(
         assignment(&course, &teacher)
             .scored(5)
-            .late_policy(365, 1, 100)
+            .late_policy(365, 1, 100, DeductedFrom::WorkScore)
             .try_build(),
         Err(DomainError::LateHorizonTooLong { max_days: 366 })
     );
@@ -529,7 +530,7 @@ fn a_failed_deadline_change_preserves_the_previous_horizon() {
     let course = course_for(&student_group(GROUP_CODE), &teacher);
     let mut work = assignment(&course, &teacher)
         .scored(5)
-        .late_policy(1, 1, 2)
+        .late_policy(1, 1, 2, DeductedFrom::WorkScore)
         .build();
     let before = work.clone();
     assert_eq!(
@@ -579,7 +580,7 @@ fn adding_a_policy_rejects_a_closing_out_of_range_without_changing_the_scale() {
             &course,
             &teacher,
             Grading::scored(5).unwrap(),
-            Some(LatePolicy::new(1, 1, 1).unwrap())
+            Some(LatePolicy::new(1, 1, 1, DeductedFrom::WorkScore).unwrap())
         ),
         Err(DomainError::AssignmentClosingOutOfRange)
     );
@@ -605,7 +606,7 @@ fn exactly_366_days_of_lateness_are_allowed() {
     let course = course_for(&student_group(GROUP_CODE), &teacher);
     let work = assignment(&course, &teacher)
         .scored(10)
-        .late_policy(183, 1, 2)
+        .late_policy(183, 1, 2, DeductedFrom::WorkScore)
         .build();
     assert_eq!(work.closes_at(), work.deadline_at() + Duration::days(366));
 }
@@ -620,7 +621,7 @@ fn changing_only_the_penalty_preserves_the_horizon() {
         &course,
         &teacher,
         work.grading(),
-        Some(LatePolicy::new(7, 2, 4).unwrap()),
+        Some(LatePolicy::new(7, 2, 4, DeductedFrom::WorkScore).unwrap()),
     )
     .unwrap();
     assert_eq!(work.closes_at(), closing);
@@ -635,7 +636,7 @@ fn changing_the_period_recalculates_the_horizon() {
         &course,
         &teacher,
         deadline,
-        Some(LatePolicy::new(10, 1, 4).unwrap()),
+        Some(LatePolicy::new(10, 1, 4, DeductedFrom::WorkScore).unwrap()),
     )
     .unwrap();
     assert_eq!(work.closes_at(), deadline + Duration::days(40));
@@ -649,7 +650,7 @@ fn creation_rejects_an_unrepresentable_closing() {
         assignment(&course, &teacher)
             .scored(10)
             .deadline_at(DateTime::<Utc>::MAX_UTC)
-            .late_policy(1, 1, 1)
+            .late_policy(1, 1, 1, DeductedFrom::WorkScore)
             .try_build(),
         Err(DomainError::AssignmentClosingOutOfRange)
     );
@@ -663,7 +664,7 @@ fn zero_possible_score_does_not_close_submissions_early() {
     let student = student(2, &group);
     let work = assignment(&course, &teacher)
         .scored(1)
-        .late_policy(7, 1, 4)
+        .late_policy(7, 1, 4, DeductedFrom::WorkScore)
         .published()
         .build();
     let last_moment = work.closes_at() - Duration::nanoseconds(1);
@@ -780,7 +781,7 @@ fn a_review_freezes_the_lateness_of_the_submission_not_of_the_review() {
         "проверка через месяц ничего не меняет"
     );
     assert_eq!(grade.penalty(), 1);
-    assert_eq!(grade.final_score(), 4);
+    assert_eq!(grade.work_score(), 4);
 }
 
 #[test]
@@ -809,7 +810,7 @@ fn a_penalty_larger_than_the_score_leaves_an_accepted_submission_with_zero() {
     assert_eq!(grade.raw_score(), 4);
     assert_eq!(grade.max_score(), 5);
     assert_eq!(grade.penalty(), 4);
-    assert_eq!(grade.final_score(), 0);
+    assert_eq!(grade.work_score(), 0);
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
 }
 
@@ -823,7 +824,7 @@ fn an_effective_penalty_is_capped_at_the_global_score_limit() {
     let assignment = assignment(&course, &teacher)
         .deadline_at(deadline_at)
         .scored(100)
-        .late_policy(1, 100, 2)
+        .late_policy(1, 100, 2, DeductedFrom::WorkScore)
         .published()
         .build();
     let mut submission = submission(&assignment, &student)
@@ -845,8 +846,65 @@ fn an_effective_penalty_is_capped_at_the_global_score_limit() {
     assert_eq!(grade.max_score(), 100);
     assert_eq!(grade.late_periods(), 2);
     assert_eq!(grade.penalty(), 100);
-    assert_eq!(grade.final_score(), 0);
+    assert_eq!(grade.work_score(), 0);
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
+}
+
+#[test]
+fn a_deduction_change_after_a_review_applies_only_to_later_reviews() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (mut assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+    let submitted_at = deadline_at + Duration::days(1);
+    let mut first = submission(&assignment, &student(2, &group))
+        .submitted_at(submitted_at)
+        .build();
+    let mut second = submission(&assignment, &student(3, &group))
+        .submitted_at(submitted_at)
+        .build();
+    first
+        .accept(&assignment, &course, &teacher, Some(5), "Ок", reviewed_at())
+        .unwrap();
+    let given = first.grade().unwrap();
+
+    assignment
+        .change_grading(
+            &course,
+            &teacher,
+            assignment.grading(),
+            Some(LatePolicy::new(7, 1, 4, DeductedFrom::CourseTotal).unwrap()),
+        )
+        .unwrap();
+    second
+        .accept(&assignment, &course, &teacher, Some(5), "Ок", reviewed_at())
+        .unwrap();
+
+    assert_eq!(first.grade(), Some(given));
+    assert_eq!(given.deducted_from(), Some(DeductedFrom::WorkScore));
+    assert_eq!((given.work_score(), given.course_total_penalty()), (4, 0));
+    let later = second.grade().unwrap();
+    assert_eq!(later.deducted_from(), Some(DeductedFrom::CourseTotal));
+    assert_eq!((later.work_score(), later.course_total_penalty()), (5, 1));
+}
+
+#[test]
+fn an_on_time_submission_carries_no_deduction_whatever_the_policy() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
+    let mut submission = submission(&assignment, &student(2, &group))
+        .submitted_at(deadline_at - Duration::nanoseconds(1))
+        .build();
+
+    submission
+        .accept(&assignment, &course, &teacher, Some(5), "Ок", reviewed_at())
+        .unwrap();
+
+    let grade = submission.grade().unwrap();
+    assert_eq!(grade.late(), None);
+    assert_eq!((grade.work_score(), grade.course_total_penalty()), (5, 0));
 }
 
 #[test]
@@ -871,7 +929,7 @@ fn a_late_policy_needs_a_scored_scale() {
     let course = course_for(&group, &teacher);
 
     let result = assignment(&course, &teacher)
-        .late_policy(7, 1, 4)
+        .late_policy(7, 1, 4, DeductedFrom::WorkScore)
         .try_build();
 
     assert_eq!(
@@ -889,7 +947,7 @@ fn nonweekly_closing_is_an_exact_exclusive_cutoff() {
     let work = assignment(&course, &teacher)
         .scored(5)
         .deadline_at(deadline)
-        .late_policy(5, 1, 2)
+        .late_policy(5, 1, 2, DeductedFrom::WorkScore)
         .build();
     assert_eq!(work.closes_at(), closing);
     assert_eq!(work.penalty_at(closing - Duration::nanoseconds(1)), 2);
@@ -914,7 +972,7 @@ fn deadline_and_policy_can_change_atomically() {
         &course,
         &teacher,
         deadline,
-        Some(LatePolicy::new(5, 1, 2).unwrap()),
+        Some(LatePolicy::new(5, 1, 2, DeductedFrom::WorkScore).unwrap()),
     )
     .unwrap();
     assert_eq!(work.deadline_at(), deadline);
@@ -925,7 +983,7 @@ fn deadline_and_policy_can_change_atomically() {
             &course,
             &teacher,
             deadline + Duration::days(1),
-            Some(LatePolicy::new(365, 1, 2).unwrap())
+            Some(LatePolicy::new(365, 1, 2, DeductedFrom::WorkScore).unwrap())
         ),
         Err(DomainError::LateHorizonTooLong { max_days: 366 })
     );
@@ -943,7 +1001,7 @@ fn pass_fail_assignments_cannot_gain_a_policy_through_terms_changes() {
             &course,
             &teacher,
             t0() + Duration::days(8),
-            Some(LatePolicy::new(1, 1, 2).unwrap())
+            Some(LatePolicy::new(1, 1, 2, DeductedFrom::WorkScore).unwrap())
         ),
         Err(DomainError::LatePolicyRequiresScoredGrading)
     );
@@ -1031,7 +1089,7 @@ fn accepted_scored_submission_keeps_the_score_of_the_reviewer() {
 
     let grade = submission.grade().unwrap();
     assert_eq!(grade.raw_score(), 4);
-    assert_eq!(grade.final_score(), 4);
+    assert_eq!(grade.work_score(), 4);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, final_score\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
+  "query": "\n        select\n            submissions.id, submissions.assignment_id, submissions.student_id,\n            submissions.attempt_number, submissions.content, submissions.status,\n            submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,\n            submissions.review_comment, submissions.raw_score, submissions.grade_max_score,\n            submissions.late_periods, submissions.penalty, submissions.penalty_deducted_from,\n            submissions.work_score, submissions.course_total_penalty\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            left join teaching_course_teachers\n              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id\n             and teaching_course_teachers.teacher_id = $2\n            where submissions.status = 'pending_review'\n              and ($1 or teaching_course_teachers.teacher_id is not null)\n              and subjects.sandbox = $3\n              and ($4::timestamptz is null or submissions.submitted_at <= $4)\n            \n        order by submissions.submitted_at, submissions.id\n        for update of submissions\n        ",
   "describe": {
     "columns": [
       {
@@ -159,22 +159,44 @@
       },
       {
         "ordinal": 14,
-        "name": "final_score",
+        "name": "penalty_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "work_score",
         "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "submissions",
-            "name": "final_score"
+            "name": "work_score"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "course_total_penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "course_total_penalty"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
+        "Bool",
         "Uuid",
-        "Uuid",
-        "Int8",
-        "Int8"
+        "Bool",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -192,8 +214,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "af72b0f056d7f89813140f7580fe1f76e6245c9384ef60bbad6fb8fac78c3a9d"
+  "hash": "4ac077651cf1617c657801c007847ab1db15c34c1cb0274df54802eb91313823"
 }

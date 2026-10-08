@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty, late_max_periods, status, created_by,\n                created_at, deadline_at, published_at\n            , revision  from assignments where id = $1",
+  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, status, created_by, created_at, deadline_at, published_at\n             from assignments where id = $1",
   "describe": {
     "columns": [
       {
@@ -104,12 +104,12 @@
       },
       {
         "ordinal": 9,
-        "name": "late_penalty",
+        "name": "late_penalty_per_period",
         "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "assignments",
-            "name": "late_penalty"
+            "name": "late_penalty_per_period"
           }
         }
       },
@@ -126,6 +126,17 @@
       },
       {
         "ordinal": 11,
+        "name": "late_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,24 +180,13 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "assignments",
             "name": "published_at"
-          }
-        }
-      },
-      {
-        "ordinal": 16,
-        "name": "revision",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "assignments",
-            "name": "revision"
           }
         }
       }
@@ -208,13 +208,13 @@
       true,
       true,
       true,
-      false,
-      false,
-      false,
-      false,
       true,
-      false
+      false,
+      false,
+      false,
+      false,
+      true
     ]
   },
-  "hash": "852b794bbf38dc1d9dda67df90339a49b5e3e32de8aa17b62058bb9e0faafaec"
+  "hash": "e725fd4fbe35111dd8a6fca2f81e2671015f377b856202627f477fe47846a3de"
 }

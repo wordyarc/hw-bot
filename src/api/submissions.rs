@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::ApiPath as Path;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::SubmitHomework;
-use crate::domain::{AssignmentId, Grade, Submission, SubmissionStatus, UserId};
+use crate::domain::{AssignmentId, DeductedFrom, Grade, Submission, SubmissionStatus, UserId};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,7 +32,9 @@ pub struct SubmissionResponse {
     max_score: Option<u16>,
     late_periods: Option<u32>,
     penalty: Option<u16>,
-    final_score: Option<u16>,
+    penalty_deducted_from: Option<DeductedFrom>,
+    work_score: Option<u16>,
+    course_total_penalty: Option<u16>,
 }
 
 impl From<&Submission> for SubmissionResponse {
@@ -54,7 +56,9 @@ impl From<&Submission> for SubmissionResponse {
             max_score: submission.grade().map(Grade::max_score),
             late_periods: submission.grade().map(Grade::late_periods),
             penalty: submission.grade().map(Grade::penalty),
-            final_score: submission.grade().map(Grade::final_score),
+            penalty_deducted_from: submission.grade().and_then(Grade::deducted_from),
+            work_score: submission.grade().map(Grade::work_score),
+            course_total_penalty: submission.grade().map(Grade::course_total_penalty),
         }
     }
 }

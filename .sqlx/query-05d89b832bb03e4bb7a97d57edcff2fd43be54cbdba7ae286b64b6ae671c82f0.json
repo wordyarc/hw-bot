@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                assignments.id, assignments.teaching_course_id, assignments.subject_id,\n                assignments.student_group_id, assignments.title, assignments.body,\n                assignments.max_attempts, assignments.max_score, assignments.late_period_days,\n                assignments.late_penalty, assignments.late_max_periods, assignments.status,\n                assignments.created_by,\n                assignments.created_at, assignments.deadline_at, assignments.published_at,\n                subjects.name as subject_name\n            from assignments\n            join subjects\n              on subjects.id = assignments.subject_id\n             where assignments.student_group_id = $1\n           and assignments.status = 'archived'\n           and assignments.published_at is not null\n         order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
+  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, status, created_by, created_at, deadline_at, published_at\n            , revision  from assignments where id = $1",
   "describe": {
     "columns": [
       {
@@ -104,12 +104,12 @@
       },
       {
         "ordinal": 9,
-        "name": "late_penalty",
+        "name": "late_penalty_per_period",
         "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "assignments",
-            "name": "late_penalty"
+            "name": "late_penalty_per_period"
           }
         }
       },
@@ -126,6 +126,17 @@
       },
       {
         "ordinal": 11,
+        "name": "late_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,22 +191,20 @@
         }
       },
       {
-        "ordinal": 16,
-        "name": "subject_name",
-        "type_info": "Text",
+        "ordinal": 17,
+        "name": "revision",
+        "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "subjects",
-            "name": "name"
+            "table": "assignments",
+            "name": "revision"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Int8",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -210,6 +219,7 @@
       true,
       true,
       true,
+      true,
       false,
       false,
       false,
@@ -218,5 +228,5 @@
       false
     ]
   },
-  "hash": "c823cba9c48efd438875804364fa365726fda490f432ef4e68a85724077509af"
+  "hash": "05d89b832bb03e4bb7a97d57edcff2fd43be54cbdba7ae286b64b6ae671c82f0"
 }

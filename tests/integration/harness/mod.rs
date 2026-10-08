@@ -10,7 +10,8 @@ use hw_bot::api::{self, ACTOR_HEADER, AppState};
 use hw_bot::app::{Actor, ApplicationContainer, FilePolicy};
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, EducationLevel, StudentGroup, StudentGroupId, Subject, TeachingCourse, User,
+    Assignment, DeductedFrom, EducationLevel, StudentGroup, StudentGroupId, Subject,
+    TeachingCourse, User,
 };
 use hw_bot::health::HealthState;
 use hw_bot::invites::{GroupInviteCodec, InviteSigningSecret};
@@ -502,16 +503,41 @@ impl TestApp {
             .created_at(Utc::now() - Duration::days(days_since_deadline + 1))
             .deadline_at(deadline_at);
 
-        if let Some((period_days, penalty, max_periods)) = late_policy {
-            builder = builder
-                .scored(5)
-                .late_policy(period_days, penalty, max_periods);
+        if let Some((period_days, penalty_per_period, max_periods)) = late_policy {
+            builder = builder.scored(5).late_policy(
+                period_days,
+                penalty_per_period,
+                max_periods,
+                DeductedFrom::WorkScore,
+            );
         }
 
         let assignment = builder.published().build();
         db::assignments::insert(&self.pool, &assignment)
             .await
             .expect("insert overdue assignment");
+
+        assignment
+    }
+
+    pub async fn add_late_assignment(
+        &self,
+        title: &str,
+        max_score: u16,
+        penalty_per_period: u16,
+        deducted_from: DeductedFrom,
+    ) -> Assignment {
+        let assignment = wall_clock_assignment(&self.fixture.course, &self.fixture.teacher)
+            .title(title)
+            .created_at(Utc::now() - Duration::days(2))
+            .deadline_at(Utc::now() - Duration::days(1))
+            .scored(max_score)
+            .late_policy(7, penalty_per_period, 4, deducted_from)
+            .published()
+            .build();
+        db::assignments::insert(&self.pool, &assignment)
+            .await
+            .expect("insert late assignment");
 
         assignment
     }

@@ -14,10 +14,13 @@ use crate::bot::errors::{log_handler_error, send_app_error};
 use crate::bot::state::{BotDialogue, BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{
-    ask_input, review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard,
-    teacher_menu,
+    ask_input, review_decision_keyboard, review_keyboard, review_score_keyboard,
+    send_message_chunks, teacher_keyboard, teacher_menu,
 };
-use crate::domain::{DomainError, ReviewDecision, Submission, SubmissionId, USER_TEXT_MAX_LEN};
+use crate::domain::{
+    DomainError, Grade, LatePenalty, ReviewDecision, Submission, SubmissionId, TelegramUserId,
+    USER_TEXT_MAX_LEN,
+};
 
 pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
     let actor = screen.actor();
@@ -51,30 +54,23 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
     let bot = screen.bot();
     let chat_id = screen.chat_id();
     let dialogue = screen.dialogue();
-    let penalty = item.assignment.penalty_at(item.submission.submitted_at());
+    let late = item
+        .assignment
+        .late_penalty_at(item.submission.submitted_at());
     dialogue
         .update(BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id: item.submission.id(),
             grading: item.assignment.grading(),
-            penalty,
+            late,
         }))
         .await?;
-    let mut summary = texts::review_summary(
-        item.subject.name().as_str(),
-        item.assignment.title().as_str(),
-        item.student.display_name().as_str(),
-        item.submission.attempt_number(),
-    );
-    if penalty > 0 {
-        summary.push('\n');
-        summary.push_str(&texts::late_submission_line(penalty));
-    }
     let keyboard = review_keyboard(
         item.submission.id(),
         item.assignment.teaching_course_id(),
         item.student.id(),
     );
-    bot.send_message(chat_id, summary).await?;
+    bot.send_message(chat_id, review_card_summary(&item, late))
+        .await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
     send_message_chunks(
@@ -107,6 +103,20 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
     .await
 }
 
+fn review_card_summary(item: &ReviewQueueItem, late: Option<LatePenalty>) -> String {
+    let mut summary = texts::review_summary(
+        item.subject.name().as_str(),
+        item.assignment.title().as_str(),
+        item.student.display_name().as_str(),
+        item.submission.attempt_number(),
+    );
+    if let (Some(late), Some(max_score)) = (late, item.assignment.grading().max_score()) {
+        summary.push('\n');
+        summary.push_str(&texts::late_submission_line(late, max_score));
+    }
+    summary
+}
+
 async fn send_previous_attempts(
     bot: &Bot,
     chat_id: ChatId,
@@ -128,7 +138,7 @@ pub(super) async fn submit_score_text(
     step: TextStep<'_>,
     submission_id: SubmissionId,
     max_score: u16,
-    penalty: u16,
+    late: Option<LatePenalty>,
 ) -> HandlerResult {
     let bot = step.bot();
     let message = step.message();
@@ -143,18 +153,15 @@ pub(super) async fn submit_score_text(
             .await?;
         return Ok(());
     };
-    confirm_score(bot, chat_id, score, penalty, max_score).await?;
     ask_review_comment(
         bot,
         chat_id,
         submission_id,
         ReviewDecision::Accept,
-        Some(score),
+        Some(Grade::new(score, max_score, late)),
         dialogue,
     )
-    .await?;
-
-    Ok(())
+    .await
 }
 
 pub(super) async fn submit_comment(
@@ -196,7 +203,7 @@ pub(super) async fn submit_comment(
             reset_dialogue(dialogue).await?;
             let saved = submission
                 .grade()
-                .map(|grade| format!("\n{}", texts::grade_saved(grade)))
+                .map(|grade| format!("\n{}", texts::grade_line(grade)))
                 .unwrap_or_default();
             bot.send_message(chat_id, format!("{}{saved}", texts::REVIEW_SAVED))
                 .reply_markup(teacher_keyboard())
@@ -257,7 +264,7 @@ pub(super) async fn handle_decision(
     let BotState::Flow(FlowState::AwaitingReviewDecision {
         submission_id,
         grading,
-        penalty,
+        late,
     }) = state
     else {
         return screen.stale().await;
@@ -272,7 +279,7 @@ pub(super) async fn handle_decision(
                 screen.chat_id(),
                 submission_id,
                 max_score,
-                penalty,
+                late,
                 screen.dialogue(),
             )
             .await
@@ -298,22 +305,19 @@ async fn ask_review_score(
     chat_id: ChatId,
     submission_id: SubmissionId,
     max_score: u16,
-    penalty: u16,
+    late: Option<LatePenalty>,
     dialogue: &BotDialogue,
 ) -> HandlerResult {
     dialogue
         .update(BotState::Flow(FlowState::AwaitingReviewScore {
             submission_id,
             max_score,
-            penalty,
+            late,
         }))
         .await?;
-    if penalty > 0 {
-        bot.send_message(chat_id, texts::late_penalty_notice(penalty))
-            .await?;
-    }
+    let question = texts::review_score_question(max_score, late);
     if max_score <= SCORE_BUTTONS_LIMIT {
-        bot.send_message(chat_id, texts::review_score_question(max_score))
+        bot.send_message(chat_id, question)
             .reply_markup(review_score_keyboard(submission_id, max_score))
             .await?;
         return Ok(());
@@ -321,11 +325,7 @@ async fn ask_review_score(
     ask_input(
         bot,
         chat_id,
-        &format!(
-            "{} {}",
-            texts::review_score_question(max_score),
-            texts::score_prompt(max_score)
-        ),
+        &format!("{question} {}", texts::score_prompt(max_score)),
     )
     .await
 }
@@ -335,33 +335,77 @@ async fn ask_review_comment(
     chat_id: ChatId,
     submission_id: SubmissionId,
     decision: ReviewDecision,
-    score: Option<u16>,
+    grade: Option<Grade>,
     dialogue: &BotDialogue,
 ) -> HandlerResult {
     dialogue
         .update(BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id,
             decision,
-            score,
+            score: grade.map(Grade::raw_score),
         }))
+        .await?;
+    bot.send_message(chat_id, texts::review_decision(decision, grade))
+        .reply_markup(review_decision_keyboard(submission_id))
         .await?;
     ask_input(bot, chat_id, texts::REVIEW_COMMENT_PROMPT).await
 }
 
-async fn confirm_score(
-    bot: &Bot,
-    chat_id: ChatId,
-    score: u16,
-    penalty: u16,
-    max_score: u16,
+pub(super) async fn change_decision(
+    screen: Screen<'_>,
+    telegram_user_id: TelegramUserId,
+    callback_submission_id: SubmissionId,
+    state: &BotState,
 ) -> HandlerResult {
-    if penalty > 0 {
-        bot.send_message(
-            chat_id,
-            texts::score_with_penalty(score, penalty, max_score),
-        )
+    let Some(submission_id) = state.awaiting_review_comment(callback_submission_id) else {
+        return screen.stale().await;
+    };
+    let item = match screen
+        .services()
+        .reviews
+        .find_for_review(screen.actor(), submission_id)
+        .await
+    {
+        Ok(item) => item,
+        Err(error)
+            if matches!(
+                error.code(),
+                ErrorCode::SubmissionAlreadyReviewed
+                    | ErrorCode::NotFound
+                    | ErrorCode::PermissionDenied
+            ) =>
+        {
+            reset_dialogue(screen.dialogue()).await?;
+            send_app_error(screen.bot(), screen.chat_id(), error).await?;
+            return show_home(screen.chat(), telegram_user_id).await;
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let late = item
+        .assignment
+        .late_penalty_at(item.submission.submitted_at());
+    screen
+        .dialogue()
+        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
+            submission_id,
+            grading: item.assignment.grading(),
+            late,
+        }))
         .await?;
-    }
+    screen
+        .bot()
+        .send_message(screen.chat_id(), texts::REVIEW_DECISION_RESET)
+        .reply_markup(teacher_keyboard())
+        .await?;
+    screen
+        .bot()
+        .send_message(screen.chat_id(), review_card_summary(&item, late))
+        .reply_markup(review_keyboard(
+            item.submission.id(),
+            item.assignment.teaching_course_id(),
+            item.student.id(),
+        ))
+        .await?;
     Ok(())
 }
 
@@ -374,7 +418,7 @@ pub(super) async fn handle_review_score(
     let BotState::Flow(FlowState::AwaitingReviewScore {
         submission_id,
         max_score,
-        penalty,
+        late,
     }) = state
     else {
         return screen.stale().await;
@@ -388,13 +432,12 @@ pub(super) async fn handle_review_score(
             return screen.ask(&texts::score_prompt(max_score)).await;
         }
     };
-    confirm_score(screen.bot(), screen.chat_id(), score, penalty, max_score).await?;
     ask_review_comment(
         screen.bot(),
         screen.chat_id(),
         submission_id,
         ReviewDecision::Accept,
-        Some(score),
+        Some(Grade::new(score, max_score, late)),
         screen.dialogue(),
     )
     .await

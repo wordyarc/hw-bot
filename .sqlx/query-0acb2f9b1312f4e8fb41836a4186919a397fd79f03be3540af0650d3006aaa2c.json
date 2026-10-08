@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with students_page as (\n            select id, display_name from users\n            where role = 'student' and student_group_id = $2\n              and ($5::uuid is null or id = $5)\n            order by display_name, id limit $3 offset $4\n        )\n        select\n            students.id as \"student_id!\",\n            students.display_name as \"display_name!\",\n            grades.id as \"assignment_id?\",\n            grades.title as \"assignment_title?\",\n            grades.max_score as \"max_score?\",\n            grades.work_score as \"work_score?\",\n            grades.course_total_penalty as \"course_total_penalty?\",\n            coalesce(totals.work_total, 0)::bigint as \"work_total!\",\n            coalesce(totals.penalty_total, 0)::bigint as \"penalty_total!\",\n            coalesce(totals.max_total, 0)::bigint as \"max_total!\"\n        from students_page students\n        cross join lateral (\n            select sum(s.work_score) as work_total,\n                   sum(s.course_total_penalty) as penalty_total,\n                   sum(coalesce(s.grade_max_score, a.max_score)) as max_total\n            from assignments a\n            left join submissions s on s.assignment_id = a.id\n                and s.student_id = students.id and s.status = 'accepted'\n            where a.teaching_course_id = $1 and a.published_at is not null\n        ) totals\n        left join lateral (\n            select a.id, a.title, a.deadline_at,\n                   coalesce(s.grade_max_score, a.max_score) as max_score, s.work_score,\n                   s.course_total_penalty\n            from assignments a\n            left join submissions s on s.assignment_id = a.id\n                and s.student_id = students.id and s.status = 'accepted'\n            where a.teaching_course_id = $1 and a.published_at is not null\n              and coalesce(s.grade_max_score, a.max_score) is not null\n            order by a.deadline_at, a.id limit $6 offset $7\n        ) grades on true\n        order by students.display_name, students.id, grades.deadline_at, grades.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "student_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "assignment_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "assignment_title?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "max_score?",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "work_score?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "work_score"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "course_total_penalty?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "course_total_penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "work_total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "penalty_total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "max_total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0acb2f9b1312f4e8fb41836a4186919a397fd79f03be3540af0650d3006aaa2c"
+}

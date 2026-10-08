@@ -1,15 +1,16 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use hw_bot::bot::callbacks;
+use hw_bot::bot::{callbacks, texts};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, Submission};
+use hw_bot::domain::{Assignment, DeductedFrom, Submission, SubmissionId, SubmissionStatus};
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, method, path};
 
-use crate::harness::TestApp;
 use crate::harness::telegram::*;
+use crate::harness::telegram_scenario::TelegramScenario;
+use crate::harness::{TestApp, submission_id};
 
 async fn delayed_submission(
     app: &TestApp,
@@ -117,5 +118,100 @@ async fn student_opens_a_previously_published_assignment_from_the_archive() {
         !callbacks
             .iter()
             .any(|callback| callback.starts_with(callbacks::SUBMIT_PREFIX))
+    );
+}
+
+#[tokio::test]
+async fn the_history_shows_a_penalty_to_the_course_total_next_to_the_work_score() {
+    let app = TestApp::start().await;
+    let assignment = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    app.review_with_score(submission, app.teacher(), "accept", 8, "Ок")
+        .await
+        .ok();
+    let grade = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
+        .await
+        .unwrap()
+        .unwrap()
+        .grade()
+        .unwrap();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
+        )
+        .await;
+    let history = telegram
+        .button_with_text(app.student(), texts::BUTTON_HISTORY)
+        .await;
+    telegram.click(app.student(), &history);
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent: Vec<String> = telegram
+        .messages(app.student())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    let header = texts::history_header(
+        app.fixture.subject.name().as_str(),
+        assignment.title().as_str(),
+    );
+    let opened = sent
+        .iter()
+        .position(|text| *text == header)
+        .unwrap_or_else(|| panic!("the history was not opened: {sent:#?}"));
+    let attempt = texts::attempt_line(
+        1,
+        texts::submission_status(SubmissionStatus::Accepted),
+        Some(&texts::grade_line(grade)),
+    );
+    assert!(sent[opened..].contains(&attempt), "{sent:#?}");
+    assert_eq!(grade.deducted_from(), Some(DeductedFrom::CourseTotal));
+    assert_eq!((grade.work_score(), grade.course_total_penalty()), (8, 4));
+}
+
+#[tokio::test]
+async fn the_assignment_card_names_a_penalty_to_the_course_total() {
+    let app = TestApp::start().await;
+    let assignment = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let deducted_from = texts::deducted_from_line(DeductedFrom::CourseTotal);
+    let sent: Vec<String> = telegram
+        .messages(app.student())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    let card = sent
+        .iter()
+        .find(|text| text.contains(&deducted_from))
+        .unwrap_or_else(|| panic!("the card does not name the deducted_from: {sent:#?}"));
+    assert!(card.contains(assignment.title().as_str()), "{card}");
+    assert!(
+        card.contains(&format!("{} −4", texts::LATE_PENALTY_LABEL)),
+        "{card}"
     );
 }

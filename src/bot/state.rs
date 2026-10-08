@@ -5,8 +5,8 @@ use teloxide::types::MessageId;
 use super::assignment_form::{AssignmentText, DraftAssignment, InputMode, TermsForm, TermsStep};
 use super::views::MenuAction;
 use crate::domain::{
-    AssignmentId, Grading, InviteGeneration, ReviewDecision, StoredFileId, SubmissionId,
-    TeachingCourseId, TelegramUserId, UserId,
+    AssignmentId, Grading, InviteGeneration, LatePenalty, ReviewDecision, StoredFileId,
+    SubmissionId, TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::invites::VerifiedInvite;
 
@@ -116,6 +116,19 @@ impl BotState {
     }
 
     /// ID студента принимается только из показанного списка, чтобы отсечь чужие кнопки.
+    pub(super) fn awaiting_review_comment(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Option<SubmissionId> {
+        match self {
+            Self::Flow(FlowState::AwaitingReviewComment {
+                submission_id: current,
+                ..
+            }) if *current == submission_id => Some(submission_id),
+            _ => None,
+        }
+    }
+
     pub(super) fn choosing_student(
         &self,
         message_id: MessageId,
@@ -244,12 +257,12 @@ pub(super) enum FlowState {
     AwaitingReviewDecision {
         submission_id: SubmissionId,
         grading: Grading,
-        penalty: u16,
+        late: Option<LatePenalty>,
     },
     AwaitingReviewScore {
         submission_id: SubmissionId,
         max_score: u16,
-        penalty: u16,
+        late: Option<LatePenalty>,
     },
     AwaitingReviewComment {
         submission_id: SubmissionId,
@@ -349,6 +362,30 @@ mod tests {
         );
         assert!(state.managing_assignment(MessageId(11), current).is_none());
         assert!(state.managing_assignment(MessageId(10), other).is_none());
+    }
+
+    #[test]
+    fn changing_a_decision_requires_the_comment_step_of_the_same_submission() {
+        let current = SubmissionId::new();
+        let other = SubmissionId::new();
+        let state = BotState::Flow(FlowState::AwaitingReviewComment {
+            submission_id: current,
+            decision: ReviewDecision::Accept,
+            score: Some(4),
+        });
+
+        assert_eq!(state.awaiting_review_comment(current), Some(current));
+        assert!(state.awaiting_review_comment(other).is_none());
+        assert!(BotState::Idle.awaiting_review_comment(current).is_none());
+        assert!(
+            BotState::Flow(FlowState::AwaitingReviewDecision {
+                submission_id: current,
+                grading: Grading::PassFail,
+                late: None,
+            })
+            .awaiting_review_comment(current)
+            .is_none()
+        );
     }
 
     #[test]

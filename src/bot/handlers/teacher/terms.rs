@@ -154,7 +154,7 @@ pub(crate) async fn handle_late_policy(
     let Some(mut form) = state.terms_form(message_id, TermsStep::Policy) else {
         return screen.stale().await;
     };
-    let result = form.choose_policy(choice == LatePolicyChoice::Penalty);
+    let result = form.choose_policy(choice.deducted_from());
     render_input_result(screen, form, result).await
 }
 

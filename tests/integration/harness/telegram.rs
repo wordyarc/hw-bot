@@ -684,7 +684,7 @@ pub(crate) async fn wait_for_review_result(
 ) -> Option<(String, Option<i16>, Option<i16>)> {
     wait_for_some(Duration::from_secs(5), || async {
         sqlx::query_as::<_, (String, Option<i16>, Option<i16>)>(
-            "select status, raw_score, final_score from submissions where id = $1 and status <> 'pending_review'",
+            "select status, raw_score, work_score from submissions where id = $1 and status <> 'pending_review'",
         )
         .bind(submission)
         .fetch_optional(pool)

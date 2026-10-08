@@ -77,7 +77,13 @@ pub(crate) async fn show_student_grades_page(
         .await?;
 
     let mut lines = vec![
-        texts::grades_header(&student.display_name, student.total(), student.max_total()),
+        texts::grades_header(
+            &student.display_name,
+            student.work_total(),
+            student.penalty_total(),
+            student.total(),
+            student.max_total(),
+        ),
         String::new(),
     ];
     if student.grades.is_empty() {
@@ -85,9 +91,14 @@ pub(crate) async fn show_student_grades_page(
     }
     for grade in &student.grades {
         let score = grade
-            .final_score
-            .map_or_else(|| "—".to_owned(), |score| score.to_string());
-        lines.push(texts::grade_entry(&grade.title, &score, grade.max_score));
+            .score
+            .map_or_else(|| "—".to_owned(), |score| score.work_score.to_string());
+        lines.push(texts::grade_entry(
+            &grade.title,
+            &score,
+            grade.max_score,
+            grade.score.map_or(0, |score| score.course_total_penalty),
+        ));
     }
     let text = lines.join("\n");
 
@@ -104,4 +115,36 @@ pub(crate) async fn show_student_grades_page(
         )),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bot::texts;
+
+    #[test]
+    fn the_card_shows_sums_and_penalties_only_when_some_go_to_the_total() {
+        let with_penalties = texts::grades_header("Student", 14, 4, 10, 20);
+        let without_penalties = texts::grades_header("Student", 14, 0, 14, 20);
+
+        assert!(with_penalties.contains("14"), "{with_penalties}");
+        assert!(with_penalties.contains("−4"), "{with_penalties}");
+        assert!(with_penalties.contains("10 из 20"), "{with_penalties}");
+        assert!(
+            without_penalties.contains("14 из 20"),
+            "{without_penalties}"
+        );
+        assert!(!without_penalties.contains('−'), "{without_penalties}");
+        assert!(without_penalties.lines().count() < with_penalties.lines().count());
+    }
+
+    #[test]
+    fn an_assignment_line_names_only_a_penalty_to_the_total() {
+        let to_total = texts::grade_entry("Ownership", "8", 10, 4);
+        let to_work = texts::grade_entry("Traits", "4", 10, 0);
+
+        assert!(to_total.contains("8 из 10"), "{to_total}");
+        assert!(to_total.contains("−4"), "{to_total}");
+        assert!(to_work.contains("4 из 10"), "{to_work}");
+        assert!(!to_work.contains('−'), "{to_work}");
+    }
 }

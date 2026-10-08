@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 use hw_bot::app::{Actor, ReviewSandbox};
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, ReviewDecision, Submission, SubmissionId, SubmissionStatus, User,
+    Assignment, DeductedFrom, ReviewDecision, Submission, SubmissionId, SubmissionStatus, User,
 };
 use hw_bot::test_support::assignment;
 use serde_json::json;
@@ -192,7 +192,7 @@ async fn bulk_acceptance_gives_the_maximum_minus_the_late_penalty() {
         .created_at(Utc::now() - Duration::days(2))
         .deadline_at(Utc::now() - Duration::hours(12))
         .scored(10)
-        .late_policy(1, 2, 4)
+        .late_policy(1, 2, 4, DeductedFrom::WorkScore)
         .published()
         .build();
     db::assignments::insert(&app.pool, &late)
@@ -207,17 +207,19 @@ async fn bulk_acceptance_gives_the_maximum_minus_the_late_penalty() {
         .grade()
         .expect("a scored acceptance has a grade");
     assert_eq!(
-        (grade.raw_score(), grade.penalty(), grade.final_score()),
+        (grade.raw_score(), grade.penalty(), grade.work_score()),
         (10, 2, 8)
     );
-    let notified: (Option<i16>, Option<i16>) = sqlx::query_as(
-        "select final_score, max_score from review_notification_outbox where submission_id = $1",
+    let notified = db::notifications::claim_next(
+        &app.pool,
+        Utc::now(),
+        Uuid::new_v4(),
+        Utc::now() + Duration::seconds(10),
     )
-    .bind(submission)
-    .fetch_one(&app.pool)
     .await
-    .expect("read notification");
-    assert_eq!(notified, (Some(8), Some(10)));
+    .expect("claim notification")
+    .expect("notification is enqueued");
+    assert_eq!(notified.grade, Some(grade));
 }
 
 #[tokio::test]

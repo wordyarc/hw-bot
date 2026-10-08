@@ -3,7 +3,9 @@ use chrono::NaiveDate;
 use uuid::Uuid;
 
 use super::handlers::input::parse_u16;
-use crate::domain::{AssignmentId, ReviewDecision, SubmissionId, TeachingCourseId, UserId};
+use crate::domain::{
+    AssignmentId, DeductedFrom, ReviewDecision, SubmissionId, TeachingCourseId, UserId,
+};
 
 use CallbackAction::{Flow, Informational, Replayable, Screen};
 
@@ -35,6 +37,7 @@ pub const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
 pub const GRADING_PREFIX: &str = "grading:";
 pub const REVIEW_SCORE_PREFIX: &str = "reviewscore:";
 pub const LATE_POLICY_PREFIX: &str = "late:";
+const STRICT_LATE_POLICY: &str = "none";
 pub const PENALTY_PREFIX: &str = "penalty:";
 pub const PENALTY_PERIOD: &str = "penalty:period";
 pub const TERMS_SAVE: &str = "terms:save";
@@ -65,6 +68,7 @@ pub const INVITE_CANCEL_ROTATE: &str = "invite:cancel-rotate";
 pub const REVIEW_ACCEPT_PREFIX: &str = "review:accept:";
 pub const REVIEW_REJECT_PREFIX: &str = "review:reject:";
 pub const REVIEW_OPEN_PREFIX: &str = "review:open:";
+pub const REVIEW_CHANGE_PREFIX: &str = "review:change:";
 pub const SANDBOX_ACCEPT_ALL: &str = "sandbox:accept-all";
 pub const SANDBOX_REJECT_ALL: &str = "sandbox:reject-all";
 
@@ -272,6 +276,7 @@ pub(super) enum FlowAction {
         decision: ReviewDecision,
         submission_id: SubmissionId,
     },
+    ChangeReviewDecision(SubmissionId),
     MaxAttempts(AmountChoice),
     Grading(GradingChoice),
     LatePolicy(LatePolicyChoice),
@@ -307,8 +312,25 @@ pub(super) enum GradingChoice {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum LatePolicyChoice {
-    None,
-    Penalty,
+    Strict,
+    Penalty(DeductedFrom),
+}
+
+impl LatePolicyChoice {
+    pub fn callback(self) -> String {
+        let value = match self {
+            Self::Strict => STRICT_LATE_POLICY,
+            Self::Penalty(deducted_from) => deducted_from.as_str(),
+        };
+        format!("{LATE_POLICY_PREFIX}{value}")
+    }
+
+    pub fn deducted_from(self) -> Option<DeductedFrom> {
+        match self {
+            Self::Strict => None,
+            Self::Penalty(deducted_from) => Some(deducted_from),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -444,6 +466,11 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
             submission_id: SubmissionId::from_uuid(id),
         })
     }),
+    (REVIEW_CHANGE_PREFIX, |id| {
+        Flow(FlowAction::ChangeReviewDecision(SubmissionId::from_uuid(
+            id,
+        )))
+    }),
     (STUDENT_PREFIX, |id| {
         Flow(FlowAction::SelectStudent(UserId::from_uuid(id)))
     }),
@@ -514,11 +541,9 @@ fn parse_grading(data: &str) -> Option<GradingChoice> {
 }
 
 fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
-    let value = data.strip_prefix(LATE_POLICY_PREFIX)?;
-    match value {
-        "none" => Some(LatePolicyChoice::None),
-        "penalty" => Some(LatePolicyChoice::Penalty),
-        _ => None,
+    match data.strip_prefix(LATE_POLICY_PREFIX)? {
+        STRICT_LATE_POLICY => Some(LatePolicyChoice::Strict),
+        value => DeductedFrom::parse_str(value).map(LatePolicyChoice::Penalty),
     }
 }
 
@@ -691,13 +716,16 @@ mod tests {
             ("sandbox:accept-all".to_owned(), "screen"),
             ("sandbox:reject-all".to_owned(), "screen"),
             (format!("review:accept:{submission}"), "flow"),
+            (format!("review:change:{submission}"), "flow"),
             ("maxattempts:3".to_owned(), "flow"),
             ("grading:passfail".to_owned(), "flow"),
             ("grading:5".to_owned(), "flow"),
             ("grading:manual".to_owned(), "flow"),
             (format!("reviewscore:{submission}:0"), "flow"),
             ("late:none".to_owned(), "flow"),
-            ("late:penalty".to_owned(), "flow"),
+            ("late:work_score".to_owned(), "flow"),
+            ("late:course_total".to_owned(), "flow"),
+            ("late:penalty".to_owned(), "invalid"),
             ("late:7:1:4".to_owned(), "invalid"),
             ("late:manual".to_owned(), "invalid"),
             (format!("{PENALTY_PREFIX}1"), "flow"),
@@ -725,6 +753,48 @@ mod tests {
             };
             assert_eq!(actual, expected, "{data}");
         }
+    }
+
+    #[test]
+    fn changing_a_review_decision_is_a_flow_step_of_its_submission() {
+        let submission_id = SubmissionId::new();
+        let data = format!("{REVIEW_CHANGE_PREFIX}{}", submission_id.as_uuid());
+
+        assert_eq!(data.len(), 50);
+        assert_eq!(
+            parse(&data),
+            Some(CallbackAction::Flow(FlowAction::ChangeReviewDecision(
+                submission_id
+            )))
+        );
+        assert_eq!(parse(&format!("{REVIEW_CHANGE_PREFIX}not-a-uuid")), None);
+    }
+
+    #[test]
+    fn late_policy_choices_name_the_deduction_and_drop_the_old_penalty_choice() {
+        for (choice, data) in [
+            (LatePolicyChoice::Strict, "late:none"),
+            (
+                LatePolicyChoice::Penalty(DeductedFrom::WorkScore),
+                "late:work_score",
+            ),
+            (
+                LatePolicyChoice::Penalty(DeductedFrom::CourseTotal),
+                "late:course_total",
+            ),
+        ] {
+            assert_eq!(choice.callback(), data);
+            assert_eq!(
+                parse(data),
+                Some(CallbackAction::Flow(FlowAction::LatePolicy(choice)))
+            );
+        }
+        assert_eq!(parse("late:penalty"), None);
+        assert_eq!(LatePolicyChoice::Strict.deducted_from(), None);
+        assert_eq!(
+            LatePolicyChoice::Penalty(DeductedFrom::CourseTotal).deducted_from(),
+            Some(DeductedFrom::CourseTotal)
+        );
     }
 
     #[test]

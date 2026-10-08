@@ -8,11 +8,12 @@ use uuid::Uuid;
 use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    AssignmentId, DomainError, Role, StudentGroupId, Submission, SubmissionHistory, SubmissionId,
-    SubmissionParts, SubmissionStatus, TeachingCourseId, User, UserId,
+    AssignmentId, DeductedFrom, DomainError, GradeParts, Role, StudentGroupId, Submission,
+    SubmissionHistory, SubmissionId, SubmissionParts, SubmissionStatus, TeachingCourseId, User,
+    UserId,
 };
 use crate::pagination::PageRequest;
-use crate::read_models::{AssignmentGrade, QueuePlace, SandboxSubmission};
+use crate::read_models::{AssignmentGrade, GradebookScore, QueuePlace, SandboxSubmission};
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const STATUS: &str = "submissions.status";
@@ -20,28 +21,27 @@ const RAW_SCORE: &str = "submissions.raw_score";
 const GRADE_MAX_SCORE: &str = "submissions.grade_max_score";
 const LATE_PERIODS: &str = "submissions.late_periods";
 const PENALTY: &str = "submissions.penalty";
-const FINAL_SCORE: &str = "submissions.final_score";
+const PENALTY_DEDUCTED_FROM: &str = "submissions.penalty_deducted_from";
+const WORK_SCORE: &str = "submissions.work_score";
+const COURSE_TOTAL_PENALTY: &str = "submissions.course_total_penalty";
 const MAX_SCORE: &str = "assignments.max_score";
 
 /// Все поля оценки сохраняются и восстанавливаются вместе.
-struct GradeColumns {
-    raw_score: Option<i16>,
-    max_score: Option<i16>,
-    late_periods: Option<i32>,
-    penalty: Option<i16>,
-    final_score: Option<i16>,
+#[derive(Default)]
+pub(super) struct GradeColumns {
+    pub raw_score: Option<i16>,
+    pub max_score: Option<i16>,
+    pub late_periods: Option<i32>,
+    pub penalty: Option<i16>,
+    pub penalty_deducted_from: Option<String>,
+    pub work_score: Option<i16>,
+    pub course_total_penalty: Option<i16>,
 }
 
 impl GradeColumns {
     fn of(submission: &Submission) -> DbResult<Self> {
         let Some(grade) = submission.grade() else {
-            return Ok(Self {
-                raw_score: None,
-                max_score: None,
-                late_periods: None,
-                penalty: None,
-                final_score: None,
-            });
+            return Ok(Self::default());
         };
 
         Ok(Self {
@@ -49,7 +49,35 @@ impl GradeColumns {
             max_score: Some(checked_num_cast(GRADE_MAX_SCORE, grade.max_score())?),
             late_periods: Some(checked_num_cast(LATE_PERIODS, grade.late_periods())?),
             penalty: Some(checked_num_cast(PENALTY, grade.penalty())?),
-            final_score: Some(checked_num_cast(FINAL_SCORE, grade.final_score())?),
+            penalty_deducted_from: grade
+                .deducted_from()
+                .map(|deducted_from| deducted_from.as_str().to_owned()),
+            work_score: Some(checked_num_cast(WORK_SCORE, grade.work_score())?),
+            course_total_penalty: Some(checked_num_cast(
+                COURSE_TOTAL_PENALTY,
+                grade.course_total_penalty(),
+            )?),
+        })
+    }
+
+    pub(super) fn parts(self) -> DbResult<GradeParts> {
+        Ok(GradeParts {
+            raw_score: cast_score(RAW_SCORE, self.raw_score)?,
+            max_score: cast_score(GRADE_MAX_SCORE, self.max_score)?,
+            late_periods: self
+                .late_periods
+                .map(|value| checked_num_cast(LATE_PERIODS, value))
+                .transpose()?,
+            penalty: cast_score(PENALTY, self.penalty)?,
+            deducted_from: self
+                .penalty_deducted_from
+                .map(|value| {
+                    DeductedFrom::parse_str(&value)
+                        .ok_or_else(|| DbError::invalid_value(PENALTY_DEDUCTED_FROM, value))
+                })
+                .transpose()?,
+            work_score: cast_score(WORK_SCORE, self.work_score)?,
+            course_total_penalty: cast_score(COURSE_TOTAL_PENALTY, self.course_total_penalty)?,
         })
     }
 }
@@ -62,7 +90,7 @@ macro_rules! select_submissions {
             select
                 id, assignment_id, student_id, attempt_number, content, status, submitted_at,
                 reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
-                penalty, final_score
+                penalty, penalty_deducted_from, work_score, course_total_penalty
             from submissions
             "# + $tail
             $(, $arg)*
@@ -92,9 +120,9 @@ where
         insert into submissions (
             id, assignment_id, student_id, attempt_number, content, status, submitted_at,
             reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
-            penalty, final_score
+            penalty, penalty_deducted_from, work_score, course_total_penalty
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
         submission.id().as_uuid(),
         submission.assignment_id().as_uuid(),
@@ -110,7 +138,9 @@ where
         grade.max_score,
         grade.late_periods,
         grade.penalty,
-        grade.final_score,
+        grade.penalty_deducted_from,
+        grade.work_score,
+        grade.course_total_penalty,
     )
     .execute(executor)
     .await?;
@@ -142,7 +172,9 @@ where
             grade_max_score = $7,
             late_periods = $8,
             penalty = $9,
-            final_score = $10
+            penalty_deducted_from = $10,
+            work_score = $11,
+            course_total_penalty = $12
         where id = $1
           and status = 'pending_review'
         "#,
@@ -155,7 +187,9 @@ where
         grade.max_score,
         grade.late_periods,
         grade.penalty,
-        grade.final_score,
+        grade.penalty_deducted_from,
+        grade.work_score,
+        grade.course_total_penalty,
     )
     .execute(executor)
     .await?;
@@ -266,7 +300,8 @@ pub struct CourseGradeRow {
     pub student_id: UserId,
     pub display_name: String,
     pub assignment: Option<AssignmentGrade>,
-    pub total: u32,
+    pub work_total: u32,
+    pub penalty_total: u32,
     pub max_total: u32,
 }
 
@@ -333,12 +368,15 @@ where
             grades.id as "assignment_id?",
             grades.title as "assignment_title?",
             grades.max_score as "max_score?",
-            grades.final_score as "final_score?",
-            coalesce(totals.total, 0)::bigint as "total!",
+            grades.work_score as "work_score?",
+            grades.course_total_penalty as "course_total_penalty?",
+            coalesce(totals.work_total, 0)::bigint as "work_total!",
+            coalesce(totals.penalty_total, 0)::bigint as "penalty_total!",
             coalesce(totals.max_total, 0)::bigint as "max_total!"
         from students_page students
         cross join lateral (
-            select sum(s.final_score) as total,
+            select sum(s.work_score) as work_total,
+                   sum(s.course_total_penalty) as penalty_total,
                    sum(coalesce(s.grade_max_score, a.max_score)) as max_total
             from assignments a
             left join submissions s on s.assignment_id = a.id
@@ -347,7 +385,8 @@ where
         ) totals
         left join lateral (
             select a.id, a.title, a.deadline_at,
-                   coalesce(s.grade_max_score, a.max_score) as max_score, s.final_score
+                   coalesce(s.grade_max_score, a.max_score) as max_score, s.work_score,
+                   s.course_total_penalty
             from assignments a
             left join submissions s on s.assignment_id = a.id
                 and s.student_id = students.id and s.status = 'accepted'
@@ -374,7 +413,19 @@ where
                 assignment_id: AssignmentId::from_uuid(id),
                 title,
                 max_score: checked_num_cast(MAX_SCORE, max_score)?,
-                final_score: cast_score(FINAL_SCORE, row.final_score)?,
+                score: row
+                    .work_score
+                    .zip(row.course_total_penalty)
+                    .map(|(work_score, course_total_penalty)| {
+                        Ok::<_, DbError>(GradebookScore {
+                            work_score: checked_num_cast(WORK_SCORE, work_score)?,
+                            course_total_penalty: checked_num_cast(
+                                COURSE_TOTAL_PENALTY,
+                                course_total_penalty,
+                            )?,
+                        })
+                    })
+                    .transpose()?,
             }),
             _ => None,
         };
@@ -383,7 +434,8 @@ where
             student_id: UserId::from_uuid(row.student_id),
             display_name: row.display_name,
             assignment,
-            total: checked_num_cast("gradebook.total", row.total)?,
+            work_total: checked_num_cast("gradebook.work_total", row.work_total)?,
+            penalty_total: checked_num_cast("gradebook.penalty_total", row.penalty_total)?,
             max_total: checked_num_cast("gradebook.max_total", row.max_total)?,
         })
     })
@@ -583,7 +635,8 @@ pub async fn lock_next_pending_for_reviewer(
             submissions.attempt_number, submissions.content, submissions.status,
             submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
             submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
-            submissions.late_periods, submissions.penalty, submissions.final_score
+            submissions.late_periods, submissions.penalty, submissions.penalty_deducted_from,
+            submissions.work_score, submissions.course_total_penalty
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
@@ -653,7 +706,8 @@ pub async fn lock_sandbox_for_reviewer(
             submissions.attempt_number, submissions.content, submissions.status,
             submissions.submitted_at, submissions.reviewed_by, submissions.reviewed_at,
             submissions.review_comment, submissions.raw_score, submissions.grade_max_score,
-            submissions.late_periods, submissions.penalty, submissions.final_score
+            submissions.late_periods, submissions.penalty, submissions.penalty_deducted_from,
+            submissions.work_score, submissions.course_total_penalty
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
@@ -686,7 +740,9 @@ struct SubmissionRow {
     grade_max_score: Option<i16>,
     late_periods: Option<i32>,
     penalty: Option<i16>,
-    final_score: Option<i16>,
+    penalty_deducted_from: Option<String>,
+    work_score: Option<i16>,
+    course_total_penalty: Option<i16>,
 }
 
 fn cast_score(column: &'static str, value: Option<i16>) -> DbResult<Option<u16>> {
@@ -714,14 +770,16 @@ impl TryFrom<SubmissionRow> for Submission {
             reviewed_by: row.reviewed_by.map(UserId::from_uuid),
             reviewed_at: row.reviewed_at,
             review_comment: row.review_comment,
-            raw_score: cast_score(RAW_SCORE, row.raw_score)?,
-            grade_max_score: cast_score(GRADE_MAX_SCORE, row.grade_max_score)?,
-            late_periods: row
-                .late_periods
-                .map(|value| checked_num_cast(LATE_PERIODS, value))
-                .transpose()?,
-            penalty: cast_score(PENALTY, row.penalty)?,
-            final_score: cast_score(FINAL_SCORE, row.final_score)?,
+            grade: GradeColumns {
+                raw_score: row.raw_score,
+                max_score: row.grade_max_score,
+                late_periods: row.late_periods,
+                penalty: row.penalty,
+                penalty_deducted_from: row.penalty_deducted_from,
+                work_score: row.work_score,
+                course_total_penalty: row.course_total_penalty,
+            }
+            .parts()?,
         })?)
     }
 }

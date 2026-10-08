@@ -3,16 +3,15 @@ use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
 use super::error::ensure_updated;
+use super::submissions::GradeColumns;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    Assignment, Subject, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User,
+    Assignment, Grade, Subject, Submission, SubmissionId, SubmissionStatus, TelegramUserId, User,
 };
 use crate::string_enum::str_enum;
 
 const ATTEMPT_COUNT: &str = "review_notification_outbox.attempt_count";
 const OUTCOME: &str = "review_notification_outbox.outcome";
-const FINAL_SCORE: &str = "review_notification_outbox.final_score";
-const MAX_SCORE: &str = "review_notification_outbox.max_score";
 const LOST_LEASE: DbError = DbError::Conflict {
     message: "notification lease is no longer owned by this worker",
 };
@@ -35,8 +34,7 @@ pub struct ClaimedReviewNotification {
     pub assignment_title: String,
     pub outcome: ReviewOutcome,
     pub review_comment: String,
-    pub final_score: Option<u16>,
-    pub max_score: Option<u16>,
+    pub grade: Option<Grade>,
     pub attempt_count: u32,
     pub lease_token: Uuid,
 }
@@ -82,24 +80,13 @@ where
         message: "reviewed submission has no comment",
     })?;
 
-    // Сохраняем балл и предмет в уведомлении. Последующая правка шкалы не должна менять доставку.
-    let score = submission
-        .grade()
-        .map(|grade| {
-            Ok::<_, DbError>((
-                checked_num_cast::<_, i16>(FINAL_SCORE, grade.final_score())?,
-                checked_num_cast::<_, i16>(MAX_SCORE, grade.max_score())?,
-            ))
-        })
-        .transpose()?;
-
     sqlx::query!(
         r#"
         insert into review_notification_outbox (
             submission_id, recipient_telegram_user_id, subject_name, assignment_title, outcome,
-            review_comment, final_score, max_score
+            review_comment
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        values ($1, $2, $3, $4, $5, $6)
         "#,
         submission.id().as_uuid(),
         student.telegram_user_id().as_i64(),
@@ -107,8 +94,6 @@ where
         assignment.title().as_str(),
         outcome.as_str(),
         review_comment.as_str(),
-        score.map(|(final_score, _)| final_score),
-        score.map(|(_, max_score)| max_score),
     )
     .execute(executor)
     .await?;
@@ -144,8 +129,9 @@ where
             lease_token = $2,
             lease_expires_at = $3,
             attempt_count = notification.attempt_count + 1
-        from next_notification
+        from next_notification, submissions
         where notification.id = next_notification.id
+          and submissions.id = notification.submission_id
         returning
             notification.id,
             notification.submission_id,
@@ -154,8 +140,13 @@ where
             notification.assignment_title,
             notification.outcome,
             notification.review_comment,
-            notification.final_score,
-            notification.max_score,
+            submissions.raw_score,
+            submissions.grade_max_score,
+            submissions.late_periods,
+            submissions.penalty,
+            submissions.penalty_deducted_from,
+            submissions.work_score,
+            submissions.course_total_penalty,
             notification.attempt_count,
             notification.lease_token as "lease_token!"
         "#,
@@ -270,8 +261,13 @@ struct ClaimedReviewNotificationRow {
     assignment_title: String,
     outcome: String,
     review_comment: String,
-    final_score: Option<i16>,
-    max_score: Option<i16>,
+    raw_score: Option<i16>,
+    grade_max_score: Option<i16>,
+    late_periods: Option<i32>,
+    penalty: Option<i16>,
+    penalty_deducted_from: Option<String>,
+    work_score: Option<i16>,
+    course_total_penalty: Option<i16>,
     attempt_count: i32,
     lease_token: Uuid,
 }
@@ -291,14 +287,18 @@ impl TryFrom<ClaimedReviewNotificationRow> for ClaimedReviewNotification {
             assignment_title: row.assignment_title,
             outcome,
             review_comment: row.review_comment,
-            final_score: row
-                .final_score
-                .map(|value| checked_num_cast(FINAL_SCORE, value))
-                .transpose()?,
-            max_score: row
-                .max_score
-                .map(|value| checked_num_cast(MAX_SCORE, value))
-                .transpose()?,
+            grade: Grade::restore(
+                GradeColumns {
+                    raw_score: row.raw_score,
+                    max_score: row.grade_max_score,
+                    late_periods: row.late_periods,
+                    penalty: row.penalty,
+                    penalty_deducted_from: row.penalty_deducted_from,
+                    work_score: row.work_score,
+                    course_total_penalty: row.course_total_penalty,
+                }
+                .parts()?,
+            )?,
             attempt_count: checked_num_cast(ATTEMPT_COUNT, row.attempt_count)?,
             lease_token: row.lease_token,
         })

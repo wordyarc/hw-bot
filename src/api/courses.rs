@@ -52,7 +52,9 @@ pub struct CourseGradebookResponse {
 pub struct StudentGradesResponse {
     student_id: Uuid,
     display_name: String,
-    total: u32,
+    work_total: u32,
+    penalty_total: u32,
+    total: i64,
     max_total: u32,
     grades: Vec<AssignmentGradeResponse>,
     grade_page: u32,
@@ -64,7 +66,8 @@ struct AssignmentGradeResponse {
     assignment_id: Uuid,
     title: String,
     max_score: u16,
-    final_score: Option<u16>,
+    work_score: Option<u16>,
+    course_total_penalty: Option<u16>,
 }
 
 impl From<&Page<StudentGrades>> for CourseGradebookResponse {
@@ -80,6 +83,8 @@ impl From<&StudentGrades> for StudentGradesResponse {
         Self {
             student_id: student.student_id.as_uuid(),
             display_name: student.display_name.clone(),
+            work_total: student.work_total(),
+            penalty_total: student.penalty_total(),
             total: student.total(),
             max_total: student.max_total(),
             grade_page: student.grade_page,
@@ -91,7 +96,8 @@ impl From<&StudentGrades> for StudentGradesResponse {
                     assignment_id: grade.assignment_id.as_uuid(),
                     title: grade.title.clone(),
                     max_score: grade.max_score,
-                    final_score: grade.final_score,
+                    work_score: grade.score.map(|score| score.work_score),
+                    course_total_penalty: grade.score.map(|score| score.course_total_penalty),
                 })
                 .collect(),
         }

@@ -13,6 +13,7 @@ use super::{DeliveryFailure, delivery_failure, request_error_kind};
 use crate::bot::texts;
 use crate::db::notifications::ReviewOutcome;
 use crate::db::{self, DbError};
+use crate::domain::Grade;
 use crate::health::ComponentHealth;
 
 #[derive(Clone, Debug)]
@@ -78,7 +79,7 @@ impl NotificationWorker {
             notification.outcome,
             &notification.subject_name,
             &notification.assignment_title,
-            notification.final_score.zip(notification.max_score),
+            notification.grade,
             &notification.review_comment,
         );
 
@@ -222,7 +223,7 @@ fn render_review_notification(
     outcome: ReviewOutcome,
     subject_name: &str,
     assignment_title: &str,
-    score: Option<(u16, u16)>,
+    grade: Option<Grade>,
     review_comment: &str,
 ) -> String {
     let verdict = match outcome {
@@ -233,7 +234,7 @@ fn render_review_notification(
         verdict,
         subject_name,
         assignment_title,
-        score,
+        grade,
         review_comment,
     );
 
@@ -265,6 +266,7 @@ fn after(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{DeductedFrom, LatePenalty, LatePolicy};
 
     #[test]
     fn review_message_is_bounded_by_telegram_limit() {
@@ -294,33 +296,55 @@ mod tests {
         assert!(message.contains("Ownership"), "{message}");
     }
 
-    #[test]
-    fn an_accepted_scored_review_names_the_score() {
-        let message = render_review_notification(
+    fn accepted(grade: Option<Grade>) -> String {
+        render_review_notification(
             ReviewOutcome::Accepted,
             "Backend development",
             "Ownership",
-            Some((4, 5)),
+            grade,
             "Хорошо",
-        );
+        )
+    }
 
-        assert!(message.contains(&texts::score_line(4, 5)), "{message}");
+    fn late_by_one_period(deducted_from: DeductedFrom) -> Option<LatePenalty> {
+        LatePolicy::new(7, 4, 4, deducted_from)
+            .unwrap()
+            .late_penalty(1)
+    }
+
+    #[test]
+    fn an_accepted_scored_review_names_the_score() {
+        let grade = Grade::new(4, 5, None);
+        let message = accepted(Some(grade));
+
+        assert!(message.contains(&texts::grade_line(grade)), "{message}");
+    }
+
+    #[test]
+    fn a_penalty_to_the_work_score_is_shown_with_its_arithmetic() {
+        let grade = Grade::new(8, 10, late_by_one_period(DeductedFrom::WorkScore));
+        let message = accepted(Some(grade));
+
+        assert!(message.contains(&texts::grade_line(grade)), "{message}");
+        assert!(message.contains("4 из 10"), "{message}");
+    }
+
+    #[test]
+    fn a_penalty_to_the_course_total_keeps_the_work_score() {
+        let grade = Grade::new(8, 10, late_by_one_period(DeductedFrom::CourseTotal));
+        let message = accepted(Some(grade));
+
+        assert!(message.contains(&texts::grade_line(grade)), "{message}");
+        assert!(message.contains("8 из 10"), "{message}");
+        assert!(message.contains("−4"), "{message}");
     }
 
     #[test]
     fn a_pass_fail_review_names_no_score() {
-        let render = |score| {
-            render_review_notification(
-                ReviewOutcome::Accepted,
-                "Backend development",
-                "Ownership",
-                score,
-                "Зачтено",
-            )
-        };
-        let score_line = format!("\n{}", texts::score_line(4, 5));
+        let grade = Grade::new(4, 5, None);
+        let line = format!("\n{}", texts::grade_line(grade));
 
-        assert_eq!(render(Some((4, 5))).replace(&score_line, ""), render(None));
+        assert_eq!(accepted(Some(grade)).replace(&line, ""), accepted(None));
     }
 
     #[test]

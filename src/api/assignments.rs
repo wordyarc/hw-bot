@@ -15,8 +15,8 @@ use crate::app::{
     StudentAssignmentDetails,
 };
 use crate::domain::{
-    Assignment, AssignmentId, AssignmentStatus, FilePresentation, Grading, LatePolicy,
-    StoredFileMetadata, StudentAssignmentProgress, TeachingCourseId, UserId,
+    Assignment, AssignmentId, AssignmentStatus, DeductedFrom, FilePresentation, Grading,
+    LatePolicy, StoredFileMetadata, StudentAssignmentProgress, TeachingCourseId, UserId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -37,26 +37,37 @@ struct LatePolicyRequest {
     #[serde(default)]
     late_period_days: Option<u16>,
     #[serde(default)]
-    late_penalty: Option<u16>,
+    late_penalty_per_period: Option<u16>,
     #[serde(default)]
     late_max_periods: Option<u16>,
+    #[serde(default)]
+    late_deducted_from: Option<DeductedFrom>,
 }
 
 impl LatePolicyRequest {
     fn parse(self) -> Result<Option<LatePolicy>, ApiError> {
         match (
             self.late_period_days,
-            self.late_penalty,
+            self.late_penalty_per_period,
             self.late_max_periods,
+            self.late_deducted_from,
         ) {
-            (None, None, None) => Ok(None),
-            (Some(period_days), Some(penalty), Some(max_periods)) => {
-                Ok(Some(LatePolicy::new(period_days, penalty, max_periods)?))
-            }
+            (None, None, None, None) => Ok(None),
+            (
+                Some(period_days),
+                Some(penalty_per_period),
+                Some(max_periods),
+                Some(deducted_from),
+            ) => Ok(Some(LatePolicy::new(
+                period_days,
+                penalty_per_period,
+                max_periods,
+                deducted_from,
+            )?)),
             _ => Err(ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_input",
-                "late policy needs late_period_days, late_penalty and late_max_periods together",
+                "late policy needs late_period_days, late_penalty_per_period, late_max_periods and late_deducted_from together",
             )),
         }
     }
@@ -66,8 +77,9 @@ impl LatePolicyRequest {
             .late_policy()
             .map_or_else(Self::default, |policy| Self {
                 late_period_days: Some(policy.period_days()),
-                late_penalty: Some(policy.penalty()),
+                late_penalty_per_period: Some(policy.penalty_per_period()),
                 late_max_periods: Some(policy.max_periods()),
+                late_deducted_from: Some(policy.deducted_from()),
             })
     }
 }
@@ -439,7 +451,8 @@ mod tests {
         for value in [
             json!({}),
             json!({
-                "late_period_days": null, "late_penalty": null, "late_max_periods": null,
+                "late_period_days": null, "late_penalty_per_period": null, "late_max_periods": null,
+                "late_deducted_from": null,
             }),
         ] {
             let request: LatePolicyRequest = serde_json::from_value(value).unwrap();
@@ -449,13 +462,18 @@ mod tests {
 
     #[test]
     fn a_partial_policy_is_never_silently_ignored() {
-        let fields = ["late_period_days", "late_penalty", "late_max_periods"];
-        for mask in 1..7 {
+        let fields = [
+            ("late_period_days", json!(1)),
+            ("late_penalty_per_period", json!(1)),
+            ("late_max_periods", json!(1)),
+            ("late_deducted_from", json!("course_total")),
+        ];
+        for mask in 1..15 {
             for missing_as_null in [false, true] {
                 let mut value = json!({});
-                for (index, field) in fields.iter().enumerate() {
+                for (index, (field, present)) in fields.iter().enumerate() {
                     if mask & (1 << index) != 0 {
-                        value[field] = json!(1);
+                        value[field] = present.clone();
                     } else if missing_as_null {
                         value[field] = json!(null);
                     }
@@ -471,12 +489,13 @@ mod tests {
     #[test]
     fn a_complete_policy_preserves_each_independent_value() {
         let request: LatePolicyRequest = serde_json::from_value(json!({
-            "late_period_days": 3, "late_penalty": 2, "late_max_periods": 5,
+            "late_period_days": 3, "late_penalty_per_period": 2, "late_max_periods": 5,
+            "late_deducted_from": "course_total",
         }))
         .unwrap();
         assert_eq!(
             request.parse().unwrap(),
-            Some(LatePolicy::new(3, 2, 5).unwrap())
+            Some(LatePolicy::new(3, 2, 5, DeductedFrom::CourseTotal).unwrap())
         );
     }
 }

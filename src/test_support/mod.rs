@@ -3,10 +3,10 @@ use chrono::{DateTime, Duration, Utc};
 pub mod telegram;
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainResult, EducationLevel, Grading, LatePolicy, NewAssignment,
-    Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission,
-    SubmissionHistory, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User,
-    UserId,
+    Assignment, AssignmentId, DeductedFrom, DomainResult, EducationLevel, Grading, LatePolicy,
+    NewAssignment, Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId,
+    Submission, SubmissionHistory, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId,
+    User, UserId,
 };
 
 #[cfg(test)]
@@ -187,9 +187,17 @@ impl<'a> AssignmentBuilder<'a> {
     }
 
     #[track_caller]
-    pub fn late_policy(mut self, period_days: u16, penalty: u16, max_periods: u16) -> Self {
-        self.late_policy =
-            Some(LatePolicy::new(period_days, penalty, max_periods).expect("valid late policy"));
+    pub fn late_policy(
+        mut self,
+        period_days: u16,
+        penalty_per_period: u16,
+        max_periods: u16,
+        deducted_from: DeductedFrom,
+    ) -> Self {
+        self.late_policy = Some(
+            LatePolicy::new(period_days, penalty_per_period, max_periods, deducted_from)
+                .expect("valid late policy"),
+        );
         self
     }
 

@@ -14,9 +14,9 @@ mod tests;
 
 pub use academic::{EducationLevel, StudentGroup, StudyProgram, Subject, TeachingCourse};
 pub use assignment::{
-    Assignment, AssignmentStatus, Grading, LATEST_TERM_YEAR, LatePolicy, MAX_ATTEMPTS,
-    MAX_LATE_PENALTY, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_LATENESS_DAYS, MAX_SCORE,
-    MaxScore, NewAssignment,
+    Assignment, AssignmentStatus, DeductedFrom, Grading, LATEST_TERM_YEAR, LatePenalty, LatePolicy,
+    MAX_ATTEMPTS, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_LATENESS_DAYS,
+    MAX_PENALTY_PER_PERIOD, MAX_SCORE, MaxScore, NewAssignment,
 };
 pub use attempts::StudentAssignmentProgress;
 pub use error::{DomainError, DomainResult};
@@ -37,4 +37,4 @@ pub use user::{Role, StaffRole, User};
 
 pub(crate) use assignment::AssignmentParts;
 pub(crate) use files::StoredFileParts;
-pub(crate) use submission::SubmissionParts;
+pub(crate) use submission::{GradeParts, SubmissionParts};

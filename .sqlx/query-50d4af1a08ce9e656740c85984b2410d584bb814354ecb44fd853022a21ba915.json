@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, final_score\n            from submissions\n            where id = $1",
+  "query": "\n            select\n                id, assignment_id, student_id, attempt_number, content, status, submitted_at,\n                reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,\n                penalty, penalty_deducted_from, work_score, course_total_penalty\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit 1",
   "describe": {
     "columns": [
       {
@@ -159,18 +159,41 @@
       },
       {
         "ordinal": 14,
-        "name": "final_score",
+        "name": "penalty_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "work_score",
         "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "submissions",
-            "name": "final_score"
+            "name": "work_score"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "course_total_penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "course_total_penalty"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -189,8 +212,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "a222046fb657d117d7fd24ea6084c09baae23a240e922dd80276ae9feb663dd9"
+  "hash": "50d4af1a08ce9e656740c85984b2410d584bb814354ecb44fd853022a21ba915"
 }

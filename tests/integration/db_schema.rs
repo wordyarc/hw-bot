@@ -1,6 +1,10 @@
 use chrono::{Duration, Utc};
 use hw_bot::db;
-use hw_bot::domain::{AssignmentStatus, EducationLevel, FilePresentation, SubmissionStatus};
+use hw_bot::domain::{
+    AssignmentStatus, DeductedFrom, EducationLevel, FilePresentation, SubmissionStatus,
+};
+use sqlx::postgres::PgQueryResult;
+use uuid::Uuid;
 
 use crate::harness::{TestApp, fresh_database};
 
@@ -89,6 +93,50 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         .unwrap_or_else(|error| panic!("submission status {} rejected: {error}", status.as_str()));
     }
 
+    let trainee = app.add_student("Deduction trainee").await;
+    let graded = app
+        .queued_submission(trainee.telegram_user_id().as_i64(), "pull/deducted_from")
+        .await;
+    app.review(graded, app.teacher(), "accept", "ok").await.ok();
+    for deducted_from in DeductedFrom::ALL {
+        let (work_score, course_total_penalty) = match deducted_from {
+            DeductedFrom::WorkScore => (3, 0),
+            DeductedFrom::CourseTotal => (4, 1),
+        };
+        store_grade(
+            &app,
+            graded,
+            1,
+            1,
+            Some(deducted_from.as_str()),
+            work_score,
+            course_total_penalty,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "submission deducted_from {} rejected: {error}",
+                deducted_from.as_str()
+            )
+        });
+    }
+
+    for deducted_from in DeductedFrom::ALL {
+        sqlx::query(
+            r#"
+            update assignments
+            set max_score = 5, late_period_days = 7, late_penalty_per_period = 1, late_max_periods = 4,
+                late_deducted_from = $2
+            where id = $1
+            "#,
+        )
+        .bind(fixture.assignment.id().as_uuid())
+        .bind(deducted_from.as_str())
+        .execute(&app.pool)
+        .await
+        .unwrap_or_else(|error| panic!("assignment deducted_from {} rejected: {error}", deducted_from.as_str()));
+    }
+
     for (position, presentation) in FilePresentation::ALL.iter().enumerate() {
         sqlx::query(
             r#"
@@ -164,7 +212,8 @@ async fn stored_grade_requires_the_frozen_scale_and_raw_score_within_it() {
                 grade_max_score = $3,
                 late_periods = 0,
                 penalty = 0,
-                final_score = 4
+                work_score = 4,
+                course_total_penalty = 0
             where id = $1
             "#,
         )
@@ -189,21 +238,153 @@ async fn stored_grade_requires_the_frozen_scale_and_raw_score_within_it() {
         .expect("a complete grade within its frozen scale is valid");
 }
 
-#[tokio::test]
-async fn stored_grade_rejects_inconsistent_arithmetic_and_excessive_penalty() {
-    let app = TestApp::start().await;
+async fn accepted_submission(app: &TestApp) -> Uuid {
     let submission = app.queued_submission(app.student(), "pull/1").await;
     app.review(submission, app.teacher(), "accept", "ok")
         .await
         .ok();
-    for (penalty, final_score) in [(2_i16, 4_i16), (101, 0)] {
-        let error = sqlx::query("update submissions set raw_score = 4, grade_max_score = 5, late_periods = 2, penalty = $2, final_score = $3 where id = $1")
-            .bind(submission).bind(penalty).bind(final_score).execute(&app.pool).await.unwrap_err();
-        assert_eq!(
-            error
-                .as_database_error()
-                .and_then(|error| error.constraint()),
-            Some("submissions_grade_belongs_to_accepted_submission")
+
+    submission
+}
+
+async fn store_grade(
+    app: &TestApp,
+    submission: Uuid,
+    late_periods: i32,
+    penalty: i16,
+    deducted_from: Option<&str>,
+    work_score: i16,
+    course_total_penalty: i16,
+) -> Result<PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        r#"
+        update submissions
+        set raw_score = 4, grade_max_score = 5, late_periods = $2, penalty = $3,
+            penalty_deducted_from = $4, work_score = $5, course_total_penalty = $6
+        where id = $1
+        "#,
+    )
+    .bind(submission)
+    .bind(late_periods)
+    .bind(penalty)
+    .bind(deducted_from)
+    .bind(work_score)
+    .bind(course_total_penalty)
+    .execute(&app.pool)
+    .await
+}
+
+#[tokio::test]
+async fn stored_grade_rejects_a_penalty_above_the_effective_limit() {
+    let app = TestApp::start().await;
+    let submission = accepted_submission(&app).await;
+
+    let error = store_grade(&app, submission, 2, 101, Some("course_total"), 4, 101)
+        .await
+        .unwrap_err();
+
+    assert_check(
+        error,
+        Some("submissions_grade_belongs_to_accepted_submission"),
+    );
+}
+
+#[tokio::test]
+async fn a_late_policy_is_stored_only_together_with_its_deduction() {
+    let app = TestApp::start().await;
+    let update = |period: Option<i16>, deducted_from: Option<&'static str>| {
+        sqlx::query(
+            r#"
+            update assignments
+            set max_score = 5, late_period_days = $2, late_penalty_per_period = $2, late_max_periods = $2,
+                late_deducted_from = $3
+            where id = $1
+            "#,
+        )
+        .bind(app.assignment())
+        .bind(period)
+        .bind(deducted_from)
+        .execute(&app.pool)
+    };
+
+    for (period, deducted_from) in [(Some(1), None), (None, Some("course_total"))] {
+        assert_check(
+            update(period, deducted_from).await.unwrap_err(),
+            Some("assignments_late_policy_is_complete"),
+        );
+    }
+    update(Some(1), Some("course_total"))
+        .await
+        .expect("a complete policy is valid");
+}
+
+#[tokio::test]
+async fn only_a_late_grade_says_where_its_penalty_is_deducted_from() {
+    let app = TestApp::start().await;
+    let submission = accepted_submission(&app).await;
+
+    for (late_periods, penalty, deducted_from) in [(0, 0, Some("work_score")), (2, 2, None)] {
+        let error = store_grade(&app, submission, late_periods, penalty, deducted_from, 4, 0)
+            .await
+            .unwrap_err();
+        assert_check(
+            error,
+            Some("submissions_penalty_deducted_from_marks_a_late_grade"),
+        );
+    }
+    store_grade(&app, submission, 2, 2, Some("work_score"), 2, 0)
+        .await
+        .expect("a late grade with its deducted_from is valid");
+}
+
+#[tokio::test]
+async fn a_stored_work_score_follows_where_the_penalty_is_deducted_from() {
+    let app = TestApp::start().await;
+    let submission = accepted_submission(&app).await;
+
+    for (deducted_from, work_score, course_total_penalty) in
+        [("work_score", 4, 0), ("course_total", 2, 2)]
+    {
+        let error = store_grade(
+            &app,
+            submission,
+            1,
+            2,
+            Some(deducted_from),
+            work_score,
+            course_total_penalty,
+        )
+        .await
+        .unwrap_err();
+        assert_check(
+            error,
+            Some("submissions_grade_follows_penalty_deducted_from"),
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_stored_course_total_penalty_follows_where_the_penalty_is_deducted_from() {
+    let app = TestApp::start().await;
+    let submission = accepted_submission(&app).await;
+
+    for (deducted_from, work_score, course_total_penalty) in
+        [("work_score", 2, 2), ("course_total", 4, 0)]
+    {
+        let error = store_grade(
+            &app,
+            submission,
+            1,
+            2,
+            Some(deducted_from),
+            work_score,
+            course_total_penalty,
+        )
+        .await
+        .unwrap_err();
+        assert_check(
+            error,
+            Some("submissions_grade_follows_penalty_deducted_from"),
         );
     }
 }
@@ -454,6 +635,19 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     .execute(&app.pool)
     .await;
     assert_check(submission.unwrap_err(), None);
+
+    let deducted_from = sqlx::query(
+        r#"
+        update assignments
+        set max_score = 5, late_period_days = 7, late_penalty_per_period = 1, late_max_periods = 4,
+            late_deducted_from = 'everything'
+        where id = $1
+        "#,
+    )
+    .bind(fixture.assignment.id().as_uuid())
+    .execute(&app.pool)
+    .await;
+    assert_check(deducted_from.unwrap_err(), None);
 
     Ok(())
 }

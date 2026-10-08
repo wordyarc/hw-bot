@@ -9,7 +9,7 @@ use crate::string_enum::str_enum;
 pub const MAX_ATTEMPTS: u16 = i16::MAX as u16;
 pub const MAX_SCORE: u16 = 100;
 pub const MAX_LATE_PERIOD_DAYS: u16 = 365;
-pub const MAX_LATE_PENALTY: u16 = MAX_SCORE;
+pub const MAX_PENALTY_PER_PERIOD: u16 = MAX_SCORE;
 pub const MAX_LATE_PERIODS: u16 = 100;
 pub const MAX_LATENESS_DAYS: u32 = 366;
 /// Год выбран по формату ДД.ММ.ГГГГ. Граница нужна не только для показа: у края диапазона chrono
@@ -22,6 +22,14 @@ str_enum! {
         Draft => "draft",
         Published => "published",
         Archived => "archived",
+    }
+}
+
+str_enum! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum DeductedFrom {
+        WorkScore => "work_score",
+        CourseTotal => "course_total",
     }
 }
 
@@ -113,20 +121,60 @@ pub struct Assignment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LatePolicy {
     period_days: u16,
-    penalty: u16,
+    penalty_per_period: u16,
     max_periods: u16,
+    deducted_from: DeductedFrom,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LatePenalty {
+    periods: u32,
+    points: u16,
+    deducted_from: DeductedFrom,
+}
+
+impl LatePenalty {
+    pub(crate) fn restore(periods: u32, points: u16, deducted_from: DeductedFrom) -> Option<Self> {
+        (periods > 0 && (1..=MAX_SCORE).contains(&points)).then_some(Self {
+            periods,
+            points,
+            deducted_from,
+        })
+    }
+
+    pub fn periods(self) -> u32 {
+        self.periods
+    }
+
+    pub fn points(self) -> u16 {
+        self.points
+    }
+
+    pub fn deducted_from(self) -> DeductedFrom {
+        self.deducted_from
+    }
 }
 
 impl LatePolicy {
-    pub fn new(period_days: u16, penalty: u16, max_periods: u16) -> DomainResult<Self> {
+    pub fn new(
+        period_days: u16,
+        penalty_per_period: u16,
+        max_periods: u16,
+        deducted_from: DeductedFrom,
+    ) -> DomainResult<Self> {
         check_range("period_days", period_days, MAX_LATE_PERIOD_DAYS)?;
-        check_range("penalty", penalty, MAX_LATE_PENALTY)?;
+        check_range(
+            "penalty_per_period",
+            penalty_per_period,
+            MAX_PENALTY_PER_PERIOD,
+        )?;
         check_range("max_periods", max_periods, MAX_LATE_PERIODS)?;
 
         Ok(Self {
             period_days,
-            penalty,
+            penalty_per_period,
             max_periods,
+            deducted_from,
         })
     }
 
@@ -134,12 +182,16 @@ impl LatePolicy {
         self.period_days
     }
 
-    pub fn penalty(self) -> u16 {
-        self.penalty
+    pub fn penalty_per_period(self) -> u16 {
+        self.penalty_per_period
     }
 
     pub fn max_periods(self) -> u16 {
         self.max_periods
+    }
+
+    pub fn deducted_from(self) -> DeductedFrom {
+        self.deducted_from
     }
 
     pub fn period_end(
@@ -171,13 +223,15 @@ impl LatePolicy {
     }
 
     pub fn possible_score(self, max_score: MaxScore, periods: u32) -> u16 {
-        Grade::new(
-            max_score.get(),
-            max_score.get(),
+        Grade::new(max_score.get(), max_score.get(), self.late_penalty(periods)).work_score()
+    }
+
+    pub fn late_penalty(self, periods: u32) -> Option<LatePenalty> {
+        (periods > 0).then(|| LatePenalty {
             periods,
-            self.penalty_for(periods),
-        )
-        .final_score()
+            points: self.penalty_for(periods),
+            deducted_from: self.deducted_from,
+        })
     }
 
     pub fn periods_until(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u32 {
@@ -206,10 +260,9 @@ impl LatePolicy {
         u32::try_from(periods).expect("chrono's date range fits in u32 days")
     }
 
-    /// Увеличивать штраф за пределами MAX_SCORE незачем: итог уже обнулён.
-    fn penalty_for(self, late_periods: u32) -> u16 {
+    pub fn penalty_for(self, late_periods: u32) -> u16 {
         late_periods
-            .saturating_mul(u32::from(self.penalty))
+            .saturating_mul(u32::from(self.penalty_per_period))
             .min(u32::from(MAX_SCORE)) as u16
     }
 }
@@ -543,6 +596,11 @@ impl Assignment {
             .map_or(0, |policy| policy.penalty_for(self.late_periods_at(at)))
     }
 
+    pub fn late_penalty_at(&self, at: DateTime<Utc>) -> Option<LatePenalty> {
+        self.late_policy
+            .and_then(|policy| policy.late_penalty(self.late_periods_at(at)))
+    }
+
     pub fn ensure_open_for_submission(&self, at: DateTime<Utc>) -> DomainResult<()> {
         let closes_at = self.closes_at();
         if at < closes_at {
@@ -677,14 +735,14 @@ mod tests {
     fn late_policy_rejects_each_field_outside_its_range() {
         for (field, max) in [
             ("period_days", MAX_LATE_PERIOD_DAYS),
-            ("penalty", MAX_LATE_PENALTY),
+            ("penalty_per_period", MAX_PENALTY_PER_PERIOD),
             ("max_periods", MAX_LATE_PERIODS),
         ] {
             for value in [0, max + 1] {
                 let policy = match field {
-                    "period_days" => LatePolicy::new(value, 1, 1),
-                    "penalty" => LatePolicy::new(1, value, 1),
-                    _ => LatePolicy::new(1, 1, value),
+                    "period_days" => LatePolicy::new(value, 1, 1, DeductedFrom::WorkScore),
+                    "penalty_per_period" => LatePolicy::new(1, value, 1, DeductedFrom::WorkScore),
+                    _ => LatePolicy::new(1, 1, value, DeductedFrom::WorkScore),
                 };
 
                 assert_eq!(
@@ -708,7 +766,7 @@ mod tests {
 
     #[test]
     fn closing_exactly_one_period_later_needs_one_period_and_a_moment_more_needs_two() {
-        let policy = LatePolicy::new(7, 1, 4).unwrap();
+        let policy = LatePolicy::new(7, 1, 4, DeductedFrom::WorkScore).unwrap();
         let deadline = t0();
         let week = Duration::weeks(1);
 
@@ -727,12 +785,35 @@ mod tests {
 
     #[test]
     fn preview_uses_the_same_penalty_for_any_period_count() {
-        let policy = LatePolicy::new(7, 1, 4).unwrap();
+        let policy = LatePolicy::new(7, 1, 4, DeductedFrom::WorkScore).unwrap();
         let maximum = MaxScore::new(10).unwrap();
         assert_eq!(policy.possible_score(maximum, 0), 10);
         assert_eq!(policy.possible_score(maximum, 1), 9);
         assert_eq!(policy.possible_score(maximum, 4), 6);
         assert_eq!(policy.possible_score(maximum, u32::MAX), 0);
+    }
+
+    #[test]
+    fn a_penalty_to_the_course_total_never_lowers_the_possible_work_score() {
+        let policy = LatePolicy::new(7, 3, 4, DeductedFrom::CourseTotal).unwrap();
+        let maximum = MaxScore::new(10).unwrap();
+
+        for periods in [0, 1, 4, u32::MAX] {
+            assert_eq!(policy.possible_score(maximum, periods), 10, "{periods}");
+        }
+        assert_eq!(policy.penalty_for(4), 12);
+    }
+
+    #[test]
+    fn the_penalty_of_a_late_submission_carries_the_steps_points_and_deduction() {
+        let policy = LatePolicy::new(7, 3, 4, DeductedFrom::CourseTotal).unwrap();
+
+        assert_eq!(policy.late_penalty(0), None);
+        let late = policy.late_penalty(2).unwrap();
+        assert_eq!(late.periods(), 2);
+        assert_eq!(late.points(), 6);
+        assert_eq!(late.deducted_from(), DeductedFrom::CourseTotal);
+        assert_eq!(policy.late_penalty(u32::MAX).unwrap().points(), MAX_SCORE);
     }
 
     #[test]
@@ -747,7 +828,7 @@ mod tests {
             body: work.body.as_str().to_owned(),
             max_attempts: work.max_attempts,
             grading: Grading::scored(10).unwrap(),
-            late_policy: Some(LatePolicy::new(365, 1, 100).unwrap()),
+            late_policy: Some(LatePolicy::new(365, 1, 100, DeductedFrom::WorkScore).unwrap()),
             status: work.status,
             created_by: work.created_by,
             created_at: work.created_at,

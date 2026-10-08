@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty, late_max_periods, status, created_by,\n                created_at, deadline_at, published_at\n             from assignments where teaching_course_id = $1 order by created_at desc, id limit $2 offset $3",
+  "query": "\n            select\n                assignments.id, assignments.teaching_course_id, assignments.subject_id,\n                assignments.student_group_id, assignments.title, assignments.body,\n                assignments.max_attempts, assignments.max_score, assignments.late_period_days,\n                assignments.late_penalty_per_period, assignments.late_max_periods,\n                assignments.late_deducted_from, assignments.status, assignments.created_by,\n                assignments.created_at, assignments.deadline_at, assignments.published_at,\n                subjects.name as subject_name\n            from assignments\n            join subjects\n              on subjects.id = assignments.subject_id\n             where assignments.student_group_id = $1\n           and assignments.status = 'archived'\n           and assignments.published_at is not null\n         order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
   "describe": {
     "columns": [
       {
@@ -104,12 +104,12 @@
       },
       {
         "ordinal": 9,
-        "name": "late_penalty",
+        "name": "late_penalty_per_period",
         "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "assignments",
-            "name": "late_penalty"
+            "name": "late_penalty_per_period"
           }
         }
       },
@@ -126,6 +126,17 @@
       },
       {
         "ordinal": 11,
+        "name": "late_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "deadline_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,13 +180,24 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "published_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "assignments",
             "name": "published_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
           }
         }
       }
@@ -199,12 +221,14 @@
       true,
       true,
       true,
+      true,
       false,
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "4d730c30cc55e504e1d06dcb6fcea389b7be4688f09fbcc77ca945ffa9c02cea"
+  "hash": "f8865acc1fa8ee65138f3452350100c306fd53607aa828d34d90aa6faee95d6f"
 }

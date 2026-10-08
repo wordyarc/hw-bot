@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, MAX_SCORE, NonEmptyString, SubmissionId,
-    TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
+    Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, LatePenalty, MAX_SCORE,
+    NonEmptyString, SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -85,45 +85,77 @@ str_enum! {
 pub struct Grade {
     raw_score: u16,
     max_score: u16,
-    late_periods: u32,
-    penalty: u16,
-    final_score: u16,
+    late: Option<LatePenalty>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GradeParts {
+    pub raw_score: Option<u16>,
+    pub max_score: Option<u16>,
+    pub late_periods: Option<u32>,
+    pub penalty: Option<u16>,
+    pub deducted_from: Option<DeductedFrom>,
+    pub work_score: Option<u16>,
+    pub course_total_penalty: Option<u16>,
 }
 
 impl Grade {
-    pub(crate) fn new(raw_score: u16, max_score: u16, late_periods: u32, penalty: u16) -> Self {
+    pub(crate) fn new(raw_score: u16, max_score: u16, late: Option<LatePenalty>) -> Self {
         Self {
             raw_score,
             max_score,
-            late_periods,
-            penalty,
-            final_score: raw_score.saturating_sub(penalty),
+            late,
         }
     }
 
-    fn restore(
-        raw_score: u16,
-        max_score: u16,
-        late_periods: u32,
-        penalty: u16,
-        final_score: u16,
-    ) -> DomainResult<Self> {
+    pub(crate) fn restore(parts: GradeParts) -> DomainResult<Option<Self>> {
+        let invalid = || DomainError::InvalidSubmissionGradeState;
+        let (raw_score, max_score, late_periods, penalty, work_score, course_total_penalty) = match (
+            parts.raw_score,
+            parts.max_score,
+            parts.late_periods,
+            parts.penalty,
+            parts.work_score,
+            parts.course_total_penalty,
+        ) {
+            (None, None, None, None, None, None) if parts.deducted_from.is_none() => {
+                return Ok(None);
+            }
+            (
+                Some(raw_score),
+                Some(max_score),
+                Some(late_periods),
+                Some(penalty),
+                Some(work_score),
+                Some(course_total_penalty),
+            ) => (
+                raw_score,
+                max_score,
+                late_periods,
+                penalty,
+                work_score,
+                course_total_penalty,
+            ),
+            _ => return Err(invalid()),
+        };
+        let late = match (late_periods, penalty, parts.deducted_from) {
+            (0, 0, None) => None,
+            (periods, points, Some(deducted_from)) => {
+                Some(LatePenalty::restore(periods, points, deducted_from).ok_or_else(invalid)?)
+            }
+            _ => return Err(invalid()),
+        };
+        let grade = Self::new(raw_score, max_score, late);
         if max_score == 0
             || max_score > MAX_SCORE
             || raw_score > max_score
-            || penalty > MAX_SCORE
-            || final_score != raw_score.saturating_sub(penalty)
+            || grade.work_score() != work_score
+            || grade.course_total_penalty() != course_total_penalty
         {
-            return Err(DomainError::InvalidSubmissionGradeState);
+            return Err(invalid());
         }
 
-        Ok(Self {
-            raw_score,
-            max_score,
-            late_periods,
-            penalty,
-            final_score,
-        })
+        Ok(Some(grade))
     }
 
     pub fn raw_score(self) -> u16 {
@@ -134,42 +166,157 @@ impl Grade {
         self.max_score
     }
 
+    pub fn late(self) -> Option<LatePenalty> {
+        self.late
+    }
+
     pub fn late_periods(self) -> u32 {
-        self.late_periods
+        self.late.map_or(0, LatePenalty::periods)
     }
 
     pub fn penalty(self) -> u16 {
-        self.penalty
+        self.late.map_or(0, LatePenalty::points)
     }
 
-    pub fn final_score(self) -> u16 {
-        self.final_score
+    pub fn deducted_from(self) -> Option<DeductedFrom> {
+        self.late.map(LatePenalty::deducted_from)
+    }
+
+    pub fn work_score(self) -> u16 {
+        match self.late {
+            Some(late) if late.deducted_from() == DeductedFrom::WorkScore => {
+                self.raw_score.saturating_sub(late.points())
+            }
+            _ => self.raw_score,
+        }
+    }
+
+    pub fn course_total_penalty(self) -> u16 {
+        match self.late {
+            Some(late) if late.deducted_from() == DeductedFrom::CourseTotal => late.points(),
+            _ => 0,
+        }
     }
 }
 
 #[cfg(test)]
-mod grade_restore_tests {
+mod grade_tests {
     use super::*;
+    use crate::domain::DeductedFrom::{CourseTotal, WorkScore};
+    use crate::domain::LatePolicy;
+
+    fn stored(
+        raw_score: u16,
+        late_periods: u32,
+        penalty: u16,
+        deducted_from: Option<DeductedFrom>,
+        work_score: u16,
+        course_total_penalty: u16,
+    ) -> GradeParts {
+        GradeParts {
+            raw_score: Some(raw_score),
+            max_score: Some(5),
+            late_periods: Some(late_periods),
+            penalty: Some(penalty),
+            deducted_from,
+            work_score: Some(work_score),
+            course_total_penalty: Some(course_total_penalty),
+        }
+    }
 
     #[test]
-    fn rejects_a_stored_grade_with_inconsistent_arithmetic() {
-        assert_eq!(
-            Grade::restore(4, 5, 2, 2, 4),
-            Err(DomainError::InvalidSubmissionGradeState)
-        );
+    fn the_frozen_deduction_decides_where_the_effective_penalty_goes() {
+        let late = |penalty_per_period, periods, deducted_from| {
+            LatePolicy::new(7, penalty_per_period, 100, deducted_from)
+                .unwrap()
+                .late_penalty(periods)
+        };
+
+        for (raw_score, max_score, late, expected) in [
+            (8, 10, None, (8, 0)),
+            (8, 10, late(4, 1, WorkScore), (4, 0)),
+            (8, 10, late(4, 1, CourseTotal), (8, 4)),
+            (4, 5, late(5, 1, WorkScore), (0, 0)),
+            (4, 5, late(5, 1, CourseTotal), (4, 5)),
+            (100, 100, late(60, 2, WorkScore), (0, 0)),
+            (100, 100, late(60, 2, CourseTotal), (100, 100)),
+        ] {
+            let grade = Grade::new(raw_score, max_score, late);
+
+            assert_eq!(
+                (grade.work_score(), grade.course_total_penalty()),
+                expected,
+                "{raw_score}/{max_score} {late:?}"
+            );
+            assert_eq!(grade.deducted_from(), late.map(LatePenalty::deducted_from));
+        }
+    }
+
+    #[test]
+    fn restores_both_deductions_and_a_grade_without_lateness() {
+        for (parts, deducted_from) in [
+            (stored(4, 0, 0, None, 4, 0), None),
+            (stored(4, 2, 2, Some(WorkScore), 2, 0), Some(WorkScore)),
+            (stored(4, 2, 5, Some(CourseTotal), 4, 5), Some(CourseTotal)),
+            (stored(4, 2, 100, Some(WorkScore), 0, 0), Some(WorkScore)),
+        ] {
+            let grade = Grade::restore(parts).unwrap().unwrap();
+            assert_eq!(grade.deducted_from(), deducted_from);
+            assert_eq!(Some(grade.work_score()), parts.work_score);
+            assert_eq!(
+                Some(grade.course_total_penalty()),
+                parts.course_total_penalty
+            );
+        }
+        assert_eq!(Grade::restore(GradeParts::default()), Ok(None));
+    }
+
+    #[test]
+    fn rejects_a_deduction_without_lateness_and_lateness_without_a_deduction() {
+        for parts in [
+            stored(4, 0, 0, Some(WorkScore), 4, 0),
+            stored(4, 0, 0, Some(CourseTotal), 4, 0),
+            stored(4, 2, 2, None, 2, 0),
+            stored(4, 2, 2, None, 4, 0),
+            stored(4, 2, 0, Some(WorkScore), 4, 0),
+            stored(4, 0, 2, Some(WorkScore), 2, 0),
+            GradeParts {
+                deducted_from: Some(WorkScore),
+                ..GradeParts::default()
+            },
+        ] {
+            assert_eq!(
+                Grade::restore(parts),
+                Err(DomainError::InvalidSubmissionGradeState),
+                "{parts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_work_score_or_course_total_penalty_inconsistent_with_the_deduction() {
+        for parts in [
+            stored(4, 2, 2, Some(WorkScore), 4, 0),
+            stored(4, 2, 2, Some(WorkScore), 2, 2),
+            stored(4, 2, 2, Some(CourseTotal), 2, 2),
+            stored(4, 2, 2, Some(CourseTotal), 4, 0),
+            stored(4, 0, 0, None, 3, 0),
+            stored(4, 0, 0, None, 4, 1),
+        ] {
+            assert_eq!(
+                Grade::restore(parts),
+                Err(DomainError::InvalidSubmissionGradeState),
+                "{parts:?}"
+            );
+        }
     }
 
     #[test]
     fn rejects_a_stored_penalty_above_the_effective_limit() {
         assert_eq!(
-            Grade::restore(4, 5, 2, 101, 0),
+            Grade::restore(stored(4, 2, 101, Some(WorkScore), 0, 0)),
             Err(DomainError::InvalidSubmissionGradeState)
         );
-    }
-
-    #[test]
-    fn restores_a_grade_clamped_to_zero() {
-        assert_eq!(Grade::restore(4, 5, 2, 100, 0).unwrap().final_score(), 0);
     }
 }
 
@@ -199,11 +346,7 @@ pub(crate) struct SubmissionParts {
     pub reviewed_by: Option<UserId>,
     pub reviewed_at: Option<DateTime<Utc>>,
     pub review_comment: Option<String>,
-    pub raw_score: Option<u16>,
-    pub grade_max_score: Option<u16>,
-    pub late_periods: Option<u32>,
-    pub penalty: Option<u16>,
-    pub final_score: Option<u16>,
+    pub grade: GradeParts,
 }
 
 impl Submission {
@@ -232,35 +375,10 @@ impl Submission {
             _ => {}
         }
 
-        let grade = match (
-            parts.raw_score,
-            parts.grade_max_score,
-            parts.late_periods,
-            parts.penalty,
-            parts.final_score,
-        ) {
-            (None, None, None, None, None) => None,
-            (
-                Some(raw_score),
-                Some(max_score),
-                Some(late_periods),
-                Some(penalty),
-                Some(final_score),
-            ) => {
-                if parts.status != SubmissionStatus::Accepted {
-                    return Err(DomainError::InvalidSubmissionGradeState);
-                }
-
-                Some(Grade::restore(
-                    raw_score,
-                    max_score,
-                    late_periods,
-                    penalty,
-                    final_score,
-                )?)
-            }
-            _ => return Err(DomainError::InvalidSubmissionGradeState),
-        };
+        let grade = Grade::restore(parts.grade)?;
+        if grade.is_some() && parts.status != SubmissionStatus::Accepted {
+            return Err(DomainError::InvalidSubmissionGradeState);
+        }
 
         Ok(Self {
             id: parts.id,
@@ -341,11 +459,7 @@ impl Submission {
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
-            raw_score: None,
-            grade_max_score: None,
-            late_periods: None,
-            penalty: None,
-            final_score: None,
+            grade: GradeParts::default(),
         })
     }
 
@@ -418,8 +532,7 @@ impl Submission {
         let grade = match status {
             SubmissionStatus::Accepted => {
                 // Берём время отправки, чтобы длительность проверки не влияла на штраф студенту.
-                let late_periods = assignment.late_periods_at(self.submitted_at);
-                let penalty = assignment.penalty_at(self.submitted_at);
+                let late = assignment.late_penalty_at(self.submitted_at);
                 let max_score = assignment.grading().max_score();
 
                 assignment
@@ -429,8 +542,7 @@ impl Submission {
                         Grade::new(
                             raw_score,
                             max_score.expect("a validated score requires scored grading"),
-                            late_periods,
-                            penalty,
+                            late,
                         )
                     })
             }
@@ -515,11 +627,7 @@ mod tests {
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
-            raw_score: None,
-            grade_max_score: None,
-            late_periods: None,
-            penalty: None,
-            final_score: None,
+            grade: GradeParts::default(),
         }
     }
 
@@ -530,6 +638,18 @@ mod tests {
             reviewed_at: Some(t0()),
             review_comment: Some("Good".to_owned()),
             ..pending_parts()
+        }
+    }
+
+    fn grade(raw_score: u16, max_score: u16) -> GradeParts {
+        GradeParts {
+            raw_score: Some(raw_score),
+            max_score: Some(max_score),
+            late_periods: Some(2),
+            penalty: Some(2),
+            deducted_from: Some(DeductedFrom::WorkScore),
+            work_score: Some(raw_score.saturating_sub(2)),
+            course_total_penalty: Some(0),
         }
     }
 
@@ -569,7 +689,10 @@ mod tests {
     fn restore_rejects_partial_grade() {
         assert_eq!(
             Submission::restore(SubmissionParts {
-                raw_score: Some(4),
+                grade: GradeParts {
+                    raw_score: Some(4),
+                    ..GradeParts::default()
+                },
                 ..accepted_parts()
             })
             .unwrap_err(),
@@ -582,27 +705,7 @@ mod tests {
         assert_eq!(
             Submission::restore(SubmissionParts {
                 status: SubmissionStatus::Rejected,
-                raw_score: Some(4),
-                grade_max_score: Some(5),
-                late_periods: Some(0),
-                penalty: Some(0),
-                final_score: Some(4),
-                ..accepted_parts()
-            })
-            .unwrap_err(),
-            DomainError::InvalidSubmissionGradeState
-        );
-    }
-
-    #[test]
-    fn restore_rejects_final_score_above_raw_score() {
-        assert_eq!(
-            Submission::restore(SubmissionParts {
-                raw_score: Some(4),
-                grade_max_score: Some(5),
-                late_periods: Some(0),
-                penalty: Some(0),
-                final_score: Some(5),
+                grade: grade(4, 5),
                 ..accepted_parts()
             })
             .unwrap_err(),
@@ -614,11 +717,7 @@ mod tests {
     fn restore_rejects_raw_score_above_the_frozen_scale() {
         assert_eq!(
             Submission::restore(SubmissionParts {
-                raw_score: Some(4),
-                grade_max_score: Some(3),
-                late_periods: Some(0),
-                penalty: Some(0),
-                final_score: Some(4),
+                grade: grade(4, 3),
                 ..accepted_parts()
             })
             .unwrap_err(),
@@ -629,11 +728,7 @@ mod tests {
     #[test]
     fn restore_accepts_full_grade_of_accepted_submission() {
         let grade = Submission::restore(SubmissionParts {
-            raw_score: Some(4),
-            grade_max_score: Some(5),
-            late_periods: Some(2),
-            penalty: Some(2),
-            final_score: Some(2),
+            grade: grade(4, 5),
             ..accepted_parts()
         })
         .unwrap()
@@ -644,16 +739,9 @@ mod tests {
         assert_eq!(grade.max_score(), 5);
         assert_eq!(grade.late_periods(), 2);
         assert_eq!(grade.penalty(), 2);
-        assert_eq!(grade.final_score(), 2);
-    }
-
-    #[test]
-    fn grade_clamps_final_score_at_zero() {
-        let grade = Grade::new(4, 5, 5, 5);
-
-        assert_eq!(grade.final_score(), 0);
-        assert_eq!(grade.raw_score(), 4);
-        assert_eq!(grade.penalty(), 5);
+        assert_eq!(grade.deducted_from(), Some(DeductedFrom::WorkScore));
+        assert_eq!(grade.work_score(), 2);
+        assert_eq!(grade.course_total_penalty(), 0);
     }
 
     #[test]

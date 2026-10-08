@@ -1,8 +1,10 @@
 use chrono::{Duration, Utc};
 use hw_bot::db;
+use hw_bot::domain::DeductedFrom;
+use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::TestApp;
+use crate::harness::{TestApp, submission_id};
 
 #[tokio::test]
 async fn expired_notification_lease_can_be_reclaimed() {
@@ -78,4 +80,44 @@ async fn concurrent_workers_claim_different_notifications() {
     let first = first.expect("first claim").expect("first notification");
     let second = second.expect("second claim").expect("second notification");
     assert_ne!(first.id, second.id);
+}
+
+#[tokio::test]
+async fn a_claimed_notification_names_the_scale_and_deduction_in_force_at_review() {
+    let app = TestApp::start().await;
+    let assignment = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    app.review_with_score(submission, app.teacher(), "accept", 8, "Ок")
+        .await
+        .ok();
+    app.post_as(
+        &format!("/assignments/{}/grading", assignment.id().as_uuid()),
+        app.teacher(),
+        json!({
+            "max_score": 20, "late_period_days": 7, "late_penalty_per_period": 1, "late_max_periods": 4,
+            "late_deducted_from": "work_score",
+        }),
+    )
+    .await
+    .ok();
+    let now = Utc::now();
+
+    let notification =
+        db::notifications::claim_next(&app.pool, now, Uuid::new_v4(), now + Duration::seconds(10))
+            .await
+            .expect("claim notification")
+            .expect("notification exists");
+
+    let grade = notification
+        .grade
+        .expect("a scored review is notified with its grade");
+    assert_eq!(grade.max_score(), 10);
+    assert_eq!(grade.deducted_from(), Some(DeductedFrom::CourseTotal));
+    assert_eq!((grade.work_score(), grade.course_total_penalty()), (8, 4));
 }
