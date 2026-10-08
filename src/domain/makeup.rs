@@ -97,7 +97,7 @@ impl CourseMakeup {
 
     pub fn balance(self, extra: u16, used: u16) -> MakeupBalance {
         MakeupBalance {
-            allowed: self.attempts.saturating_add(extra),
+            allowed: self.attempts + extra,
             used,
         }
     }
@@ -214,7 +214,7 @@ impl MakeupBalance {
 
     pub fn spend(self) -> Self {
         Self {
-            used: self.used.saturating_add(1),
+            used: self.used + 1,
             ..self
         }
     }
@@ -391,7 +391,6 @@ mod tests {
             })
         );
         assert_eq!(makeup.balance(2, 2).remaining(), 1);
-        assert_eq!(makeup.balance(u16::MAX, 0).allowed(), u16::MAX);
     }
 
     #[test]

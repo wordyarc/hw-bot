@@ -144,13 +144,28 @@ pub(crate) async fn handle_form(
     action: MakeupFormAction,
     state: BotState,
 ) -> HandlerResult {
-    let Some(mut form) = state.makeup_form(message_id, MakeupStep::Summary) else {
+    let Some(step) = state.active_makeup().map(|form| form.step) else {
         return screen.stale().await;
     };
+    let Some(mut form) = state.makeup_form(message_id, step) else {
+        return screen.stale().await;
+    };
+    if action == MakeupFormAction::Back {
+        if !form.can_go_back() {
+            return screen.stale().await;
+        }
+        return back(screen, form).await;
+    }
+    if step != MakeupStep::Summary {
+        return screen.stale().await;
+    }
     match action {
         MakeupFormAction::Save => save(screen, form).await,
         MakeupFormAction::Cancel => cancel(screen, form).await,
-        MakeupFormAction::Date | MakeupFormAction::Attempts | MakeupFormAction::Disable => {
+        MakeupFormAction::Date
+        | MakeupFormAction::Attempts
+        | MakeupFormAction::Disable
+        | MakeupFormAction::Back => {
             if !form.edit(action) {
                 return screen.stale().await;
             }

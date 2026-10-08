@@ -419,7 +419,7 @@ async fn the_home_screen_counts_makeups_apart_from_the_queue() {
         .find(|text| text.starts_with(&greeting))
         .expect("the home screen is shown");
     assert!(home.contains(&texts::review_queue_line(1)), "{home}");
-    assert!(home.contains(&texts::home_makeup_line(5)), "{home}");
+    assert!(home.contains(&texts::makeup_queue_line(5)), "{home}");
 }
 
 async fn open_next_makeup(app: &TestApp, telegram: &TelegramScenario) {
@@ -938,7 +938,7 @@ async fn an_emptied_queue_names_the_makeups_still_waiting() {
     assert!(
         sent.iter()
             .any(|text| text.starts_with(texts::REVIEW_QUEUE_EMPTY)
-                && text.contains(&texts::home_makeup_line(1))),
+                && text.contains(&texts::makeup_queue_line(1))),
         "{sent:#?}"
     );
 }
@@ -1098,4 +1098,66 @@ async fn an_ended_makeup_is_shown_as_off_and_is_set_up_again_from_the_date() {
             .iter()
             .any(|text| text.contains(texts::MAKEUP_DATE_QUESTION))
     );
+}
+
+#[tokio::test]
+async fn a_step_opened_from_the_summary_returns_to_it_by_the_back_button() {
+    let app = TestApp::start().await;
+    open_makeup(&app, 3).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_form(&app, &telegram).await;
+    telegram.click_button(teacher, &answer("pass")).await;
+    telegram
+        .click_button(teacher, callbacks::MAKEUP_ATTEMPTS)
+        .await;
+    telegram.click_button(teacher, callbacks::MAKEUP_BACK).await;
+    telegram.click_button(teacher, callbacks::MAKEUP_SAVE).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(settings(&app).await.map(CourseMakeup::attempts), Some(3));
+    assert!(texts_sent(&telegram, teacher).contains(&texts::MAKEUP_SAVED.to_owned()));
+}
+
+#[tokio::test]
+async fn a_grant_after_the_makeup_was_turned_off_explains_it_and_drops_the_button() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    let opened = open_makeup(&app, 1).await;
+    let makeup = makeup_of(&app, &closed, &app.fixture.student).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    reject_the_only_makeup(&app, &telegram, makeup).await;
+    let grant = telegram
+        .button(app.teacher(), callbacks::MAKEUP_GRANT)
+        .await;
+    app.application
+        .courses
+        .configure_makeup(ConfigureMakeup {
+            course_id: app.fixture.course.id(),
+            actor: app.teacher_actor(),
+            expected: Some(opened),
+            settings: None,
+            decisions: Vec::new(),
+            now: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    telegram.click(app.teacher(), &grant);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let notice = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| {
+            message["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with(texts::MAKEUP_GRANT_UNAVAILABLE))
+        })
+        .expect("the refusal is explained");
+    assert!(!callbacks_of(&notice).contains(&callbacks::MAKEUP_GRANT.to_owned()));
 }

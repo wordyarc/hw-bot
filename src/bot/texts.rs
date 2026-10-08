@@ -514,13 +514,15 @@ pub fn review_makeup_attempts(remaining: u16, allowed: u16) -> String {
 pub fn makeups_left(makeups: u32) -> String {
     match makeups {
         0 => MAKEUP_QUEUE_DONE.to_owned(),
-        _ => home_makeup_line(makeups),
+        _ => makeup_queue_line(makeups),
     }
 }
 
 pub const MAKEUP_ATTEMPT_GRANTED: &str = "➕ Попытка досдачи добавлена.";
+pub const MAKEUP_GRANT_UNAVAILABLE: &str =
+    "Досдача по предмету закончилась или выключена: добавить попытку нельзя.";
 
-pub fn home_makeup_line(makeups: u32) -> String {
+pub fn makeup_queue_line(makeups: u32) -> String {
     format!("🩹 Досдач на проверку: {makeups}")
 }
 

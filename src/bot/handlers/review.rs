@@ -19,9 +19,8 @@ use crate::bot::views::{
     review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
 };
 use crate::domain::{
-    DomainError, Grade, Grading, LatePenalty, MakeupTerms, ReviewDecision, Submission,
-    SubmissionId, SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId,
-    USER_TEXT_MAX_LEN, UserId,
+    DomainError, Grade, Grading, LatePenalty, ReviewDecision, Submission, SubmissionId,
+    SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
 };
 use crate::pagination::PageRequest;
 
@@ -57,7 +56,7 @@ pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
                 format!(
                     "{}\n{}",
                     texts::REVIEW_QUEUE_EMPTY,
-                    texts::home_makeup_line(makeups)
+                    texts::makeup_queue_line(makeups)
                 ),
                 teacher_menu(None),
             ),
@@ -115,23 +114,17 @@ fn review_target(item: &ReviewQueueItem) -> ReviewTarget {
     }
 }
 
-fn makeup_grade(item: &ReviewQueueItem) -> Option<Option<Grade>> {
-    match (item.assignment.makeup(), item.assignment.grading()) {
-        (Some(MakeupTerms::Credit(credit)), Grading::Score { max_score }) => {
-            Some(Some(Grade::new(credit.get(), max_score.get(), None)))
-        }
-        (Some(MakeupTerms::PassFail), Grading::PassFail) => Some(None),
-        _ => None,
-    }
-}
-
 fn accept_label(item: &ReviewQueueItem) -> Option<String> {
     match item.submission.kind() {
         SubmissionKind::Regular => Some(texts::BUTTON_ACCEPT.to_owned()),
-        SubmissionKind::Makeup => makeup_grade(item).map(|grade| match grade {
-            Some(grade) => texts::accept_makeup_button(grade.raw_score()),
-            None => texts::BUTTON_ACCEPT_MAKEUP.to_owned(),
-        }),
+        SubmissionKind::Makeup => item
+            .assignment
+            .makeup_grade()
+            .ok()
+            .map(|grade| match grade {
+                Some(grade) => texts::accept_makeup_button(grade.raw_score()),
+                None => texts::BUTTON_ACCEPT_MAKEUP.to_owned(),
+            }),
     }
 }
 
@@ -409,11 +402,18 @@ pub(super) async fn grant_makeup_attempt(
     let Some(grant) = state.makeup_grant(message_id) else {
         return screen.stale().await;
     };
-    screen
+    let notice = match screen
         .services()
         .courses
         .grant_makeup_attempt(screen.actor(), grant.course_id, grant.student_id)
-        .await?;
+        .await
+    {
+        Ok(_) => texts::MAKEUP_ATTEMPT_GRANTED.to_owned(),
+        Err(AppError::Domain(DomainError::MakeupNotOffered)) => {
+            texts::MAKEUP_GRANT_UNAVAILABLE.to_owned()
+        }
+        Err(error) => return Err(error.into()),
+    };
     reset_dialogue(screen.dialogue()).await?;
     match grant.origin {
         GrantOrigin::Review { sandbox } => {
@@ -425,15 +425,12 @@ pub(super) async fn grant_makeup_attempt(
                     offer_grant: true,
                     sandbox,
                 },
-                Some(texts::MAKEUP_ATTEMPT_GRANTED),
+                Some(&notice),
             )
             .await
         }
         GrantOrigin::Grades { list } => {
-            screen
-                .bot()
-                .send_message(screen.chat_id(), texts::MAKEUP_ATTEMPT_GRANTED)
-                .await?;
+            screen.bot().send_message(screen.chat_id(), notice).await?;
             show_student_grades_page(
                 screen,
                 grant.course_id,
@@ -510,7 +507,7 @@ pub(super) async fn handle_decision(
         }
         (ReviewDecision::Accept, ReviewTarget::Makeup) => {
             let item = reload_item(screen, submission_id).await?;
-            let Some(grade) = makeup_grade(&item) else {
+            let Ok(grade) = item.assignment.makeup_grade() else {
                 return restart_with(screen, item, texts::REVIEW_MAKEUP_WITHDRAWN).await;
             };
             ask_review_comment(chat, submission_id, decision, SubmissionKind::Makeup, grade).await

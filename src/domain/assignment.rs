@@ -624,6 +624,16 @@ impl Assignment {
         self.makeup
     }
 
+    pub fn makeup_grade(&self) -> DomainResult<Option<Grade>> {
+        match (self.makeup, self.grading) {
+            (Some(MakeupTerms::Credit(credit)), Grading::Score { max_score }) => {
+                Ok(Some(Grade::new(credit.get(), max_score.get(), None)))
+            }
+            (Some(MakeupTerms::PassFail), Grading::PassFail) => Ok(None),
+            _ => Err(DomainError::MakeupNotOffered),
+        }
+    }
+
     pub fn closes_at(&self) -> DateTime<Utc> {
         Self::closing_for(self.deadline_at, self.late_policy).expect("validated assignment horizon")
     }

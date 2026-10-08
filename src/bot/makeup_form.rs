@@ -105,17 +105,16 @@ impl MakeupForm {
         }
     }
 
+    pub fn can_go_back(&self) -> bool {
+        self.previous().is_some()
+    }
+
     pub fn back(&mut self) -> bool {
         if self.mode != InputMode::Buttons {
             self.mode = InputMode::Buttons;
             return true;
         }
-        let previous = if self.return_to_summary && self.step != MakeupStep::Summary {
-            Some(MakeupStep::Summary)
-        } else {
-            self.previous()
-        };
-        let Some(step) = previous else {
+        let Some(step) = self.previous() else {
             return false;
         };
         self.go(step);
@@ -221,6 +220,9 @@ impl MakeupForm {
     }
 
     fn previous(&self) -> Option<MakeupStep> {
+        if self.return_to_summary && self.step != MakeupStep::Summary {
+            return Some(MakeupStep::Summary);
+        }
         match self.step {
             MakeupStep::Date | MakeupStep::Summary => None,
             MakeupStep::Attempts => Some(MakeupStep::Date),

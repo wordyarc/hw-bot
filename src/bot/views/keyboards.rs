@@ -13,12 +13,12 @@ use crate::bot::callbacks::{
     DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL, DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS,
     FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GRADING_PREFIX, INVITE_CANCEL_ROTATE,
     INVITE_CONFIRM_ROTATE, InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice,
-    MAKEUP_ATTEMPTS, MAKEUP_ATTEMPTS_PREFIX, MAKEUP_CANCEL, MAKEUP_DATE, MAKEUP_DISABLE,
-    MAKEUP_SAVE, MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REVIEW_ACCEPT_PREFIX,
-    REVIEW_CHANGE_PREFIX, REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX, ReplayableAction,
-    STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE, TERMS_DURATION_APPLY,
-    TERMS_DURATION_DATE, TERMS_EXIT, TERMS_MAKEUP, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS,
-    TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
+    MAKEUP_ATTEMPTS, MAKEUP_ATTEMPTS_PREFIX, MAKEUP_BACK, MAKEUP_CANCEL, MAKEUP_DATE,
+    MAKEUP_DISABLE, MAKEUP_SAVE, MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget,
+    REVIEW_ACCEPT_PREFIX, REVIEW_CHANGE_PREFIX, REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX,
+    ReplayableAction, STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
+    TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_EXIT, TERMS_MAKEUP, TERMS_PENALTY,
+    TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
 };
 use crate::bot::makeup_form::{MakeupForm, MakeupStep};
 use crate::bot::texts;
@@ -750,7 +750,7 @@ pub(super) fn makeup_form_keyboard(
     timezone: &BotTimezone,
     now: DateTime<Utc>,
 ) -> Option<InlineKeyboardMarkup> {
-    Some(match form.step {
+    let mut keyboard = match form.step {
         MakeupStep::Date => match form.mode {
             InputMode::Calendar(month) => {
                 calendar_keyboard(month, timezone.first_date_ending_after(now))
@@ -760,7 +760,13 @@ pub(super) fn makeup_form_keyboard(
         MakeupStep::Attempts => makeup_attempts_keyboard(),
         MakeupStep::Scale(_) => makeup_answer_keyboard(form.current_scale()?.grading, None),
         MakeupStep::Summary => makeup_summary_keyboard(form, timezone),
-    })
+    };
+    if form.can_go_back() {
+        keyboard
+            .inline_keyboard
+            .push(row(texts::BUTTON_BACK, MAKEUP_BACK));
+    }
+    Some(keyboard)
 }
 
 pub(crate) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
@@ -1206,6 +1212,27 @@ mod tests {
         assert_eq!(rows[rows.len() - 2][0]["callback_data"], DEADLINE_OPTIONS);
         assert_eq!(rows.last().unwrap()[0]["text"], texts::BUTTON_BACK);
         assert_eq!(rows.last().unwrap()[0]["callback_data"], TERMS_BACK);
+    }
+
+    #[test]
+    fn the_makeup_form_offers_a_step_back_only_where_one_exists() {
+        let last_action = |form: &MakeupForm| {
+            let keyboard = makeup_form_keyboard(form, &timezone(), t0()).unwrap();
+            let json = serde_json::to_value(keyboard).unwrap();
+            json["inline_keyboard"].as_array().unwrap().last().unwrap()[0]["callback_data"].clone()
+        };
+        let mut form = MakeupForm::new(TeachingCourseId::new(), None, Vec::new(), t0());
+        assert_ne!(last_action(&form), MAKEUP_BACK);
+
+        form.apply_date(t0() + chrono::Duration::days(30), t0())
+            .unwrap();
+        assert_eq!(last_action(&form), MAKEUP_BACK);
+        form.apply_attempts(3).unwrap();
+        assert_eq!(form.step, MakeupStep::Summary);
+        assert_ne!(last_action(&form), MAKEUP_BACK);
+
+        assert!(form.edit(crate::bot::callbacks::MakeupFormAction::Date));
+        assert_eq!(last_action(&form), MAKEUP_BACK);
     }
 
     fn timezone() -> BotTimezone {

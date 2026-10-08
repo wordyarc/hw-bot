@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Acceptance, Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, Grading,
-    LatePenalty, MAX_ATTEMPTS, MAX_SCORE, MakeupRequest, MakeupTerms, NonEmptyString, Offer,
-    SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
+    Acceptance, Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, LatePenalty,
+    MAX_ATTEMPTS, MAX_SCORE, MakeupRequest, NonEmptyString, Offer, SubmissionId, TeachingCourse,
+    USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -646,13 +646,7 @@ impl Submission {
                 if score.is_some() {
                     return Err(DomainError::ScoreNotAllowed);
                 }
-                match (assignment.makeup(), assignment.grading()) {
-                    (Some(MakeupTerms::Credit(credit)), Grading::Score { max_score }) => {
-                        Some(Grade::new(credit.get(), max_score.get(), None))
-                    }
-                    (Some(MakeupTerms::PassFail), Grading::PassFail) => None,
-                    _ => return Err(DomainError::MakeupNotOffered),
-                }
+                assignment.makeup_grade()?
             }
             _ => None,
         };

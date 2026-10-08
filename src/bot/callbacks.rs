@@ -68,6 +68,7 @@ pub const MAKEUP_ATTEMPTS: &str = "makeup-form:attempts";
 pub const MAKEUP_DISABLE: &str = "makeup-form:disable";
 pub const MAKEUP_SAVE: &str = "makeup-form:save";
 pub const MAKEUP_CANCEL: &str = "makeup-form:cancel";
+pub const MAKEUP_BACK: &str = "makeup-form:back";
 pub const MAKEUP_GRANT: &str = "makeup-grant";
 
 pub const FILE_ADD: &str = "file:add";
@@ -351,6 +352,7 @@ pub(super) enum MakeupFormAction {
     Disable,
     Save,
     Cancel,
+    Back,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -457,6 +459,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         MAKEUP_DISABLE => Flow(FlowAction::MakeupForm(MakeupFormAction::Disable)),
         MAKEUP_SAVE => Flow(FlowAction::MakeupForm(MakeupFormAction::Save)),
         MAKEUP_CANCEL => Flow(FlowAction::MakeupForm(MakeupFormAction::Cancel)),
+        MAKEUP_BACK => Flow(FlowAction::MakeupForm(MakeupFormAction::Back)),
         DEADLINE_CALENDAR => Flow(FlowAction::Deadline(DeadlineAction::Calendar)),
         DEADLINE_MANUAL => Flow(FlowAction::Deadline(DeadlineAction::Manual)),
         DEADLINE_OPTIONS => Flow(FlowAction::Deadline(DeadlineAction::Options)),
@@ -925,6 +928,7 @@ mod tests {
             (MAKEUP_DISABLE, MakeupFormAction::Disable),
             (MAKEUP_SAVE, MakeupFormAction::Save),
             (MAKEUP_CANCEL, MakeupFormAction::Cancel),
+            (MAKEUP_BACK, MakeupFormAction::Back),
         ] {
             assert!(data.len() <= 20, "{data}");
             assert_eq!(parse(data), Some(Flow(FlowAction::MakeupForm(action))));
