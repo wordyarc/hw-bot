@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::submissions::HistoryColumns;
+use crate::db::submissions::{history_columns, with_submission_history};
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{AssignmentId, Role, StudentGroupId, TelegramUserId, User, UserId};
 use crate::pagination::PageRequest;
@@ -82,40 +82,19 @@ pub(crate) async fn list_students_with_assignment_history<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    sqlx::query_as!(
-        AssignmentStudentCardRow,
+    with_submission_history!(
+        query_as, AssignmentStudentCardRow;
+        "student_id",
+        "assignment_id = $1",
         r#"
-        with history as (
-            select
-                student_id,
-                count(*) filter (
-                    where kind = 'regular' and status in ('accepted', 'rejected')
-                )::bigint as used_attempts,
-                count(*)::bigint as submission_count,
-                bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,
-                max(work_score) filter (
-                    where kind = 'regular' and status = 'accepted'
-                ) as accepted_regular_score,
-                bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,
-                bool_or(status = 'pending_review') as has_pending_submission
-            from submissions
-            where assignment_id = $1
-            group by student_id
-        )
-        select
-            users.id,
-            users.telegram_user_id,
-            users.role,
-            users.display_name,
-            users.student_group_id,
-            users.registered_at,
-            coalesce(history.used_attempts, 0)::bigint as "used_attempts!",
-            coalesce(history.submission_count, 0)::bigint as "submission_count!",
-            coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
-            coalesce(history.has_accepted_regular, false) as "has_accepted_regular!",
-            history.accepted_regular_score as "accepted_regular_score?",
-            coalesce(history.has_accepted_makeup, false) as "has_accepted_makeup!",
-            coalesce(history.has_pending_submission, false) as "has_pending_submission!"
+        users.id,
+        users.telegram_user_id,
+        users.role,
+        users.display_name,
+        users.student_group_id,
+        users.registered_at
+        "#,
+        r#"
         from users
         left join history
           on history.student_id = users.id
@@ -272,16 +251,7 @@ impl TryFrom<AssignmentStudentCardRow> for AssignmentStudentSummary {
             student_group_id: row.student_group_id,
             registered_at: row.registered_at,
         })?;
-        let history = HistoryColumns {
-            used_attempts: row.used_attempts,
-            submission_count: row.submission_count,
-            extra_attempts: row.extra_attempts,
-            has_accepted_regular: row.has_accepted_regular,
-            accepted_regular_score: row.accepted_regular_score,
-            has_accepted_makeup: row.has_accepted_makeup,
-            has_pending_submission: row.has_pending_submission,
-        }
-        .history()?;
+        let history = history_columns!(row).history()?;
 
         Ok(Self { student, history })
     }

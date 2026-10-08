@@ -116,6 +116,63 @@ impl HistoryColumns {
     }
 }
 
+macro_rules! with_submission_history {
+    (
+        $query:ident $(, $row:ty)?;
+        $key:literal, $filter:literal, $select:literal, $tail:literal
+        $(, $arg:expr)* $(,)?
+    ) => {
+        sqlx::$query!(
+            $($row,)?
+            r#"
+            with history as (
+                select
+                    "# + $key + r#",
+                    count(*) filter (
+                        where kind = 'regular' and status in ('accepted', 'rejected')
+                    )::bigint as used_attempts,
+                    count(*)::bigint as submission_count,
+                    bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,
+                    max(work_score) filter (
+                        where kind = 'regular' and status = 'accepted'
+                    ) as accepted_regular_score,
+                    bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,
+                    bool_or(status = 'pending_review') as has_pending_submission
+                from submissions
+                where "# + $filter + r#"
+                group by "# + $key + r#"
+            )
+            select
+                "# + $select + r#",
+                coalesce(history.used_attempts, 0)::bigint as "used_attempts!",
+                coalesce(history.submission_count, 0)::bigint as "submission_count!",
+                coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
+                coalesce(history.has_accepted_regular, false) as "has_accepted_regular!",
+                history.accepted_regular_score as "accepted_regular_score?",
+                coalesce(history.has_accepted_makeup, false) as "has_accepted_makeup!",
+                coalesce(history.has_pending_submission, false) as "has_pending_submission!"
+            "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
+macro_rules! history_columns {
+    ($row:expr) => {
+        $crate::db::submissions::HistoryColumns {
+            used_attempts: $row.used_attempts,
+            submission_count: $row.submission_count,
+            extra_attempts: $row.extra_attempts,
+            has_accepted_regular: $row.has_accepted_regular,
+            accepted_regular_score: $row.accepted_regular_score,
+            has_accepted_makeup: $row.has_accepted_makeup,
+            has_pending_submission: $row.has_pending_submission,
+        }
+    };
+}
+
+pub(super) use {history_columns, with_submission_history};
+
 macro_rules! select_submissions {
     ($tail:literal $(, $arg:expr)* $(,)?) => {
         sqlx::query_as!(
@@ -245,35 +302,12 @@ pub async fn load_histories<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let rows = sqlx::query!(
+    let rows = with_submission_history!(
+        query;
+        "assignment_id",
+        "student_id = $2 and assignment_id = any($1)",
+        r#"requested.assignment_id as "assignment_id!""#,
         r#"
-        with history as (
-            select
-                assignment_id,
-                count(*) filter (
-                    where kind = 'regular' and status in ('accepted', 'rejected')
-                )::bigint as used_attempts,
-                count(*)::bigint as submission_count,
-                bool_or(kind = 'regular' and status = 'accepted') as has_accepted_regular,
-                max(work_score) filter (
-                    where kind = 'regular' and status = 'accepted'
-                ) as accepted_regular_score,
-                bool_or(kind = 'makeup' and status = 'accepted') as has_accepted_makeup,
-                bool_or(status = 'pending_review') as has_pending_submission
-            from submissions
-            where student_id = $2
-              and assignment_id = any($1)
-            group by assignment_id
-        )
-        select
-            requested.assignment_id as "assignment_id!",
-            coalesce(history.used_attempts, 0) as "used_attempts!",
-            coalesce(history.submission_count, 0) as "submission_count!",
-            coalesce(progress.extra_attempts, 0)::smallint as "extra_attempts!",
-            coalesce(history.has_accepted_regular, false) as "has_accepted_regular!",
-            history.accepted_regular_score as "accepted_regular_score?",
-            coalesce(history.has_accepted_makeup, false) as "has_accepted_makeup!",
-            coalesce(history.has_pending_submission, false) as "has_pending_submission!"
         from unnest($1::uuid[]) as requested (assignment_id)
         left join history
           on history.assignment_id = requested.assignment_id
@@ -289,16 +323,7 @@ where
 
     rows.into_iter()
         .map(|row| {
-            let history = HistoryColumns {
-                used_attempts: row.used_attempts,
-                submission_count: row.submission_count,
-                extra_attempts: row.extra_attempts,
-                has_accepted_regular: row.has_accepted_regular,
-                accepted_regular_score: row.accepted_regular_score,
-                has_accepted_makeup: row.has_accepted_makeup,
-                has_pending_submission: row.has_pending_submission,
-            }
-            .history()?;
+            let history = history_columns!(row).history()?;
 
             Ok((AssignmentId::from_uuid(row.assignment_id), history))
         })

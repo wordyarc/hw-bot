@@ -116,7 +116,6 @@ impl BotState {
         }
     }
 
-    /// ID студента принимается только из показанного списка, чтобы отсечь чужие кнопки.
     pub(super) fn awaiting_review_comment(
         &self,
         submission_id: SubmissionId,
@@ -130,6 +129,7 @@ impl BotState {
         }
     }
 
+    /// ID студента принимается только из показанного списка, чтобы отсечь чужие кнопки.
     pub(super) fn choosing_student(
         &self,
         message_id: MessageId,

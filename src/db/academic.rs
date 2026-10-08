@@ -102,20 +102,29 @@ where
         .map_err(DbError::from)
 }
 
-pub async fn find_subject_sandbox<'e, E>(executor: E, id: SubjectId) -> DbResult<Option<bool>>
+pub async fn find_subject_with_sandbox<'e, E>(
+    executor: E,
+    id: SubjectId,
+) -> DbResult<Option<(Subject, bool)>>
 where
     E: PgExecutor<'e>,
 {
-    Ok(sqlx::query_scalar!(
+    let row = sqlx::query!(
         r#"
-        select sandbox
+        select id, name, sandbox
         from subjects
         where id = $1
         "#,
         id.as_uuid(),
     )
     .fetch_optional(executor)
-    .await?)
+    .await?;
+
+    row.map(|row| {
+        let subject = Subject::new(SubjectId::from_uuid(row.id), row.name)?;
+        Ok((subject, row.sandbox))
+    })
+    .transpose()
 }
 
 /// Вызывающий обязан объединить оба INSERT транзакцией: нельзя оставить курс без преподавателей.

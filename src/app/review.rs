@@ -260,12 +260,10 @@ impl ReviewService {
         let student = db::users::find_by_id(&mut *tx, submission.student_id())
             .await?
             .required("student")?;
-        let subject = db::academic::find_subject_by_id(&mut *tx, teaching_course.subject_id())
-            .await?
-            .required("subject")?;
-        let sandbox = db::academic::find_subject_sandbox(&mut *tx, subject.id())
-            .await?
-            .required("subject")?;
+        let (subject, sandbox) =
+            db::academic::find_subject_with_sandbox(&mut *tx, teaching_course.subject_id())
+                .await?
+                .required("subject")?;
         db::notifications::enqueue_review_result(
             &mut *tx,
             &submission,
