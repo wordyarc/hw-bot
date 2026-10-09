@@ -4,7 +4,7 @@ use hw_bot::domain::{DeductedFrom, SubmissionKind};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, out_of, submission_id};
 
 #[tokio::test]
 async fn expired_notification_lease_can_be_reclaimed() {
@@ -93,7 +93,7 @@ async fn a_claimed_notification_names_the_scale_and_deduction_in_force_at_review
             .await
             .created(),
     );
-    app.review_with_score(submission, app.teacher(), "accept", 8, "Ок")
+    app.review_with_score(submission, app.teacher(), "accept", out_of(8, 10), "Ок")
         .await
         .ok();
     app.post_as(

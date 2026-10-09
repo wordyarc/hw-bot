@@ -369,6 +369,28 @@ pub async fn latest_for_student<'e, E: PgExecutor<'e>>(
     .transpose()
 }
 
+pub async fn list_previous_attempts<'e, E>(
+    executor: E,
+    submission: &Submission,
+    limit: u16,
+) -> DbResult<Vec<Submission>>
+where
+    E: PgExecutor<'e>,
+{
+    select_submissions!(
+        "where assignment_id = $1 and student_id = $2 and attempt_number < $3 order by attempt_number desc limit $4",
+        submission.assignment_id().as_uuid(),
+        submission.student_id().as_uuid(),
+        checked_num_cast::<_, i16>(ATTEMPT_NUMBER, submission.attempt_number())?,
+        i64::from(limit),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(Submission::try_from)
+    .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct CourseGradeRow {
     pub student_id: UserId,

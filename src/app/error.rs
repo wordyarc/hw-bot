@@ -82,6 +82,7 @@ impl AppError {
                 | DomainError::InvalidLatePolicy { .. }
                 | DomainError::LatePolicyRequiresScoredGrading
                 | DomainError::ScoreOutOfRange { .. }
+                | DomainError::ScoreScaleMismatch { .. }
                 | DomainError::ScoreRequired
                 | DomainError::ScoreNotAllowed
                 | DomainError::AssignmentClosingOutOfRange

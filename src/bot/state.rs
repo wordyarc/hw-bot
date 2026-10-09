@@ -6,8 +6,8 @@ use super::assignment_form::{AssignmentText, DraftAssignment, InputMode, TermsFo
 use super::makeup_form::{MakeupForm, MakeupStep};
 use super::views::MenuAction;
 use crate::domain::{
-    AssignmentId, Grading, InviteGeneration, LatePenalty, ReviewDecision, StoredFileId,
-    SubmissionId, TeachingCourseId, TelegramUserId, UserId,
+    AssignmentId, Grading, InviteGeneration, LatePenalty, ReviewDecision, ReviewScore,
+    StoredFileId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::invites::VerifiedInvite;
 
@@ -379,7 +379,7 @@ pub(super) enum FlowState {
     AwaitingReviewComment {
         submission_id: SubmissionId,
         decision: ReviewDecision,
-        score: Option<u16>,
+        score: Option<ReviewScore>,
     },
     AwaitingBulkReviewComment {
         decision: ReviewDecision,
@@ -484,7 +484,10 @@ mod tests {
         let state = BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id: current,
             decision: ReviewDecision::Accept,
-            score: Some(4),
+            score: Some(ReviewScore {
+                value: 4,
+                max_score: 5,
+            }),
         });
 
         assert_eq!(state.awaiting_review_comment(current), Some(current));

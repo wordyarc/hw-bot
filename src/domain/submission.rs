@@ -184,6 +184,12 @@ str_enum! {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewScore {
+    pub value: u16,
+    pub max_score: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Grade {
     raw_score: u16,
     max_score: u16,
@@ -579,7 +585,7 @@ impl Submission {
         assignment: &Assignment,
         teaching_course: &TeachingCourse,
         reviewer: &User,
-        score: Option<u16>,
+        score: Option<ReviewScore>,
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
@@ -620,7 +626,7 @@ impl Submission {
         teaching_course: &TeachingCourse,
         reviewer: &User,
         status: SubmissionStatus,
-        score: Option<u16>,
+        score: Option<ReviewScore>,
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
@@ -643,19 +649,7 @@ impl Submission {
         let grade = match (status, self.kind) {
             (SubmissionStatus::Accepted, SubmissionKind::Regular) => {
                 // Берём время отправки, чтобы длительность проверки не влияла на штраф студенту.
-                let late = assignment.late_penalty_at(self.submitted_at);
-                let max_score = assignment.grading().max_score();
-
-                assignment
-                    .grading()
-                    .validate_score(score)?
-                    .map(|raw_score| {
-                        Grade::new(
-                            raw_score,
-                            max_score.expect("a validated score requires scored grading"),
-                            late,
-                        )
-                    })
+                assignment.regular_grade(score, self.submitted_at)?
             }
             (SubmissionStatus::Accepted, SubmissionKind::Makeup) => {
                 if score.is_some() {

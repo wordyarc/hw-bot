@@ -1,3 +1,4 @@
+use std::ops::RangeInclusive;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,9 +8,9 @@ use hw_bot::bot::{app_error_message, callbacks, texts};
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, DeductedFrom, Grade, ReviewDecision, SubmissionId, SubmissionKind,
-    USER_TEXT_MAX_LEN,
+    SubmissionStatus, USER_TEXT_MAX_LEN,
 };
-use hw_bot::test_support::submission as submission_of;
+use hw_bot::test_support::{assignment as assignment_of, history, submission as submission_of};
 use serde_json::{Value, json};
 use uuid::Uuid;
 use wiremock::matchers::{body_partial_json, method, path};
@@ -17,15 +18,93 @@ use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, out_of, submission_id};
 
 fn regular_grade(grade: Grade) -> String {
     texts::grade_line(SubmissionKind::Regular, Some(grade)).unwrap()
 }
 
 #[tokio::test]
+async fn the_review_card_shows_ten_previous_attempts_without_a_notice() {
+    assert_previous_attempts_on_the_card(10, 1..=10, false).await;
+}
+
+#[tokio::test]
+async fn the_review_card_hides_attempts_before_the_latest_ten_and_says_so() {
+    assert_previous_attempts_on_the_card(11, 2..=11, true).await;
+}
+
+async fn assert_previous_attempts_on_the_card(
+    previous: u16,
+    shown: RangeInclusive<u16>,
+    hidden: bool,
+) {
+    let app = TestApp::start().await;
+    let assignment = assignment_of(&app.fixture.course, &app.fixture.teacher)
+        .max_attempts(previous + 1)
+        .published()
+        .build();
+    db::assignments::insert(&app.pool, &assignment)
+        .await
+        .unwrap();
+    for used in 0..previous {
+        let mut attempt = submission_of(&assignment, &app.fixture.student)
+            .history(history().used(used).build())
+            .content(format!("pull/{}", used + 1))
+            .build();
+        attempt
+            .reject(
+                &assignment,
+                &app.fixture.course,
+                &app.fixture.teacher,
+                "Ещё раз",
+                Utc::now(),
+            )
+            .unwrap();
+        db::submissions::insert(&app.pool, &attempt).await.unwrap();
+    }
+    let pending = submission_of(&assignment, &app.fixture.student)
+        .history(history().used(previous).build())
+        .build();
+    db::submissions::insert(&app.pool, &pending).await.unwrap();
+
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, pending.id().as_uuid()),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.teacher());
+    let rejected = texts::submission_status(SubmissionStatus::Rejected);
+    for number in 1..=previous {
+        let attempt =
+            texts::previous_attempt(number, rejected, &format!("pull/{number}"), Some("Ещё раз"));
+        assert_eq!(
+            sent.contains(&attempt),
+            shown.contains(&number),
+            "attempt {number}: {sent:#?}"
+        );
+    }
+    assert_eq!(
+        sent.contains(&texts::earlier_attempts_hidden(10)),
+        hidden,
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
 async fn review_restarts_when_the_selected_score_exceeds_the_new_scale() {
     assert_review_recovers_from_grading_change(Some(5), Some(3)).await;
+}
+
+#[tokio::test]
+async fn review_restarts_when_the_scale_grows_after_the_score_was_chosen() {
+    assert_review_recovers_from_grading_change(Some(5), Some(10)).await;
 }
 
 #[tokio::test]
@@ -383,7 +462,7 @@ async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
             .await
             .created(),
     );
-    app.review_with_score(submission, app.teacher(), "accept", 4, "Ок")
+    app.review_with_score(submission, app.teacher(), "accept", out_of(4, 5), "Ок")
         .await
         .ok();
     let updates = vec![
@@ -435,7 +514,7 @@ async fn the_student_card_shows_penalties_to_the_course_total() {
                 .await
                 .created(),
         );
-        app.review_with_score(submission, app.teacher(), "accept", score, "Ок")
+        app.review_with_score(submission, app.teacher(), "accept", out_of(score, 10), "Ок")
             .await
             .ok();
     }

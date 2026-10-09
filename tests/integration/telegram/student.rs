@@ -13,7 +13,7 @@ use wiremock::matchers::{body_json, method, path};
 
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, out_of, submission_id};
 
 async fn delayed_submission(
     app: &TestApp,
@@ -64,7 +64,7 @@ async fn a_delayed_submission_does_not_get_a_penalty_for_processing_time() {
         submission.id().as_uuid(),
         app.teacher(),
         "accept",
-        5,
+        out_of(5, 5),
         "Принято",
     )
     .await
@@ -135,7 +135,7 @@ async fn the_history_shows_a_penalty_to_the_course_total_next_to_the_work_score(
             .await
             .created(),
     );
-    app.review_with_score(submission, app.teacher(), "accept", 8, "Ок")
+    app.review_with_score(submission, app.teacher(), "accept", out_of(8, 10), "Ок")
         .await
         .ok();
     let grade = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))

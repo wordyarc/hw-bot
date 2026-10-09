@@ -3,7 +3,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use crate::domain::{
     Acceptance, Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom,
     DomainError, Grade, Grading, LATEST_TERM_YEAR, LatePolicy, MakeupRequest, MakeupTerms,
-    NewAssignment, Offer, Role, StaffRole, StudentAssignmentProgress, Submission,
+    NewAssignment, Offer, ReviewScore, Role, StaffRole, StudentAssignmentProgress, Submission,
     SubmissionHistory, SubmissionId, SubmissionKind, SubmissionStatus, TeachingCourse,
     TelegramUserId, User, UserId,
 };
@@ -14,6 +14,10 @@ use crate::test_support::{
 
 fn reviewed_at() -> DateTime<Utc> {
     t0() + Duration::hours(2)
+}
+
+fn out_of(value: u16, max_score: u16) -> Option<ReviewScore> {
+    Some(ReviewScore { value, max_score })
 }
 
 #[test]
@@ -770,7 +774,7 @@ fn a_review_freezes_the_lateness_of_the_submission_not_of_the_review() {
             &assignment,
             &course,
             &teacher,
-            Some(5),
+            out_of(5, 5),
             "Ок",
             deadline_at + Duration::days(30),
         )
@@ -803,7 +807,7 @@ fn a_penalty_larger_than_the_score_leaves_an_accepted_submission_with_zero() {
             &assignment,
             &course,
             &teacher,
-            Some(4),
+            out_of(4, 5),
             "Ок",
             deadline_at + Duration::days(29),
         )
@@ -839,7 +843,7 @@ fn an_effective_penalty_is_capped_at_the_global_score_limit() {
             &assignment,
             &course,
             &teacher,
-            Some(100),
+            out_of(100, 100),
             "Ок",
             deadline_at + Duration::days(3),
         )
@@ -867,7 +871,14 @@ fn a_deduction_change_after_a_review_applies_only_to_later_reviews() {
         .submitted_at(submitted_at)
         .build();
     first
-        .accept(&assignment, &course, &teacher, Some(5), "Ок", reviewed_at())
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            out_of(5, 5),
+            "Ок",
+            reviewed_at(),
+        )
         .unwrap();
     let given = first.grade().unwrap();
 
@@ -880,7 +891,14 @@ fn a_deduction_change_after_a_review_applies_only_to_later_reviews() {
         )
         .unwrap();
     second
-        .accept(&assignment, &course, &teacher, Some(5), "Ок", reviewed_at())
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            out_of(5, 5),
+            "Ок",
+            reviewed_at(),
+        )
         .unwrap();
 
     assert_eq!(first.grade(), Some(given));
@@ -902,7 +920,14 @@ fn an_on_time_submission_carries_no_deduction_whatever_the_policy() {
         .build();
 
     submission
-        .accept(&assignment, &course, &teacher, Some(5), "Ок", reviewed_at())
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            out_of(5, 5),
+            "Ок",
+            reviewed_at(),
+        )
         .unwrap();
 
     let grade = submission.grade().unwrap();
@@ -1058,7 +1083,14 @@ fn score_above_the_scale_is_rejected() {
     let assignment = assignment(&course, &teacher).scored(5).published().build();
     let mut submission = submission(&assignment, &student).build();
 
-    let result = submission.accept(&assignment, &course, &teacher, Some(6), "Ок", reviewed_at());
+    let result = submission.accept(
+        &assignment,
+        &course,
+        &teacher,
+        out_of(6, 5),
+        "Ок",
+        reviewed_at(),
+    );
 
     assert_eq!(
         result.unwrap_err(),
@@ -1075,7 +1107,14 @@ fn score_on_pass_fail_assignment_is_rejected() {
     let assignment = assignment(&course, &teacher).published().build();
     let mut submission = submission(&assignment, &student).build();
 
-    let result = submission.accept(&assignment, &course, &teacher, Some(1), "Ок", reviewed_at());
+    let result = submission.accept(
+        &assignment,
+        &course,
+        &teacher,
+        out_of(1, 5),
+        "Ок",
+        reviewed_at(),
+    );
 
     assert_eq!(result.unwrap_err(), DomainError::ScoreNotAllowed);
 }
@@ -1090,7 +1129,14 @@ fn accepted_scored_submission_keeps_the_score_of_the_reviewer() {
     let mut submission = submission(&assignment, &student).build();
 
     submission
-        .accept(&assignment, &course, &teacher, Some(4), "Ок", reviewed_at())
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            out_of(4, 5),
+            "Ок",
+            reviewed_at(),
+        )
         .unwrap();
 
     let grade = submission.grade().unwrap();
@@ -1956,7 +2002,7 @@ fn a_makeup_is_credited_by_the_terms_at_review_without_a_penalty() {
         .build();
 
     assert_eq!(
-        makeup.accept(&work, &course, &teacher, Some(6), "Ок", reviewed_at()),
+        makeup.accept(&work, &course, &teacher, out_of(6, 10), "Ок", reviewed_at()),
         Err(DomainError::ScoreNotAllowed)
     );
     assert!(makeup.is_pending_review());

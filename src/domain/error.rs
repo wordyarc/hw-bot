@@ -109,6 +109,9 @@ pub enum DomainError {
     #[error("score must be in 0..={max}, got {value}")]
     ScoreOutOfRange { value: u16, max: u16 },
 
+    #[error("score was given out of {given_max}, but the assignment is graded out of {max}")]
+    ScoreScaleMismatch { given_max: u16, max: u16 },
+
     #[error("scored assignment requires a score")]
     ScoreRequired,
 

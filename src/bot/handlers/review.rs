@@ -19,7 +19,7 @@ use crate::bot::views::{
     review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
 };
 use crate::domain::{
-    DomainError, Grade, Grading, LatePenalty, ReviewDecision, Submission, SubmissionId,
+    DomainError, Grade, Grading, LatePenalty, ReviewDecision, ReviewScore, SubmissionId,
     SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
 };
 use crate::pagination::PageRequest;
@@ -159,19 +159,18 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
         None,
     )
     .await?;
-    let submission_header =
-        match send_previous_attempts(bot, chat_id, &item.previous_attempts).await {
-            Ok(()) => texts::SUBMISSION_HEADER.to_owned(),
-            Err(error) if error.is_invalid_token() => return Err(error),
-            Err(error) => {
-                log_handler_error(&error);
-                format!(
-                    "{}\n\n{}",
-                    texts::PREVIOUS_ATTEMPTS_INCOMPLETE,
-                    texts::SUBMISSION_HEADER
-                )
-            }
-        };
+    let submission_header = match send_previous_attempts(bot, chat_id, &item).await {
+        Ok(()) => texts::SUBMISSION_HEADER.to_owned(),
+        Err(error) if error.is_invalid_token() => return Err(error),
+        Err(error) => {
+            log_handler_error(&error);
+            format!(
+                "{}\n\n{}",
+                texts::PREVIOUS_ATTEMPTS_INCOMPLETE,
+                texts::SUBMISSION_HEADER
+            )
+        }
+    };
     bot.send_message(chat_id, submission_header).await?;
     send_message_chunks(
         bot,
@@ -214,9 +213,16 @@ fn review_card_summary(item: &ReviewQueueItem, target: ReviewTarget) -> String {
 async fn send_previous_attempts(
     bot: &Bot,
     chat_id: ChatId,
-    attempts: &[Submission],
+    item: &ReviewQueueItem,
 ) -> HandlerResult {
-    for attempt in attempts {
+    if item.earlier_attempts_hidden {
+        bot.send_message(
+            chat_id,
+            texts::earlier_attempts_hidden(item.previous_attempts.len()),
+        )
+        .await?;
+    }
+    for attempt in &item.previous_attempts {
         let text = texts::previous_attempt(
             attempt.attempt_number(),
             texts::submission_status(attempt.status()),
@@ -260,7 +266,7 @@ pub(super) async fn submit_comment(
     step: TextStep<'_>,
     submission_id: SubmissionId,
     decision: ReviewDecision,
-    score: Option<u16>,
+    score: Option<ReviewScore>,
 ) -> HandlerResult {
     let bot = step.bot();
     let message = step.message();
@@ -322,7 +328,7 @@ pub(super) async fn submit_comment(
         Err(AppError::Domain(
             DomainError::ScoreRequired
             | DomainError::ScoreNotAllowed
-            | DomainError::ScoreOutOfRange { .. },
+            | DomainError::ScoreScaleMismatch { .. },
         )) => {
             restart_review(screen, submission_id, texts::REVIEW_GRADING_CHANGED).await?;
         }
@@ -556,7 +562,10 @@ async fn ask_review_comment(
     grade: Option<Grade>,
 ) -> HandlerResult {
     let score = match kind {
-        SubmissionKind::Regular => grade.map(Grade::raw_score),
+        SubmissionKind::Regular => grade.map(|grade| ReviewScore {
+            value: grade.raw_score(),
+            max_score: grade.max_score(),
+        }),
         SubmissionKind::Makeup => None,
     };
     chat.dialogue()

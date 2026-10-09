@@ -12,7 +12,7 @@ use hw_bot::pagination::PageRequest;
 use hw_bot::test_support::{assignment as assignment_of, submission as submission_of};
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, out_of, submission_id};
 
 fn ten() -> Grading {
     Grading::scored(10).unwrap()
@@ -582,7 +582,7 @@ async fn the_student_list_and_card_offer_a_makeup_only_where_it_can_be_sent() {
             .await
             .created(),
     );
-    app.review_with_score(accepted, app.teacher(), "accept", 6, "Минимум")
+    app.review_with_score(accepted, app.teacher(), "accept", out_of(6, 10), "Минимум")
         .await
         .ok();
     app.change_deadline(
@@ -790,7 +790,7 @@ async fn closed_with_accepted_work(
         accepted.id().as_uuid(),
         app.teacher(),
         "accept",
-        score,
+        out_of(score, 10),
         "Принято",
     )
     .await

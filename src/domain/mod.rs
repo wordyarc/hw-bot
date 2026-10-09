@@ -34,7 +34,8 @@ pub use makeup::{
     MakeupRequest, MakeupTerms, Offer,
 };
 pub use submission::{
-    Grade, ReviewDecision, Submission, SubmissionHistory, SubmissionKind, SubmissionStatus,
+    Grade, ReviewDecision, ReviewScore, Submission, SubmissionHistory, SubmissionKind,
+    SubmissionStatus,
 };
 pub use text::{
     ASSIGNMENT_TITLE_MAX_LEN, DISPLAY_NAME_MAX_LEN, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN,

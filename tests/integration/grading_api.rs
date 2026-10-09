@@ -7,7 +7,7 @@ use hw_bot::pagination::PageRequest;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, assignment_id, submission_id};
+use crate::harness::{TestApp, assignment_id, out_of, submission_id};
 
 async fn scored_submission(app: &TestApp, max_score: u16) -> uuid::Uuid {
     let assignment = app.add_scored_assignment(max_score).await;
@@ -24,7 +24,7 @@ async fn accepting_with_a_score_stores_the_whole_arithmetic() {
     let submission = scored_submission(&app, 5).await;
 
     let body = app
-        .review_with_score(submission, app.teacher(), "accept", 4, "Хорошо")
+        .review_with_score(submission, app.teacher(), "accept", out_of(4, 5), "Хорошо")
         .await
         .ok();
 
@@ -52,7 +52,7 @@ async fn a_penalty_to_the_course_total_reaches_the_submission_response() {
     );
 
     let body = app
-        .review_with_score(submission, app.teacher(), "accept", 8, "Ок")
+        .review_with_score(submission, app.teacher(), "accept", out_of(8, 10), "Ок")
         .await
         .ok();
 
@@ -208,7 +208,7 @@ async fn the_notification_carries_the_score_of_the_review() {
     let app = TestApp::start().await;
     let submission = scored_submission(&app, 5).await;
 
-    app.review_with_score(submission, app.teacher(), "accept", 4, "Хорошо")
+    app.review_with_score(submission, app.teacher(), "accept", out_of(4, 5), "Хорошо")
         .await
         .ok();
 
@@ -237,7 +237,7 @@ async fn a_review_freezes_the_scale_after_the_assignment_becomes_pass_fail() {
             .await
             .created(),
     );
-    app.review_with_score(submission, app.teacher(), "accept", 4, "Хорошо")
+    app.review_with_score(submission, app.teacher(), "accept", out_of(4, 5), "Хорошо")
         .await
         .ok();
 
@@ -387,7 +387,13 @@ async fn a_late_submission_before_the_horizon_is_accepted_with_a_penalty() {
         .await
         .created();
     let body = app
-        .review_with_score(submission_id(&submitted), app.teacher(), "accept", 5, "Ок")
+        .review_with_score(
+            submission_id(&submitted),
+            app.teacher(),
+            "accept",
+            out_of(5, 5),
+            "Ок",
+        )
         .await
         .ok();
 
@@ -549,7 +555,7 @@ async fn moving_a_deadline_back_does_not_truncate_the_stored_lateness_counter() 
     .await
     .ok();
     let body = app
-        .review_with_score(id, app.teacher(), "accept", 5, "Ок")
+        .review_with_score(id, app.teacher(), "accept", out_of(5, 5), "Ок")
         .await
         .ok();
     assert!(body["late_periods"].as_u64().unwrap() > u64::from(u16::MAX));
@@ -592,9 +598,19 @@ async fn reviewed(app: &TestApp, assignment: &Assignment, score: u16) {
             .await
             .created(),
     );
-    app.review_with_score(submission, app.teacher(), "accept", score, "Ок")
-        .await
-        .ok();
+    let max_score = assignment
+        .grading()
+        .max_score()
+        .expect("a scored assignment");
+    app.review_with_score(
+        submission,
+        app.teacher(),
+        "accept",
+        out_of(score, max_score),
+        "Ок",
+    )
+    .await
+    .ok();
 }
 
 async fn student_grades(app: &TestApp) -> StudentGrades {
@@ -737,7 +753,7 @@ async fn the_gradebook_sums_only_reviewed_scores() {
             .await
             .created(),
     );
-    app.review_with_score(reviewed, app.teacher(), "accept", 4, "Ок")
+    app.review_with_score(reviewed, app.teacher(), "accept", out_of(4, 5), "Ок")
         .await
         .ok();
     app.submit(second.id().as_uuid(), app.student(), "pull/2")
@@ -833,7 +849,7 @@ async fn archiving_an_unpublished_draft_does_not_increase_the_gradebook_maximum(
 async fn a_rejection_with_a_score_does_not_finish_the_review() {
     let app = TestApp::start().await;
     let id = app.queued_submission(app.student(), "pull/1").await;
-    app.review_with_score(id, app.teacher(), "reject", 4, "Fix it")
+    app.review_with_score(id, app.teacher(), "reject", out_of(4, 5), "Fix it")
         .await
         .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
     app.review(id, app.teacher(), "reject", "Fix it").await.ok();
@@ -849,7 +865,7 @@ async fn moving_the_deadline_does_not_change_a_grade_that_was_already_given() {
             .created(),
     );
     let reviewed = app
-        .review_with_score(submission, app.teacher(), "accept", 5, "Ок")
+        .review_with_score(submission, app.teacher(), "accept", out_of(5, 5), "Ок")
         .await
         .ok();
     assert_eq!(reviewed["work_score"], json!(4));

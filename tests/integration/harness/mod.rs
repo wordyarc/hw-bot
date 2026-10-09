@@ -10,8 +10,8 @@ use hw_bot::api::{self, ACTOR_HEADER, AppState};
 use hw_bot::app::{Actor, ApplicationContainer, ConfigureMakeup, FilePolicy, MakeupSettings};
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, CourseMakeup, DeductedFrom, EducationLevel, Grading, MakeupTerms, StudentGroup,
-    StudentGroupId, Subject, TeachingCourse, User,
+    Assignment, CourseMakeup, DeductedFrom, EducationLevel, Grading, MakeupTerms, ReviewScore,
+    StudentGroup, StudentGroupId, Subject, TeachingCourse, User,
 };
 use hw_bot::health::HealthState;
 use hw_bot::invites::{GroupInviteCodec, InviteSigningSecret};
@@ -311,13 +311,18 @@ impl TestApp {
         submission: Uuid,
         telegram_id: i64,
         decision: &str,
-        score: u16,
+        score: ReviewScore,
         comment: &str,
     ) -> TestResponse {
         self.review_raw(
             submission,
             telegram_id,
-            json!({ "decision": decision, "score": score, "comment": comment }),
+            json!({
+                "decision": decision,
+                "score": score.value,
+                "max_score": score.max_score,
+                "comment": comment,
+            }),
         )
         .await
     }
@@ -724,6 +729,10 @@ fn json_request(builder: Builder, body: Value) -> Request<Body> {
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).expect("valid json")))
         .expect("valid request")
+}
+
+pub fn out_of(value: u16, max_score: u16) -> ReviewScore {
+    ReviewScore { value, max_score }
 }
 
 #[track_caller]

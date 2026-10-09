@@ -10,7 +10,7 @@ use super::ApiPath as Path;
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{ReviewQueueItem, ReviewSubmission};
-use crate::domain::{Assignment, ReviewDecision, SubmissionId, User};
+use crate::domain::{Assignment, ReviewDecision, ReviewScore, SubmissionId, User};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,7 +18,23 @@ pub struct ReviewSubmissionRequest {
     decision: ReviewDecision,
     #[serde(default)]
     score: Option<u16>,
+    #[serde(default)]
+    max_score: Option<u16>,
     comment: String,
+}
+
+impl ReviewSubmissionRequest {
+    fn score(&self) -> Result<Option<ReviewScore>, ApiError> {
+        match (self.score, self.max_score) {
+            (None, None) => Ok(None),
+            (Some(value), Some(max_score)) => Ok(Some(ReviewScore { value, max_score })),
+            _ => Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_input",
+                "score needs the max_score it was given against",
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -118,7 +134,7 @@ pub async fn review_submission(
         submission_id,
         actor: reviewer,
         decision: request.decision,
-        score: request.score,
+        score: request.score()?,
         comment: request.comment,
         reviewed_at: Utc::now(),
     };
@@ -126,4 +142,43 @@ pub async fn review_submission(
     let reviewed = state.application.reviews.review_submission(command).await?;
 
     Ok(Json(SubmissionResponse::from(&reviewed.submission)))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn score(body: Value) -> Result<Option<ReviewScore>, ApiError> {
+        serde_json::from_value::<ReviewSubmissionRequest>(body)
+            .unwrap()
+            .score()
+    }
+
+    #[test]
+    fn a_score_travels_only_with_the_maximum_it_was_given_against() {
+        assert_eq!(
+            score(json!({"decision": "accept", "comment": "Ок"})).unwrap(),
+            None
+        );
+        assert_eq!(
+            score(json!({"decision": "accept", "score": 4, "max_score": 5, "comment": "Ок"}))
+                .unwrap(),
+            Some(ReviewScore {
+                value: 4,
+                max_score: 5
+            })
+        );
+        for body in [
+            json!({"decision": "accept", "score": 4, "comment": "Ок"}),
+            json!({"decision": "accept", "max_score": 5, "comment": "Ок"}),
+        ] {
+            let error = score(body).unwrap_err();
+            assert_eq!(
+                (error.status(), error.code()),
+                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_input")
+            );
+        }
+    }
 }

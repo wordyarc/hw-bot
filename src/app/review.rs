@@ -11,11 +11,13 @@ use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::db::submissions::ReviewStream;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, ReviewDecision, Subject, Submission, SubmissionId,
-    SubmissionKind, TeachingCourse, TeachingCourseId, User,
+    Assignment, AssignmentId, DomainError, ReviewDecision, ReviewScore, Subject, Submission,
+    SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{MakeupPool, SandboxSubmission};
+
+const PREVIOUS_ATTEMPTS_SHOWN: u16 = 10;
 
 async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
 where
@@ -38,7 +40,7 @@ pub struct ReviewSubmission {
     pub submission_id: SubmissionId,
     pub actor: Actor,
     pub decision: ReviewDecision,
-    pub score: Option<u16>,
+    pub score: Option<ReviewScore>,
     pub comment: String,
     pub reviewed_at: DateTime<Utc>,
 }
@@ -66,6 +68,7 @@ pub struct ReviewQueueItem {
     pub subject: Subject,
     pub student: User,
     pub previous_attempts: Vec<Submission>,
+    pub earlier_attempts_hidden: bool,
     pub makeup: Option<MakeupPool>,
 }
 
@@ -122,7 +125,8 @@ impl ReviewService {
             return Ok(None);
         };
 
-        let item = load_queue_item(&mut tx, submission).await?;
+        let context = load_review_context(&mut tx, submission.assignment_id()).await?;
+        let item = load_queue_item(&mut tx, submission, context).await?;
         tx.commit().await?;
         Ok(Some(item))
     }
@@ -169,7 +173,16 @@ impl ReviewService {
             };
 
             let score = match submission.kind() {
-                SubmissionKind::Regular => context.assignment.grading().max_score(),
+                SubmissionKind::Regular => {
+                    context
+                        .assignment
+                        .grading()
+                        .max_score()
+                        .map(|max_score| ReviewScore {
+                            value: max_score,
+                            max_score,
+                        })
+                }
                 SubmissionKind::Makeup => None,
             };
             let decided = match command.decision {
@@ -195,19 +208,7 @@ impl ReviewService {
             }
             reviewed += 1;
 
-            db::submissions::save_review_result(&mut *tx, &submission).await?;
-
-            let student = db::users::find_by_id(&mut *tx, submission.student_id())
-                .await?
-                .required("student")?;
-            db::notifications::enqueue_review_result(
-                &mut *tx,
-                &submission,
-                &context.assignment,
-                &context.subject,
-                &student,
-            )
-            .await?;
+            record_review(&mut tx, &submission, context).await?;
         }
 
         tx.commit().await?;
@@ -226,20 +227,12 @@ impl ReviewService {
         let mut submission = db::submissions::find_by_id(&mut *tx, command.submission_id)
             .await?
             .required("submission")?;
-
-        let assignment = db::assignments::find_by_id(&mut *tx, submission.assignment_id())
-            .await?
-            .required("assignment")?;
-
-        let teaching_course =
-            db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
+        let context = load_review_context(&mut tx, submission.assignment_id()).await?;
 
         match command.decision {
             ReviewDecision::Accept => submission.accept(
-                &assignment,
-                &teaching_course,
+                &context.assignment,
+                &context.course,
                 &reviewer,
                 command.score,
                 command.comment,
@@ -249,38 +242,22 @@ impl ReviewService {
                 return Err(DomainError::ScoreNotAllowed.into());
             }
             ReviewDecision::Reject => submission.reject(
-                &assignment,
-                &teaching_course,
+                &context.assignment,
+                &context.course,
                 &reviewer,
                 command.comment,
                 command.reviewed_at,
             )?,
         }
 
-        db::submissions::save_review_result(&mut *tx, &submission).await?;
-
-        let student = db::users::find_by_id(&mut *tx, submission.student_id())
-            .await?
-            .required("student")?;
-        let (subject, sandbox) =
-            db::academic::find_subject_with_sandbox(&mut *tx, teaching_course.subject_id())
-                .await?
-                .required("subject")?;
-        db::notifications::enqueue_review_result(
-            &mut *tx,
-            &submission,
-            &assignment,
-            &subject,
-            &student,
-        )
-        .await?;
+        record_review(&mut tx, &submission, &context).await?;
 
         tx.commit().await?;
 
         Ok(ReviewedSubmission {
             submission,
-            course_id: teaching_course.id(),
-            sandbox,
+            course_id: context.course.id(),
+            sandbox: context.sandbox,
         })
     }
 
@@ -294,19 +271,14 @@ impl ReviewService {
         let submission = db::submissions::find_by_id(&mut *connection, submission_id)
             .await?
             .required("submission")?;
-        let item = load_queue_item(&mut connection, submission).await?;
-        let course = db::academic::find_teaching_course_by_id(
-            &mut *connection,
-            item.assignment.teaching_course_id(),
-        )
-        .await?
-        .required("teaching course")?;
-        item.assignment
-            .ensure_managed_by(&course, &reviewer, "review homework")?;
-        if !item.submission.is_pending_review() {
+        let context = load_review_context(&mut connection, submission.assignment_id()).await?;
+        context
+            .assignment
+            .ensure_managed_by(&context.course, &reviewer, "review homework")?;
+        if !submission.is_pending_review() {
             return Err(DomainError::SubmissionIsNotPendingReview.into());
         }
-        Ok(item)
+        load_queue_item(&mut connection, submission, context).await
     }
 }
 
@@ -314,6 +286,7 @@ struct ReviewContext {
     assignment: Assignment,
     course: TeachingCourse,
     subject: Subject,
+    sandbox: bool,
 }
 
 async fn load_review_context(
@@ -327,46 +300,63 @@ async fn load_review_context(
         db::academic::find_teaching_course_by_id(&mut *connection, assignment.teaching_course_id())
             .await?
             .required("teaching course")?;
-    let subject = db::academic::find_subject_by_id(&mut *connection, assignment.subject_id())
-        .await?
-        .required("subject")?;
+    let (subject, sandbox) =
+        db::academic::find_subject_with_sandbox(&mut *connection, assignment.subject_id())
+            .await?
+            .required("subject")?;
 
     Ok(ReviewContext {
         assignment,
         course,
         subject,
+        sandbox,
     })
+}
+
+async fn record_review(
+    connection: &mut PgConnection,
+    submission: &Submission,
+    context: &ReviewContext,
+) -> AppResult<()> {
+    db::submissions::save_review_result(&mut *connection, submission).await?;
+
+    let student = db::users::find_by_id(&mut *connection, submission.student_id())
+        .await?
+        .required("student")?;
+    db::notifications::enqueue_review_result(
+        &mut *connection,
+        submission,
+        &context.assignment,
+        &context.subject,
+        &student,
+    )
+    .await?;
+
+    Ok(())
 }
 
 async fn load_queue_item(
     connection: &mut PgConnection,
     submission: Submission,
+    context: ReviewContext,
 ) -> AppResult<ReviewQueueItem> {
-    let assignment = db::assignments::find_by_id(&mut *connection, submission.assignment_id())
-        .await?
-        .required("assignment")?;
-    let subject = db::academic::find_subject_by_id(&mut *connection, assignment.subject_id())
-        .await?
-        .required("subject")?;
     let student = db::users::find_by_id(&mut *connection, submission.student_id())
         .await?
         .required("student")?;
-    let mut previous_attempts: Vec<_> = db::submissions::list_for_student(
+    let mut previous_attempts = db::submissions::list_previous_attempts(
         &mut *connection,
-        assignment.id(),
-        student.id(),
-        PageRequest::default(),
+        &submission,
+        PREVIOUS_ATTEMPTS_SHOWN + 1,
     )
-    .await?
-    .into_iter()
-    .filter(|attempt| attempt.attempt_number() < submission.attempt_number())
-    .collect();
+    .await?;
+    let earlier_attempts_hidden = previous_attempts.len() > usize::from(PREVIOUS_ATTEMPTS_SHOWN);
+    previous_attempts.truncate(usize::from(PREVIOUS_ATTEMPTS_SHOWN));
     previous_attempts.reverse();
     let makeup = match submission.kind() {
         SubmissionKind::Makeup => {
             active_makeup_pool(
                 &mut *connection,
-                assignment.teaching_course_id(),
+                context.course.id(),
                 student.id(),
                 Utc::now(),
             )
@@ -376,10 +366,11 @@ async fn load_queue_item(
     };
     Ok(ReviewQueueItem {
         submission,
-        assignment,
-        subject,
+        assignment: context.assignment,
+        subject: context.subject,
         student,
         previous_attempts,
+        earlier_attempts_hidden,
         makeup,
     })
 }

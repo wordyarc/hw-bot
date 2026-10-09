@@ -4,7 +4,7 @@ use hw_bot::domain::{Assignment, MakeupTerms};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, out_of, submission_id};
 
 #[tokio::test]
 async fn reloading_a_review_checks_access_to_its_course() {
@@ -463,7 +463,7 @@ async fn a_score_in_a_makeup_review_is_invalid_input() {
     let app = TestApp::start().await;
     let (_, makeup) = pending_makeup(&app).await;
 
-    app.review_with_score(makeup, app.teacher(), "accept", 6, "Досдано")
+    app.review_with_score(makeup, app.teacher(), "accept", out_of(6, 10), "Досдано")
         .await
         .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 

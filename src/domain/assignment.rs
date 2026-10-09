@@ -2,7 +2,7 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 
 use crate::domain::{
     ASSIGNMENT_TITLE_MAX_LEN, Acceptance, AssignmentId, CourseMakeup, DomainError, DomainResult,
-    Grade, MakeupTerms, NonEmptyString, StudentGroupId, SubjectId, TeachingCourse,
+    Grade, MakeupTerms, NonEmptyString, ReviewScore, StudentGroupId, SubjectId, TeachingCourse,
     TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
@@ -83,21 +83,6 @@ impl Grading {
 
     pub fn is_scored(self) -> bool {
         matches!(self, Self::Score { .. })
-    }
-
-    pub fn validate_score(self, score: Option<u16>) -> DomainResult<Option<u16>> {
-        match (self, score) {
-            (Self::PassFail, None) => Ok(None),
-            (Self::PassFail, Some(_)) => Err(DomainError::ScoreNotAllowed),
-            (Self::Score { .. }, None) => Err(DomainError::ScoreRequired),
-            (Self::Score { max_score }, Some(value)) if value > max_score.get() => {
-                Err(DomainError::ScoreOutOfRange {
-                    value,
-                    max: max_score.get(),
-                })
-            }
-            (Self::Score { .. }, Some(value)) => Ok(Some(value)),
-        }
     }
 }
 
@@ -624,6 +609,35 @@ impl Assignment {
         self.makeup
     }
 
+    pub(crate) fn regular_grade(
+        &self,
+        score: Option<ReviewScore>,
+        submitted_at: DateTime<Utc>,
+    ) -> DomainResult<Option<Grade>> {
+        match (self.grading, score) {
+            (Grading::PassFail, None) => Ok(None),
+            (Grading::PassFail, Some(_)) => Err(DomainError::ScoreNotAllowed),
+            (Grading::Score { .. }, None) => Err(DomainError::ScoreRequired),
+            (Grading::Score { max_score }, Some(score)) if score.max_score != max_score.get() => {
+                Err(DomainError::ScoreScaleMismatch {
+                    given_max: score.max_score,
+                    max: max_score.get(),
+                })
+            }
+            (Grading::Score { max_score }, Some(score)) if score.value > max_score.get() => {
+                Err(DomainError::ScoreOutOfRange {
+                    value: score.value,
+                    max: max_score.get(),
+                })
+            }
+            (Grading::Score { max_score }, Some(score)) => Ok(Some(Grade::new(
+                score.value,
+                max_score.get(),
+                self.late_penalty_at(submitted_at),
+            ))),
+        }
+    }
+
     pub fn makeup_grade(&self) -> DomainResult<Option<Grade>> {
         match (self.makeup, self.grading) {
             (Some(MakeupTerms::Credit(credit)), Grading::Score { max_score }) => {
@@ -736,7 +750,7 @@ mod tests {
     use chrono::Duration;
 
     use super::*;
-    use crate::test_support::t0;
+    use crate::test_support::{assignment, course_for, student_group, t0, teacher};
 
     fn restore(
         status: AssignmentStatus,
@@ -931,28 +945,54 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scored_grading_requires_a_score_within_the_scale() {
-        let grading = Grading::scored(5).unwrap();
+    fn out_of(value: u16, max_score: u16) -> Option<ReviewScore> {
+        Some(ReviewScore { value, max_score })
+    }
 
-        assert_eq!(grading.validate_score(Some(0)).unwrap(), Some(0));
-        assert_eq!(grading.validate_score(Some(5)).unwrap(), Some(5));
+    #[test]
+    fn a_scored_assignment_requires_a_score_within_its_scale() {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let scored = assignment(&course, &teacher).scored(5).build();
+
+        for value in [0, 5] {
+            assert_eq!(
+                scored.regular_grade(out_of(value, 5), t0()),
+                Ok(Some(Grade::new(value, 5, None)))
+            );
+        }
         assert_eq!(
-            grading.validate_score(Some(6)).unwrap_err(),
-            DomainError::ScoreOutOfRange { value: 6, max: 5 }
+            scored.regular_grade(out_of(6, 5), t0()),
+            Err(DomainError::ScoreOutOfRange { value: 6, max: 5 })
         );
         assert_eq!(
-            grading.validate_score(None).unwrap_err(),
-            DomainError::ScoreRequired
+            scored.regular_grade(None, t0()),
+            Err(DomainError::ScoreRequired)
         );
     }
 
     #[test]
+    fn a_score_given_out_of_another_maximum_is_refused_even_within_the_scale() {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let scored = assignment(&course, &teacher).scored(10).build();
+
+        for given_max in [5, 20] {
+            assert_eq!(
+                scored.regular_grade(out_of(4, given_max), t0()),
+                Err(DomainError::ScoreScaleMismatch { given_max, max: 10 })
+            );
+        }
+    }
+
+    #[test]
     fn pass_fail_grading_rejects_any_score() {
-        assert_eq!(Grading::PassFail.validate_score(None).unwrap(), None);
+        let pass_fail = restore(AssignmentStatus::Published, 1, Some(t0())).unwrap();
+
+        assert_eq!(pass_fail.regular_grade(None, t0()), Ok(None));
         assert_eq!(
-            Grading::PassFail.validate_score(Some(1)).unwrap_err(),
-            DomainError::ScoreNotAllowed
+            pass_fail.regular_grade(out_of(1, 1), t0()),
+            Err(DomainError::ScoreNotAllowed)
         );
     }
 
