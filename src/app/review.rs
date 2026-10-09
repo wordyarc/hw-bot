@@ -9,6 +9,7 @@ use crate::app::courses::active_makeup_pool;
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppResult, Required};
 use crate::db;
+use crate::db::submissions::ReviewStream;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, ReviewDecision, Subject, Submission, SubmissionId,
     SubmissionKind, TeachingCourse, TeachingCourseId, User,
@@ -82,48 +83,20 @@ impl ReviewService {
     /// При одновременной проверке `save_review_result` условным update запишет первое решение,
     /// а последующие отклонит с `SubmissionIsNotPendingReview`.
     pub async fn take_next_from_queue(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
-        let mut tx = self.pool.begin().await?;
-
-        let reviewer = load_reviewer(&mut *tx, actor).await?;
-
-        let Some(submission) =
-            db::submissions::lock_next_pending_for_reviewer(&mut tx, &reviewer).await?
-        else {
-            return Ok(None);
-        };
-
-        let item = load_queue_item(&mut tx, submission).await?;
-        tx.commit().await?;
-        Ok(Some(item))
+        self.take_next(actor, ReviewStream::Main).await
     }
 
     pub async fn take_next_makeup(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
-        let mut tx = self.pool.begin().await?;
-
-        let reviewer = load_reviewer(&mut *tx, actor).await?;
-
-        let Some(submission) =
-            db::submissions::lock_next_makeup_for_reviewer(&mut tx, &reviewer).await?
-        else {
-            return Ok(None);
-        };
-
-        let item = load_queue_item(&mut tx, submission).await?;
-        tx.commit().await?;
-        Ok(Some(item))
+        self.take_next(actor, ReviewStream::Makeup).await
     }
 
     /// Между подсчётом и `take_next_from_queue` работы могут разобрать; ненулевого счётчика недостаточно.
     pub async fn queue_size(&self, actor: Actor) -> AppResult<u32> {
-        let reviewer = load_reviewer(&self.pool, actor).await?;
-
-        Ok(db::submissions::count_pending_for_reviewer(&self.pool, &reviewer).await?)
+        self.count(actor, ReviewStream::Main, None).await
     }
 
     pub async fn makeup_size(&self, actor: Actor) -> AppResult<u32> {
-        let reviewer = load_reviewer(&self.pool, actor).await?;
-
-        Ok(db::submissions::count_makeup_for_reviewer(&self.pool, &reviewer).await?)
+        self.count(actor, ReviewStream::Makeup, None).await
     }
 
     pub async fn sandbox_size(
@@ -131,9 +104,38 @@ impl ReviewService {
         actor: Actor,
         cutoff: Option<DateTime<Utc>>,
     ) -> AppResult<u32> {
+        self.count(actor, ReviewStream::Sandbox, cutoff).await
+    }
+
+    async fn take_next(
+        &self,
+        actor: Actor,
+        stream: ReviewStream,
+    ) -> AppResult<Option<ReviewQueueItem>> {
+        let mut tx = self.pool.begin().await?;
+
+        let reviewer = load_reviewer(&mut *tx, actor).await?;
+
+        let Some(submission) =
+            db::submissions::lock_next_for_reviewer(&mut tx, &reviewer, stream).await?
+        else {
+            return Ok(None);
+        };
+
+        let item = load_queue_item(&mut tx, submission).await?;
+        tx.commit().await?;
+        Ok(Some(item))
+    }
+
+    async fn count(
+        &self,
+        actor: Actor,
+        stream: ReviewStream,
+        cutoff: Option<DateTime<Utc>>,
+    ) -> AppResult<u32> {
         let reviewer = load_reviewer(&self.pool, actor).await?;
 
-        Ok(db::submissions::count_sandbox_for_reviewer(&self.pool, &reviewer, cutoff).await?)
+        Ok(db::submissions::count_for_reviewer(&self.pool, &reviewer, stream, cutoff).await?)
     }
 
     pub async fn sandbox_page(

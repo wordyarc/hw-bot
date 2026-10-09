@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use hw_bot::bot::{callbacks, texts};
+use hw_bot::app::ErrorCode;
+use hw_bot::bot::{app_error_message, callbacks, texts};
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, DeductedFrom, Submission, SubmissionId, SubmissionKind, SubmissionStatus,
@@ -181,6 +182,47 @@ async fn the_history_shows_a_penalty_to_the_course_total_next_to_the_work_score(
     assert!(sent[opened..].contains(&attempt), "{sent:#?}");
     assert_eq!(grade.deducted_from(), Some(DeductedFrom::CourseTotal));
     assert_eq!((grade.work_score(), grade.course_total_penalty()), (8, 4));
+}
+
+#[tokio::test]
+async fn an_old_submit_button_names_why_the_work_cannot_be_submitted_instead_of_asking_for_it() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    let submit = telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram.message(app.student(), "pull/1");
+    telegram.flush(app.student()).await;
+    telegram.click(app.student(), &submit);
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent: Vec<String> = telegram
+        .messages(app.student())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    let prompts = sent
+        .iter()
+        .filter(|text| **text == texts::input_prompt(texts::SUBMISSION_PROMPT))
+        .count();
+    assert_eq!(prompts, 1, "{sent:#?}");
+    assert!(
+        sent.contains(&app_error_message(ErrorCode::SubmissionPendingReview).to_owned()),
+        "{sent:#?}"
+    );
 }
 
 #[tokio::test]

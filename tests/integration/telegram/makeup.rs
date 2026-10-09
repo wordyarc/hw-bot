@@ -710,6 +710,40 @@ async fn an_empty_pool_leaves_the_card_without_a_submit_button() {
 }
 
 #[tokio::test]
+async fn an_old_makeup_button_names_the_spent_pool_instead_of_asking_for_work() {
+    let app = TestApp::start().await;
+    let spent = app.add_closed_assignment("Spent", 10, 6).await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    open_makeup(&app, 1).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_card(&app, &telegram, &closed).await;
+    let submit = telegram
+        .button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid()),
+        )
+        .await;
+    makeup_of(&app, &spent, &app.fixture.student).await;
+    telegram.click(app.student(), &submit);
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.student());
+    assert!(
+        sent.contains(&app_error_message(ErrorCode::MakeupAttemptsExhausted).to_owned()),
+        "{sent:#?}"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|text| text.contains(texts::SUBMISSION_PROMPT)),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
 async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_keeps_the_pool() {
     let app = TestApp::start().await;
     let work = app

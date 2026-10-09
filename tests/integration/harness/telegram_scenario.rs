@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::Utc;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -115,7 +116,7 @@ impl TelegramScenario {
                 let mut state = messages.lock().unwrap();
                 state.next_message += 1;
                 let message = json!({
-                    "message_id": state.next_message, "date": 1,
+                    "message_id": state.next_message, "date": Utc::now().timestamp(),
                     "chat": {"id": body["chat_id"], "type": "private"},
                     "from": {"id": 999, "is_bot": true, "first_name": "Test Bot"},
                     "text": body["text"], "reply_markup": body["reply_markup"],

@@ -69,7 +69,22 @@ impl SubmissionHistory {
     }
 
     pub fn accepts_new_attempt_for(self, assignment: &Assignment, at: DateTime<Utc>) -> bool {
-        self.offer_at(assignment, at, MakeupRequest::default()) == Some(Offer::Regular)
+        self.ensure_regular_attempt(assignment, at).is_ok()
+    }
+
+    pub fn ensure_regular_attempt(
+        self,
+        assignment: &Assignment,
+        at: DateTime<Utc>,
+    ) -> DomainResult<()> {
+        if !assignment.is_published() {
+            return Err(DomainError::AssignmentIsNotPublished);
+        }
+        if self.has_pending_submission {
+            return Err(DomainError::SubmissionAlreadyPendingReview);
+        }
+        self.ensure_admits(assignment, Acceptance::Regular)?;
+        assignment.ensure_open_for_submission(at)
     }
 
     pub fn offer_at(

@@ -554,7 +554,7 @@ pub async fn queue_place_for(
 
 /// Для позиции студента учитываем сдачи всех курсов, видимые хотя бы одному преподавателю
 /// этого задания: каждый ревьюер работает с общей очередью своих курсов.
-/// Сортировка здесь должна повторять `lock_next_pending_for_reviewer`.
+/// Сортировка здесь должна повторять `lock_next_for_reviewer`.
 async fn pending_queue_places<'e, E>(
     executor: E,
     student_id: UserId,
@@ -643,8 +643,8 @@ where
     .collect()
 }
 
-#[derive(Clone, Copy)]
-enum ReviewStream {
+#[derive(Clone, Copy, Debug)]
+pub enum ReviewStream {
     Main,
     Makeup,
     Sandbox,
@@ -697,32 +697,7 @@ macro_rules! reviewer_scope {
     };
 }
 
-pub async fn count_pending_for_reviewer<'e, E>(executor: E, reviewer: &User) -> DbResult<u32>
-where
-    E: PgExecutor<'e>,
-{
-    count_for_reviewer(executor, reviewer, ReviewStream::Main, None).await
-}
-
-pub async fn count_makeup_for_reviewer<'e, E>(executor: E, reviewer: &User) -> DbResult<u32>
-where
-    E: PgExecutor<'e>,
-{
-    count_for_reviewer(executor, reviewer, ReviewStream::Makeup, None).await
-}
-
-pub async fn count_sandbox_for_reviewer<'e, E>(
-    executor: E,
-    reviewer: &User,
-    cutoff: Option<DateTime<Utc>>,
-) -> DbResult<u32>
-where
-    E: PgExecutor<'e>,
-{
-    count_for_reviewer(executor, reviewer, ReviewStream::Sandbox, cutoff).await
-}
-
-async fn count_for_reviewer<'e, E>(
+pub async fn count_for_reviewer<'e, E>(
     executor: E,
     reviewer: &User,
     stream: ReviewStream,
@@ -741,21 +716,7 @@ where
     checked_num_cast("review_queue.pending", pending)
 }
 
-pub async fn lock_next_pending_for_reviewer(
-    tx: &mut Transaction<'_, Postgres>,
-    reviewer: &User,
-) -> DbResult<Option<Submission>> {
-    lock_next_for_reviewer(tx, reviewer, ReviewStream::Main).await
-}
-
-pub async fn lock_next_makeup_for_reviewer(
-    tx: &mut Transaction<'_, Postgres>,
-    reviewer: &User,
-) -> DbResult<Option<Submission>> {
-    lock_next_for_reviewer(tx, reviewer, ReviewStream::Makeup).await
-}
-
-async fn lock_next_for_reviewer(
+pub async fn lock_next_for_reviewer(
     tx: &mut Transaction<'_, Postgres>,
     reviewer: &User,
     stream: ReviewStream,

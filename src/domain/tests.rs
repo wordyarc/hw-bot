@@ -1327,6 +1327,89 @@ fn a_new_attempt_is_offered_only_where_submit_would_succeed() {
 }
 
 #[test]
+fn a_regular_attempt_is_refused_by_the_work_state_or_a_closed_window() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let draft = assignment(&course, &teacher).max_attempts(2).build();
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(2)
+        .published()
+        .build();
+    let (open, closed) = (t0(), assignment.closes_at());
+
+    assert_eq!(
+        history()
+            .used(1)
+            .build()
+            .ensure_regular_attempt(&assignment, open),
+        Ok(())
+    );
+    for (history, at, refusal) in [
+        (
+            history().used(2).build(),
+            open,
+            DomainError::AttemptsExhausted {
+                allowed: 2,
+                used: 2,
+            },
+        ),
+        (
+            history().accepted().build(),
+            open,
+            DomainError::SubmissionAlreadyAccepted,
+        ),
+        (
+            history().pending().build(),
+            open,
+            DomainError::SubmissionAlreadyPendingReview,
+        ),
+        (
+            history().build(),
+            closed,
+            DomainError::AssignmentDeadlineExceeded {
+                deadline_at: assignment.deadline_at(),
+                submitted_at: closed,
+            },
+        ),
+    ] {
+        assert_eq!(
+            history.ensure_regular_attempt(&assignment, at),
+            Err(refusal)
+        );
+    }
+    assert_eq!(
+        history().build().ensure_regular_attempt(&draft, open),
+        Err(DomainError::AssignmentIsNotPublished)
+    );
+}
+
+#[test]
+fn a_refused_attempt_names_pending_then_accepted_work_before_the_closed_window() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let assignment = assignment(&course, &teacher).scored(10).published().build();
+    let closed = assignment.closes_at();
+
+    assert_eq!(
+        history()
+            .accepted_with(5)
+            .pending()
+            .build()
+            .ensure_regular_attempt(&assignment, closed),
+        Err(DomainError::SubmissionAlreadyPendingReview)
+    );
+    assert_eq!(
+        history()
+            .accepted_with(5)
+            .build()
+            .ensure_regular_attempt(&assignment, closed),
+        Err(DomainError::SubmissionAlreadyAccepted)
+    );
+}
+
+#[test]
 fn extra_attempts_of_another_assignment_are_refused() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);

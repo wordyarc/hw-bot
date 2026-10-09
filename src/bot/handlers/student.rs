@@ -1,10 +1,10 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use super::input::{ensure_text_limit, require_text};
 use super::reset_dialogue;
-use crate::app::{ErrorCode, StudentAssignment, StudentMakeup, SubmitHomework};
+use crate::app::{AppError, ErrorCode, StudentAssignment, StudentMakeup, SubmitHomework};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
@@ -377,13 +377,26 @@ fn available(makeup: Option<StudentMakeup>) -> Option<StudentMakeup> {
 pub(super) async fn start_submission(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
+    shown_at: DateTime<Utc>,
 ) -> HandlerResult {
     let details = screen
         .services()
         .assignments
         .find_for_student(screen.actor(), assignment_id)
         .await?;
-    let makeup = available(details.assignment.makeup);
+    let item = &details.assignment;
+    let makeup = available(item.makeup);
+    if makeup.is_none()
+        && let Err(refused) = item
+            .history
+            .ensure_regular_attempt(&item.assignment, shown_at)
+    {
+        let reason = item
+            .makeup
+            .and_then(|offered| offered.balance.ensure_available().err())
+            .unwrap_or(refused);
+        return Err(AppError::from(reason).into());
+    }
     screen
         .dialogue()
         .update(BotState::Flow(FlowState::AwaitingSubmission {
@@ -393,7 +406,7 @@ pub(super) async fn start_submission(
         .await?;
     match makeup {
         Some(makeup) => {
-            let terms = makeup_credit_terms(makeup.credit, details.assignment.assignment.grading());
+            let terms = makeup_credit_terms(makeup.credit, item.assignment.grading());
             screen
                 .ask(&texts::makeup_prompt(&terms, makeup.balance.remaining()))
                 .await

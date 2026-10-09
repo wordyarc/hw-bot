@@ -1,4 +1,5 @@
 use anyhow::{Context, anyhow};
+use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
 use teloxide::types::{CallbackQuery, Message, MessageId, User};
@@ -321,7 +322,7 @@ async fn run_menu_action(
         return Ok(());
     };
 
-    handle_replayable_action(screen, target).await
+    handle_replayable_action(screen, target, Utc::now()).await
 }
 
 fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
@@ -401,7 +402,9 @@ pub(super) async fn handle_callback(
         };
 
         match action {
-            CallbackAction::Replayable(action) => handle_replayable_action(screen, action).await,
+            CallbackAction::Replayable(action) => {
+                handle_replayable_action(screen, action, message.date).await
+            }
             CallbackAction::Screen(action) => {
                 handle_screen_action(screen, message.id, action, state).await
             }
@@ -419,7 +422,11 @@ pub(super) async fn handle_callback(
     finish_handler(&bot, chat_id, result).await
 }
 
-async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) -> HandlerResult {
+async fn handle_replayable_action(
+    screen: Screen<'_>,
+    action: ReplayableAction,
+    shown_at: DateTime<Utc>,
+) -> HandlerResult {
     match action {
         ReplayableAction::Page(target, page) => {
             let page = PageRequest::new(page);
@@ -464,7 +471,7 @@ async fn handle_replayable_action(screen: Screen<'_>, action: ReplayableAction) 
             screen.ask(texts::ASSIGNMENT_TITLE_PROMPT).await
         }
         ReplayableAction::StartSubmission(assignment_id) => {
-            student::start_submission(screen, assignment_id).await
+            student::start_submission(screen, assignment_id, shown_at).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await

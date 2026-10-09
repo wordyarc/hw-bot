@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use hw_bot::app::{ErrorCode, SubmitHomework};
-use hw_bot::db::submissions;
+use hw_bot::db::submissions::{self, ReviewStream};
 use hw_bot::db::{DbError, DbResult};
 use hw_bot::domain::{
     Assignment, DomainError, Submission, SubmissionHistory, SubmissionStatus, User,
@@ -111,9 +111,10 @@ async fn queue_is_ordered_by_submitted_at_not_by_insertion_order() -> anyhow::Re
     let earlier = insert_submission(&app.pool, &app.fixture.assignment, &third, 1).await?;
 
     let mut tx = app.pool.begin().await?;
-    let next = submissions::lock_next_pending_for_reviewer(&mut tx, &app.fixture.teacher)
-        .await?
-        .expect("the queue is not empty");
+    let next =
+        submissions::lock_next_for_reviewer(&mut tx, &app.fixture.teacher, ReviewStream::Main)
+            .await?
+            .expect("the queue is not empty");
     tx.rollback().await?;
 
     assert_eq!(next.id(), earlier.id());
@@ -130,14 +131,22 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
     insert_submission(&app.pool, &app.fixture.assignment, &other_student, 2).await?;
 
     let mut first_tx = app.pool.begin().await?;
-    let head = submissions::lock_next_pending_for_reviewer(&mut first_tx, &app.fixture.teacher)
-        .await?
-        .expect("the queue is not empty");
+    let head = submissions::lock_next_for_reviewer(
+        &mut first_tx,
+        &app.fixture.teacher,
+        ReviewStream::Main,
+    )
+    .await?
+    .expect("the queue is not empty");
 
     let mut second_tx = app.pool.begin().await?;
-    let next = submissions::lock_next_pending_for_reviewer(&mut second_tx, &app.fixture.teacher)
-        .await?
-        .expect("the locked head must be skipped, not waited for");
+    let next = submissions::lock_next_for_reviewer(
+        &mut second_tx,
+        &app.fixture.teacher,
+        ReviewStream::Main,
+    )
+    .await?
+    .expect("the locked head must be skipped, not waited for");
 
     assert_ne!(
         head.id(),
@@ -148,10 +157,13 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
     first_tx.commit().await?;
 
     let mut repeated_tx = app.pool.begin().await?;
-    let repeated =
-        submissions::lock_next_pending_for_reviewer(&mut repeated_tx, &app.fixture.teacher)
-            .await?
-            .expect("the committed queue read must not reserve its submission");
+    let repeated = submissions::lock_next_for_reviewer(
+        &mut repeated_tx,
+        &app.fixture.teacher,
+        ReviewStream::Main,
+    )
+    .await?
+    .expect("the committed queue read must not reserve its submission");
     assert_eq!(
         repeated.id(),
         head.id(),

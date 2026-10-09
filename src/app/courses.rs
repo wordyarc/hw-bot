@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
-use crate::app::access::{load_managing_teacher, load_managing_teacher_on};
+use crate::app::access::{load_group_student, load_managing_teacher, load_managing_teacher_on};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -236,10 +236,7 @@ impl CourseService {
         let group = self
             .managed_group(actor, course_id, "read student contact")
             .await?;
-        let student = db::users::find_by_id(&self.pool, student_id)
-            .await?
-            .filter(|user| user.role().student_group_id() == Some(group.id()))
-            .required("student")?;
+        let student = load_group_student(&self.pool, group.id(), student_id).await?;
 
         Ok(StudentContact {
             student_id: student.id(),
@@ -350,13 +347,9 @@ impl CourseService {
         course_id: TeachingCourseId,
         student_id: UserId,
     ) -> AppResult<Option<MakeupPool>> {
-        let group = self
-            .managed_group(actor, course_id, "read student makeup")
-            .await?;
-        let student = db::users::find_by_id(&self.pool, student_id)
-            .await?
-            .filter(|user| user.role().student_group_id() == Some(group.id()))
-            .required("student")?;
+        let (_, course) =
+            load_managing_teacher(&self.pool, actor, course_id, "read student makeup").await?;
+        let student = load_group_student(&self.pool, course.student_group_id(), student_id).await?;
 
         active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await
     }
@@ -371,10 +364,7 @@ impl CourseService {
 
         let (_, course) =
             load_managing_teacher_on(&mut tx, actor, course_id, "grant makeup attempt").await?;
-        let student = db::users::find_by_id(&mut *tx, student_id)
-            .await?
-            .filter(|user| user.role().student_group_id() == Some(course.student_group_id()))
-            .required("student")?;
+        let student = load_group_student(&mut *tx, course.student_group_id(), student_id).await?;
         let makeup = db::makeup::find_course(&mut *tx, course_id)
             .await?
             .ok_or(DomainError::MakeupNotOffered)?;
