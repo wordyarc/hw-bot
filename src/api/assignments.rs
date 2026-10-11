@@ -33,12 +33,12 @@ pub struct CreateAssignmentRequest {
     #[serde(default)]
     max_score: Option<u16>,
     #[serde(flatten)]
-    late_policy: LatePolicyRequest,
+    late_policy: LatePolicyFields,
     deadline_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-struct LatePolicyRequest {
+struct LatePolicyFields {
     #[serde(default)]
     late_period_days: Option<u16>,
     #[serde(default)]
@@ -49,7 +49,7 @@ struct LatePolicyRequest {
     late_deducted_from: Option<DeductedFrom>,
 }
 
-impl LatePolicyRequest {
+impl LatePolicyFields {
     fn parse(self) -> Result<Option<LatePolicy>, ApiError> {
         match (
             self.late_period_days,
@@ -75,8 +75,10 @@ impl LatePolicyRequest {
             )),
         }
     }
+}
 
-    fn of(assignment: &Assignment) -> Self {
+impl From<&Assignment> for LatePolicyFields {
+    fn from(assignment: &Assignment) -> Self {
         assignment
             .late_policy()
             .map_or_else(Self::default, |policy| Self {
@@ -113,7 +115,7 @@ pub struct ChangeGradingRequest {
     #[serde(default)]
     max_score: Option<u16>,
     #[serde(flatten)]
-    late_policy: LatePolicyRequest,
+    late_policy: LatePolicyFields,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,7 +152,7 @@ pub struct AssignmentResponse {
     max_attempts: u16,
     max_score: Option<u16>,
     #[serde(flatten)]
-    late_policy: LatePolicyRequest,
+    late_policy: LatePolicyFields,
     closes_at: DateTime<Utc>,
     makeup_offered: Option<bool>,
     makeup_credit: Option<u16>,
@@ -176,7 +178,7 @@ impl From<&Assignment> for AssignmentResponse {
             body: assignment.body().as_str().to_owned(),
             max_attempts: assignment.max_attempts(),
             max_score: assignment.grading().max_score(),
-            late_policy: LatePolicyRequest::of(assignment),
+            late_policy: assignment.into(),
             closes_at: assignment.closes_at(),
             makeup_offered: assignment.makeup().map(MakeupTerms::is_offered),
             makeup_credit: assignment
@@ -486,7 +488,7 @@ mod tests {
                 "late_deducted_from": null,
             }),
         ] {
-            let request: LatePolicyRequest = serde_json::from_value(value).unwrap();
+            let request: LatePolicyFields = serde_json::from_value(value).unwrap();
             assert_eq!(request.parse().unwrap(), None);
         }
     }
@@ -509,7 +511,7 @@ mod tests {
                         value[field] = json!(null);
                     }
                 }
-                let request: LatePolicyRequest = serde_json::from_value(value.clone()).unwrap();
+                let request: LatePolicyFields = serde_json::from_value(value.clone()).unwrap();
                 let error = request.parse().unwrap_err();
                 assert_eq!(error.status(), StatusCode::UNPROCESSABLE_ENTITY, "{value}");
                 assert_eq!(error.code(), "invalid_input", "{value}");
@@ -519,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_complete_policy_preserves_each_independent_value() {
-        let request: LatePolicyRequest = serde_json::from_value(json!({
+        let request: LatePolicyFields = serde_json::from_value(json!({
             "late_period_days": 3, "late_penalty_per_period": 2, "late_max_periods": 5,
             "late_deducted_from": "course_total",
         }))

@@ -223,9 +223,9 @@ impl CourseService {
         student_id: UserId,
         page: PageRequest,
     ) -> AppResult<StudentGrades> {
-        let (_, course) =
-            load_managing_teacher(&self.pool, actor, course_id, "read student grades").await?;
-        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+        let (course, student, group_id) = self
+            .managed_student(actor, course_id, student_id, "read student grades")
+            .await?;
 
         load_student_grades(&self.pool, &course, group_id, student.id(), page).await
     }
@@ -237,9 +237,9 @@ impl CourseService {
         student_id: UserId,
         page: PageRequest,
     ) -> AppResult<StudentGradesCard> {
-        let (_, course) =
-            load_managing_teacher(&self.pool, actor, course_id, "read student grades").await?;
-        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+        let (course, student, group_id) = self
+            .managed_student(actor, course_id, student_id, "read student grades")
+            .await?;
         let grades = load_student_grades(&self.pool, &course, group_id, student.id(), page).await?;
         let makeup = active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await?;
 
@@ -256,9 +256,9 @@ impl CourseService {
         course_id: TeachingCourseId,
         student_id: UserId,
     ) -> AppResult<StudentContact> {
-        let (_, course) =
-            load_managing_teacher(&self.pool, actor, course_id, "read student contact").await?;
-        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+        let (_, student, group_id) = self
+            .managed_student(actor, course_id, student_id, "read student contact")
+            .await?;
         let group = db::academic::find_student_group_by_id(&self.pool, group_id)
             .await?
             .required("student group")?;
@@ -278,10 +278,7 @@ impl CourseService {
     ) -> AppResult<Option<CourseMakeup>> {
         load_managing_teacher(&self.pool, actor, course_id, "read course makeup").await?;
 
-        let now = Utc::now();
-        Ok(db::makeup::find_course(&self.pool, course_id)
-            .await?
-            .filter(|makeup| makeup.is_active_at(now)))
+        self.find_active_makeup(course_id).await
     }
 
     pub async fn makeup_state(
@@ -306,10 +303,7 @@ impl CourseService {
     ) -> AppResult<MakeupQuestion> {
         load_managing_teacher(&self.pool, actor, course_id, "read course makeup").await?;
 
-        let now = Utc::now();
-        let enabled = db::makeup::find_course(&self.pool, course_id)
-            .await?
-            .is_some_and(|makeup| makeup.is_active_at(now));
+        let enabled = self.find_active_makeup(course_id).await?.is_some();
         let hint = match grading {
             Grading::Score { max_score } if enabled => {
                 db::makeup::common_credit(&self.pool, course_id, max_score, except).await?
@@ -372,9 +366,9 @@ impl CourseService {
         course_id: TeachingCourseId,
         student_id: UserId,
     ) -> AppResult<Option<MakeupPool>> {
-        let (_, course) =
-            load_managing_teacher(&self.pool, actor, course_id, "read student makeup").await?;
-        let (student, _) = load_course_student(&self.pool, &course, student_id).await?;
+        let (_, student, _) = self
+            .managed_student(actor, course_id, student_id, "read student makeup")
+            .await?;
 
         active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await
     }
@@ -422,6 +416,29 @@ impl CourseService {
         db::academic::find_teaching_course_summary(&self.pool, course_id)
             .await?
             .required("teaching course")
+    }
+
+    async fn managed_student(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+        student_id: UserId,
+        action: &'static str,
+    ) -> AppResult<(TeachingCourse, User, StudentGroupId)> {
+        let (_, course) = load_managing_teacher(&self.pool, actor, course_id, action).await?;
+        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+
+        Ok((course, student, group_id))
+    }
+
+    async fn find_active_makeup(
+        &self,
+        course_id: TeachingCourseId,
+    ) -> AppResult<Option<CourseMakeup>> {
+        let now = Utc::now();
+        Ok(db::makeup::find_course(&self.pool, course_id)
+            .await?
+            .filter(|makeup| makeup.is_active_at(now)))
     }
 
     async fn ensure_course_group(

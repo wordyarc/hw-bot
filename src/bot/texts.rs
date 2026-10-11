@@ -272,28 +272,26 @@ pub fn number_prompt(max: u16) -> String {
     format!("Введите целое число от 1 до {max}:")
 }
 
-pub fn penalty_question(period_days: u16) -> String {
-    let period = if period_days == 7 {
-        "неделю".to_owned()
-    } else {
-        format!("период в {period_days} дн.")
-    };
+fn each_started_period(period_days: u16) -> String {
     if period_days == 7 {
-        format!("Какой штраф в баллах назначить за каждую начавшуюся {period} опоздания?")
-    } else {
-        format!("Какой штраф в баллах назначить за каждый начавшийся {period} опоздания?")
-    }
-}
-
-pub fn penalty_rule(period_days: u16, penalty_per_period: u16) -> String {
-    let period = if period_days == 7 {
         "каждую начавшуюся неделю".to_owned()
     } else {
         format!("каждый начавшийся период в {period_days} дн.")
-    };
+    }
+}
+
+pub fn penalty_question(period_days: u16) -> String {
     format!(
-        "{PENALTY_LABEL} −{} за {period} опоздания после срока.",
-        points(penalty_per_period)
+        "Какой штраф в баллах назначить за {} опоздания?",
+        each_started_period(period_days)
+    )
+}
+
+pub fn penalty_rule(period_days: u16, penalty_per_period: u16) -> String {
+    format!(
+        "{PENALTY_LABEL} −{} за {} опоздания после срока.",
+        points(penalty_per_period),
+        each_started_period(period_days)
     )
 }
 
@@ -832,7 +830,12 @@ pub fn course_button(subject: &str, group: &str) -> String {
 pub fn course_groups_button(subject: &str, groups: usize) -> String {
     format!(
         "📘 {subject} · {groups} {}",
-        plural(groups as u32, "группа", "группы", "групп")
+        plural(
+            u32::try_from(groups).unwrap_or(u32::MAX),
+            "группа",
+            "группы",
+            "групп"
+        )
     )
 }
 

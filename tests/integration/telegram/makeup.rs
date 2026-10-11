@@ -238,7 +238,7 @@ async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announce
         .open_makeup(
             &app.fixture.course,
             3,
-            Utc::now() - Duration::days(30) + Duration::seconds(3),
+            Utc::now() - Duration::days(30) + Duration::seconds(10),
         )
         .await;
     let telegram = TelegramScenario::new().await;

@@ -441,9 +441,10 @@ impl TermsForm {
         now: DateTime<Utc>,
     ) -> Result<(), TermsInputError> {
         if self.step == TermsStep::DurationDate {
-            let Some(deadline) = self.terms.deadline_at else {
-                return Ok(());
-            };
+            let deadline = self
+                .terms
+                .deadline_at
+                .ok_or(TermsInputError::UnexpectedStep)?;
             let policy = self
                 .terms
                 .preview_policy(1)

@@ -4,7 +4,7 @@ use axum::extract::{FromRequest, Request};
 
 use crate::api::ApiError;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct JsonBody<T>(pub T);
 
 impl<T, S> FromRequest<S> for JsonBody<T>

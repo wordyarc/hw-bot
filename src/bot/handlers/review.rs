@@ -611,12 +611,12 @@ async fn ask_review_comment(
 pub(super) async fn change_decision(
     screen: Screen<'_>,
     telegram_user_id: TelegramUserId,
-    callback_submission_id: SubmissionId,
+    submission_id: SubmissionId,
     state: &BotState,
 ) -> HandlerResult {
-    let Some(submission_id) = state.awaiting_review_comment(callback_submission_id) else {
+    if !state.is_awaiting_review_comment(submission_id) {
         return screen.stale().await;
-    };
+    }
     let Some(item) = reload_item(screen, telegram_user_id, submission_id).await? else {
         return Ok(());
     };

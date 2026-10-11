@@ -25,11 +25,14 @@ pub enum BootstrapError {
     #[error("bootstrap: {0}")]
     InvalidData(String),
 
-    #[error("bootstrap: database error: {0}")]
-    Database(#[from] sqlx::Error),
+    #[error("bootstrap: {0}")]
+    Database(#[from] DbError),
+}
 
-    #[error("bootstrap: database error: {0}")]
-    Db(#[from] DbError),
+impl From<sqlx::Error> for BootstrapError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error.into())
+    }
 }
 
 #[derive(Deserialize)]

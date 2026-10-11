@@ -47,10 +47,6 @@ impl NonEmptyString {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
 }
 
 #[cfg(test)]
@@ -78,13 +74,6 @@ mod tests {
             NonEmptyString::new("field", "   ").unwrap_err(),
             DomainError::EmptyField { field: "field" }
         );
-    }
-
-    #[test]
-    fn returns_owned_string() {
-        let value = NonEmptyString::new("field", "text").unwrap();
-
-        assert_eq!(value.into_string(), "text");
     }
 
     #[test]

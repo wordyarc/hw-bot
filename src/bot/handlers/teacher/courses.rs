@@ -152,10 +152,7 @@ pub(crate) async fn publish_assignment(
     assignment_id: AssignmentId,
     state: &BotState,
 ) -> HandlerResult {
-    if state
-        .managing_assignment(message_id, assignment_id)
-        .is_none()
-    {
+    if !state.is_managing_assignment(message_id, assignment_id) {
         return screen.stale().await;
     }
     screen
@@ -176,10 +173,7 @@ pub(crate) async fn archive_assignment(
     assignment_id: AssignmentId,
     state: &BotState,
 ) -> HandlerResult {
-    if state
-        .managing_assignment(message_id, assignment_id)
-        .is_none()
-    {
+    if !state.is_managing_assignment(message_id, assignment_id) {
         return screen.stale().await;
     }
     screen

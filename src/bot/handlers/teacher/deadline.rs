@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDate, Utc};
 use teloxide::types::MessageId;
 
 use super::makeup::handle_date;
@@ -7,7 +8,30 @@ use crate::bot::callbacks::DeadlineAction;
 use crate::bot::context::Screen;
 use crate::bot::makeup_form::MakeupStep;
 use crate::bot::state::BotState;
+use crate::bot::timezone::BotTimezone;
 use crate::bot::{HandlerResult, texts};
+
+pub(super) enum DateChoice {
+    Mode(InputMode),
+    At(Option<DateTime<Utc>>),
+}
+
+pub(super) fn choose_date(
+    action: DeadlineAction,
+    timezone: &BotTimezone,
+    calendar_from: NaiveDate,
+) -> DateChoice {
+    let date = match action {
+        DeadlineAction::Manual => return DateChoice::Mode(InputMode::Manual),
+        DeadlineAction::Options => return DateChoice::Mode(InputMode::Buttons),
+        DeadlineAction::Calendar => return DateChoice::Mode(InputMode::Calendar(calendar_from)),
+        DeadlineAction::Month(month) => return DateChoice::Mode(InputMode::Calendar(month)),
+        DeadlineAction::Days(days) => timezone.in_days(u64::from(days)),
+        DeadlineAction::Months(months) => timezone.in_months(months),
+        DeadlineAction::Pick(date) => Some(date),
+    };
+    DateChoice::At(date.and_then(|date| timezone.end_of(date)))
+}
 
 pub(crate) async fn handle_deadline(
     screen: Screen<'_>,
@@ -25,47 +49,25 @@ pub(crate) async fn handle_deadline(
         return screen.stale().await;
     };
     let step = active.step;
-    if !matches!(step, TermsStep::Deadline | TermsStep::DurationDate) {
+    let presets_allowed = step == TermsStep::Deadline
+        || !matches!(action, DeadlineAction::Days(_) | DeadlineAction::Months(_));
+    if !matches!(step, TermsStep::Deadline | TermsStep::DurationDate) || !presets_allowed {
         return screen.stale().await;
     }
     let Some(mut form) = state.terms_form(message_id, step) else {
         return screen.stale().await;
     };
-    let date = match action {
-        DeadlineAction::Manual => {
-            form.mode = InputMode::Manual;
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Options => {
-            form.mode = InputMode::Buttons;
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Calendar => {
-            form.mode = InputMode::Calendar(match (step, form.terms.deadline_at) {
-                (TermsStep::DurationDate, Some(deadline)) => {
-                    screen.timezone().first_date_ending_after(deadline)
-                }
-                _ => screen.timezone().today(),
-            });
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Month(month) => {
-            form.mode = InputMode::Calendar(month);
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Days(days) if step == TermsStep::Deadline => {
-            screen.timezone().in_days(u64::from(days))
-        }
-        DeadlineAction::Months(months) if step == TermsStep::Deadline => {
-            screen.timezone().in_months(months)
-        }
-        DeadlineAction::Days(_) | DeadlineAction::Months(_) => {
-            return screen.stale().await;
-        }
-        DeadlineAction::Pick(date) => Some(date),
+    let timezone = screen.timezone();
+    let calendar_from = match (step, form.terms.deadline_at) {
+        (TermsStep::DurationDate, Some(deadline)) => timezone.first_date_ending_after(deadline),
+        _ => timezone.today(),
     };
-    match date.and_then(|date| screen.timezone().end_of(date)) {
-        Some(at) => apply_date(screen, form, at).await,
-        None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
+    match choose_date(action, timezone, calendar_from) {
+        DateChoice::Mode(mode) => {
+            form.mode = mode;
+            render(screen.chat(), form, None).await
+        }
+        DateChoice::At(Some(at)) => apply_date(screen, form, at).await,
+        DateChoice::At(None) => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
     }
 }

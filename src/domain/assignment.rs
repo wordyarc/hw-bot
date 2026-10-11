@@ -318,17 +318,15 @@ impl Assignment {
             });
         }
 
-        if parts.deadline_at <= parts.created_at {
-            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
-        }
-
-        if parts.late_policy.is_some() && !parts.grading.is_scored() {
-            return Err(DomainError::LatePolicyRequiresScoredGrading);
-        }
-        Self::closing_for(parts.deadline_at, parts.late_policy)?;
-        if let Some(terms) = parts.makeup {
-            terms.ensure_fits(parts.grading)?;
-        }
+        Self::validate_terms(
+            parts.created_at,
+            ProposedTerms {
+                grading: parts.grading,
+                late_policy: parts.late_policy,
+                deadline_at: parts.deadline_at,
+                makeup: parts.makeup,
+            },
+        )?;
 
         // У архивного задания может не быть published_at, если его убрали туда из черновика.
         match parts.status {
@@ -539,18 +537,22 @@ impl Assignment {
             return Err(DomainError::AssignmentIsArchived);
         }
 
-        if terms.deadline_at <= self.created_at {
-            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
-        }
-
-        if terms.late_policy.is_some() && !terms.grading.is_scored() {
-            return Err(DomainError::LatePolicyRequiresScoredGrading);
-        }
-
-        Self::closing_for(terms.deadline_at, terms.late_policy)?;
+        Self::validate_terms(self.created_at, terms)?;
         if let Some(policy) = terms.late_policy {
             policy.validate_horizon(terms.deadline_at)?;
         }
+
+        Ok(())
+    }
+
+    fn validate_terms(created_at: DateTime<Utc>, terms: ProposedTerms) -> DomainResult<()> {
+        if terms.deadline_at <= created_at {
+            return Err(DomainError::AssignmentDeadlineMustBeAfterCreatedAt);
+        }
+        if terms.late_policy.is_some() && !terms.grading.is_scored() {
+            return Err(DomainError::LatePolicyRequiresScoredGrading);
+        }
+        Self::closing_for(terms.deadline_at, terms.late_policy)?;
         if let Some(makeup) = terms.makeup {
             makeup.ensure_fits(terms.grading)?;
         }

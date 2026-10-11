@@ -48,8 +48,7 @@ pub(crate) fn parse_u16(value: &str) -> Option<u16> {
 }
 
 pub(super) fn parse_positive_attempts(text: &str) -> Option<u16> {
-    let value = parse_number(text)?;
-    (value > 0 && value <= MAX_ATTEMPTS).then_some(value)
+    parse_number(text).filter(|value| (1..=MAX_ATTEMPTS).contains(value))
 }
 
 #[cfg(test)]

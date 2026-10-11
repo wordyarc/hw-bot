@@ -3,6 +3,7 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{ChatId, MessageId};
 
 use super::courses::show_course_assignments_page;
+use super::deadline::{DateChoice, choose_date};
 use super::terms::{detach, show_step};
 use crate::app::{AppError, ErrorCode};
 use crate::bot::assignment_form::InputMode;
@@ -150,22 +151,17 @@ pub(crate) async fn handle_form(
     let Some(mut form) = state.makeup_form(message_id, step) else {
         return screen.stale().await;
     };
-    if action == MakeupFormAction::Back {
-        if !form.step_back() {
-            return screen.stale().await;
-        }
-        return render(screen.chat(), form, None).await;
-    }
-    if step != MakeupStep::Summary {
-        return screen.stale().await;
-    }
     match action {
+        MakeupFormAction::Back => {
+            if !form.step_back() {
+                return screen.stale().await;
+            }
+            render(screen.chat(), form, None).await
+        }
+        _ if step != MakeupStep::Summary => screen.stale().await,
         MakeupFormAction::Save => save(screen, form).await,
         MakeupFormAction::Cancel => cancel(screen, form).await,
-        MakeupFormAction::Date
-        | MakeupFormAction::Attempts
-        | MakeupFormAction::Disable
-        | MakeupFormAction::Back => {
+        MakeupFormAction::Date | MakeupFormAction::Attempts | MakeupFormAction::Disable => {
             if !form.edit(action) {
                 return screen.stale().await;
             }
@@ -180,30 +176,13 @@ pub(crate) async fn handle_date(
     action: DeadlineAction,
 ) -> HandlerResult {
     let timezone = screen.timezone();
-    let date = match action {
-        DeadlineAction::Manual => {
-            form.mode = InputMode::Manual;
-            return render(screen.chat(), form, None).await;
+    match choose_date(action, timezone, timezone.today()) {
+        DateChoice::Mode(mode) => {
+            form.mode = mode;
+            render(screen.chat(), form, None).await
         }
-        DeadlineAction::Options => {
-            form.mode = InputMode::Buttons;
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Calendar => {
-            form.mode = InputMode::Calendar(timezone.today());
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Month(month) => {
-            form.mode = InputMode::Calendar(month);
-            return render(screen.chat(), form, None).await;
-        }
-        DeadlineAction::Days(days) => timezone.in_days(u64::from(days)),
-        DeadlineAction::Months(months) => timezone.in_months(months),
-        DeadlineAction::Pick(date) => Some(date),
-    };
-    match date.and_then(|date| timezone.end_of(date)) {
-        Some(until) => apply_date(screen, form, until).await,
-        None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
+        DateChoice::At(Some(until)) => apply_date(screen, form, until).await,
+        DateChoice::At(None) => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
     }
 }
 

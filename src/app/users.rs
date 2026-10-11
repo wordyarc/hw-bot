@@ -151,10 +151,11 @@ impl UserService {
 
     async fn registered_user(&self, user: User) -> AppResult<RegisteredUser> {
         let student_group = match user.student_group_id() {
-            Some(id) => db::academic::find_student_group_by_id(&self.pool, id)
-                .await?
-                .required("student group")
-                .map(Some)?,
+            Some(id) => Some(
+                db::academic::find_student_group_by_id(&self.pool, id)
+                    .await?
+                    .required("student group")?,
+            ),
             None => None,
         };
 

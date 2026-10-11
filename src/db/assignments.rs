@@ -146,8 +146,8 @@ macro_rules! select_assignments {
     };
 }
 
-macro_rules! select_assignment_cards {
-    ($tail:literal $(, $arg:expr)* $(,)?) => {
+macro_rules! fetch_assignment_cards {
+    ($executor:expr, $tail:literal $(, $arg:expr)* $(,)?) => {
         sqlx::query!(
             r#"
             select
@@ -170,6 +170,16 @@ macro_rules! select_assignment_cards {
             "# + $tail
             $(, $arg)*
         )
+        .fetch_all($executor)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(StudentAssignmentCard {
+                subject: Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?,
+                assignment: Assignment::try_from(assignment_row!(row))?,
+            })
+        })
+        .collect()
     };
 }
 
@@ -352,7 +362,8 @@ pub async fn list_published_for_group<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    select_assignment_cards!(
+    fetch_assignment_cards!(
+        executor,
         " join assignment_groups issued
             on issued.assignment_id = assignments.id
          where issued.student_group_id = $1
@@ -362,16 +373,6 @@ where
         PageRequest::FETCH_LIMIT,
         page.offset(),
     )
-    .fetch_all(executor)
-    .await?
-    .into_iter()
-    .map(|row| {
-        Ok(StudentAssignmentCard {
-            subject: Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?,
-            assignment: Assignment::try_from(assignment_row!(row))?,
-        })
-    })
-    .collect()
 }
 
 pub async fn list_archived_for_group<'e, E>(
@@ -382,7 +383,8 @@ pub async fn list_archived_for_group<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    select_assignment_cards!(
+    fetch_assignment_cards!(
+        executor,
         " join assignment_groups issued
             on issued.assignment_id = assignments.id
          where issued.student_group_id = $1
@@ -393,16 +395,6 @@ where
         PageRequest::FETCH_LIMIT,
         page.offset(),
     )
-    .fetch_all(executor)
-    .await?
-    .into_iter()
-    .map(|row| {
-        Ok(StudentAssignmentCard {
-            subject: Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?,
-            assignment: Assignment::try_from(assignment_row!(row))?,
-        })
-    })
-    .collect()
 }
 
 pub async fn list_for_course<'e, E>(

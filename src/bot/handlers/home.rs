@@ -163,27 +163,32 @@ pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
                 }
                 Role::Teacher | Role::Admin => {
                     let actor = Actor::new(registered.user.id());
-                    let pending = services.reviews.queue_size(actor).await?;
-                    let mut text = format!(
-                        "{}\n\n{}",
-                        texts::home_greeting(name),
-                        texts::review_queue_line(pending)
+                    let mut lines = Vec::new();
+                    let pending = optional_stat(
+                        services.reviews.queue_size(actor).await,
+                        "teacher_pending_queue",
                     );
+                    if let Some(pending) = pending {
+                        lines.push(texts::review_queue_line(pending));
+                    }
                     let makeups =
                         optional_stat(services.reviews.makeup_size(actor).await, "teacher_makeups");
                     if let Some(makeups) = makeups.filter(|&count| count > 0) {
-                        text.push('\n');
-                        text.push_str(&texts::makeup_queue_line(makeups));
+                        lines.push(texts::makeup_queue_line(makeups));
                     }
                     let sandbox = optional_stat(
                         services.reviews.sandbox_size(actor, None).await,
                         "teacher_sandbox",
                     );
                     if let Some(sandbox) = sandbox.filter(|&count| count > 0) {
-                        text.push('\n');
-                        text.push_str(&texts::home_sandbox_line(sandbox));
+                        lines.push(texts::home_sandbox_line(sandbox));
                     }
-                    text
+                    let greeting = texts::home_greeting(name);
+                    if lines.is_empty() {
+                        greeting
+                    } else {
+                        format!("{greeting}\n\n{}", lines.join("\n"))
+                    }
                 }
             };
             bot.send_message(chat_id, text)

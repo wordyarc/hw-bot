@@ -24,10 +24,7 @@ pub(crate) async fn begin_terms_edit(
     assignment_id: AssignmentId,
     state: &BotState,
 ) -> HandlerResult {
-    if state
-        .managing_assignment(message_id, assignment_id)
-        .is_none()
-    {
+    if !state.is_managing_assignment(message_id, assignment_id) {
         return screen.stale().await;
     }
     let VersionedAssignment {

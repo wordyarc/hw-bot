@@ -434,9 +434,20 @@ fn duration_options_keyboard(
     deadline: DateTime<Utc>,
     timezone: &BotTimezone,
 ) -> InlineKeyboardMarkup {
+    let mut rows = duration_presets(terms, deadline, timezone).unwrap_or_default();
+    rows.extend(date_input_rows());
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+fn duration_presets(
+    terms: &AssignmentTerms,
+    deadline: DateTime<Utc>,
+    timezone: &BotTimezone,
+) -> Option<Vec<Row>> {
+    let policy = terms.preview_policy(1)?;
     let base = timezone.local_date(deadline - chrono::Duration::nanoseconds(1));
-    let mut rows = Vec::new();
-    for (label, date) in [
+    let presets = [
         (
             texts::PRESET_WEEK_AFTER,
             base.checked_add_days(chrono::Days::new(7)),
@@ -449,31 +460,23 @@ fn duration_options_keyboard(
             texts::PRESET_MONTH_AFTER,
             base.checked_add_months(chrono::Months::new(1)),
         ),
-    ] {
-        let Some(date) = date else { continue };
-        let Some(at) = timezone.end_of(date) else {
-            continue;
-        };
-        let Some(policy) = terms.preview_policy(1) else {
-            continue;
-        };
-        let Ok(periods) = u16::try_from(policy.periods_to_close_at(deadline, at)) else {
-            continue;
-        };
-        if terms
-            .preview_policy(periods)
-            .is_none_or(|policy| policy.validate_horizon(deadline).is_err())
-        {
-            continue;
-        }
-        rows.push(row(
-            texts::date_preset(label, &timezone.format_date(date)),
-            DeadlineAction::Pick(date).callback(),
-        ));
-    }
-    rows.extend(date_input_rows());
-
-    InlineKeyboardMarkup::new(rows)
+    ];
+    let rows = presets
+        .into_iter()
+        .filter_map(|(label, date)| {
+            let date = date?;
+            let at = timezone.end_of(date)?;
+            let periods = u16::try_from(policy.periods_to_close_at(deadline, at)).ok()?;
+            terms
+                .preview_policy(periods)
+                .filter(|policy| policy.validate_horizon(deadline).is_ok())?;
+            Some(row(
+                texts::date_preset(label, &timezone.format_date(date)),
+                DeadlineAction::Pick(date).callback(),
+            ))
+        })
+        .collect();
+    Some(rows)
 }
 
 pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {

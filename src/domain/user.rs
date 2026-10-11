@@ -105,19 +105,15 @@ impl User {
         student_group: &StudentGroup,
         registered_at: DateTime<Utc>,
     ) -> DomainResult<Self> {
-        Ok(Self {
+        Self::new(
             id,
             telegram_user_id,
-            role: Role::Student {
+            Role::Student {
                 student_group_id: student_group.id(),
             },
-            display_name: NonEmptyString::new_bounded(
-                "user.display_name",
-                display_name,
-                DISPLAY_NAME_MAX_LEN,
-            )?,
+            display_name,
             registered_at,
-        })
+        )
     }
 
     pub fn new_staff(

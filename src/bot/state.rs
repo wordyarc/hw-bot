@@ -42,20 +42,18 @@ pub(super) enum ActiveForm<'a> {
 }
 
 impl BotState {
-    pub(super) fn managing_assignment(
+    pub(super) fn is_managing_assignment(
         &self,
         message_id: MessageId,
         assignment_id: AssignmentId,
-    ) -> Option<AssignmentId> {
-        match self {
+    ) -> bool {
+        matches!(
+            self,
             Self::Screen(ScreenState::ManagingAssignment {
                 message_id: current_message,
                 assignment_id: current_assignment,
-            }) if *current_message == message_id && *current_assignment == assignment_id => {
-                Some(assignment_id)
-            }
-            _ => None,
-        }
+            }) if *current_message == message_id && *current_assignment == assignment_id
+        )
     }
 
     pub(super) fn course_invite(
@@ -153,17 +151,14 @@ impl BotState {
         }
     }
 
-    pub(super) fn awaiting_review_comment(
-        &self,
-        submission_id: SubmissionId,
-    ) -> Option<SubmissionId> {
-        match self {
+    pub(super) fn is_awaiting_review_comment(&self, submission_id: SubmissionId) -> bool {
+        matches!(
+            self,
             Self::Flow(FlowState::AwaitingReviewComment {
                 submission_id: current,
                 ..
-            }) if *current == submission_id => Some(submission_id),
-            _ => None,
-        }
+            }) if *current == submission_id
+        )
     }
 
     /// ID студента принимается только из показанного списка, чтобы отсечь чужие кнопки.
@@ -531,12 +526,9 @@ mod tests {
             assignment_id: current,
         });
 
-        assert_eq!(
-            state.managing_assignment(MessageId(10), current),
-            Some(current)
-        );
-        assert!(state.managing_assignment(MessageId(11), current).is_none());
-        assert!(state.managing_assignment(MessageId(10), other).is_none());
+        assert!(state.is_managing_assignment(MessageId(10), current));
+        assert!(!state.is_managing_assignment(MessageId(11), current));
+        assert!(!state.is_managing_assignment(MessageId(10), other));
     }
 
     #[test]
@@ -552,19 +544,18 @@ mod tests {
             }),
         });
 
-        assert_eq!(state.awaiting_review_comment(current), Some(current));
-        assert!(state.awaiting_review_comment(other).is_none());
-        assert!(BotState::Idle.awaiting_review_comment(current).is_none());
+        assert!(state.is_awaiting_review_comment(current));
+        assert!(!state.is_awaiting_review_comment(other));
+        assert!(!BotState::Idle.is_awaiting_review_comment(current));
         assert!(
-            BotState::Flow(FlowState::AwaitingReviewDecision {
+            !BotState::Flow(FlowState::AwaitingReviewDecision {
                 submission_id: current,
                 target: ReviewTarget::Regular {
                     grading: Grading::PassFail,
                     late: None,
                 },
             })
-            .awaiting_review_comment(current)
-            .is_none()
+            .is_awaiting_review_comment(current)
         );
     }
 
