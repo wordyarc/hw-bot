@@ -3,7 +3,7 @@ use teloxide::types::MessageId;
 
 use super::HandlerResult;
 use super::context::{Screen, TextStep};
-use super::errors::send_error_code;
+use super::errors::{BotError, log_handler_error, send_error_code};
 use super::files::{TransferError, incoming_file};
 use super::state::{BotState, FileDeletion, FlowState, ScreenState};
 use super::texts;
@@ -36,12 +36,17 @@ pub(super) async fn submit_file(
         send_error_code(bot, chat_id, ErrorCode::FileTooLarge).await?;
         return Ok(());
     }
-    let transfer = step.transfers().acquire().await?;
-    let content = match transfer
-        .download(&incoming.file_id, policy.max_file_size_bytes)
-        .await
-    {
-        Ok(content) => content,
+    let downloaded = match step.transfers().acquire().await {
+        Ok(transfer) => {
+            let content = transfer
+                .download(&incoming.file_id, policy.max_file_size_bytes)
+                .await;
+            content.map(|content| (transfer, content))
+        }
+        Err(error) => Err(error),
+    };
+    let (transfer, content) = match downloaded {
+        Ok(downloaded) => downloaded,
         Err(TransferError::TooLarge) => {
             send_error_code(bot, chat_id, ErrorCode::FileTooLarge).await?;
             return Ok(());
@@ -134,10 +139,20 @@ pub(super) async fn open(
         .files
         .open_assignment_file_for_teacher(screen.actor(), files.assignment_id, file_id)
         .await?;
-    screen
+    let sent = screen
         .transfers()
         .send(screen.chat_id(), &screen.services().files, &file)
-        .await?;
+        .await;
+    if let Err(error) = sent.map_err(BotError::from) {
+        if error.is_invalid_token() {
+            return Err(error);
+        }
+        log_handler_error(&error);
+        screen
+            .bot()
+            .send_message(screen.chat_id(), texts::FILE_SEND_FAILED)
+            .await?;
+    }
     Ok(())
 }
 

@@ -661,6 +661,48 @@ async fn a_resend_is_not_repeated_as_an_upload_unless_the_file_id_was_rejected()
     assert_eq!(sent_documents(&telegram).await.len(), 1);
 }
 
+#[tokio::test]
+async fn a_file_the_teacher_opens_without_success_is_reported() {
+    let app = TestApp::start().await;
+    add_document(&app, Some("limited-file")).await;
+    let mut updates = file_upload_updates(&app, app.assignment(), json!(null));
+    updates.truncate(5);
+    updates.push(callback_update(
+        6,
+        app.teacher(),
+        &cb(callbacks::FILE_OPEN_PREFIX, 0),
+        BOT_MESSAGE_ID,
+    ));
+    let telegram = telegram_server(updates).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "ok": false,
+            "error_code": 429,
+            "description": "Too Many Requests: retry after 5",
+            "parameters": {"retry_after": 5}
+        })))
+        .mount(&telegram)
+        .await;
+    let failed = Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_partial_json(json!({
+            "chat_id": app.teacher(),
+            "text": texts::FILE_SEND_FAILED
+        })))
+        .respond_with(telegram_message_response())
+        .expect(1)
+        .with_priority(1)
+        .mount_as_scoped(&telegram)
+        .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    tokio::time::timeout(Duration::from_secs(5), failed.wait_until_satisfied())
+        .await
+        .expect("the failed delivery is reported");
+    stop_bot(cancellation, &mut task).await;
+}
+
 async fn add_document(app: &TestApp, telegram_file_id: Option<&str>) {
     use hw_bot::app::AddAssignmentFile;
     use hw_bot::domain::FilePresentation;

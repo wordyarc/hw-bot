@@ -371,10 +371,10 @@ pub(crate) async fn handle_terms(
         return screen.stale().await;
     };
     if action == TermsAction::Back {
-        if !form.can_go_back() {
+        if !form.step_back() {
             return screen.stale().await;
         }
-        return back(screen, form).await;
+        return render(screen.chat(), form, None).await;
     }
     if action == TermsAction::DurationDate && form.step == TermsStep::Periods {
         form.go(TermsStep::DurationDate);

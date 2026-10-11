@@ -213,6 +213,9 @@ pub(super) async fn handle_message(
                 };
                 return teacher::confirm_exit(screen, form.clone(), action, telegram_user_id).await;
             }
+            if action == MenuAction::Help {
+                return send_help(step.chat(), telegram_user_id).await;
+            }
             reset_dialogue(&dialogue).await?;
             if let Some(form) = state.active_makeup() {
                 teacher::abandon_makeup(&bot, chat_id, form).await?;
@@ -275,12 +278,14 @@ pub(super) async fn handle_message(
             BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
                 teacher::submit_body(step, course_id, title).await?;
             }
-            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts { text, .. }) => {
-                teacher::submit_max_attempts(step, text).await?;
+            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts { message_id, text }) => {
+                teacher::submit_max_attempts(step, message_id, text).await?;
             }
-            BotState::Flow(FlowState::ChoosingGrading { draft, .. })
-            | BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
-                teacher::submit_grading_text(step, draft).await?;
+            BotState::Flow(FlowState::ChoosingGrading { message_id, draft }) => {
+                teacher::submit_grading_text(step, Some(message_id), draft).await?;
+            }
+            BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
+                teacher::submit_grading_text(step, None, draft).await?;
             }
             BotState::Flow(FlowState::ConfiguringTerms(form)) => {
                 teacher::submit_terms(step, form).await?;
@@ -553,7 +558,8 @@ async fn handle_flow_action(
             decision,
             submission_id,
         } => {
-            review::handle_decision(screen, submission_id, decision, state).await?;
+            review::handle_decision(screen, telegram_user_id, submission_id, decision, state)
+                .await?;
         }
         FlowAction::ChangeReviewDecision(submission_id) => {
             review::change_decision(screen, telegram_user_id, submission_id, &state).await?;

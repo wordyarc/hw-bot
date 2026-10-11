@@ -310,6 +310,31 @@ fn student_from_another_group_cannot_submit_assignment() {
 }
 
 #[test]
+fn a_student_of_another_group_learns_nothing_about_a_draft_or_a_closed_assignment() {
+    let teacher = teacher(1);
+    let assignment_group = student_group(GROUP_CODE);
+    let other_group = student_group(OTHER_GROUP_CODE);
+    let course = course_for(&assignment_group, &teacher);
+    let student = student(2, &other_group);
+    let draft = assignment(&course, &teacher).build();
+    let closed = assignment(&course, &teacher)
+        .deadline_at(t0() + Duration::days(1))
+        .published()
+        .build();
+
+    for (assignment, at) in [(&draft, t0()), (&closed, t0() + Duration::days(2))] {
+        let result = submission(assignment, &student)
+            .submitted_at(at)
+            .try_build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            DomainError::StudentDoesNotBelongToAssignmentGroup
+        );
+    }
+}
+
+#[test]
 fn draft_assignment_cannot_be_submitted() {
     let teacher = teacher(1);
     let group = student_group(GROUP_CODE);

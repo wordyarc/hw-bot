@@ -80,22 +80,26 @@ impl BotTimezone {
     }
 
     pub fn format_since(&self, instant: DateTime<Utc>) -> String {
-        let local = instant.with_timezone(&self.tz);
-        if local.time() == NaiveTime::MIN {
-            local.format(DATE).to_string()
-        } else {
-            local.format(DATE_TIME).to_string()
-        }
+        let format = match self.closed_day(instant) {
+            Some(_) => DATE,
+            None => DATE_TIME,
+        };
+        instant.with_timezone(&self.tz).format(format).to_string()
     }
 
     fn end_label(&self, instant: DateTime<Utc>, date: &str, date_time: &str) -> String {
-        let local = instant.with_timezone(&self.tz);
-        match local.date_naive().pred_opt() {
-            Some(day) if local.time() == NaiveTime::MIN => {
-                texts::end_of_day(&day.format(date).to_string())
-            }
-            _ => local.format(date_time).to_string(),
+        match self.closed_day(instant) {
+            Some(day) => texts::end_of_day(&day.format(date).to_string()),
+            None => instant
+                .with_timezone(&self.tz)
+                .format(date_time)
+                .to_string(),
         }
+    }
+
+    fn closed_day(&self, instant: DateTime<Utc>) -> Option<NaiveDate> {
+        let day = instant.with_timezone(&self.tz).date_naive().pred_opt()?;
+        (self.end_of(day) == Some(instant)).then_some(day)
     }
 
     pub fn format_short(&self, instant: DateTime<Utc>) -> String {
@@ -253,6 +257,17 @@ mod tests {
 
         assert_eq!(santiago.end_of(date), Some(at("2025-09-07T04:00:00Z")));
         assert_eq!(santiago.parse_deadline("06.09.2025"), santiago.end_of(date));
+    }
+
+    #[test]
+    fn a_day_closed_by_a_clock_jump_at_midnight_is_shown_as_the_whole_day() {
+        let santiago = BotTimezone::new(Tz::America__Santiago);
+        let end = santiago
+            .end_of(NaiveDate::from_ymd_opt(2025, 9, 6).unwrap())
+            .unwrap();
+
+        assert_eq!(santiago.format_until(end), texts::end_of_day("06.09.2025"));
+        assert_eq!(santiago.format_since(end), "07.09.2025");
     }
 
     #[test]

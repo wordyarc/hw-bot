@@ -484,7 +484,10 @@ pub(super) async fn submit_homework_text(
         }
         Err(error) => {
             reset_dialogue(step.dialogue()).await?;
-            Err(error.into())
+            bot.send_message(chat_id, app_error_message(error.code()))
+                .reply_markup(student_keyboard())
+                .await?;
+            Ok(())
         }
     }
 }

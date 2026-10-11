@@ -275,3 +275,52 @@ async fn streamed_body_over_the_limit_keeps_the_transport_error_code() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_request_timeout_is_logged_with_its_endpoint() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct Writer(Arc<Mutex<Vec<u8>>>);
+    impl Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Writer(Arc::default());
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_env_filter("hw_bot=info,tower_http=info")
+        .with_writer(move || writer.clone())
+        .finish();
+    let _logs = tracing::subscriber::set_default(subscriber);
+    let router = with_transport_layers(
+        Router::new().route(
+            "/slow",
+            get(|| async { tokio::time::sleep(Duration::from_secs(5)).await }),
+        ),
+        Duration::from_millis(10),
+    );
+
+    let response = router
+        .oneshot(Request::get("/slow").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_error(response, StatusCode::REQUEST_TIMEOUT, "request_timeout").await;
+    let bytes = buffer.0.lock().unwrap();
+    let event = serde_json::Deserializer::from_slice(&bytes)
+        .into_iter::<Value>()
+        .map(Result::unwrap)
+        .find(|event| event["fields"]["kind"] == "request_timeout")
+        .expect("the timeout is logged");
+    assert_eq!(event["span"]["method"], "GET", "{event}");
+    assert_eq!(event["span"]["uri"], "/slow", "{event}");
+}

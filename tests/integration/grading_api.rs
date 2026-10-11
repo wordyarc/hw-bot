@@ -783,6 +783,25 @@ async fn pass_fail_assignments_stay_out_of_the_gradebook() {
 }
 
 #[tokio::test]
+async fn a_pass_fail_acceptance_stays_out_of_the_gradebook_after_the_scale_appears() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    app.review(submission, app.teacher(), "accept", "Зачтено")
+        .await
+        .ok();
+
+    app.change_grading(app.assignment(), app.teacher(), Some(10))
+        .await
+        .ok();
+
+    let body = gradebook(&app, app.teacher()).await.ok();
+
+    let student = &body["students"][0];
+    assert_eq!(student["grades"].as_array().unwrap().len(), 0);
+    assert_eq!(student["max_total"], json!(0));
+}
+
+#[tokio::test]
 async fn a_gradebook_of_a_foreign_course_is_denied() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider teacher").await;

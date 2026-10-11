@@ -485,19 +485,22 @@ where
         cross join lateral (
             select sum(best.work_score) as work_total,
                    sum(best.course_total_penalty) as penalty_total,
-                   sum(coalesce(best.grade_max_score, a.max_score)) as max_total
+                   sum(case when best.student_id is null then a.max_score
+                            else best.grade_max_score end) as max_total
             from assignments a
             left join best on best.assignment_id = a.id and best.student_id = students.id
             where a.teaching_course_id = $1 and a.published_at is not null
         ) totals
         left join lateral (
             select a.id, a.title, a.deadline_at,
-                   coalesce(best.grade_max_score, a.max_score) as max_score, best.work_score,
-                   best.course_total_penalty, best.kind = 'makeup' as makeup
+                   case when best.student_id is null then a.max_score
+                        else best.grade_max_score end as max_score,
+                   best.work_score, best.course_total_penalty, best.kind = 'makeup' as makeup
             from assignments a
             left join best on best.assignment_id = a.id and best.student_id = students.id
             where a.teaching_course_id = $1 and a.published_at is not null
-              and coalesce(best.grade_max_score, a.max_score) is not null
+              and case when best.student_id is null then a.max_score
+                       else best.grade_max_score end is not null
             order by a.deadline_at, a.id limit $6 offset $7
         ) grades on true
         order by students.display_name, students.id, grades.deadline_at, grades.id

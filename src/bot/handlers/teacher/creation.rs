@@ -2,6 +2,7 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
 use super::attempts::chosen_amount;
+use super::terms::detach;
 use crate::bot::HandlerResult;
 use crate::bot::assignment_form::{AssignmentTerms, AssignmentText, DraftAssignment, TermsForm};
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
@@ -64,6 +65,7 @@ pub(crate) async fn handle_grading(
             Err(_) => return screen.stale().await,
         },
         GradingChoice::Manual => {
+            detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
             screen
                 .dialogue()
                 .update(BotState::Flow(FlowState::AwaitingGradingText { draft }))
@@ -177,6 +179,7 @@ pub(crate) async fn submit_body(
 
 pub(crate) async fn submit_max_attempts(
     step: TextStep<'_>,
+    message_id: MessageId,
     assignment: AssignmentText,
 ) -> HandlerResult {
     let bot = step.bot();
@@ -191,6 +194,7 @@ pub(crate) async fn submit_max_attempts(
             .await?;
         return Ok(());
     };
+    detach(bot, chat_id, Some(message_id)).await?;
     ask_grading(step.chat(), DraftAssignment::new(assignment, max_attempts)).await?;
 
     Ok(())
@@ -198,6 +202,7 @@ pub(crate) async fn submit_max_attempts(
 
 pub(crate) async fn submit_grading_text(
     step: TextStep<'_>,
+    message_id: Option<MessageId>,
     draft: DraftAssignment,
 ) -> HandlerResult {
     let bot = step.bot();
@@ -215,6 +220,7 @@ pub(crate) async fn submit_grading_text(
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
+    detach(bot, chat_id, message_id).await?;
     apply_grading(screen, draft, grading, None).await?;
 
     Ok(())

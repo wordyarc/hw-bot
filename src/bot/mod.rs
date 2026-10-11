@@ -192,7 +192,8 @@ impl TelegramBot {
         let _stop_handlers_on_drop = force_stop.clone().drop_guard();
         let invalid_credentials = Arc::new(AtomicBool::new(false));
         let handler_credentials = invalid_credentials.clone();
-        let handler_cancellation = cancellation.clone();
+        let stop = cancellation.child_token();
+        let handler_stop = stop.clone();
         let mut dispatcher = Dispatcher::builder(self.bot.inner.clone(), schema(force_stop))
             .dependencies(dptree::deps![
                 self.bot,
@@ -210,11 +211,11 @@ impl TelegramBot {
             .default_handler(|_| async {})
             .error_handler(Arc::new(move |error: BotError| {
                 let credentials = handler_credentials.clone();
-                let cancellation = handler_cancellation.clone();
+                let stop = handler_stop.clone();
                 async move {
                     if error.is_invalid_token() {
                         credentials.store(true, Ordering::Release);
-                        cancellation.cancel();
+                        stop.cancel();
                     }
                 }
             }))
@@ -238,7 +239,7 @@ impl TelegramBot {
 
         tokio::select! {
             result = &mut dispatch => result.map_err(map_startup_error)?,
-            () = cancellation.cancelled() => {
+            () = stop.cancelled() => {
                 // Ожидание dispatch запустило бы ещё idle dispatcher даже после отмены.
                 if shutdown.shutdown().is_ok() {
                     dispatch.await.map_err(map_startup_error)?;

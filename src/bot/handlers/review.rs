@@ -315,25 +315,34 @@ pub(super) async fn submit_comment(
                         offer_grant: submission.status() == SubmissionStatus::Rejected,
                         sandbox: reviewed.sandbox,
                     },
-                    None,
                 )
                 .await?;
             }
         }
-        Err(error) if error.code() == ErrorCode::SubmissionAlreadyReviewed => {
-            reset_dialogue(dialogue).await?;
-            send_app_error(bot, chat_id, error).await?;
-            show_home(step.chat(), telegram_user_id).await?;
+        Err(error) if review_closed(&error) => {
+            close_review(screen, telegram_user_id, error).await?;
         }
         Err(AppError::Domain(
             DomainError::ScoreRequired
             | DomainError::ScoreNotAllowed
             | DomainError::ScoreScaleMismatch { .. },
         )) => {
-            restart_review(screen, submission_id, texts::REVIEW_GRADING_CHANGED).await?;
+            restart_review(
+                screen,
+                telegram_user_id,
+                submission_id,
+                texts::REVIEW_GRADING_CHANGED,
+            )
+            .await?;
         }
         Err(AppError::Domain(DomainError::MakeupNotOffered)) => {
-            restart_review(screen, submission_id, texts::REVIEW_MAKEUP_WITHDRAWN).await?;
+            restart_review(
+                screen,
+                telegram_user_id,
+                submission_id,
+                texts::REVIEW_MAKEUP_WITHDRAWN,
+            )
+            .await?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -348,11 +357,7 @@ struct MakeupFollowup {
     sandbox: bool,
 }
 
-async fn send_makeup_followup(
-    screen: Screen<'_>,
-    followup: MakeupFollowup,
-    notice: Option<&str>,
-) -> HandlerResult {
+async fn send_makeup_followup(screen: Screen<'_>, followup: MakeupFollowup) -> HandlerResult {
     let services = screen.services();
     let makeups = match followup.sandbox {
         true => None,
@@ -367,8 +372,7 @@ async fn send_makeup_followup(
         }
         false => None,
     };
-    let mut lines: Vec<String> = notice.map(str::to_owned).into_iter().collect();
-    lines.extend(makeups.map(texts::makeups_left));
+    let mut lines: Vec<String> = makeups.map(texts::makeups_left).into_iter().collect();
     lines.extend(pool.map(|pool| {
         texts::review_makeup_attempts(pool.balance.remaining(), pool.balance.allowed())
     }));
@@ -421,6 +425,7 @@ pub(super) async fn grant_makeup_attempt(
         Err(error) => return Err(error.into()),
     };
     reset_dialogue(screen.dialogue()).await?;
+    screen.bot().send_message(screen.chat_id(), notice).await?;
     match grant.origin {
         GrantOrigin::Review { sandbox } => {
             send_makeup_followup(
@@ -431,12 +436,10 @@ pub(super) async fn grant_makeup_attempt(
                     offer_grant: true,
                     sandbox,
                 },
-                Some(&notice),
             )
             .await
         }
         GrantOrigin::Grades { list } => {
-            screen.bot().send_message(screen.chat_id(), notice).await?;
             show_student_grades_page(
                 screen,
                 grant.course_id,
@@ -449,42 +452,58 @@ pub(super) async fn grant_makeup_attempt(
     }
 }
 
+fn review_closed(error: &AppError) -> bool {
+    matches!(
+        error.code(),
+        ErrorCode::SubmissionAlreadyReviewed | ErrorCode::NotFound | ErrorCode::PermissionDenied
+    )
+}
+
+async fn close_review(
+    screen: Screen<'_>,
+    telegram_user_id: TelegramUserId,
+    error: AppError,
+) -> HandlerResult {
+    reset_dialogue(screen.dialogue()).await?;
+    send_app_error(screen.bot(), screen.chat_id(), error).await?;
+    show_home(screen.chat(), telegram_user_id).await
+}
+
 async fn reload_item(
     screen: Screen<'_>,
+    telegram_user_id: TelegramUserId,
     submission_id: SubmissionId,
-) -> HandlerResult<ReviewQueueItem> {
+) -> HandlerResult<Option<ReviewQueueItem>> {
     match screen
         .services()
         .reviews
         .find_for_review(screen.actor(), submission_id)
         .await
     {
-        Ok(item) => Ok(item),
-        Err(error) => {
-            if matches!(
-                error.code(),
-                ErrorCode::SubmissionAlreadyReviewed
-                    | ErrorCode::NotFound
-                    | ErrorCode::PermissionDenied
-            ) {
-                reset_dialogue(screen.dialogue()).await?;
-            }
-            Err(error.into())
+        Ok(item) => Ok(Some(item)),
+        Err(error) if review_closed(&error) => {
+            close_review(screen, telegram_user_id, error).await?;
+            Ok(None)
         }
+        Err(error) => Err(error.into()),
     }
 }
 
 async fn restart_review(
     screen: Screen<'_>,
+    telegram_user_id: TelegramUserId,
     submission_id: SubmissionId,
     reason: &str,
 ) -> HandlerResult {
-    let item = reload_item(screen, submission_id).await?;
-    restart_with(screen, item, reason).await
+    match reload_item(screen, telegram_user_id, submission_id).await? {
+        Some(item) => restart_with(screen, item, reason).await,
+        None => Ok(()),
+    }
 }
 
 pub(super) async fn handle_decision(
     screen: Screen<'_>,
+    telegram_user_id: TelegramUserId,
     callback_submission_id: SubmissionId,
     decision: ReviewDecision,
     state: BotState,
@@ -512,7 +531,9 @@ pub(super) async fn handle_decision(
             ask_review_comment(chat, submission_id, decision, SubmissionKind::Regular, None).await
         }
         (ReviewDecision::Accept, ReviewTarget::Makeup) => {
-            let item = reload_item(screen, submission_id).await?;
+            let Some(item) = reload_item(screen, telegram_user_id, submission_id).await? else {
+                return Ok(());
+            };
             let Ok(grade) = item.assignment.makeup_grade() else {
                 return restart_with(screen, item, texts::REVIEW_MAKEUP_WITHDRAWN).await;
             };
@@ -525,7 +546,11 @@ pub(super) async fn handle_decision(
 }
 
 async fn restart_with(screen: Screen<'_>, item: ReviewQueueItem, reason: &str) -> HandlerResult {
-    screen.bot().send_message(screen.chat_id(), reason).await?;
+    screen
+        .bot()
+        .send_message(screen.chat_id(), reason)
+        .reply_markup(teacher_keyboard())
+        .await?;
     show_item(screen, item).await
 }
 
@@ -594,26 +619,8 @@ pub(super) async fn change_decision(
     let Some(submission_id) = state.awaiting_review_comment(callback_submission_id) else {
         return screen.stale().await;
     };
-    let item = match screen
-        .services()
-        .reviews
-        .find_for_review(screen.actor(), submission_id)
-        .await
-    {
-        Ok(item) => item,
-        Err(error)
-            if matches!(
-                error.code(),
-                ErrorCode::SubmissionAlreadyReviewed
-                    | ErrorCode::NotFound
-                    | ErrorCode::PermissionDenied
-            ) =>
-        {
-            reset_dialogue(screen.dialogue()).await?;
-            send_app_error(screen.bot(), screen.chat_id(), error).await?;
-            return show_home(screen.chat(), telegram_user_id).await;
-        }
-        Err(error) => return Err(error.into()),
+    let Some(item) = reload_item(screen, telegram_user_id, submission_id).await? else {
+        return Ok(());
     };
     let target = review_target(&item);
     screen

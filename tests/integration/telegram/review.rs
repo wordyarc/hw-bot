@@ -1117,6 +1117,77 @@ async fn changing_the_decision_after_a_score_saves_a_rejection_without_a_score()
 }
 
 #[tokio::test]
+async fn the_help_menu_item_keeps_the_score_buttons_working() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
+            .await
+            .created(),
+    );
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, submission),
+        )
+        .await;
+    let score = telegram
+        .button(
+            app.teacher(),
+            &format!("{}{submission}:4", callbacks::REVIEW_SCORE_PREFIX),
+        )
+        .await;
+
+    telegram.message(app.teacher(), texts::BUTTON_HELP);
+    telegram.flush(app.teacher()).await;
+    telegram.click(app.teacher(), &score);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(!sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
+    assert!(
+        sent.contains(&texts::input_prompt(texts::REVIEW_COMMENT_PROMPT)),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_review_restarted_from_the_comment_step_brings_the_menu_back() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, submission),
+        )
+        .await;
+    app.change_grading(app.assignment(), app.teacher(), Some(10))
+        .await
+        .ok();
+
+    telegram.message(app.teacher(), "Зачтено");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let restart = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| message["text"] == texts::REVIEW_GRADING_CHANGED)
+        .expect("the review restarts");
+    assert!(
+        restart["reply_markup"]["keyboard"].is_array(),
+        "{restart:#?}"
+    );
+}
+
+#[tokio::test]
 async fn a_change_button_after_the_review_is_saved_is_stale() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;

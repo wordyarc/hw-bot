@@ -226,6 +226,43 @@ async fn an_old_submit_button_names_why_the_work_cannot_be_submitted_instead_of_
 }
 
 #[tokio::test]
+async fn a_submission_refused_after_the_prompt_brings_the_menu_back() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    app.archive_assignment(app.assignment(), app.teacher())
+        .await
+        .ok();
+    telegram.message(app.student(), "pull/1");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let refusal = telegram
+        .messages(app.student())
+        .into_iter()
+        .find(|message| message["text"] == app_error_message(ErrorCode::AssignmentUnavailable))
+        .expect("the refusal is sent");
+    assert!(
+        refusal["reply_markup"]["keyboard"].is_array(),
+        "{refusal:#?}"
+    );
+}
+
+#[tokio::test]
 async fn the_assignment_card_names_a_penalty_to_the_course_total() {
     let app = TestApp::start().await;
     let assignment = app

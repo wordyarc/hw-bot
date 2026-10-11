@@ -1142,6 +1142,22 @@ mod tests {
     }
 
     #[test]
+    fn the_zeroing_period_names_the_whole_penalty_the_review_will_store() {
+        let timezone = timezone();
+        let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();
+        let policy = LatePolicy::new(1, 6, 5, DeductedFrom::WorkScore).unwrap();
+        let max_score = MaxScore::new(10).unwrap();
+
+        let schedule = schedule(deadline, policy, max_score, &timezone);
+        let lines: Vec<_> = schedule.lines().collect();
+
+        assert_eq!(
+            lines[3],
+            texts::schedule_penalty_row("22.08.2026 23:59", 12, 0, 10)
+        );
+    }
+
+    #[test]
     fn a_long_schedule_collapses_its_middle_into_one_line() {
         let timezone = timezone();
         let deadline = timezone.parse_deadline("20.08.2026 23:59").unwrap();

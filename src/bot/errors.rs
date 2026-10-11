@@ -1,3 +1,4 @@
+use teloxide::ApiError;
 use teloxide::prelude::ChatId;
 
 use super::Bot;
@@ -59,10 +60,16 @@ pub(super) fn log_request_error(operation: &'static str, error: &teloxide::Reque
         teloxide::RequestError::RetryAfter(delay) => Some(delay.seconds()),
         _ => None,
     };
+    let api_error = match error {
+        teloxide::RequestError::Api(ApiError::Unknown(_) | ApiError::CantParseEntities(_)) => None,
+        teloxide::RequestError::Api(error) => Some(tracing::field::debug(error)),
+        _ => None,
+    };
     tracing::warn!(
         operation,
         kind = request_error_kind(error),
         retry_after_seconds,
+        api_error,
         "Telegram request failed"
     );
 }
@@ -112,24 +119,25 @@ pub fn app_error_message(code: ErrorCode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
-    #[test]
-    fn transport_logs_keep_correlation_without_the_raw_telegram_response() {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex};
+    #[derive(Clone)]
+    struct Writer(Arc<Mutex<Vec<u8>>>);
 
-        #[derive(Clone)]
-        struct Writer(Arc<Mutex<Vec<u8>>>);
-        impl Write for Writer {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+    impl Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
         }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn captured(log: impl FnOnce()) -> Vec<u8> {
         let buffer = Writer(Arc::default());
         let writer = buffer.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -137,7 +145,20 @@ mod tests {
             .without_time()
             .with_writer(move || writer.clone())
             .finish();
-        tracing::subscriber::with_default(subscriber, || {
+        tracing::subscriber::with_default(subscriber, log);
+        buffer.0.lock().unwrap().clone()
+    }
+
+    fn events(bytes: &[u8]) -> Vec<serde_json::Value> {
+        serde_json::Deserializer::from_slice(bytes)
+            .into_iter::<serde_json::Value>()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn transport_logs_keep_correlation_without_the_raw_telegram_response() {
+        let bytes = captured(|| {
             let error = teloxide::RequestError::InvalidJson {
                 source: Arc::new(serde_json::from_str::<serde_json::Value>("invalid").unwrap_err()),
                 raw: "private-comment-and-token".into(),
@@ -156,11 +177,7 @@ mod tests {
                 assert!(!format!("{startup:?}: {startup}").contains("private-comment-and-token"));
             });
         });
-        let bytes = buffer.0.lock().unwrap();
-        let events: Vec<_> = serde_json::Deserializer::from_slice(&bytes)
-            .into_iter::<serde_json::Value>()
-            .map(Result::unwrap)
-            .collect();
+        let events = events(&bytes);
         assert_eq!(events.len(), 4);
         for event in events {
             assert_eq!(event["span"]["update_id"], 7);
@@ -168,5 +185,31 @@ mod tests {
             assert_eq!(event["fields"]["kind"], "telegram_invalid_response");
         }
         assert!(!String::from_utf8_lossy(&bytes).contains("private-comment-and-token"));
+    }
+
+    #[test]
+    fn an_api_error_is_named_but_its_description_is_not_logged() {
+        let bytes = captured(|| {
+            log_request_error(
+                "get_updates",
+                &teloxide::RequestError::Api(ApiError::TerminatedByOtherGetUpdates),
+            );
+            log_request_error(
+                "update",
+                &teloxide::RequestError::Api(ApiError::Unknown("private-description".into())),
+            );
+        });
+        let events = events(&bytes);
+
+        assert_eq!(
+            events[0]["fields"]["api_error"],
+            "TerminatedByOtherGetUpdates"
+        );
+        assert!(
+            events[1]["fields"].get("api_error").is_none(),
+            "{}",
+            events[1]
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-description"));
     }
 }

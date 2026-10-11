@@ -151,10 +151,10 @@ pub(crate) async fn handle_form(
         return screen.stale().await;
     };
     if action == MakeupFormAction::Back {
-        if !form.can_go_back() {
+        if !form.step_back() {
             return screen.stale().await;
         }
-        return back(screen, form).await;
+        return render(screen.chat(), form, None).await;
     }
     if step != MakeupStep::Summary {
         return screen.stale().await;
@@ -267,8 +267,12 @@ async fn cancel(screen: Screen<'_>, form: MakeupForm) -> HandlerResult {
     show_course_assignments_page(screen, form.course_id, PageRequest::default()).await
 }
 
-async fn save(screen: Screen<'_>, form: MakeupForm) -> HandlerResult {
-    let Some(command) = form.command(screen.actor(), Utc::now()) else {
+async fn save(screen: Screen<'_>, mut form: MakeupForm) -> HandlerResult {
+    let now = Utc::now();
+    if form.notice_end(now) {
+        return render(screen.chat(), form, Some(texts::MAKEUP_ENDED_BEFORE_SAVE)).await;
+    }
+    let Some(command) = form.command(screen.actor(), now) else {
         return discard(screen.chat(), form).await;
     };
     let notice = match screen.services().courses.configure_makeup(command).await {

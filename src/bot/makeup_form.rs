@@ -90,6 +90,16 @@ impl MakeupForm {
         self.saved.filter(|_| !self.active)
     }
 
+    pub fn notice_end(&mut self, now: DateTime<Utc>) -> bool {
+        let ended = self.active
+            && !self.disabling
+            && self.saved.is_some_and(|makeup| !makeup.is_active_at(now));
+        if ended {
+            self.active = false;
+        }
+        ended
+    }
+
     pub fn current_scale(&self) -> Option<&ScaleQuestion> {
         match self.step {
             MakeupStep::Scale(index) => self.scales.get(index),
@@ -107,6 +117,16 @@ impl MakeupForm {
 
     pub fn can_go_back(&self) -> bool {
         self.previous().is_some()
+    }
+
+    pub fn step_back(&mut self) -> bool {
+        if !self.can_go_back() {
+            return false;
+        }
+        if matches!(self.mode, InputMode::Calendar(_)) {
+            self.mode = InputMode::Buttons;
+        }
+        self.back()
     }
 
     pub fn back(&mut self) -> bool {
@@ -343,6 +363,28 @@ mod tests {
     }
 
     #[test]
+    fn an_end_reached_while_editing_turns_the_save_into_enabling() {
+        let mut form = MakeupForm::new(TeachingCourseId::new(), Some(enabled()), Vec::new(), t0());
+        assert!(!form.notice_end(enabled().until() - Duration::seconds(1)));
+        assert!(form.active);
+
+        assert!(form.notice_end(enabled().until()));
+        assert!(!form.active);
+        assert_eq!(form.ended(), Some(enabled()));
+        assert!(!form.edit(MakeupFormAction::Disable));
+        assert!(!form.notice_end(enabled().until()));
+    }
+
+    #[test]
+    fn disabling_a_makeup_that_ended_meanwhile_is_still_saved_as_disabling() {
+        let mut form = MakeupForm::new(TeachingCourseId::new(), Some(enabled()), Vec::new(), t0());
+        assert!(form.edit(MakeupFormAction::Disable));
+
+        assert!(!form.notice_end(enabled().until()));
+        assert!(form.disabling);
+    }
+
+    #[test]
     fn cancelling_a_scale_question_returns_to_the_pool_with_the_entered_values() {
         let mut form = MakeupForm::new(TeachingCourseId::new(), None, two_scales(), t0());
         form.apply_date(t0() + Duration::days(30), t0()).unwrap();
@@ -374,6 +416,20 @@ mod tests {
         assert!(form.back());
         assert_eq!(form.step, MakeupStep::Summary);
         assert!(!form.back());
+    }
+
+    #[test]
+    fn the_back_button_leaves_the_calendar_for_the_summary_unlike_cancel() {
+        let mut form = MakeupForm::new(TeachingCourseId::new(), Some(enabled()), Vec::new(), t0());
+        assert!(form.edit(MakeupFormAction::Date));
+        form.mode = InputMode::Calendar(t0().date_naive());
+        let mut cancelled = form.clone();
+
+        assert!(form.step_back());
+        assert_eq!(form.step, MakeupStep::Summary);
+        assert!(cancelled.back());
+        assert_eq!(cancelled.step, MakeupStep::Date);
+        assert_eq!(cancelled.mode, InputMode::Buttons);
     }
 
     #[test]

@@ -6,7 +6,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::Level;
 
 mod actor;
 mod assignments;
@@ -30,7 +31,7 @@ pub use state::AppState;
 pub const REQUEST_BODY_LIMIT: usize = 64 * 1024;
 
 pub fn router(state: AppState, request_timeout: Duration) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health::readiness))
         .route("/health/live", get(health::liveness))
         .route("/health/ready", get(health::readiness))
@@ -104,14 +105,19 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
                 "method not allowed",
             )
         })
+        .with_state(state);
+    with_transport_layers(router, request_timeout)
+}
+
+fn with_transport_layers(router: Router, request_timeout: Duration) -> Router {
+    router
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             request_timeout,
         ))
         .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT))
-        .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::map_response(normalize_transport_error))
-        .with_state(state)
+        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
 }
 
 async fn normalize_transport_error(response: Response) -> Response {
@@ -124,12 +130,15 @@ async fn normalize_transport_error(response: Response) -> Response {
         return response;
     }
     match response.status() {
-        StatusCode::REQUEST_TIMEOUT => ApiError::new(
-            StatusCode::REQUEST_TIMEOUT,
-            "request_timeout",
-            "request timed out",
-        )
-        .into_response(),
+        StatusCode::REQUEST_TIMEOUT => {
+            tracing::warn!(kind = "request_timeout", "HTTP request timed out");
+            ApiError::new(
+                StatusCode::REQUEST_TIMEOUT,
+                "request_timeout",
+                "request timed out",
+            )
+            .into_response()
+        }
         StatusCode::PAYLOAD_TOO_LARGE => ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "request_body_too_large",

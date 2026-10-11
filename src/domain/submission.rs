@@ -535,15 +535,15 @@ impl Submission {
             });
         }
 
+        if student.student_group_id() != Some(assignment.student_group_id()) {
+            return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
+        }
+
         if !assignment.is_published() {
             return Err(DomainError::AssignmentIsNotPublished);
         }
 
         let acceptance = assignment.acceptance_at(submitted_at, makeup.consented_course())?;
-
-        if student.student_group_id() != Some(assignment.student_group_id()) {
-            return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
-        }
 
         history.ensure_admits(assignment, acceptance)?;
 

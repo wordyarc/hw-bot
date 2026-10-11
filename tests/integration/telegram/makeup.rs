@@ -231,6 +231,45 @@ async fn a_save_opened_before_a_colleagues_save_keeps_the_colleagues_settings() 
     assert!(texts_sent(&telegram, app.teacher()).contains(&texts::MAKEUP_CONFLICT.to_owned()));
 }
 
+#[tokio::test]
+async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announces_a_new_pool() {
+    let app = TestApp::start().await;
+    let opened = app
+        .open_makeup(
+            &app.fixture.course,
+            3,
+            Utc::now() - Duration::days(30) + Duration::seconds(3),
+        )
+        .await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_form(&app, &telegram).await;
+    telegram.click_button(app.teacher(), &answer("pass")).await;
+    telegram
+        .click_button(app.teacher(), callbacks::MAKEUP_DATE)
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
+        .await;
+    telegram.button(app.teacher(), callbacks::MAKEUP_SAVE).await;
+    tokio::time::sleep((opened.until() - Utc::now()).to_std().unwrap_or_default()).await;
+
+    telegram
+        .click_button(app.teacher(), callbacks::MAKEUP_SAVE)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        db::makeup::find_course(&app.pool, app.fixture.course.id())
+            .await
+            .unwrap(),
+        Some(opened)
+    );
+    assert!(texts_sent(&telegram, app.teacher()).iter().any(|text| {
+        text.starts_with(texts::MAKEUP_ENDED_BEFORE_SAVE) && text.contains(texts::MAKEUP_NEW_POOL)
+    }));
+}
+
 async fn create_through_the_wizard(app: &TestApp, telegram: &TelegramScenario, title: &str) {
     let teacher = app.teacher();
     telegram.message(teacher, "/courses");
@@ -606,12 +645,15 @@ async fn a_grant_after_a_rejection_gives_the_student_an_attempt() {
             .any(|text| text.contains(&texts::review_makeup_attempts(0, 1))),
         "{sent:#?}"
     );
-    assert!(
-        sent.iter()
-            .any(|text| text.starts_with(texts::MAKEUP_ATTEMPT_GRANTED)
-                && text.contains(&texts::review_makeup_attempts(1, 2))),
-        "{sent:#?}"
-    );
+    let granted = sent
+        .iter()
+        .position(|text| text == texts::MAKEUP_ATTEMPT_GRANTED)
+        .unwrap_or_else(|| panic!("{sent:#?}"));
+    let balance = sent
+        .iter()
+        .position(|text| text.contains(&texts::review_makeup_attempts(1, 2)))
+        .unwrap_or_else(|| panic!("{sent:#?}"));
+    assert!(granted < balance, "{sent:#?}");
 }
 
 #[tokio::test]

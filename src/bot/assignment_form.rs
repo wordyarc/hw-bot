@@ -480,6 +480,16 @@ impl TermsForm {
         true
     }
 
+    pub fn step_back(&mut self) -> bool {
+        if !self.can_go_back() {
+            return false;
+        }
+        if matches!(self.mode, InputMode::Calendar(_)) {
+            self.mode = InputMode::Buttons;
+        }
+        self.back()
+    }
+
     pub fn edit_summary(&mut self, action: TermsAction) -> bool {
         if self.step != TermsStep::Summary {
             return false;
@@ -720,6 +730,21 @@ mod tests {
         assert_eq!(form.step, TermsStep::Periods);
         assert_eq!(form.mode, InputMode::Buttons);
         assert_eq!(form.terms.complete(), before);
+    }
+
+    #[test]
+    fn the_back_button_leaves_the_calendar_for_the_previous_step_unlike_cancel() {
+        let mut form = complete_form();
+        form.go(TermsStep::Deadline);
+        let calendar = InputMode::Calendar(t0().date_naive());
+        form.mode = calendar;
+        let mut cancelled = form.clone();
+
+        assert!(form.step_back());
+        assert_eq!(form.step, TermsStep::Policy);
+        assert!(cancelled.back());
+        assert_eq!(cancelled.step, TermsStep::Deadline);
+        assert_eq!(cancelled.mode, InputMode::Buttons);
     }
 
     #[test]

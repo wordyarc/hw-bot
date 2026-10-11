@@ -187,8 +187,9 @@ pub(super) fn penalty_schedule(
         let until = timezone.format_until(until);
         lines.push(match policy.deducted_from() {
             DeductedFrom::WorkScore => {
-                let score = policy.possible_score(max_score, u32::from(periods));
-                texts::schedule_penalty_row(&until, max - score, score, max)
+                let periods = u32::from(periods);
+                let score = policy.possible_score(max_score, periods);
+                texts::schedule_penalty_row(&until, policy.penalty_for(periods), score, max)
             }
             DeductedFrom::CourseTotal => {
                 texts::schedule_total_row(&until, policy.penalty_for(u32::from(periods)))

@@ -311,6 +311,22 @@ async fn open_deadline_calendar(app: &TestApp, telegram: &TelegramScenario) {
 }
 
 #[tokio::test]
+async fn the_back_button_under_the_calendar_returns_to_the_previous_step() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_deadline_calendar(&app, &telegram).await;
+
+    let back = telegram
+        .click_button(app.teacher(), callbacks::TERMS_BACK)
+        .await;
+    let save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(save.message_id, back.message_id);
+}
+
+#[tokio::test]
 async fn calendar_month_navigation_keeps_deadline_selection_active() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
@@ -861,6 +877,44 @@ async fn choosing_a_duration_date_requires_confirmation_of_rounded_periods() {
         expected_deadline(&deadline) + chrono::Duration::days(14)
     );
     stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn typed_answers_leave_no_live_buttons_on_the_creation_questions() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+    telegram.message(teacher, "/courses");
+    telegram
+        .click_button(teacher, &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(teacher, &cb(callbacks::CREATE_PREFIX, app.course()))
+        .await;
+    telegram.message(teacher, "Typed answers");
+    telegram.message(teacher, "Send a pull request.");
+    let attempts = telegram
+        .button(teacher, &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
+        .await;
+    telegram.message(teacher, "2");
+    let scale = telegram
+        .click_button(teacher, &cb(callbacks::GRADING_PREFIX, "manual"))
+        .await;
+    telegram.message(teacher, "7");
+    telegram
+        .button(teacher, &cb(callbacks::LATE_POLICY_PREFIX, "none"))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    for question in [attempts.message_id, scale.message_id] {
+        let message = telegram
+            .messages(teacher)
+            .into_iter()
+            .find(|message| message["message_id"] == question)
+            .unwrap();
+        assert!(message.get("reply_markup").is_none(), "{message:#?}");
+    }
 }
 
 #[tokio::test]

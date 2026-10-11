@@ -530,6 +530,35 @@ async fn attachment_timeout_keeps_submission_available() {
 }
 
 #[tokio::test]
+async fn invalid_credentials_stop_the_bot_without_cancelling_the_other_components() {
+    let app = TestApp::start().await;
+    add_assignment_document(&app).await;
+    let telegram = telegram_server(vec![callback_update(
+        1,
+        app.student(),
+        &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        BOT_MESSAGE_ID,
+    )])
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendDocument"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "ok": false, "error_code": 401, "description": "Unauthorized",
+        })))
+        .mount(&telegram)
+        .await;
+    let (cancellation, task) = start_bot(&app, &telegram);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(matches!(result, Err(TelegramBotError::InvalidCredentials)));
+    assert!(!cancellation.is_cancelled());
+}
+
+#[tokio::test]
 async fn invalid_credentials_during_attachment_delivery_stop_the_bot() {
     let app = TestApp::start().await;
     add_assignment_document(&app).await;
