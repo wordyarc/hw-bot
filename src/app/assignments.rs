@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::app::access::{
-    load_managed_versioned_assignment, load_managing_teacher, load_managing_teacher_on,
-    load_student,
+    ManagedAssignment, load_managed_assignment_on, load_managed_versioned_assignment,
+    load_managing_teacher, load_student,
 };
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
@@ -234,26 +234,27 @@ impl AssignmentService {
     ) -> AppResult<StudentAssignmentProgress> {
         let mut tx = self.pool.begin().await?;
 
-        let actor = load_actor(&mut *tx, command.actor, "teacher").await?;
-
-        let assignment = db::assignments::find_by_id(&mut *tx, command.assignment_id)
-            .await?
-            .required("assignment")?;
+        let ManagedAssignment {
+            actor,
+            course,
+            stored: VersionedAssignment { assignment, .. },
+        } = load_managed_assignment_on(
+            &mut tx,
+            command.actor,
+            command.assignment_id,
+            "grant extra attempts",
+        )
+        .await?;
 
         let student = db::users::find_by_id(&mut *tx, command.student_id)
             .await?
             .required("student")?;
 
-        let teaching_course =
-            db::academic::find_teaching_course_by_id(&mut *tx, assignment.teaching_course_id())
-                .await?
-                .required("teaching course")?;
-
         let extra_attempts =
             db::attempts::lock_or_create(&mut tx, assignment.id(), student.id()).await?;
         let mut progress = StudentAssignmentProgress::new(&assignment, &student, extra_attempts)?;
 
-        progress.grant_extra_attempts(&assignment, &teaching_course, &actor, command.amount)?;
+        progress.grant_extra_attempts(&assignment, &course, &actor, command.amount)?;
 
         db::attempts::update(&mut tx, &progress).await?;
         tx.commit().await?;
@@ -480,20 +481,15 @@ impl AssignmentService {
     {
         let mut tx = self.pool.begin().await?;
 
-        let VersionedAssignment {
-            mut assignment,
-            revision,
-        } = db::assignments::find_versioned_by_id(&mut *tx, assignment_id)
-            .await?
-            .required("assignment")?;
-
-        let (actor, teaching_course) = load_managing_teacher_on(
-            &mut tx,
+        let ManagedAssignment {
             actor,
-            assignment.teaching_course_id(),
-            "change assignment",
-        )
-        .await?;
+            course: teaching_course,
+            stored:
+                VersionedAssignment {
+                    mut assignment,
+                    revision,
+                },
+        } = load_managed_assignment_on(&mut tx, actor, assignment_id, "change assignment").await?;
 
         if expected_revision.is_some_and(|expected| expected != revision) {
             return Err(AppError::AssignmentChangedConcurrently);

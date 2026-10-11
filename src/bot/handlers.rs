@@ -14,7 +14,7 @@ use super::callbacks::{
 };
 use super::context::{BotContext, Chat, Deps, Screen, TextStep};
 use super::errors::finish_handler;
-use super::state::{BotDialogue, BotState, FlowState, ScreenState};
+use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button};
 use crate::domain::{Role, TelegramUserId};
@@ -113,7 +113,7 @@ pub(super) async fn handle_command(
 
         let telegram_user_id = message_sender_id(&message)?;
 
-        if let Some(form) = state.active_terms()
+        if let Some(form) = state.active_form()
             && !matches!(command, Command::Help)
         {
             if matches!(command, Command::Cancel) {
@@ -129,22 +129,10 @@ pub(super) async fn handle_command(
                     )
                     .await;
                 }
-                return teacher::back(screen, form.clone()).await;
+                return teacher::form_back(screen, form).await;
             }
             reset_dialogue(&dialogue).await?;
-            teacher::abandon(&bot, chat_id, form).await?;
-        }
-        if let Some(form) = state.active_makeup()
-            && !matches!(command, Command::Help)
-        {
-            if matches!(command, Command::Cancel) {
-                let Some(screen) = chat.resolve(telegram_user_id).await? else {
-                    return Ok(());
-                };
-                return teacher::makeup_back(screen, form.clone()).await;
-            }
-            reset_dialogue(&dialogue).await?;
-            teacher::abandon_makeup(&bot, chat_id, form).await?;
+            teacher::abandon_form(&bot, chat_id, form).await?;
         }
 
         if let Some(action) = menu_action_for(&command) {
@@ -207,7 +195,7 @@ pub(super) async fn handle_message(
         let step = TextStep::new(&bot, &message, telegram_user_id, deps);
 
         if let Some(action) = message.text().and_then(menu_action) {
-            if let Some(form) = state.active_terms() {
+            if let Some(ActiveForm::Terms(form)) = state.active_form() {
                 let Some(screen) = step.resolve().await? else {
                     return Ok(());
                 };
@@ -217,8 +205,8 @@ pub(super) async fn handle_message(
                 return send_help(step.chat(), telegram_user_id).await;
             }
             reset_dialogue(&dialogue).await?;
-            if let Some(form) = state.active_makeup() {
-                teacher::abandon_makeup(&bot, chat_id, form).await?;
+            if let Some(form) = state.active_form() {
+                teacher::abandon_form(&bot, chat_id, form).await?;
             }
             return run_menu_action(step.chat(), telegram_user_id, action).await;
         }
@@ -389,11 +377,8 @@ pub(super) async fn handle_callback(
         }
         if matches!(action, CallbackAction::Replayable(_)) {
             reset_dialogue(&dialogue).await?;
-            if let Some(form) = state.active_terms() {
-                teacher::abandon(&bot, chat_id, form).await?;
-            }
-            if let Some(form) = state.active_makeup() {
-                teacher::abandon_makeup(&bot, chat_id, form).await?;
+            if let Some(form) = state.active_form() {
+                teacher::abandon_form(&bot, chat_id, form).await?;
             }
         }
 
@@ -456,9 +441,6 @@ async fn handle_replayable_action(
         ReplayableAction::ReviewHub => review::show_hub(screen).await,
         ReplayableAction::NextReview => review::show_next(screen).await,
         ReplayableAction::NextMakeupReview => review::show_next_makeup(screen).await,
-        ReplayableAction::Course(course_id) => {
-            teacher::show_course_assignments_page(screen, course_id, PageRequest::default()).await
-        }
         ReplayableAction::CourseMakeup(course_id) => teacher::open_makeup(screen, course_id).await,
         ReplayableAction::Assignment(assignment_id) => {
             student::show_assignment(screen, assignment_id).await
@@ -481,14 +463,8 @@ async fn handle_replayable_action(
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await
         }
-        ReplayableAction::GrantAttempts(assignment_id) => {
-            teacher::show_students_page(screen, assignment_id, PageRequest::default()).await
-        }
         ReplayableAction::GroupInvite(course_id) => {
             teacher::show_group_invite(screen, course_id).await
-        }
-        ReplayableAction::Gradebook(course_id) => {
-            teacher::show_gradebook_page(screen, course_id, PageRequest::default()).await
         }
         ReplayableAction::ReviewSubmission(submission_id) => {
             review::open(screen, submission_id).await

@@ -1,3 +1,9 @@
+use teloxide::types::ChatId;
+
+use crate::bot::context::Screen;
+use crate::bot::state::ActiveForm;
+use crate::bot::{Bot, HandlerResult};
+
 mod attempts;
 mod courses;
 mod creation;
@@ -25,11 +31,28 @@ pub(super) use gradebook::{show_gradebook_page, show_student_grades_page};
 pub(super) use invites::show_group_invite;
 pub(super) use invites::{ask_invite_rotation, cancel_invite_rotation, confirm_invite_rotation};
 pub(super) use makeup::{
-    abandon as abandon_makeup, back as makeup_back, handle_answer as handle_makeup_answer,
-    handle_attempts as handle_makeup_attempts, handle_form as handle_makeup_form,
-    open as open_makeup, submit_text as submit_makeup_text,
+    handle_answer as handle_makeup_answer, handle_attempts as handle_makeup_attempts,
+    handle_form as handle_makeup_form, open as open_makeup, submit_text as submit_makeup_text,
 };
 pub(super) use terms::{
-    abandon, back, begin_terms_edit, confirm_exit, handle_late_policy, handle_makeup,
-    handle_penalty, handle_period, handle_periods, handle_terms, submit_terms,
+    begin_terms_edit, confirm_exit, handle_late_policy, handle_makeup, handle_penalty,
+    handle_period, handle_periods, handle_terms, submit_terms,
 };
+
+pub(super) async fn abandon_form(
+    bot: &Bot,
+    chat_id: ChatId,
+    form: ActiveForm<'_>,
+) -> HandlerResult {
+    match form {
+        ActiveForm::Terms(form) => terms::abandon(bot, chat_id, form).await,
+        ActiveForm::Makeup(form) => makeup::abandon(bot, chat_id, form).await,
+    }
+}
+
+pub(super) async fn form_back(screen: Screen<'_>, form: ActiveForm<'_>) -> HandlerResult {
+    match form {
+        ActiveForm::Terms(form) => terms::back(screen, form.clone()).await,
+        ActiveForm::Makeup(form) => makeup::back(screen, form.clone()).await,
+    }
+}

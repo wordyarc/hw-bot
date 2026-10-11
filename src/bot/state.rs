@@ -31,6 +31,12 @@ pub(super) struct FileDeletion {
 
 /// Кнопка допустима при совпадении двух условий: ожидаемого состояния диалога и ID сообщения.
 /// Оба условия проверяются в каждом методе разбора.
+#[derive(Clone, Copy)]
+pub(super) enum ActiveForm<'a> {
+    Terms(&'a TermsForm),
+    Makeup(&'a MakeupForm),
+}
+
 impl BotState {
     pub(super) fn managing_assignment(
         &self,
@@ -234,6 +240,16 @@ impl BotState {
     pub(super) fn active_makeup(&self) -> Option<&MakeupForm> {
         match self {
             Self::Flow(FlowState::ConfiguringMakeup(form)) => Some(form),
+            _ => None,
+        }
+    }
+
+    pub(super) fn active_form(&self) -> Option<ActiveForm<'_>> {
+        match self {
+            Self::Flow(
+                FlowState::ConfiguringTerms(form) | FlowState::ConfirmingTermsExit { form, .. },
+            ) => Some(ActiveForm::Terms(form)),
+            Self::Flow(FlowState::ConfiguringMakeup(form)) => Some(ActiveForm::Makeup(form)),
             _ => None,
         }
     }

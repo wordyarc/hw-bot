@@ -9,9 +9,8 @@ use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget,
 };
 use crate::bot::callbacks::{
-    CALENDAR_MONTH_PREFIX, CALENDAR_NOOP, CALENDAR_PICK_PREFIX, DEADLINE_CALENDAR,
-    DEADLINE_DAYS_PREFIX, DEADLINE_MANUAL, DEADLINE_MONTHS_PREFIX, DEADLINE_OPTIONS,
-    FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GRADING_PREFIX, INVITE_CANCEL_ROTATE,
+    AmountChoice, CALENDAR_NOOP, DEADLINE_CALENDAR, DEADLINE_MANUAL, DEADLINE_OPTIONS,
+    DeadlineAction, FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GradingChoice, INVITE_CANCEL_ROTATE,
     INVITE_CONFIRM_ROTATE, InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice,
     MAKEUP_ATTEMPTS, MAKEUP_ATTEMPTS_PREFIX, MAKEUP_BACK, MAKEUP_CANCEL, MAKEUP_DATE,
     MAKEUP_DISABLE, MAKEUP_SAVE, MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget,
@@ -229,7 +228,7 @@ pub(crate) fn student_grades_keyboard(
     }
     rows.push(row(
         texts::BUTTON_BACK_TO_STUDENTS,
-        PageTarget::Gradebook(course_id).callback(0),
+        ReplayableAction::Page(PageTarget::Gradebook(course_id), 0).callback(),
     ));
     InlineKeyboardMarkup::new(rows)
 }
@@ -290,7 +289,7 @@ pub(crate) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeybo
                 course.subject.name().as_str(),
                 course.group.code().as_str(),
             )),
-            ReplayableAction::Course(course.course.id()).callback(),
+            ReplayableAction::Page(PageTarget::Course(course.course.id()), 0).callback(),
         )
     }))
 }
@@ -320,7 +319,7 @@ pub(crate) fn course_assignments_keyboard(
         ),
         row(
             texts::BUTTON_GRADEBOOK,
-            ReplayableAction::Gradebook(course_id).callback(),
+            ReplayableAction::Page(PageTarget::Gradebook(course_id), 0).callback(),
         ),
         row(
             makeup.map_or_else(
@@ -375,11 +374,12 @@ pub(crate) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
         ),
         row(
             texts::BUTTON_GRANT_ATTEMPTS,
-            ReplayableAction::GrantAttempts(assignment_id).callback(),
+            ReplayableAction::Page(PageTarget::Students(assignment_id), 0).callback(),
         ),
         row(
             texts::BUTTON_BACK_TO_COURSE_ASSIGNMENTS,
-            ReplayableAction::Course(assignment.teaching_course_id()).callback(),
+            ReplayableAction::Page(PageTarget::Course(assignment.teaching_course_id()), 0)
+                .callback(),
         ),
     ]);
 
@@ -401,17 +401,17 @@ pub(crate) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboar
         preset(
             texts::PRESET_WEEK,
             timezone.in_days(7),
-            format!("{DEADLINE_DAYS_PREFIX}7"),
+            DeadlineAction::Days(7).callback(),
         ),
         preset(
             texts::PRESET_TWO_WEEKS,
             timezone.in_days(14),
-            format!("{DEADLINE_DAYS_PREFIX}14"),
+            DeadlineAction::Days(14).callback(),
         ),
         preset(
             texts::PRESET_MONTH,
             timezone.in_months(1),
-            format!("{DEADLINE_MONTHS_PREFIX}1"),
+            DeadlineAction::Months(1).callback(),
         ),
     ]
     .into_iter()
@@ -461,7 +461,7 @@ fn duration_options_keyboard(
         }
         rows.push(row(
             texts::date_preset(label, &timezone.format_date(date)),
-            format!("{CALENDAR_PICK_PREFIX}{date}"),
+            DeadlineAction::Pick(date).callback(),
         ));
     }
     rows.extend(date_input_rows());
@@ -471,18 +471,9 @@ fn duration_options_keyboard(
 
 pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {
     let blank = || button("·", CALENDAR_NOOP);
-    let turn = |label: &str, month: NaiveDate| {
-        button(
-            label,
-            format!("{CALENDAR_MONTH_PREFIX}{}", month_key(month)),
-        )
-    };
-    let pick = |label: String, day: NaiveDate| {
-        button(
-            label,
-            format!("{CALENDAR_PICK_PREFIX}{}", day.format("%Y-%m-%d")),
-        )
-    };
+    let turn =
+        |label: &str, month: NaiveDate| button(label, DeadlineAction::Month(month).callback());
+    let pick = |label: String, day: NaiveDate| button(label, DeadlineAction::Pick(day).callback());
     let first = month.with_day(1).unwrap_or(month);
     let previous = first.checked_sub_months(chrono::Months::new(1));
     let next = first.checked_add_months(chrono::Months::new(1));
@@ -533,17 +524,21 @@ pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKey
     InlineKeyboardMarkup::new(rows)
 }
 
-fn month_key(date: NaiveDate) -> String {
-    date.format("%Y-%m").to_string()
-}
-
 pub(crate) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
-    let amount = |amount: u16| button(amount.to_string(), format!("{prefix}{amount}"));
+    let amount = |amount: u16| {
+        button(
+            amount.to_string(),
+            AmountChoice::Preset(amount).callback(prefix),
+        )
+    };
 
     InlineKeyboardMarkup::new(vec![
         [1, 2, 3].into_iter().map(amount).collect(),
         [5, 10].into_iter().map(amount).collect(),
-        row(texts::BUTTON_OTHER_AMOUNT, format!("{prefix}manual")),
+        row(
+            texts::BUTTON_OTHER_AMOUNT,
+            AmountChoice::Manual.callback(prefix),
+        ),
     ])
 }
 
@@ -551,7 +546,7 @@ pub(crate) fn grading_keyboard() -> InlineKeyboardMarkup {
     let preset = |max_score: u16| {
         button(
             texts::scale_button(max_score),
-            format!("{GRADING_PREFIX}{max_score}"),
+            GradingChoice::Preset(max_score).callback(),
         )
     };
 
@@ -559,9 +554,9 @@ pub(crate) fn grading_keyboard() -> InlineKeyboardMarkup {
         vec![preset(5), preset(10)],
         row(
             texts::BUTTON_OTHER_MAX_SCORE,
-            format!("{GRADING_PREFIX}manual"),
+            GradingChoice::Manual.callback(),
         ),
-        row(texts::BUTTON_PASS_FAIL, format!("{GRADING_PREFIX}passfail")),
+        row(texts::BUTTON_PASS_FAIL, GradingChoice::PassFail.callback()),
     ])
 }
 
@@ -586,13 +581,13 @@ pub(crate) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
             .map(|points| {
                 button(
                     texts::penalty_button(points),
-                    format!("{PENALTY_PREFIX}{points}"),
+                    AmountChoice::Preset(points).callback(PENALTY_PREFIX),
                 )
             })
             .collect(),
         row(
             texts::BUTTON_OTHER_NUMBER,
-            format!("{PENALTY_PREFIX}manual"),
+            AmountChoice::Manual.callback(PENALTY_PREFIX),
         ),
         row(texts::period_button(period_days), PENALTY_PERIOD),
     ])
@@ -706,7 +701,7 @@ pub(crate) fn makeup_attempts_keyboard() -> InlineKeyboardMarkup {
     let amount = |amount: u16| {
         button(
             amount.to_string(),
-            format!("{MAKEUP_ATTEMPTS_PREFIX}{amount}"),
+            AmountChoice::Preset(amount).callback(MAKEUP_ATTEMPTS_PREFIX),
         )
     };
 
@@ -714,7 +709,7 @@ pub(crate) fn makeup_attempts_keyboard() -> InlineKeyboardMarkup {
         [1, 2, 3, 5].into_iter().map(amount).collect(),
         row(
             texts::BUTTON_OTHER_AMOUNT,
-            format!("{MAKEUP_ATTEMPTS_PREFIX}manual"),
+            AmountChoice::Manual.callback(MAKEUP_ATTEMPTS_PREFIX),
         ),
     ])
 }
@@ -817,14 +812,14 @@ pub(super) fn terms_form_keyboard(
                             &texts::lateness_duration(terms.period_days, periods),
                             &timezone.format_until_short(closes_at),
                         ),
-                        format!("{LATE_PERIODS_PREFIX}{periods}"),
+                        AmountChoice::Preset(periods).callback(LATE_PERIODS_PREFIX),
                     ));
                 }
             }
             rows.push(vec![
                 button(
                     texts::BUTTON_OTHER_PERIODS,
-                    format!("{LATE_PERIODS_PREFIX}manual"),
+                    AmountChoice::Manual.callback(LATE_PERIODS_PREFIX),
                 ),
                 button(texts::BUTTON_PICK_DATE, TERMS_DURATION_DATE),
             ]);
@@ -850,10 +845,11 @@ pub(crate) fn review_score_keyboard(
     submission_id: SubmissionId,
     max_score: u16,
 ) -> InlineKeyboardMarkup {
+    let prefix = format!("{REVIEW_SCORE_PREFIX}{}:", submission_id.as_uuid());
     let score = |score: u16| {
         button(
             score.to_string(),
-            format!("{REVIEW_SCORE_PREFIX}{}:{score}", submission_id.as_uuid()),
+            AmountChoice::Preset(score).callback(&prefix),
         )
     };
 
@@ -864,7 +860,7 @@ pub(crate) fn review_score_keyboard(
         .collect();
     rows.push(row(
         texts::BUTTON_OTHER_AMOUNT,
-        format!("{REVIEW_SCORE_PREFIX}{}:manual", submission_id.as_uuid()),
+        AmountChoice::Manual.callback(&prefix),
     ));
 
     InlineKeyboardMarkup::new(rows)
@@ -925,7 +921,7 @@ pub(crate) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboa
         ),
         row(
             texts::BUTTON_BACK_TO_COURSE,
-            ReplayableAction::Course(course_id).callback(),
+            ReplayableAction::Page(PageTarget::Course(course_id), 0).callback(),
         ),
     ])
 }
@@ -947,7 +943,7 @@ pub(crate) fn gradebook_students_keyboard(
             .map(|student| (student.student_id, student.display_name.as_str())),
         row(
             texts::BUTTON_BACK_TO_COURSE,
-            ReplayableAction::Course(course_id).callback(),
+            ReplayableAction::Page(PageTarget::Course(course_id), 0).callback(),
         ),
     )
 }
@@ -1009,6 +1005,7 @@ mod tests {
     use super::super::render::{penalty_schedule, terms_form_view};
     use super::*;
     use crate::bot::assignment_form::{AssignmentText, DraftAssignment};
+    use crate::bot::callbacks::CALENDAR_PICK_PREFIX;
     use crate::bot::texts::deadline_left;
     use crate::domain::{Grading, LatePolicy, MaxScore};
     use crate::test_support::t0;

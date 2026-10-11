@@ -3,7 +3,7 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 
 use super::home::show_home;
-use super::input::{ensure_text_limit, parse_number, require_text};
+use super::input::{parse_number, require_text};
 use super::reset_dialogue;
 use super::teacher::show_student_grades_page;
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
@@ -20,7 +20,7 @@ use crate::bot::views::{
 };
 use crate::domain::{
     DomainError, Grade, Grading, LatePenalty, ReviewDecision, ReviewScore, SubmissionId,
-    SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
+    SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::pagination::PageRequest;
 
@@ -278,9 +278,6 @@ pub(super) async fn submit_comment(
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
-    if !ensure_text_limit(bot, chat_id, text, USER_TEXT_MAX_LEN, texts::FIELD_COMMENT).await? {
-        return Ok(());
-    }
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };

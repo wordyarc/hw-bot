@@ -59,7 +59,11 @@ pub const TERMS_CANCEL: &str = "terms:cancel";
 pub const TERMS_MAKEUP: &str = "terms:makeup";
 
 pub const MAKEUP_ANSWER_PREFIX: &str = "makeup-answer:";
-const MAKEUP_ANSWER_MANUAL: &str = "manual";
+const MANUAL_CHOICE: &str = "manual";
+const PASS_FAIL_GRADING: &str = "passfail";
+const DATE_FORMAT: &str = "%Y-%m-%d";
+const MONTH_FORMAT: &str = "%Y-%m";
+const MAKEUP_ANSWER_MANUAL: &str = MANUAL_CHOICE;
 const MAKEUP_ANSWER_NOT_OFFERED: &str = "off";
 const MAKEUP_ANSWER_PASS_FAIL: &str = "pass";
 pub const MAKEUP_ATTEMPTS_PREFIX: &str = "makeup-attempts:";
@@ -156,16 +160,13 @@ pub(super) enum ReplayableAction {
     ReviewHub,
     NextReview,
     NextMakeupReview,
-    Course(TeachingCourseId),
     CourseMakeup(TeachingCourseId),
     Assignment(AssignmentId),
     ManageAssignment(AssignmentId),
     StartAssignmentCreation(TeachingCourseId),
     StartSubmission(AssignmentId),
     AssignmentFiles(AssignmentId),
-    GrantAttempts(AssignmentId),
     GroupInvite(TeachingCourseId),
-    Gradebook(TeachingCourseId),
     ReviewSubmission(SubmissionId),
 }
 
@@ -177,21 +178,21 @@ impl ReplayableAction {
             Self::Page(PageTarget::Queue, 0) => MENU_QUEUE.to_owned(),
             Self::Page(PageTarget::Courses, 0) => MENU_COURSES.to_owned(),
             Self::Page(PageTarget::Sandbox, 0) => MENU_SANDBOX.to_owned(),
+            Self::Page(PageTarget::Course(id), 0) => format!("{COURSE_PREFIX}{}", id.as_uuid()),
+            Self::Page(PageTarget::Students(id), 0) => format!("{ATTEMPTS_PREFIX}{}", id.as_uuid()),
+            Self::Page(PageTarget::Gradebook(id), 0) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::Page(target, page) => target.callback(page),
             Self::Profile => MENU_PROFILE.to_owned(),
             Self::ReviewHub => REVIEW_HUB.to_owned(),
             Self::NextReview => NEXT_REVIEW.to_owned(),
             Self::NextMakeupReview => NEXT_MAKEUP_REVIEW.to_owned(),
-            Self::Course(id) => format!("{COURSE_PREFIX}{}", id.as_uuid()),
             Self::CourseMakeup(id) => format!("{MAKEUP_PREFIX}{}", id.as_uuid()),
             Self::Assignment(id) => format!("{ASSIGNMENT_PREFIX}{}", id.as_uuid()),
             Self::ManageAssignment(id) => format!("{MANAGE_PREFIX}{}", id.as_uuid()),
             Self::StartAssignmentCreation(id) => format!("{CREATE_PREFIX}{}", id.as_uuid()),
             Self::StartSubmission(id) => format!("{SUBMIT_PREFIX}{}", id.as_uuid()),
             Self::AssignmentFiles(id) => format!("{FILES_PREFIX}{}", id.as_uuid()),
-            Self::GrantAttempts(id) => format!("{ATTEMPTS_PREFIX}{}", id.as_uuid()),
             Self::GroupInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
-            Self::Gradebook(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::ReviewSubmission(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
         }
     }
@@ -361,11 +362,30 @@ pub(super) enum AmountChoice {
     Manual,
 }
 
+impl AmountChoice {
+    pub fn callback(self, prefix: &str) -> String {
+        match self {
+            Self::Preset(amount) => format!("{prefix}{amount}"),
+            Self::Manual => format!("{prefix}{MANUAL_CHOICE}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GradingChoice {
     PassFail,
     Preset(u16),
     Manual,
+}
+
+impl GradingChoice {
+    pub fn callback(self) -> String {
+        match self {
+            Self::PassFail => format!("{GRADING_PREFIX}{PASS_FAIL_GRADING}"),
+            Self::Preset(max_score) => format!("{GRADING_PREFIX}{max_score}"),
+            Self::Manual => format!("{GRADING_PREFIX}{MANUAL_CHOICE}"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -417,6 +437,22 @@ pub(super) enum DeadlineAction {
     Options,
     Month(NaiveDate),
     Pick(NaiveDate),
+}
+
+impl DeadlineAction {
+    pub fn callback(self) -> String {
+        match self {
+            Self::Days(days) => format!("{DEADLINE_DAYS_PREFIX}{days}"),
+            Self::Months(months) => format!("{DEADLINE_MONTHS_PREFIX}{months}"),
+            Self::Calendar => DEADLINE_CALENDAR.to_owned(),
+            Self::Manual => DEADLINE_MANUAL.to_owned(),
+            Self::Options => DEADLINE_OPTIONS.to_owned(),
+            Self::Month(month) => {
+                format!("{CALENDAR_MONTH_PREFIX}{}", month.format(MONTH_FORMAT))
+            }
+            Self::Pick(date) => format!("{CALENDAR_PICK_PREFIX}{}", date.format(DATE_FORMAT)),
+        }
+    }
 }
 
 pub(super) fn parse(data: &str) -> Option<CallbackAction> {
@@ -473,7 +509,10 @@ type Route<V, A> = (&'static str, fn(V) -> A);
 
 const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
     (COURSE_PREFIX, |id| {
-        Replayable(ReplayableAction::Course(TeachingCourseId::from_uuid(id)))
+        Replayable(ReplayableAction::Page(
+            PageTarget::Course(TeachingCourseId::from_uuid(id)),
+            0,
+        ))
     }),
     (MAKEUP_PREFIX, |id| {
         Replayable(ReplayableAction::CourseMakeup(TeachingCourseId::from_uuid(
@@ -504,7 +543,10 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         )))
     }),
     (ATTEMPTS_PREFIX, |id| {
-        Replayable(ReplayableAction::GrantAttempts(AssignmentId::from_uuid(id)))
+        Replayable(ReplayableAction::Page(
+            PageTarget::Students(AssignmentId::from_uuid(id)),
+            0,
+        ))
     }),
     (INVITE_PREFIX, |id| {
         Replayable(ReplayableAction::GroupInvite(TeachingCourseId::from_uuid(
@@ -512,7 +554,10 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         )))
     }),
     (GRADES_PREFIX, |id| {
-        Replayable(ReplayableAction::Gradebook(TeachingCourseId::from_uuid(id)))
+        Replayable(ReplayableAction::Page(
+            PageTarget::Gradebook(TeachingCourseId::from_uuid(id)),
+            0,
+        ))
     }),
     (REVIEW_OPEN_PREFIX, |id| {
         Replayable(ReplayableAction::ReviewSubmission(SubmissionId::from_uuid(
@@ -611,8 +656,8 @@ fn parse_review_score(data: &str) -> Option<FlowAction> {
 
 fn parse_grading(data: &str) -> Option<GradingChoice> {
     match data.strip_prefix(GRADING_PREFIX)? {
-        "passfail" => Some(GradingChoice::PassFail),
-        "manual" => Some(GradingChoice::Manual),
+        PASS_FAIL_GRADING => Some(GradingChoice::PassFail),
+        MANUAL_CHOICE => Some(GradingChoice::Manual),
         value => parse_u16(value).map(GradingChoice::Preset),
     }
 }
@@ -634,7 +679,7 @@ fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
 }
 
 fn parse_amount_value(value: &str) -> Option<AmountChoice> {
-    if value == "manual" {
+    if value == MANUAL_CHOICE {
         return Some(AmountChoice::Manual);
     }
     parse_u16(value).map(AmountChoice::Preset)
@@ -649,7 +694,7 @@ fn parse_deadline(data: &str) -> Option<DeadlineAction> {
     }
     // cal: поглотил бы cal:pick:, если разобрать общий префикс первым.
     if let Some(date) = data.strip_prefix(CALENDAR_PICK_PREFIX) {
-        return NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        return NaiveDate::parse_from_str(date, DATE_FORMAT)
             .ok()
             .map(DeadlineAction::Pick);
     }
@@ -693,6 +738,63 @@ mod tests {
             format!("{CONTACT_PREFIX}{id}:{}", "A".repeat(65)),
         ] {
             assert_eq!(parse(&invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn flow_choices_round_trip_through_their_callbacks() {
+        for choice in [
+            GradingChoice::PassFail,
+            GradingChoice::Preset(7),
+            GradingChoice::Manual,
+        ] {
+            assert_eq!(
+                parse(&choice.callback()),
+                Some(CallbackAction::Flow(FlowAction::Grading(choice)))
+            );
+        }
+        for choice in [AmountChoice::Preset(3), AmountChoice::Manual] {
+            assert_eq!(
+                parse(&choice.callback(PENALTY_PREFIX)),
+                Some(CallbackAction::Flow(FlowAction::Penalty(choice)))
+            );
+        }
+        for action in [
+            DeadlineAction::Days(7),
+            DeadlineAction::Months(1),
+            DeadlineAction::Calendar,
+            DeadlineAction::Manual,
+            DeadlineAction::Options,
+            DeadlineAction::Month(NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()),
+            DeadlineAction::Pick(NaiveDate::from_ymd_opt(2026, 9, 21).unwrap()),
+        ] {
+            assert_eq!(
+                parse(&action.callback()),
+                Some(CallbackAction::Flow(FlowAction::Deadline(action)))
+            );
+        }
+    }
+
+    #[test]
+    fn a_first_page_round_trips_through_its_short_route() {
+        for target in [
+            PageTarget::Assignments,
+            PageTarget::Archive,
+            PageTarget::Queue,
+            PageTarget::Courses,
+            PageTarget::Sandbox,
+            PageTarget::Course(TeachingCourseId::new()),
+            PageTarget::Students(AssignmentId::new()),
+            PageTarget::Gradebook(TeachingCourseId::new()),
+        ] {
+            let data = ReplayableAction::Page(target, 0).callback();
+            assert!(!data.starts_with(PAGE_PREFIX), "{data}");
+            assert_eq!(
+                parse(&data),
+                Some(CallbackAction::Replayable(ReplayableAction::Page(
+                    target, 0
+                )))
+            );
         }
     }
 

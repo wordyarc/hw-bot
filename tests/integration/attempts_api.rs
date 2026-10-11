@@ -1,5 +1,7 @@
 use axum::http::StatusCode;
+use hw_bot::app::{Actor, ErrorCode, GrantExtraAttempts};
 use hw_bot::db;
+use hw_bot::domain::UserId;
 use serde_json::json;
 
 use crate::harness::{TestApp, submission_id};
@@ -80,6 +82,26 @@ async fn outsider_teacher_cannot_grant_attempts() {
     )
     .await
     .error(StatusCode::FORBIDDEN, "permission_denied");
+}
+
+#[tokio::test]
+async fn an_outsider_is_refused_before_the_student_is_looked_up() {
+    let app = TestApp::start().await;
+    let outsider = app.add_outsider_teacher("Outsider teacher").await;
+
+    let error = app
+        .application
+        .assignments
+        .grant_extra_attempts(GrantExtraAttempts {
+            assignment_id: app.fixture.assignment.id(),
+            student_id: UserId::new(),
+            actor: Actor::new(outsider.id()),
+            amount: 1,
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::PermissionDenied);
 }
 
 #[tokio::test]

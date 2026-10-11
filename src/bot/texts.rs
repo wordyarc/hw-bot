@@ -340,9 +340,6 @@ pub const PRIVATE_CHATS_ONLY: &str = "Бот работает только в л
 pub const ASSIGNMENT_BODY_HEADER: &str = "📄 Текст задания:";
 pub const FIELD_NAME: &str = "Имя";
 pub const FIELD_TITLE: &str = "Название";
-pub const FIELD_BODY: &str = "Текст задания";
-pub const FIELD_COMMENT: &str = "Комментарий";
-pub const FIELD_SUBMISSION: &str = "Текст работы";
 
 pub fn number_error(max: u16) -> String {
     format!("Введите целое число от 1 до {max}.")

@@ -446,7 +446,8 @@ async fn a_work_sent_before_makeup_was_enabled_keeps_the_closing_code() {
     let app = TestApp::start().await;
     let work = app.add_closed_assignment("Closed", 10, 6).await;
     let sent_at = Utc::now();
-    app.enable_makeup(3).await;
+    app.open_makeup(&app.fixture.course, 3, sent_at + Duration::seconds(1))
+        .await;
 
     let error = app
         .application

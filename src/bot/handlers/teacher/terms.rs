@@ -327,7 +327,7 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> Han
     }
 }
 
-pub(crate) async fn back(screen: Screen<'_>, mut form: TermsForm) -> HandlerResult {
+pub(super) async fn back(screen: Screen<'_>, mut form: TermsForm) -> HandlerResult {
     if !form.back() {
         return cancel(screen, form).await;
     }
@@ -426,7 +426,7 @@ pub(crate) async fn confirm_exit(
     Ok(())
 }
 
-pub(crate) async fn abandon(bot: &Bot, chat_id: ChatId, form: &TermsForm) -> HandlerResult {
+pub(super) async fn abandon(bot: &Bot, chat_id: ChatId, form: &TermsForm) -> HandlerResult {
     detach(bot, chat_id, form.message_id).await?;
     let text = if matches!(form.terms.target, TermsTarget::Create(_)) {
         texts::DRAFT_DISCARDED

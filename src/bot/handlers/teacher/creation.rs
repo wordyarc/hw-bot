@@ -13,9 +13,7 @@ use crate::bot::handlers::input::{
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{attempts_keyboard, grading_keyboard};
-use crate::domain::{
-    ASSIGNMENT_TITLE_MAX_LEN, Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId, USER_TEXT_MAX_LEN,
-};
+use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
 
 pub(crate) async fn handle_max_attempts(
     screen: Screen<'_>,
@@ -162,9 +160,6 @@ pub(crate) async fn submit_body(
     };
     if text.trim().is_empty() {
         bot.send_message(chat_id, texts::BODY_REQUIRED).await?;
-        return Ok(());
-    }
-    if !ensure_text_limit(bot, chat_id, text, USER_TEXT_MAX_LEN, texts::FIELD_BODY).await? {
         return Ok(());
     }
     let text = AssignmentText {

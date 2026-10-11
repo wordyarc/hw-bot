@@ -25,17 +25,40 @@ pub(crate) async fn load_managed_versioned_assignment_on(
     assignment_id: AssignmentId,
     action: &'static str,
 ) -> AppResult<VersionedAssignment> {
+    Ok(
+        load_managed_assignment_on(connection, actor, assignment_id, action)
+            .await?
+            .stored,
+    )
+}
+
+pub(crate) struct ManagedAssignment {
+    pub actor: User,
+    pub course: TeachingCourse,
+    pub stored: VersionedAssignment,
+}
+
+pub(crate) async fn load_managed_assignment_on(
+    connection: &mut PgConnection,
+    actor: Actor,
+    assignment_id: AssignmentId,
+    action: &'static str,
+) -> AppResult<ManagedAssignment> {
     let stored = db::assignments::find_versioned_by_id(&mut *connection, assignment_id)
         .await?
         .required("assignment")?;
-    load_managing_teacher_on(
+    let (actor, course) = load_managing_teacher_on(
         connection,
         actor,
         stored.assignment.teaching_course_id(),
         action,
     )
     .await?;
-    Ok(stored)
+    Ok(ManagedAssignment {
+        actor,
+        course,
+        stored,
+    })
 }
 
 pub(crate) async fn load_managing_teacher(

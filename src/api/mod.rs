@@ -9,6 +9,8 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
 
+use crate::app::ErrorCode;
+
 mod actor;
 mod assignments;
 mod courses;
@@ -97,7 +99,7 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             "/submissions/{submission_id}/review",
             post(review::review_submission),
         )
-        .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not_found", "route not found") })
+        .fallback(|| async { ApiError::from_code(ErrorCode::NotFound, "route not found") })
         .method_not_allowed_fallback(|| async {
             ApiError::new(
                 StatusCode::METHOD_NOT_ALLOWED,

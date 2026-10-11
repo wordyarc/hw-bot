@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::ApiPath as Path;
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
-use crate::app::{ReviewQueueItem, ReviewSubmission};
+use crate::app::{ErrorCode, ReviewQueueItem, ReviewSubmission};
 use crate::domain::{Assignment, ReviewDecision, ReviewScore, SubmissionId, User};
 
 #[derive(Debug, Deserialize)]
@@ -28,9 +28,8 @@ impl ReviewSubmissionRequest {
         match (self.score, self.max_score) {
             (None, None) => Ok(None),
             (Some(value), Some(max_score)) => Ok(Some(ReviewScore { value, max_score })),
-            _ => Err(ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid_input",
+            _ => Err(ApiError::from_code(
+                ErrorCode::InvalidInput,
                 "score needs the max_score it was given against",
             )),
         }

@@ -465,39 +465,42 @@ async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
     app.review_with_score(submission, app.teacher(), "accept", out_of(4, 5), "Ок")
         .await
         .ok();
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(
-            2,
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::GRADES_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(
             app.teacher(),
-            &format!("{}{}", callbacks::GRADES_PREFIX, app.course()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            3,
-            app.teacher(),
-            &format!(
-                "{}{}",
+            &cb(
                 callbacks::STUDENT_PREFIX,
-                app.fixture.student.id().as_uuid()
+                app.fixture.student.id().as_uuid(),
             ),
-            BOT_MESSAGE_ID,
-        ),
-    ];
-    let telegram = telegram_server(updates).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
-
-    wait_for_sent_message_count(&telegram, 3).await;
+        )
+        .await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
 
+    let header = texts::grades_header(app.fixture.student.display_name().as_str(), 4, 0, 4, 5);
+    let sent = texts_sent(&telegram, app.teacher());
+    let card = sent
+        .iter()
+        .find(|text| text.starts_with(&header))
+        .unwrap_or_else(|| panic!("the card does not carry the total: {sent:#?}"));
     assert!(
-        requests.contains("Итого: 4 из 5"),
-        "the student card carries the total; requests:\n{requests}"
-    );
-    assert!(
-        requests.contains("Rust traits · 4 из 5"),
-        "the drill-down carries the per-assignment score; requests:\n{requests}"
+        card.contains(&texts::grade_entry(
+            assignment.title().as_str(),
+            "4",
+            5,
+            0,
+            false
+        )),
+        "{card}"
     );
 }
 

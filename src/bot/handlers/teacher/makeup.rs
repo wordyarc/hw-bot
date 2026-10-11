@@ -47,7 +47,7 @@ async fn discard(chat: Chat<'_>, form: MakeupForm) -> HandlerResult {
     abandon(chat.bot(), chat.chat_id(), &form).await
 }
 
-pub(crate) async fn abandon(bot: &Bot, chat_id: ChatId, form: &MakeupForm) -> HandlerResult {
+pub(super) async fn abandon(bot: &Bot, chat_id: ChatId, form: &MakeupForm) -> HandlerResult {
     detach(bot, chat_id, form.message_id).await?;
     bot.send_message(chat_id, texts::MAKEUP_DISCARDED)
         .reply_markup(teacher_keyboard())
@@ -254,7 +254,7 @@ pub(crate) async fn submit_text(step: TextStep<'_>, mut form: MakeupForm) -> Han
     render_input_result(screen, form, result).await
 }
 
-pub(crate) async fn back(screen: Screen<'_>, mut form: MakeupForm) -> HandlerResult {
+pub(super) async fn back(screen: Screen<'_>, mut form: MakeupForm) -> HandlerResult {
     if !form.back() {
         return cancel(screen, form).await;
     }

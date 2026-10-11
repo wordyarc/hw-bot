@@ -36,14 +36,14 @@ impl ApiError {
         self.code
     }
 
+    pub fn from_code(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::new(app_error_status(code), code.as_str(), message)
+    }
+
     fn internal(error: &dyn std::fmt::Display) -> Self {
         tracing::error!(error = %error, "request failed");
 
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ErrorCode::InternalError.as_str(),
-            INTERNAL_MESSAGE,
-        )
+        Self::from_code(ErrorCode::InternalError, INTERNAL_MESSAGE)
     }
 }
 
@@ -80,7 +80,7 @@ impl From<AppError> for ApiError {
             return Self::internal(&error);
         }
 
-        Self::new(app_error_status(code), code.as_str(), error.to_string())
+        Self::from_code(code, error.to_string())
     }
 }
 

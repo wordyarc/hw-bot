@@ -11,8 +11,8 @@ use super::pagination::{Pagination, page_json};
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
 use crate::app::{
-    ChangeDeadline, ChangeGrading, CreateAssignment, GrantExtraAttempts, StudentAssignment,
-    StudentAssignmentDetails,
+    ChangeDeadline, ChangeGrading, CreateAssignment, ErrorCode, GrantExtraAttempts,
+    StudentAssignment, StudentAssignmentDetails,
 };
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DeductedFrom, FilePresentation, Grading,
@@ -65,9 +65,8 @@ impl LatePolicyRequest {
                 max_periods,
                 deducted_from,
             )?)),
-            _ => Err(ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid_input",
+            _ => Err(ApiError::from_code(
+                ErrorCode::InvalidInput,
                 "late policy needs late_period_days, late_penalty_per_period, late_max_periods and late_deducted_from together",
             )),
         }

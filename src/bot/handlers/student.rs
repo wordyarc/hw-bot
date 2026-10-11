@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-use super::input::{ensure_text_limit, require_text};
+use super::input::require_text;
 use super::reset_dialogue;
 use crate::app::{AppError, ErrorCode, StudentAssignment, StudentMakeup, SubmitHomework};
 use crate::bot::HandlerResult;
@@ -15,9 +15,7 @@ use crate::bot::views::{
     button_label, list_text, makeup_credit_terms, paginated_keyboard, send_message_chunks,
     student_grading_lines, student_keyboard, student_menu,
 };
-use crate::domain::{
-    AssignmentId, AssignmentStatus, StoredFileMetadata, Submission, USER_TEXT_MAX_LEN,
-};
+use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata, Submission};
 use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -425,17 +423,6 @@ pub(super) async fn submit_homework_text(
     let Some(text) = require_text(bot, step.message()).await? else {
         return Ok(());
     };
-    if !ensure_text_limit(
-        bot,
-        chat_id,
-        text,
-        USER_TEXT_MAX_LEN,
-        texts::FIELD_SUBMISSION,
-    )
-    .await?
-    {
-        return Ok(());
-    }
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
