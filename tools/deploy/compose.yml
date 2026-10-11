@@ -5,7 +5,7 @@ services:
     image: postgres:18.4-bookworm
     restart: unless-stopped
     mem_limit: 448m
-    cpus: 1.25
+    cpus: 1.0
     command:
       - postgres
       - -c

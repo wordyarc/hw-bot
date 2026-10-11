@@ -803,7 +803,7 @@ pub fn gradebook_makeup_attempts(remaining: u16, allowed: u16) -> String {
 }
 
 pub fn course_button(subject: &str, group: &str) -> String {
-    format!("📘 {subject} · {group}")
+    format!("📘 {group} · {subject}")
 }
 
 pub fn course_assignment_entry(title: &str, status: &str, deadline: &str) -> String {
