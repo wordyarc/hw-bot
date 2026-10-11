@@ -221,16 +221,29 @@ pub(crate) fn student_grading_lines(
     timezone: &BotTimezone,
 ) -> String {
     let closes_at = assignment.closes_at();
-    let mut lines = format!(
-        "\n{}",
-        terms_lines(
+    let terms = match (assignment.late_policy(), assignment.grading()) {
+        (Some(policy), Grading::Score { max_score }) if now < closes_at => format!(
+            "{} {}\n{}\n{}",
+            texts::MAX_SCORE_LABEL,
+            texts::points(max_score.get()),
+            texts::deducted_from_line(policy.deducted_from()),
+            penalty_schedule(
+                assignment.deadline_at(),
+                policy,
+                closes_at,
+                max_score,
+                timezone
+            )
+        ),
+        _ => terms_lines(
             assignment.grading(),
             assignment.deadline_at(),
             assignment.late_policy(),
             closes_at,
             timezone,
-        )
-    );
+        ),
+    };
+    let mut lines = format!("\n{terms}");
     match makeup {
         Some(makeup) if now >= closes_at => {
             lines.push_str(&format!(
@@ -527,7 +540,14 @@ mod tests {
             late.contains(&format!("{} −1", texts::LATE_PENALTY_LABEL)),
             "{late}"
         );
-        assert!(late.contains(texts::SUBMISSIONS_CLOSE_LABEL), "{late}");
+        let schedule = penalty_schedule(
+            assignment.deadline_at(),
+            assignment.late_policy().unwrap(),
+            assignment.closes_at(),
+            MaxScore::new(5).unwrap(),
+            &timezone,
+        );
+        assert!(late.contains(&schedule), "{late}");
 
         let closed = grading_lines(&assignment, assignment.closes_at(), &timezone);
         assert!(closed.contains(texts::CLOSED_ON), "{closed}");
