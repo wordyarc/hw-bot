@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
+use hw_bot::bot::texts;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -241,22 +242,29 @@ impl TelegramScenario {
     }
 
     pub async fn flush(&self, user: i64) {
-        let previous = self.state.lock().unwrap().next_message;
         self.message(user, "/help");
         wait_for_some(Duration::from_secs(5), || async {
-            self.state
-                .lock()
-                .unwrap()
+            let state = self.state.lock().unwrap();
+            let requested = state
+                .updates
+                .iter()
+                .filter(|update| {
+                    let message = &update["message"];
+                    message["chat"]["id"] == user
+                        && (message["text"] == "/help" || message["text"] == texts::BUTTON_HELP)
+                })
+                .count();
+            let answered = state
                 .messages
                 .iter()
-                .find(|message| {
+                .filter(|message| {
                     message["chat"]["id"] == user
-                        && message["message_id"].as_i64().unwrap() > i64::from(previous)
                         && message["text"]
                             .as_str()
                             .is_some_and(|text| text.starts_with('❓'))
                 })
-                .cloned()
+                .count();
+            (answered >= requested).then_some(())
         })
         .await
         .expect("the same-chat barrier was answered");
