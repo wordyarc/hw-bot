@@ -228,3 +228,149 @@ async fn a_course_of_several_groups_is_listed_by_its_subject_and_lists_the_group
         "{sent:#?}"
     );
 }
+
+async fn open_submission_prompt(app: &TestApp, telegram: &TelegramScenario) {
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+}
+
+fn menu_returned_after_the_prompt(telegram: &TelegramScenario, user: i64) -> bool {
+    let sent = telegram.messages(user);
+    let prompt = sent
+        .iter()
+        .rposition(|message| message["text"] == texts::input_prompt(texts::SUBMISSION_PROMPT))
+        .expect("the submission prompt was sent");
+    sent[prompt + 1..]
+        .iter()
+        .any(|message| message["reply_markup"]["keyboard"].is_array())
+}
+
+#[tokio::test]
+async fn a_mistyped_command_is_not_taken_as_the_text_of_a_submission() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram.message(app.student(), "/Cancel");
+    telegram.message(app.student(), "pull/1");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let contents: Vec<String> = sqlx::query_scalar("select content from submissions")
+        .fetch_all(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(contents, ["pull/1"]);
+}
+
+#[tokio::test]
+async fn leaving_the_submission_prompt_by_a_button_brings_the_menu_back() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram
+        .click_button(app.student(), callbacks::MENU_ASSIGNMENTS)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        menu_returned_after_the_prompt(&telegram, app.student()),
+        "{:#?}",
+        telegram.messages(app.student())
+    );
+}
+
+#[tokio::test]
+async fn leaving_the_submission_prompt_by_a_command_brings_the_menu_back() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram.message(app.student(), "/queue");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        menu_returned_after_the_prompt(&telegram, app.student()),
+        "{:#?}",
+        telegram.messages(app.student())
+    );
+}
+
+#[tokio::test]
+async fn the_teacher_card_names_the_moment_of_publication_rather_than_a_deadline() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let published_at = app
+        .fixture
+        .assignment
+        .published_at()
+        .expect("the fixture assignment is published");
+    let line = texts::published_line(&bot_timezone().format_moment(published_at));
+    let sent: Vec<String> = telegram
+        .messages(app.teacher())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    assert!(sent.iter().any(|text| text.contains(&line)), "{sent:#?}");
+}
+
+fn group_message_update(update_id: u32, user_id: i64, text: &str) -> serde_json::Value {
+    let mut update = message_update(update_id, user_id, update_id as i32, text);
+    update["message"]["chat"] = json!({ "id": -1_000_500, "type": "group", "title": "Поток" });
+    update
+}
+
+#[tokio::test]
+async fn in_a_group_the_bot_answers_commands_only() {
+    let app = TestApp::start().await;
+    let telegram = telegram_server(vec![
+        group_message_update(1, app.student(), "Всем привет"),
+        group_message_update(2, app.student(), "/help"),
+    ])
+    .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram);
+
+    wait_for_sent_message_count(&telegram, 1).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent: Vec<serde_json::Value> = telegram
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/bottest-token/SendMessage")
+        .map(|request| request.body_json().unwrap())
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:#?}");
+    assert_eq!(sent[0]["text"], texts::PRIVATE_CHATS_ONLY);
+}

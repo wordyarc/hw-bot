@@ -8,6 +8,7 @@ mod attempts;
 mod courses;
 mod creation;
 mod deadline;
+mod form;
 mod gradebook;
 mod invites;
 mod makeup;
@@ -36,8 +37,8 @@ pub(super) use makeup::{
     handle_form as handle_makeup_form, open as open_makeup, submit_text as submit_makeup_text,
 };
 pub(super) use terms::{
-    begin_terms_edit, confirm_exit, handle_late_policy, handle_makeup, handle_penalty,
-    handle_period, handle_periods, handle_terms, submit_terms,
+    begin_terms_edit, confirm_exit, handle_duration_periods, handle_late_policy, handle_makeup,
+    handle_penalty, handle_period, handle_periods, handle_terms, submit_terms,
 };
 
 pub(super) async fn abandon_form(
@@ -46,14 +47,14 @@ pub(super) async fn abandon_form(
     form: ActiveForm<'_>,
 ) -> HandlerResult {
     match form {
-        ActiveForm::Terms(form) => terms::abandon(bot, chat_id, form).await,
-        ActiveForm::Makeup(form) => makeup::abandon(bot, chat_id, form).await,
+        ActiveForm::Terms(form) => form::abandon(bot, chat_id, form).await,
+        ActiveForm::Makeup(form) => form::abandon(bot, chat_id, form).await,
     }
 }
 
 pub(super) async fn form_back(screen: Screen<'_>, form: ActiveForm<'_>) -> HandlerResult {
     match form {
-        ActiveForm::Terms(form) => terms::back(screen, form.clone()).await,
-        ActiveForm::Makeup(form) => makeup::back(screen, form.clone()).await,
+        ActiveForm::Terms(form) => form::back(screen, form.clone()).await,
+        ActiveForm::Makeup(form) => form::back(screen, form.clone()).await,
     }
 }

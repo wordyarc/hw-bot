@@ -1,12 +1,12 @@
 use chrono::{Duration, Utc};
 use hw_bot::app::{
     Actor, AppError, ChangeTerms, ConfigureMakeup, ErrorCode, MakeupDecision, MakeupPool,
-    MakeupSettings, ReviewSubmission, StudentMakeup, SubmitHomework, SubmittedHomework,
+    MakeupSettings, ReviewSubmission, SubmitHomework, SubmittedHomework,
 };
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, AssignmentId, CourseMakeup, DeductedFrom, Grading, MakeupTerms, ReviewDecision,
-    SubmissionId, SubmissionKind, User,
+    Assignment, AssignmentId, CourseMakeup, DeductedFrom, Grading, MakeupOffer, MakeupTerms,
+    ReviewDecision, SubmissionId, SubmissionKind, User,
 };
 use hw_bot::pagination::PageRequest;
 use hw_bot::test_support::{assignment as assignment_of, submission as submission_of};
@@ -557,7 +557,7 @@ async fn a_granted_attempt_lets_a_student_with_an_empty_pool_send_another_makeup
 fn offered(
     items: &[hw_bot::app::StudentAssignment],
     assignment: &Assignment,
-) -> Option<StudentMakeup> {
+) -> Option<MakeupOffer> {
     items
         .iter()
         .find(|item| item.assignment.id() == assignment.id())

@@ -1,22 +1,72 @@
 use chrono::{DateTime, Utc};
-use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
-use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
-use teloxide::{ApiError, RequestError};
+use teloxide::payloads::SendMessageSetters;
+use teloxide::types::{InlineKeyboardMarkup, MessageId};
 
 use super::courses::show_assignment;
+use super::form::{
+    FormScreen, abandon, apply_date, cancel, detach, finish, render, render_input_result,
+    step_back, take_text,
+};
 use crate::app::{ChangeTerms, CreateAssignment, ErrorCode, VersionedAssignment};
 use crate::bot::assignment_form::{
-    AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsInputError, TermsStep, TermsTarget,
+    AssignmentTerms, CompleteTerms, TermsForm, TermsInputError, TermsStep, TermsTarget,
 };
-use crate::bot::callbacks::{AmountChoice, LatePolicyChoice, MakeupChoice, TermsAction};
-use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::callbacks::{
+    AmountChoice, LatePolicyChoice, MakeupChoice, ReplayableAction, TermsAction,
+};
+use crate::bot::context::{Screen, TextStep};
 use crate::bot::errors::send_error_code;
-use crate::bot::handlers::input::{parse_number, require_text};
+use crate::bot::form::InputMode;
+use crate::bot::handlers::input::parse_number;
 use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{BotState, FlowState};
-use crate::bot::views::{MenuAction, teacher_keyboard, terms_exit_keyboard, terms_form_view};
-use crate::bot::{Bot, HandlerResult, assignment_files, texts};
+use crate::bot::timezone::BotTimezone;
+use crate::bot::views::{MenuAction, terms_exit_keyboard, terms_form_view};
+use crate::bot::{HandlerResult, assignment_files, texts};
 use crate::domain::{AssignmentId, AssignmentStatus, DomainError, MakeupTerms, TelegramUserId};
+
+impl FormScreen for TermsForm {
+    fn view(
+        &mut self,
+        timezone: &BotTimezone,
+        now: DateTime<Utc>,
+    ) -> Option<(String, InlineKeyboardMarkup)> {
+        if self.step == TermsStep::Summary {
+            self.go(TermsStep::Summary);
+        }
+        terms_form_view(self, timezone, now)
+    }
+
+    fn into_state(self) -> BotState {
+        BotState::Flow(FlowState::ConfiguringTerms(self))
+    }
+
+    fn abandoned_text(&self) -> &'static str {
+        match self.terms.target {
+            TermsTarget::Create(_) => texts::DRAFT_DISCARDED,
+            TermsTarget::Edit { .. } => texts::TERMS_DISCARDED,
+        }
+    }
+
+    fn input_message(error: TermsInputError) -> Option<String> {
+        Some(match error {
+            TermsInputError::UnexpectedStep => return None,
+            TermsInputError::NumberOutOfRange { max } => texts::number_prompt(max),
+            TermsInputError::InvalidDurationDate => texts::INVALID_DURATION_DATE.into(),
+            TermsInputError::DeadlineInPast => texts::DEADLINE_IN_FUTURE.into(),
+            TermsInputError::Domain(error) => validation_message(&error),
+        })
+    }
+
+    fn cancelled_to(&self) -> Option<ReplayableAction> {
+        match self.terms.target {
+            TermsTarget::Create(_) => None,
+            TermsTarget::Edit { assignment_id, .. } => {
+                Some(ReplayableAction::ManageAssignment(assignment_id))
+            }
+        }
+    }
+}
 
 pub(crate) async fn begin_terms_edit(
     screen: Screen<'_>,
@@ -59,96 +109,6 @@ pub(crate) async fn begin_terms_edit(
     );
     form.message_id = Some(message_id);
     render(screen.chat(), form, None).await
-}
-
-pub(super) async fn render(
-    chat: Chat<'_>,
-    mut form: TermsForm,
-    error: Option<&str>,
-) -> HandlerResult {
-    if form.step == TermsStep::Summary {
-        form.go(TermsStep::Summary);
-    }
-    let Some((mut text, keyboard)) = terms_form_view(&form, chat.timezone(), Utc::now()) else {
-        return discard(chat, form).await;
-    };
-    if let Some(error) = error {
-        text = format!("{error}\n\n{text}");
-    }
-    show_step(chat, &mut form.message_id, form.mode, text, keyboard).await?;
-    chat.dialogue()
-        .update(BotState::Flow(FlowState::ConfiguringTerms(form)))
-        .await?;
-    Ok(())
-}
-
-pub(super) async fn show_step(
-    chat: Chat<'_>,
-    message_id: &mut Option<MessageId>,
-    mode: InputMode,
-    text: String,
-    keyboard: InlineKeyboardMarkup,
-) -> HandlerResult {
-    let bot = chat.bot();
-    let chat_id = chat.chat_id();
-    if mode == InputMode::Manual {
-        detach(bot, chat_id, message_id.take()).await?;
-        return chat.ask(&text).await;
-    }
-    if let Some(id) = *message_id {
-        match bot
-            .edit_message_text(chat_id, id, &text)
-            .reply_markup(keyboard.clone())
-            .await
-        {
-            Ok(_) | Err(RequestError::Api(ApiError::MessageNotModified)) => {}
-            Err(RequestError::Api(
-                ApiError::MessageToEditNotFound | ApiError::MessageCantBeEdited,
-            )) => *message_id = None,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    if message_id.is_none() {
-        *message_id = Some(
-            bot.send_message(chat_id, text)
-                .reply_markup(keyboard)
-                .await?
-                .id,
-        );
-    }
-    Ok(())
-}
-
-/// Сюда попадает только форма, которую нельзя показать: шаг требует значений, которых в ней нет.
-/// Каждая правка формы проверяется, поэтому это ошибка программы, а не ввода.
-async fn discard(chat: Chat<'_>, form: TermsForm) -> HandlerResult {
-    tracing::error!(step = ?form.step, "terms form does not hold what its step needs");
-    reset_dialogue(chat.dialogue()).await?;
-    detach(chat.bot(), chat.chat_id(), form.message_id).await?;
-    chat.bot()
-        .send_message(chat.chat_id(), texts::INVALID_TERMS)
-        .reply_markup(teacher_keyboard())
-        .await?;
-    Ok(())
-}
-
-pub(super) async fn detach(
-    bot: &Bot,
-    chat_id: ChatId,
-    message_id: Option<MessageId>,
-) -> HandlerResult {
-    let Some(message_id) = message_id else {
-        return Ok(());
-    };
-    match bot.edit_message_reply_markup(chat_id, message_id).await {
-        Ok(_)
-        | Err(RequestError::Api(
-            ApiError::MessageNotModified
-            | ApiError::MessageToEditNotFound
-            | ApiError::MessageCantBeEdited,
-        )) => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 fn validation_message(error: &DomainError) -> String {
@@ -239,6 +199,19 @@ async fn handle_amount(
     }
 }
 
+pub(crate) async fn handle_duration_periods(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    periods: u16,
+    state: BotState,
+) -> HandlerResult {
+    let Some(mut form) = state.terms_form(message_id, TermsStep::DurationDate) else {
+        return screen.stale().await;
+    };
+    let result = form.apply_duration_periods(periods);
+    render_input_result(screen, form, result).await
+}
+
 pub(crate) async fn handle_period(
     screen: Screen<'_>,
     message_id: MessageId,
@@ -256,51 +229,10 @@ async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> Ha
     render_input_result(screen, form, result).await
 }
 
-pub(super) async fn apply_date(
-    screen: Screen<'_>,
-    mut form: TermsForm,
-    at: DateTime<Utc>,
-) -> HandlerResult {
-    let result = form.apply_date(at, Utc::now());
-    render_input_result(screen, form, result).await
-}
-
-async fn render_input_result(
-    screen: Screen<'_>,
-    form: TermsForm,
-    result: Result<(), TermsInputError>,
-) -> HandlerResult {
-    let message = match result {
-        Ok(()) => return render(screen.chat(), form, None).await,
-        Err(TermsInputError::UnexpectedStep) => return screen.stale().await,
-        Err(TermsInputError::NumberOutOfRange { max }) => texts::number_prompt(max),
-        Err(TermsInputError::InvalidDurationDate) => texts::INVALID_DURATION_DATE.into(),
-        Err(TermsInputError::DeadlineInPast) => texts::DEADLINE_IN_FUTURE.into(),
-        Err(TermsInputError::Domain(error)) => validation_message(&error),
-    };
-    render(screen.chat(), form, Some(&message)).await
-}
-
-pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> HandlerResult {
-    let Some(text) = require_text(step.bot(), step.message()).await? else {
+pub(crate) async fn submit_terms(step: TextStep<'_>, form: TermsForm) -> HandlerResult {
+    let Some((screen, mut form, text)) = take_text(step, form).await? else {
         return Ok(());
     };
-    let Some(screen) = step.resolve().await? else {
-        return Ok(());
-    };
-    let accepts_text = match form.step {
-        TermsStep::Deadline
-        | TermsStep::DurationDate
-        | TermsStep::Penalty
-        | TermsStep::Period
-        | TermsStep::Periods => true,
-        TermsStep::Makeup => form.terms.grading().is_scored(),
-        TermsStep::Policy | TermsStep::DurationConfirm { .. } | TermsStep::Summary => false,
-    };
-    if !accepts_text {
-        return render(screen.chat(), form, Some(texts::CHOOSE_BUTTON)).await;
-    }
-    detach(screen.bot(), screen.chat_id(), form.message_id.take()).await?;
     match form.step {
         TermsStep::Deadline | TermsStep::DurationDate => {
             match screen.timezone().parse_deadline(text) {
@@ -322,13 +254,6 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, mut form: TermsForm) -> Han
             None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
         },
     }
-}
-
-pub(super) async fn back(screen: Screen<'_>, mut form: TermsForm) -> HandlerResult {
-    if !form.back() {
-        return cancel(screen, form).await;
-    }
-    render(screen.chat(), form, None).await
 }
 
 pub(crate) async fn handle_terms(
@@ -368,10 +293,7 @@ pub(crate) async fn handle_terms(
         return screen.stale().await;
     };
     if action == TermsAction::Back {
-        if !form.step_back() {
-            return screen.stale().await;
-        }
-        return render(screen.chat(), form, None).await;
+        return step_back(screen, form).await;
     }
     if action == TermsAction::DurationDate && form.step == TermsStep::Periods {
         form.go(TermsStep::DurationDate);
@@ -423,28 +345,6 @@ pub(crate) async fn confirm_exit(
     Ok(())
 }
 
-pub(super) async fn abandon(bot: &Bot, chat_id: ChatId, form: &TermsForm) -> HandlerResult {
-    detach(bot, chat_id, form.message_id).await?;
-    let text = if matches!(form.terms.target, TermsTarget::Create(_)) {
-        texts::DRAFT_DISCARDED
-    } else {
-        texts::TERMS_DISCARDED
-    };
-    bot.send_message(chat_id, text)
-        .reply_markup(teacher_keyboard())
-        .await?;
-    Ok(())
-}
-
-async fn cancel(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
-    reset_dialogue(screen.dialogue()).await?;
-    abandon(screen.bot(), screen.chat_id(), &form).await?;
-    if let TermsTarget::Edit { assignment_id, .. } = form.terms.target {
-        show_assignment(screen, assignment_id).await?;
-    }
-    Ok(())
-}
-
 async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> HandlerResult {
     if let Err(error) = form.terms.validate() {
         return render(screen.chat(), form, Some(&validation_message(&error))).await;
@@ -493,40 +393,19 @@ async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> H
     let assignment = match (result, edited) {
         (Ok(assignment), _) => assignment,
         (Err(error), Some(assignment_id)) if error.code() == ErrorCode::ConcurrentModification => {
-            return conflict(screen, message_id, assignment_id).await;
+            finish(screen, message_id, texts::TERMS_CONFLICT).await?;
+            return show_assignment(screen, assignment_id).await;
         }
         (Err(error), _) => return Err(error.into()),
     };
-    reset_dialogue(screen.dialogue()).await?;
-    detach(screen.bot(), screen.chat_id(), message_id).await?;
-    let notice = if edited.is_some() {
-        texts::TERMS_SAVED
-    } else {
-        texts::DRAFT_CREATED
-    };
-    screen
-        .bot()
-        .send_message(screen.chat_id(), notice)
-        .reply_markup(teacher_keyboard())
-        .await?;
-    if edited.is_some() {
-        show_assignment(screen, assignment.id()).await
-    } else {
-        assignment_files::show(screen, assignment.id(), true).await
+    match edited {
+        Some(_) => {
+            finish(screen, message_id, texts::TERMS_SAVED).await?;
+            show_assignment(screen, assignment.id()).await
+        }
+        None => {
+            finish(screen, message_id, texts::DRAFT_CREATED).await?;
+            assignment_files::show(screen, assignment.id(), true).await
+        }
     }
-}
-
-async fn conflict(
-    screen: Screen<'_>,
-    message_id: Option<MessageId>,
-    assignment_id: AssignmentId,
-) -> HandlerResult {
-    reset_dialogue(screen.dialogue()).await?;
-    detach(screen.bot(), screen.chat_id(), message_id).await?;
-    screen
-        .bot()
-        .send_message(screen.chat_id(), texts::TERMS_CONFLICT)
-        .reply_markup(teacher_keyboard())
-        .await?;
-    show_assignment(screen, assignment_id).await
 }

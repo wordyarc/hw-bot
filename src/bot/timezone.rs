@@ -80,11 +80,17 @@ impl BotTimezone {
     }
 
     pub fn format_since(&self, instant: DateTime<Utc>) -> String {
-        let format = match self.closed_day(instant) {
-            Some(_) => DATE,
-            None => DATE_TIME,
-        };
-        instant.with_timezone(&self.tz).format(format).to_string()
+        match self.closed_day(instant) {
+            Some(_) => instant.with_timezone(&self.tz).format(DATE).to_string(),
+            None => self.format_moment(instant),
+        }
+    }
+
+    pub fn format_moment(&self, instant: DateTime<Utc>) -> String {
+        instant
+            .with_timezone(&self.tz)
+            .format(DATE_TIME)
+            .to_string()
     }
 
     fn end_label(&self, instant: DateTime<Utc>, date: &str, date_time: &str) -> String {
@@ -116,6 +122,14 @@ impl BotTimezone {
     /// Возвращает полночь после указанного дня.
     pub fn end_of(&self, date: NaiveDate) -> Option<DateTime<Utc>> {
         self.instant(date.succ_opt()?, NaiveTime::MIN)
+    }
+
+    pub fn add_months(&self, instant: DateTime<Utc>, months: u32) -> Option<DateTime<Utc>> {
+        let local = instant
+            .with_timezone(&self.tz)
+            .naive_local()
+            .checked_add_months(Months::new(months))?;
+        self.instant(local.date(), local.time())
     }
 
     pub fn in_days(&self, days: u64) -> Option<NaiveDate> {

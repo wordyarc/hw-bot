@@ -51,6 +51,21 @@ pub(super) fn parse_positive_attempts(text: &str) -> Option<u16> {
     parse_number(text).filter(|value| (1..=MAX_ATTEMPTS).contains(value))
 }
 
+pub(super) fn looks_like_command(text: &str) -> bool {
+    let Some(name) = text
+        .split_whitespace()
+        .next()
+        .and_then(|word| word.strip_prefix('/'))
+    else {
+        return false;
+    };
+    let name = name.split_once('@').map_or(name, |(name, _)| name);
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|character| character.is_alphanumeric() || character == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +80,32 @@ mod tests {
         assert!(parse_positive_attempts("0").is_none());
         assert!(parse_positive_attempts("+1").is_none());
         assert!(parse_positive_attempts("32768").is_none());
+    }
+
+    #[test]
+    fn a_leading_slash_word_is_a_command_even_when_the_bot_does_not_know_it() {
+        for text in [
+            "/stop",
+            "/Cancel",
+            "/cancel@other_bot",
+            "/отмена",
+            "/tasks now",
+        ] {
+            assert!(looks_like_command(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_path_or_plain_text_is_not_a_command() {
+        for text in [
+            "/usr/bin/python",
+            "pull/1",
+            "/",
+            "https://example.test",
+            "",
+            "  ",
+        ] {
+            assert!(!looks_like_command(text), "{text}");
+        }
     }
 }

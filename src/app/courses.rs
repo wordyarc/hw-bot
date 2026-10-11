@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
-use crate::app::access::{load_course_student, load_managing_teacher, load_managing_teacher_on};
+use crate::app::access::{
+    ensure_manages, load_course_student, load_managing_teacher, load_managing_teacher_on,
+};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -327,26 +329,23 @@ impl CourseService {
             "configure course makeup",
         )
         .await?;
-        let active = command
-            .expected
-            .filter(|current| current.is_active_at(command.now));
-        let settings = match (command.settings, active) {
-            (None, _) => None,
-            (Some(settings), None) => Some(CourseMakeup::open(
-                settings.until,
-                settings.attempts,
-                command.now,
-            )?),
-            (Some(settings), Some(current)) => {
-                Some(current.change(settings.until, settings.attempts, command.now)?)
-            }
-        };
+        let settings = command
+            .settings
+            .map(|settings| {
+                CourseMakeup::save(
+                    command.expected,
+                    settings.until,
+                    settings.attempts,
+                    command.now,
+                )
+            })
+            .transpose()?;
 
-        let settings = super::on_conflict(
+        let saved = super::on_conflict(
             db::makeup::update_course(&mut *tx, course.id(), command.expected, settings).await,
             AppError::CourseMakeupChangedConcurrently,
         )?;
-        if active.is_none() && settings.is_some() {
+        if settings.is_some_and(|settings| settings.starts_new_pool(command.expected)) {
             db::makeup::clear_pool(&mut *tx, course.id()).await?;
         }
         for decision in &command.decisions {
@@ -357,7 +356,7 @@ impl CourseService {
 
         tx.commit().await?;
 
-        Ok(settings)
+        Ok(saved)
     }
 
     pub async fn student_makeup(
@@ -411,11 +410,13 @@ impl CourseService {
         course_id: TeachingCourseId,
         action: &'static str,
     ) -> AppResult<TeachingCourseSummary> {
-        load_managing_teacher(&self.pool, actor, course_id, action).await?;
-
-        db::academic::find_teaching_course_summary(&self.pool, course_id)
+        let teacher = load_actor(&self.pool, actor, "teacher").await?;
+        let summary = db::academic::find_teaching_course_summary(&self.pool, course_id)
             .await?
-            .required("teaching course")
+            .required("teaching course")?;
+        ensure_manages(&summary.course, &teacher, action)?;
+
+        Ok(summary)
     }
 
     async fn managed_student(

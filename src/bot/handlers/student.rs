@@ -4,7 +4,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use super::input::require_text;
 use super::reset_dialogue;
-use crate::app::{AppError, ErrorCode, StudentAssignment, StudentMakeup, SubmitHomework};
+use crate::app::{AppError, ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
@@ -15,7 +15,7 @@ use crate::bot::views::{
     button_label, list_text, makeup_credit_terms, paginated_keyboard, send_message_chunks,
     student_grading_lines, student_keyboard, student_menu,
 };
-use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata, Submission};
+use crate::domain::{AssignmentId, AssignmentStatus, MakeupOffer, StoredFileMetadata, Submission};
 use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -368,7 +368,7 @@ pub(super) async fn show_history(
     Ok(())
 }
 
-fn available(makeup: Option<StudentMakeup>) -> Option<StudentMakeup> {
+fn available(makeup: Option<MakeupOffer>) -> Option<MakeupOffer> {
     makeup.filter(|makeup| makeup.balance.remaining() > 0)
 }
 

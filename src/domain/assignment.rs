@@ -188,9 +188,7 @@ impl LatePolicy {
         deadline_at: DateTime<Utc>,
         periods: u16,
     ) -> DomainResult<DateTime<Utc>> {
-        let days = u32::from(self.period_days)
-            .checked_mul(u32::from(periods))
-            .ok_or(DomainError::AssignmentClosingOutOfRange)?;
+        let days = u32::from(self.period_days) * u32::from(periods);
         deadline_at
             .checked_add_signed(Duration::days(i64::from(days)))
             .ok_or(DomainError::AssignmentClosingOutOfRange)
@@ -227,26 +225,27 @@ impl LatePolicy {
         if at < deadline_at {
             return 0;
         }
-
-        let lateness = at - deadline_at;
-        let period = i64::from(self.period_days) * 24 * 60 * 60;
-        let periods = lateness.num_seconds() / period + 1;
-
-        u32::try_from(periods).expect("chrono's date range fits in u32 days")
+        self.whole_periods(deadline_at, at).0 + 1
     }
 
     pub fn periods_to_close_at(self, deadline_at: DateTime<Utc>, closes_at: DateTime<Utc>) -> u32 {
         if closes_at <= deadline_at {
             return 0;
         }
+        let (whole, rest) = self.whole_periods(deadline_at, closes_at);
+        whole + u32::from(rest)
+    }
 
-        let lateness = closes_at - deadline_at;
-        let period = i64::from(self.period_days) * 24 * 60 * 60;
-        let whole_periods = lateness.num_seconds() / period;
-        let periods =
-            whole_periods + i64::from(lateness > Duration::seconds(whole_periods * period));
+    fn whole_periods(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> (u32, bool) {
+        let lateness = at - deadline_at;
+        let period = Duration::days(i64::from(self.period_days)).num_seconds();
+        let whole = lateness.num_seconds() / period;
+        let rest = lateness > Duration::seconds(whole * period);
 
-        u32::try_from(periods).expect("chrono's date range fits in u32 days")
+        (
+            u32::try_from(whole).expect("chrono's date range fits in u32 days"),
+            rest,
+        )
     }
 
     pub fn penalty_for(self, late_periods: u32) -> u16 {

@@ -53,6 +53,7 @@ pub const TERMS_POLICY: &str = "terms:policy";
 pub const TERMS_BACK: &str = "terms:back";
 pub const TERMS_DURATION_DATE: &str = "terms:duration-date";
 pub const TERMS_DURATION_APPLY: &str = "terms:duration-apply";
+pub const TERMS_DURATION_PERIODS_PREFIX: &str = "terms:duration:";
 pub const TERMS_EXIT: &str = "terms:exit";
 pub const TERMS_STAY: &str = "terms:stay";
 pub const LATE_PERIODS_PREFIX: &str = "periods:";
@@ -318,6 +319,7 @@ pub(super) enum FlowAction {
     LatePolicy(LatePolicyChoice),
     Penalty(AmountChoice),
     Periods(AmountChoice),
+    DurationPeriods(u16),
     PenaltyPeriod,
     Terms(TermsAction),
     ReviewScore {
@@ -656,6 +658,8 @@ fn parse_flow(data: &str) -> Option<FlowAction> {
         parse_late_policy(data).map(FlowAction::LatePolicy)
     } else if data.starts_with(REVIEW_SCORE_PREFIX) {
         parse_review_score(data)
+    } else if let Some(periods) = data.strip_prefix(TERMS_DURATION_PERIODS_PREFIX) {
+        parse_u16(periods).map(FlowAction::DurationPeriods)
     } else {
         parse_deadline(data).map(FlowAction::Deadline)
     }

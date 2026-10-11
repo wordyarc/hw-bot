@@ -11,8 +11,8 @@ use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::db::submissions::ReviewStream;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, ReviewDecision, ReviewScore, Subject, Submission,
-    SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
+    Assignment, AssignmentId, DomainError, Review, ReviewDecision, ReviewScore, Subject,
+    Submission, SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{MakeupPool, SandboxSubmission};
@@ -230,26 +230,17 @@ impl ReviewService {
             .required("submission")?;
         let context = load_review_context(&mut tx, submission.assignment_id()).await?;
 
-        match command.decision {
-            ReviewDecision::Accept => submission.accept(
-                &context.assignment,
-                &context.course,
-                &reviewer,
-                command.score,
-                command.comment,
-                command.reviewed_at,
-            )?,
-            ReviewDecision::Reject if command.score.is_some() => {
-                return Err(DomainError::ScoreNotAllowed.into());
-            }
-            ReviewDecision::Reject => submission.reject(
-                &context.assignment,
-                &context.course,
-                &reviewer,
-                command.comment,
-                command.reviewed_at,
-            )?,
-        }
+        submission.review(
+            &context.assignment,
+            &context.course,
+            &reviewer,
+            Review {
+                decision: command.decision,
+                score: command.score,
+                comment: command.comment,
+                reviewed_at: command.reviewed_at,
+            },
+        )?;
 
         record_review(&mut tx, &submission, &context).await?;
 

@@ -4,9 +4,8 @@ use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
-use super::assignment_form::{
-    AssignmentText, DraftAssignment, InputMode, IssuedGroups, TermsForm, TermsStep,
-};
+use super::assignment_form::{AssignmentText, DraftAssignment, IssuedGroups, TermsForm, TermsStep};
+use super::form::InputMode;
 use super::makeup_form::{MakeupForm, MakeupStep};
 use super::views::MenuAction;
 use crate::domain::{

@@ -31,6 +31,7 @@ pub mod callbacks;
 mod context;
 mod errors;
 mod files;
+mod form;
 mod handlers;
 mod invites;
 mod makeup_form;

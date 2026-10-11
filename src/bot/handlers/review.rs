@@ -249,7 +249,7 @@ pub(super) async fn submit_score_text(
         return Ok(());
     };
     let Some(score) = parse_score(text, max_score) else {
-        bot.send_message(chat_id, texts::score_error(max_score))
+        bot.send_message(chat_id, texts::score_prompt(max_score))
             .await?;
         return Ok(());
     };

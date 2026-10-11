@@ -13,7 +13,6 @@ pub use actor::Actor;
 pub use assignments::{
     AssignmentService, AssignmentSubmissionHistory, ChangeDeadline, ChangeGrading, ChangeTerms,
     CreateAssignment, GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
-    StudentMakeup,
 };
 pub use container::ApplicationContainer;
 pub use courses::{

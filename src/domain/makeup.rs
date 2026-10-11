@@ -24,12 +24,23 @@ impl CourseMakeup {
         })
     }
 
-    pub fn change(
-        self,
+    pub fn save(
+        current: Option<Self>,
         until: DateTime<Utc>,
         attempts: u16,
         now: DateTime<Utc>,
     ) -> DomainResult<Self> {
+        match current.filter(|current| current.is_active_at(now)) {
+            Some(current) => current.change(until, attempts, now),
+            None => Self::open(until, attempts, now),
+        }
+    }
+
+    pub fn starts_new_pool(self, previous: Option<Self>) -> bool {
+        previous.is_none_or(|previous| previous.opened_at != self.opened_at)
+    }
+
+    fn change(self, until: DateTime<Utc>, attempts: u16, now: DateTime<Utc>) -> DomainResult<Self> {
         Self::ensure_until(until, now)?;
         Self::ensure_attempts(attempts)?;
 
@@ -268,13 +279,10 @@ impl Acceptance {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Offer {
-    Regular,
-    Makeup {
-        credit: Option<MakeupCredit>,
-        until: DateTime<Utc>,
-        balance: MakeupBalance,
-    },
+pub struct MakeupOffer {
+    pub until: DateTime<Utc>,
+    pub credit: Option<MakeupCredit>,
+    pub balance: MakeupBalance,
 }
 
 #[cfg(test)]
@@ -352,6 +360,31 @@ mod tests {
                 .opened_at(),
             t0()
         );
+    }
+
+    #[test]
+    fn saving_an_active_makeup_keeps_its_pool() {
+        let opened = CourseMakeup::open(t0() + Duration::days(30), 3, t0()).unwrap();
+
+        let saved =
+            CourseMakeup::save(Some(opened), opened.until(), 4, t0() + Duration::days(10)).unwrap();
+
+        assert_eq!(saved.opened_at(), t0());
+        assert_eq!(saved.attempts(), 4);
+        assert!(!saved.starts_new_pool(Some(opened)));
+    }
+
+    #[test]
+    fn saving_after_the_end_or_without_settings_opens_a_new_pool() {
+        let opened = CourseMakeup::open(t0() + Duration::days(30), 3, t0()).unwrap();
+        let later = opened.until() + Duration::days(1);
+
+        for previous in [Some(opened), None] {
+            let saved = CourseMakeup::save(previous, later + Duration::days(30), 3, later).unwrap();
+
+            assert_eq!(saved.opened_at(), later);
+            assert!(saved.starts_new_pool(previous));
+        }
     }
 
     #[test]

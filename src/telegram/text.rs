@@ -12,16 +12,14 @@ pub(crate) fn utf16_prefix(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
-pub(crate) fn truncate(text: &str, limit: usize, ellipsis: bool) -> String {
-    let prefix = utf16_prefix(text, limit);
-    if prefix.len() == text.len() {
+const ELLIPSIS: &str = "...";
+
+pub(crate) fn truncate(text: &str, limit: usize) -> String {
+    if text.encode_utf16().count() <= limit {
         return text.to_owned();
     }
-    let mut result = prefix.to_owned();
-    if ellipsis {
-        result.push_str("...");
-    }
-    result
+    let prefix = utf16_prefix(text, limit.saturating_sub(ELLIPSIS.len()));
+    format!("{prefix}{ELLIPSIS}")
 }
 
 #[cfg(test)]
@@ -29,11 +27,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn truncation_counts_utf16_units_and_appends_an_optional_ellipsis() {
-        assert_eq!(truncate("🦀Привет", 5, true), "🦀При...");
-        assert_eq!(truncate("🦀Привет", 5, false), "🦀При");
-        assert_eq!(truncate("🦀Привет", 8, true), "🦀Привет");
-        assert_eq!(truncate("🦀Привет", 0, false), "");
+    fn a_text_within_the_limit_is_kept_whole() {
+        assert_eq!(truncate("🦀Привет", 8), "🦀Привет");
+    }
+
+    #[test]
+    fn a_truncated_text_fits_the_limit_together_with_the_ellipsis() {
+        assert_eq!(truncate("🦀Привет", 7), "🦀Пр...");
+        assert_eq!(truncate("ab🦀cd", 5), "ab...");
+        for limit in 3..12 {
+            let text = truncate("я🦀a".repeat(5).as_str(), limit);
+            assert!(text.encode_utf16().count() <= limit, "{limit}: {text}");
+            assert!(text.ends_with(ELLIPSIS), "{limit}: {text}");
+        }
     }
 
     #[test]

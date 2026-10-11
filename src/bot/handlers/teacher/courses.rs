@@ -122,7 +122,7 @@ pub(crate) async fn show_assignment(
     });
     let published = assignment
         .published_at()
-        .map(|published_at| texts::published_line(&timezone.format(published_at)));
+        .map(|published_at| texts::published_line(&timezone.format_moment(published_at)));
     let text = texts::teacher_assignment_card(
         assignment.title().as_str(),
         texts::assignment_status(assignment.status()),

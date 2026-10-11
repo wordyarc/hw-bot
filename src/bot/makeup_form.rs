@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use teloxide::types::MessageId;
 
-use super::assignment_form::InputMode;
 use super::callbacks::MakeupFormAction;
+use super::form::{Form, InputMode};
 use crate::app::{Actor, ConfigureMakeup, MakeupDecision, MakeupSettings, UndecidedAssignment};
 use crate::domain::{
     AssignmentId, CourseMakeup, DomainError, Grading, MakeupTerms, TeachingCourseId,
@@ -115,46 +115,6 @@ impl MakeupForm {
         }
     }
 
-    pub fn can_go_back(&self) -> bool {
-        self.previous().is_some()
-    }
-
-    pub fn step_back(&mut self) -> bool {
-        if !self.can_go_back() {
-            return false;
-        }
-        if matches!(self.mode, InputMode::Calendar(_)) {
-            self.mode = InputMode::Buttons;
-        }
-        self.back()
-    }
-
-    pub fn back(&mut self) -> bool {
-        if self.mode != InputMode::Buttons {
-            self.mode = InputMode::Buttons;
-            return true;
-        }
-        let Some(step) = self.previous() else {
-            return false;
-        };
-        self.go(step);
-        true
-    }
-
-    pub fn apply_date(
-        &mut self,
-        until: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> Result<(), MakeupInputError> {
-        if self.step != MakeupStep::Date {
-            return Err(MakeupInputError::UnexpectedStep);
-        }
-        CourseMakeup::ensure_until(until, now).map_err(MakeupInputError::Domain)?;
-        self.until = Some(until);
-        self.advance();
-        Ok(())
-    }
-
     pub fn apply_attempts(&mut self, attempts: u16) -> Result<(), MakeupInputError> {
         if self.step != MakeupStep::Attempts {
             return Err(MakeupInputError::UnexpectedStep);
@@ -265,6 +225,71 @@ impl MakeupForm {
             }
         };
         self.go(step);
+    }
+}
+
+impl Form for MakeupForm {
+    type Step = MakeupStep;
+    type InputError = MakeupInputError;
+
+    fn step(&self) -> MakeupStep {
+        self.step
+    }
+
+    fn mode(&self) -> InputMode {
+        self.mode
+    }
+
+    fn set_mode(&mut self, mode: InputMode) {
+        self.mode = mode;
+    }
+
+    fn message_id(&self) -> Option<MessageId> {
+        self.message_id
+    }
+
+    fn message_id_mut(&mut self) -> &mut Option<MessageId> {
+        &mut self.message_id
+    }
+
+    fn can_go_back(&self) -> bool {
+        self.previous().is_some()
+    }
+
+    fn back(&mut self) -> bool {
+        if self.mode != InputMode::Buttons {
+            self.mode = InputMode::Buttons;
+            return true;
+        }
+        let Some(step) = self.previous() else {
+            return false;
+        };
+        self.go(step);
+        true
+    }
+
+    fn accepts_text(&self) -> bool {
+        match self.step {
+            MakeupStep::Date | MakeupStep::Attempts => true,
+            MakeupStep::Scale(_) => self
+                .current_scale()
+                .is_some_and(|scale| scale.grading.is_scored()),
+            MakeupStep::Summary => false,
+        }
+    }
+
+    fn apply_date(
+        &mut self,
+        until: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<(), MakeupInputError> {
+        if self.step != MakeupStep::Date {
+            return Err(MakeupInputError::UnexpectedStep);
+        }
+        CourseMakeup::ensure_until(until, now).map_err(MakeupInputError::Domain)?;
+        self.until = Some(until);
+        self.advance();
+        Ok(())
     }
 }
 

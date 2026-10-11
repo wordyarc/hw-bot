@@ -102,11 +102,11 @@ pub const DEDUCTED_FROM_LABEL: &str = "Учёт штрафа:";
 pub const PERIOD_LABEL: &str = "Период:";
 pub const LATENESS_LABEL: &str = "Опоздание:";
 pub const CLOSED_ON: &str = "Приём работ закрыт";
+pub const ARCHIVED_CLOSED: &str = "📦 Задание в архиве, приём работ закрыт.";
 pub const WHOLE_DAY_HINT: &str =
     "Можно написать дату сообщением. Без указания времени она означает приём до конца этого дня.";
 pub const MAX_SCORE_LABEL: &str = "🏅 Максимум:";
 pub const PASS_FAIL_LABEL: &str = "🏅 Оценивание: зачёт/незачёт";
-pub const BUTTON_OTHER_NUMBER: &str = "Другое число";
 pub const BUTTON_SAVE_DRAFT: &str = "💾 Сохранить черновик";
 pub const BUTTON_CANCEL_CREATION: &str = "✖️ Отменить создание";
 pub const BUTTON_BACK: &str = "⬅️ Назад";
@@ -269,7 +269,7 @@ pub fn queue_ahead(position: u32) -> String {
 }
 
 pub fn number_prompt(max: u16) -> String {
-    format!("Введите целое число от 1 до {max}:")
+    format!("Введите целое число от 1 до {max}.")
 }
 
 fn each_started_period(period_days: u16) -> String {
@@ -349,14 +349,12 @@ pub fn teacher_help() -> String {
 
 pub const CHOOSE_ACTION: &str = "Выберите действие:";
 pub const ACTION_CANCELLED: &str = "Текущее действие отменено.";
+pub const UNKNOWN_COMMAND: &str =
+    "🤷 Такой команды нет. Отменить текущее действие — /cancel, все команды — /help.";
 pub const PRIVATE_CHATS_ONLY: &str = "Бот работает только в личных сообщениях.";
 pub const ASSIGNMENT_BODY_HEADER: &str = "📄 Текст задания:";
 pub const FIELD_NAME: &str = "Имя";
 pub const FIELD_TITLE: &str = "Название";
-
-pub fn number_error(max: u16) -> String {
-    format!("Введите целое число от 1 до {max}.")
-}
 
 pub fn student_pending_line(pending: u32) -> String {
     format!("⏳ Ваших работ на проверке: {pending}")
@@ -589,10 +587,6 @@ pub fn previous_attempt(number: u16, status: &str, content: &str, comment: Optio
 }
 
 pub fn score_prompt(max_score: u16) -> String {
-    format!("Введите целое число от 0 до {max_score}:")
-}
-
-pub fn score_error(max_score: u16) -> String {
     format!("Введите целое число от 0 до {max_score}.")
 }
 
@@ -889,7 +883,6 @@ pub const BUTTON_OTHER_MAX_SCORE: &str = "✍️ Другой максимум";
 pub const BUTTON_PASS_FAIL: &str = "⏭ Без баллов, зачёт/незачёт";
 pub const BUTTON_CALENDAR: &str = "🗓 Выбрать дату";
 pub const BUTTON_MANUAL: &str = "✍️ Ввести вручную";
-pub const BUTTON_PICK_DATE: &str = "Выбрать дату";
 pub const BUTTON_OTHER_PERIODS: &str = "Другое число периодов";
 pub const BUTTON_APPLY_PERIODS: &str = "Применить число периодов";
 pub const BUTTON_POLICY_WORK_SCORE: &str = "После срока: штраф в балл работы";
@@ -918,11 +911,11 @@ pub const MONTHS: [&str; 12] = [
 pub const WEEKDAYS: [&str; 7] = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 pub fn attempts_prompt(max: u16) -> String {
-    format!("Введите количество попыток от 1 до {max}:")
+    format!("Введите количество попыток от 1 до {max}.")
 }
 
 pub fn max_score_prompt(max: u16) -> String {
-    format!("Введите максимальный балл от 1 до {max}:")
+    format!("Введите максимальный балл от 1 до {max}.")
 }
 
 pub fn scale_button(max_score: u16) -> String {

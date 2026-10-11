@@ -241,11 +241,7 @@ fn render_review_notification(
         review_comment,
     );
 
-    if text.encode_utf16().count() <= MESSAGE_LIMIT {
-        text
-    } else {
-        truncate(&text, MESSAGE_LIMIT - 3, true)
-    }
+    truncate(&text, MESSAGE_LIMIT)
 }
 
 fn retry_delay(settings: &NotificationWorkerSettings, attempt_count: u32) -> Duration {

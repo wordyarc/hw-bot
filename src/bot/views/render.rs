@@ -2,11 +2,14 @@ use chrono::{DateTime, Utc};
 use teloxide::types::InlineKeyboardMarkup;
 
 use super::keyboards::{makeup_form_keyboard, terms_form_keyboard};
-use crate::app::StudentMakeup;
-use crate::bot::assignment_form::{CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget};
+use crate::bot::assignment_form::{CompleteTerms, TermsForm, TermsStep, TermsTarget};
+use crate::bot::form::InputMode;
 use crate::bot::makeup_form::{MakeupForm, MakeupStep};
 use crate::bot::{texts, timezone::BotTimezone};
-use crate::domain::{Assignment, DeductedFrom, Grading, LatePolicy, MakeupCredit, MaxScore};
+use crate::domain::{
+    Assignment, AssignmentStatus, DeductedFrom, Grading, LatePolicy, MakeupCredit, MakeupOffer,
+    MaxScore,
+};
 use crate::telegram::text::truncate;
 
 const MAKEUP_TITLES_SHOWN: usize = 10;
@@ -216,13 +219,15 @@ pub(crate) fn grading_lines(
 
 pub(crate) fn student_grading_lines(
     assignment: &Assignment,
-    makeup: Option<StudentMakeup>,
+    makeup: Option<MakeupOffer>,
     now: DateTime<Utc>,
     timezone: &BotTimezone,
 ) -> String {
     let closes_at = assignment.closes_at();
+    let archived = assignment.status() == AssignmentStatus::Archived;
+    let open = !archived && now < closes_at;
     let terms = match (assignment.late_policy(), assignment.grading()) {
-        (Some(policy), Grading::Score { max_score }) if now < closes_at => format!(
+        (Some(policy), Grading::Score { max_score }) if open => format!(
             "{} {}\n{}\n{}",
             texts::MAX_SCORE_LABEL,
             texts::points(max_score.get()),
@@ -245,6 +250,9 @@ pub(crate) fn student_grading_lines(
     };
     let mut lines = format!("\n{terms}");
     match makeup {
+        _ if archived => {
+            lines.push_str(&format!("\n{}", texts::ARCHIVED_CLOSED));
+        }
         Some(makeup) if now >= closes_at => {
             lines.push_str(&format!(
                 "\n{}",
@@ -261,14 +269,14 @@ pub(crate) fn student_grading_lines(
         _ => {}
     }
     let penalty = assignment.penalty_at(now);
-    if penalty > 0 && now < closes_at {
+    if penalty > 0 && open {
         lines.push_str(&format!("\n{} −{penalty}", texts::LATE_PENALTY_LABEL));
     }
     lines
 }
 
 pub(crate) fn student_makeup_lines(
-    makeup: StudentMakeup,
+    makeup: MakeupOffer,
     grading: Grading,
     timezone: &BotTimezone,
 ) -> String {
@@ -405,7 +413,7 @@ pub(crate) fn list_text(header: &str, entries: impl IntoIterator<Item = String>)
 }
 
 pub(crate) fn button_label(label: &str) -> String {
-    truncate(label, 60, true)
+    truncate(label, 60)
 }
 
 #[cfg(test)]
@@ -555,7 +563,38 @@ mod tests {
     }
 
     #[test]
+    fn an_archived_card_shows_no_schedule_or_current_penalty_before_the_closing() {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let mut assignment = assignment(&course, &teacher)
+            .scored(5)
+            .late_policy(7, 1, 4, DeductedFrom::WorkScore)
+            .published()
+            .build();
+        assignment.archive(&course, &teacher).unwrap();
+        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let schedule = penalty_schedule(
+            assignment.deadline_at(),
+            assignment.late_policy().unwrap(),
+            assignment.closes_at(),
+            MaxScore::new(5).unwrap(),
+            &timezone,
+        );
+
+        let card = grading_lines(
+            &assignment,
+            assignment.deadline_at() + Duration::days(1),
+            &timezone,
+        );
+
+        assert!(!card.contains(&schedule), "{card}");
+        assert!(!card.contains(texts::LATE_PENALTY_LABEL), "{card}");
+        assert!(card.contains(texts::ARCHIVED_CLOSED), "{card}");
+    }
+
+    #[test]
     fn an_ended_makeup_is_named_at_the_date_step_and_announced_as_a_new_pool() {
+        use crate::bot::form::Form;
         use crate::bot::makeup_form::MakeupForm;
         use crate::domain::{CourseMakeup, TeachingCourseId};
 
@@ -627,7 +666,6 @@ mod tests {
 
     #[test]
     fn a_closed_card_shows_the_makeup_instead_of_the_closing_or_says_the_pool_is_empty() {
-        use crate::app::StudentMakeup;
         use crate::domain::{CourseMakeup, MakeupTerms};
 
         let teacher = teacher(1);
@@ -639,7 +677,7 @@ mod tests {
             .build();
         let closed = work.closes_at() + Duration::days(1);
         let window = CourseMakeup::open(closed + Duration::days(30), 3, work.closes_at()).unwrap();
-        let offer = |used| StudentMakeup {
+        let offer = |used| MakeupOffer {
             until: window.until(),
             credit: work.makeup().and_then(MakeupTerms::credit),
             balance: window.balance(0, used),

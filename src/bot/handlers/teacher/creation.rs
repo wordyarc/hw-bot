@@ -4,7 +4,7 @@ use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
 use teloxide::types::MessageId;
 
 use super::attempts::chosen_amount;
-use super::terms::detach;
+use super::form::{detach, render};
 use crate::bot::HandlerResult;
 use crate::bot::assignment_form::{
     AssignmentTerms, AssignmentText, DraftAssignment, IssuedGroups, TermsForm,
@@ -103,7 +103,7 @@ pub(super) async fn apply_grading(
     let step = terms.first_step();
     let mut form = TermsForm::new(terms, step);
     form.message_id = message_id;
-    super::terms::render(screen.chat(), form, None).await
+    render(screen.chat(), form, None).await
 }
 
 pub(super) async fn ask_max_attempts(
@@ -297,7 +297,7 @@ pub(crate) async fn submit_max_attempts(
         return Ok(());
     };
     let Some(max_attempts) = parse_positive_attempts(text) else {
-        bot.send_message(chat_id, texts::number_error(MAX_ATTEMPTS))
+        bot.send_message(chat_id, texts::attempts_prompt(MAX_ATTEMPTS))
             .await?;
         return Ok(());
     };
@@ -324,7 +324,7 @@ pub(crate) async fn submit_grading_text(
         return Ok(());
     };
     let Some(grading) = parse_max_score(text) else {
-        bot.send_message(chat_id, texts::number_error(MAX_SCORE))
+        bot.send_message(chat_id, texts::max_score_prompt(MAX_SCORE))
             .await?;
         return Ok(());
     };

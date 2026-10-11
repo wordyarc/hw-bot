@@ -8,7 +8,7 @@ use crate::app::{
     AssignmentStudentSummary, CourseStudent, SandboxSubmission, TeachingCourseSummary,
 };
 use crate::bot::assignment_form::{
-    AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget,
+    AssignmentTerms, CompleteTerms, TermsForm, TermsStep, TermsTarget,
 };
 use crate::bot::callbacks::{
     ASSIGNMENT_GROUP_PREFIX, ASSIGNMENT_GROUPS_DONE, AmountChoice, CALENDAR_NOOP,
@@ -19,9 +19,10 @@ use crate::bot::callbacks::{
     MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REGISTRATION_GROUP_PREFIX,
     REVIEW_ACCEPT_PREFIX, REVIEW_CHANGE_PREFIX, REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX,
     ReplayableAction, STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
-    TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_EXIT, TERMS_MAKEUP, TERMS_PENALTY,
-    TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
+    TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_DURATION_PERIODS_PREFIX, TERMS_EXIT,
+    TERMS_MAKEUP, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
 };
+use crate::bot::form::{Form, InputMode};
 use crate::bot::makeup_form::{MakeupForm, MakeupStep};
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
@@ -446,33 +447,31 @@ fn duration_presets(
     timezone: &BotTimezone,
 ) -> Option<Vec<Row>> {
     let policy = terms.preview_policy(1)?;
-    let base = timezone.local_date(deadline - chrono::Duration::nanoseconds(1));
     let presets = [
         (
             texts::PRESET_WEEK_AFTER,
-            base.checked_add_days(chrono::Days::new(7)),
+            deadline.checked_add_signed(chrono::Duration::days(7)),
         ),
         (
             texts::PRESET_TWO_WEEKS_AFTER,
-            base.checked_add_days(chrono::Days::new(14)),
+            deadline.checked_add_signed(chrono::Duration::days(14)),
         ),
-        (
-            texts::PRESET_MONTH_AFTER,
-            base.checked_add_months(chrono::Months::new(1)),
-        ),
+        (texts::PRESET_MONTH_AFTER, timezone.add_months(deadline, 1)),
     ];
     let rows = presets
         .into_iter()
-        .filter_map(|(label, date)| {
-            let date = date?;
-            let at = timezone.end_of(date)?;
-            let periods = u16::try_from(policy.periods_to_close_at(deadline, at)).ok()?;
-            terms
-                .preview_policy(periods)
-                .filter(|policy| policy.validate_horizon(deadline).is_ok())?;
+        .filter_map(|(label, at)| {
+            let periods = u16::try_from(policy.periods_to_close_at(deadline, at?)).ok()?;
+            let closes_at = terms.preview_policy(periods).and_then(|policy| {
+                policy.validate_horizon(deadline).ok()?;
+                policy.closes_at(deadline).ok()
+            })?;
             Some(row(
-                texts::date_preset(label, &timezone.format_date(date)),
-                DeadlineAction::Pick(date).callback(),
+                texts::date_preset(
+                    label,
+                    &texts::until(&timezone.format_until_short(closes_at)),
+                ),
+                format!("{TERMS_DURATION_PERIODS_PREFIX}{periods}"),
             ))
         })
         .collect();
@@ -596,7 +595,7 @@ pub(crate) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
             })
             .collect(),
         row(
-            texts::BUTTON_OTHER_NUMBER,
+            texts::BUTTON_OTHER_AMOUNT,
             AmountChoice::Manual.callback(PENALTY_PREFIX),
         ),
         row(texts::period_button(period_days), PENALTY_PERIOD),
@@ -831,7 +830,7 @@ pub(super) fn terms_form_keyboard(
                     texts::BUTTON_OTHER_PERIODS,
                     AmountChoice::Manual.callback(LATE_PERIODS_PREFIX),
                 ),
-                button(texts::BUTTON_PICK_DATE, TERMS_DURATION_DATE),
+                button(texts::BUTTON_CALENDAR, TERMS_DURATION_DATE),
             ]);
             InlineKeyboardMarkup::new(rows)
         }
@@ -1104,38 +1103,53 @@ mod tests {
     }
 
     #[test]
-    fn duration_presets_start_after_the_deadline_and_respect_the_horizon() {
-        use crate::bot::callbacks::{CallbackAction, DeadlineAction, FlowAction};
+    fn duration_presets_count_whole_periods_from_the_deadline_moment() {
+        use crate::bot::callbacks::{CallbackAction, FlowAction};
+        let timezone = timezone();
+        for deadline in ["20.08.2027", "20.08.2027 23:59"] {
+            let mut terms = scored_terms();
+            terms.deadline_at = timezone.parse_deadline(deadline);
+            terms.period_days = 7;
+            let deadline = terms.deadline_at.unwrap();
+            let keyboard = duration_options_keyboard(&terms, deadline, &timezone);
+            let periods: Vec<u16> = keyboard
+                .inline_keyboard
+                .iter()
+                .flatten()
+                .filter_map(|button| {
+                    let teloxide::types::InlineKeyboardButtonKind::CallbackData(data) =
+                        &button.kind
+                    else {
+                        panic!("expected a callback");
+                    };
+                    match crate::bot::callbacks::parse(data).expect("routable duration button") {
+                        CallbackAction::Flow(FlowAction::DurationPeriods(periods)) => Some(periods),
+                        _ => None,
+                    }
+                })
+                .collect();
+            assert_eq!(periods, [1, 2, 5], "{deadline}");
+        }
+    }
+
+    #[test]
+    fn a_duration_preset_names_the_moment_submissions_close() {
         let timezone = timezone();
         let mut terms = scored_terms();
-        terms.deadline_at = timezone.parse_deadline("20.08.2027");
+        terms.deadline_at = timezone.parse_deadline("20.08.2027 23:59");
         terms.period_days = 7;
         let deadline = terms.deadline_at.unwrap();
-        let policy = LatePolicy::new(7, 1, 1, DeductedFrom::WorkScore).unwrap();
+        let week = deadline + chrono::Duration::days(7);
+
         let keyboard = duration_options_keyboard(&terms, deadline, &timezone);
-        let mut dates = Vec::new();
-        for button in keyboard.inline_keyboard.iter().flatten() {
-            let teloxide::types::InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
-                panic!("expected a callback");
-            };
-            let action = crate::bot::callbacks::parse(data).expect("routable duration button");
-            if let CallbackAction::Flow(FlowAction::Deadline(DeadlineAction::Pick(date))) = action {
-                let at = timezone.end_of(date).unwrap();
-                assert!(at > deadline);
-                let periods = u16::try_from(policy.periods_to_close_at(deadline, at)).unwrap();
-                LatePolicy::new(7, 1, periods, DeductedFrom::WorkScore)
-                    .unwrap()
-                    .validate_horizon(deadline)
-                    .unwrap();
-                dates.push((date, periods));
-            }
-        }
-        assert_eq!(dates.len(), 3);
+
         assert_eq!(
-            dates[0],
-            (chrono::NaiveDate::from_ymd_opt(2027, 8, 27).unwrap(), 1)
+            keyboard.inline_keyboard[0][0].text,
+            texts::date_preset(
+                texts::PRESET_WEEK_AFTER,
+                &texts::until(&timezone.format_until_short(week))
+            )
         );
-        assert_eq!(dates[1].1, 2);
     }
 
     #[test]
@@ -1366,7 +1380,7 @@ mod tests {
     #[test]
     fn button_labels_are_truncated_only_when_needed() {
         assert_eq!(button_label("Мои задания"), "Мои задания");
-        assert_eq!(button_label(&"я".repeat(61)).chars().count(), 63);
+        assert_eq!(button_label(&"я".repeat(61)).chars().count(), 60);
         assert!(button_label(&"я".repeat(61)).ends_with("..."));
     }
 

@@ -2,7 +2,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-use crate::app::access::{load_managed_versioned_assignment, load_managed_versioned_assignment_on};
+use crate::app::access::{load_managed_assignment_on, load_managed_versioned_assignment};
 use crate::app::assignments::load_visible_assignment_for_student;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
@@ -127,13 +127,14 @@ impl FileService {
         })?;
 
         let mut tx = self.pool.begin().await?;
-        let assignment = load_managed_versioned_assignment_on(
+        let assignment = load_managed_assignment_on(
             &mut tx,
             command.actor,
             command.assignment_id,
             "add assignment file",
         )
         .await?
+        .stored
         .assignment;
         let revision =
             advance_revision(&mut tx, assignment.id(), command.expected_revision).await?;
@@ -169,13 +170,14 @@ impl FileService {
         command: DeleteAssignmentFile,
     ) -> AppResult<AssignmentFiles> {
         let mut tx = self.pool.begin().await?;
-        let assignment = load_managed_versioned_assignment_on(
+        let assignment = load_managed_assignment_on(
             &mut tx,
             command.actor,
             command.assignment_id,
             "delete assignment file",
         )
         .await?
+        .stored
         .assignment;
         let revision =
             advance_revision(&mut tx, assignment.id(), command.expected_revision).await?;

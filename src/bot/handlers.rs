@@ -2,7 +2,8 @@ use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
-use teloxide::types::{CallbackQuery, Message, MessageId, User};
+use teloxide::payloads::SendMessageSetters;
+use teloxide::types::{CallbackQuery, ChatId, Message, MessageId, User};
 use teloxide::utils::command::BotCommands;
 
 use super::Bot;
@@ -16,7 +17,9 @@ use super::context::{BotContext, Chat, Deps, Screen, TextStep};
 use super::errors::finish_handler;
 use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
-use super::views::{MenuAction, menu_action, send_stale_button};
+use super::views::{
+    MenuAction, menu_action, send_stale_button, student_keyboard, teacher_keyboard,
+};
 use crate::domain::{Role, TelegramUserId};
 use crate::pagination::PageRequest;
 use crate::telegram::is_invalid_token;
@@ -85,6 +88,42 @@ impl Command {
     }
 }
 
+async fn abandon_flow(bot: &Bot, chat_id: ChatId, state: &BotState) -> HandlerResult {
+    if let Some(form) = state.active_form() {
+        return teacher::abandon_form(bot, chat_id, form).await;
+    }
+    let BotState::Flow(flow) = state else {
+        return Ok(());
+    };
+    let (text, keyboard) = match flow {
+        FlowState::AwaitingSubmission { .. } => (texts::ACTION_CANCELLED, student_keyboard()),
+        FlowState::AwaitingAssignmentTitle { .. }
+        | FlowState::AwaitingAssignmentBody { .. }
+        | FlowState::ChoosingAssignmentGroups { .. }
+        | FlowState::AwaitingAssignmentMaxAttempts { .. }
+        | FlowState::ChoosingGrading { .. }
+        | FlowState::AwaitingGradingText { .. } => (texts::DRAFT_DISCARDED, teacher_keyboard()),
+        FlowState::AwaitingReviewScore { .. }
+        | FlowState::AwaitingReviewComment { .. }
+        | FlowState::AwaitingBulkReviewComment { .. }
+        | FlowState::AwaitingAssignmentFile { .. }
+        | FlowState::AwaitingAttemptAmount { .. } => (texts::ACTION_CANCELLED, teacher_keyboard()),
+        FlowState::ChoosingRegistrationGroup { .. }
+        | FlowState::AwaitingRegistrationName { .. }
+        | FlowState::ConfirmingInviteRotation { .. }
+        | FlowState::AwaitingReviewDecision { .. }
+        | FlowState::ConfirmingAssignmentFileDeletion { .. }
+        | FlowState::ConfiguringTerms(_)
+        | FlowState::ConfiguringMakeup(_)
+        | FlowState::ConfirmingTermsExit { .. }
+        | FlowState::ChoosingStudent { .. } => return Ok(()),
+    };
+    bot.send_message(chat_id, text)
+        .reply_markup(keyboard)
+        .await?;
+    Ok(())
+}
+
 pub(super) async fn reset_dialogue(dialogue: &BotDialogue) -> HandlerResult {
     match dialogue.exit().await {
         Ok(()) | Err(InMemStorageError::DialogueNotFound) => Ok(()),
@@ -114,40 +153,35 @@ pub(super) async fn handle_command(
         let telegram_user_id = message_sender_id(&message)?;
 
         if let Some(form) = state.active_form()
-            && !matches!(command, Command::Help)
+            && matches!(command, Command::Cancel)
         {
-            if matches!(command, Command::Cancel) {
-                let Some(screen) = chat.resolve(telegram_user_id).await? else {
-                    return Ok(());
-                };
-                if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
-                    return teacher::handle_terms(
-                        screen,
-                        *message_id,
-                        callbacks::TermsAction::Stay,
-                        state,
-                    )
-                    .await;
-                }
-                return teacher::form_back(screen, form).await;
+            let Some(screen) = chat.resolve(telegram_user_id).await? else {
+                return Ok(());
+            };
+            if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
+                return teacher::handle_terms(
+                    screen,
+                    *message_id,
+                    callbacks::TermsAction::Stay,
+                    state,
+                )
+                .await;
             }
+            return teacher::form_back(screen, form).await;
+        }
+        if !matches!(command, Command::Help | Command::Cancel) {
             reset_dialogue(&dialogue).await?;
-            teacher::abandon_form(&bot, chat_id, form).await?;
+            abandon_flow(&bot, chat_id, &state).await?;
         }
 
         if let Some(action) = menu_action_for(&command) {
-            reset_dialogue(&dialogue).await?;
             return run_menu_action(chat, telegram_user_id, action).await;
         }
         match command {
             Command::Start(payload) => {
-                reset_dialogue(&dialogue).await?;
                 start_registration(chat, telegram_user_id, payload.trim()).await
             }
-            Command::Menu => {
-                reset_dialogue(&dialogue).await?;
-                show_home(chat, telegram_user_id).await
-            }
+            Command::Menu => show_home(chat, telegram_user_id).await,
             Command::Cancel => {
                 reset_dialogue(&dialogue).await?;
                 bot.send_message(chat_id, texts::ACTION_CANCELLED).await?;
@@ -183,7 +217,12 @@ pub(super) async fn handle_message(
     let chat_id = message.chat.id;
     let result = async {
         tracing::Span::current().record("action", "input");
-        if !ensure_private_message(&bot, &message).await? {
+        if !message.chat.is_private() {
+            return Ok(());
+        }
+
+        if message.text().is_some_and(input::looks_like_command) {
+            bot.send_message(chat_id, texts::UNKNOWN_COMMAND).await?;
             return Ok(());
         }
 
@@ -205,9 +244,7 @@ pub(super) async fn handle_message(
                 return send_help(step.chat(), telegram_user_id).await;
             }
             reset_dialogue(&dialogue).await?;
-            if let Some(form) = state.active_form() {
-                teacher::abandon_form(&bot, chat_id, form).await?;
-            }
+            abandon_flow(&bot, chat_id, &state).await?;
             return run_menu_action(step.chat(), telegram_user_id, action).await;
         }
 
@@ -381,9 +418,7 @@ pub(super) async fn handle_callback(
         }
         if matches!(action, CallbackAction::Replayable(_)) {
             reset_dialogue(&dialogue).await?;
-            if let Some(form) = state.active_form() {
-                teacher::abandon_form(&bot, chat_id, form).await?;
-            }
+            abandon_flow(&bot, chat_id, &state).await?;
         }
 
         let deps = Deps {
@@ -563,6 +598,9 @@ async fn handle_flow_action(
         }
         FlowAction::Periods(choice) => {
             teacher::handle_periods(screen, message_id, choice, state).await?
+        }
+        FlowAction::DurationPeriods(periods) => {
+            teacher::handle_duration_periods(screen, message_id, periods, state).await?
         }
         FlowAction::PenaltyPeriod => teacher::handle_period(screen, message_id, state).await?,
         FlowAction::Terms(action) => {
@@ -954,7 +992,7 @@ mod tests {
         forms.push(summary);
         let mut calendar =
             MakeupForm::new(course.id(), None, Vec::new(), crate::test_support::t0());
-        calendar.mode = crate::bot::assignment_form::InputMode::Calendar(today);
+        calendar.mode = crate::bot::form::InputMode::Calendar(today);
         forms.push(calendar);
         for form in forms {
             let (_, keyboard) =

@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::{
     Acceptance, Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, LatePenalty,
-    MAX_ATTEMPTS, MAX_SCORE, MakeupRequest, NonEmptyString, Offer, SubmissionId, TeachingCourse,
-    USER_TEXT_MAX_LEN, User, UserId,
+    MAX_ATTEMPTS, MAX_SCORE, MakeupOffer, MakeupRequest, NonEmptyString, SubmissionId,
+    TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -87,27 +87,27 @@ impl SubmissionHistory {
         assignment.ensure_open_for_submission(at)
     }
 
-    pub fn offer_at(
+    pub fn makeup_offer_at(
         self,
         assignment: &Assignment,
         at: DateTime<Utc>,
         makeup: MakeupRequest,
-    ) -> Option<Offer> {
+    ) -> Option<MakeupOffer> {
         if !assignment.is_published() {
             return None;
         }
         let acceptance = assignment
             .acceptance_at(at, makeup.consented_course())
             .ok()?;
+        let Acceptance::Makeup { credit } = acceptance else {
+            return None;
+        };
         self.ensure_admits(assignment, acceptance).ok()?;
 
-        Some(match acceptance {
-            Acceptance::Regular => Offer::Regular,
-            Acceptance::Makeup { credit } => Offer::Makeup {
-                credit,
-                until: makeup.course?.until(),
-                balance: makeup.balance,
-            },
+        Some(MakeupOffer {
+            until: makeup.course?.until(),
+            credit,
+            balance: makeup.balance,
         })
     }
 
@@ -181,6 +181,14 @@ str_enum! {
         Accept => "accept",
         Reject => "reject",
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Review {
+    pub decision: ReviewDecision,
+    pub score: Option<ReviewScore>,
+    pub comment: String,
+    pub reviewed_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -589,14 +597,16 @@ impl Submission {
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
-        self.complete_review(
+        self.review(
             assignment,
             teaching_course,
             reviewer,
-            SubmissionStatus::Accepted,
-            score,
-            comment,
-            reviewed_at,
+            Review {
+                decision: ReviewDecision::Accept,
+                score,
+                comment: comment.into(),
+                reviewed_at,
+            },
         )
     }
 
@@ -608,27 +618,25 @@ impl Submission {
         comment: impl Into<String>,
         reviewed_at: DateTime<Utc>,
     ) -> DomainResult<()> {
-        self.complete_review(
+        self.review(
             assignment,
             teaching_course,
             reviewer,
-            SubmissionStatus::Rejected,
-            None,
-            comment,
-            reviewed_at,
+            Review {
+                decision: ReviewDecision::Reject,
+                score: None,
+                comment: comment.into(),
+                reviewed_at,
+            },
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn complete_review(
+    pub fn review(
         &mut self,
         assignment: &Assignment,
         teaching_course: &TeachingCourse,
         reviewer: &User,
-        status: SubmissionStatus,
-        score: Option<ReviewScore>,
-        comment: impl Into<String>,
-        reviewed_at: DateTime<Utc>,
+        review: Review,
     ) -> DomainResult<()> {
         if self.assignment_id != assignment.id() {
             return Err(DomainError::SubmissionDoesNotBelongToAssignment);
@@ -646,26 +654,29 @@ impl Submission {
             return Err(DomainError::SubmissionIsNotPendingReview);
         }
 
-        let grade = match (status, self.kind) {
-            (SubmissionStatus::Accepted, SubmissionKind::Regular) => {
+        let grade = match (review.decision, review.score, self.kind) {
+            (ReviewDecision::Accept, score, SubmissionKind::Regular) => {
                 // Берём время отправки, чтобы длительность проверки не влияла на штраф студенту.
                 assignment.regular_grade(score, self.submitted_at)?
             }
-            (SubmissionStatus::Accepted, SubmissionKind::Makeup) => {
-                if score.is_some() {
-                    return Err(DomainError::ScoreNotAllowed);
-                }
-                assignment.makeup_grade()?
-            }
-            _ => None,
+            (ReviewDecision::Accept, None, SubmissionKind::Makeup) => assignment.makeup_grade()?,
+            (ReviewDecision::Accept, Some(_), SubmissionKind::Makeup)
+            | (ReviewDecision::Reject, Some(_), _) => return Err(DomainError::ScoreNotAllowed),
+            (ReviewDecision::Reject, None, _) => None,
         };
 
-        let review_comment =
-            NonEmptyString::new_bounded("submission.review_comment", comment, USER_TEXT_MAX_LEN)?;
+        let review_comment = NonEmptyString::new_bounded(
+            "submission.review_comment",
+            review.comment,
+            USER_TEXT_MAX_LEN,
+        )?;
 
-        self.status = status;
+        self.status = match review.decision {
+            ReviewDecision::Accept => SubmissionStatus::Accepted,
+            ReviewDecision::Reject => SubmissionStatus::Rejected,
+        };
         self.reviewed_by = Some(reviewer.id());
-        self.reviewed_at = Some(reviewed_at);
+        self.reviewed_at = Some(review.reviewed_at);
         self.review_comment = Some(review_comment);
         self.grade = grade;
 

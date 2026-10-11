@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    AssignmentId, DeductedFrom, DomainError, GradeParts, Role, StudentGroupId, Submission,
+    AssignmentId, DeductedFrom, DomainError, GradeParts, StudentGroupId, Submission,
     SubmissionHistory, SubmissionHistoryParts, SubmissionId, SubmissionKind, SubmissionParts,
     SubmissionStatus, TeachingCourseId, User, UserId,
 };
@@ -468,6 +468,19 @@ where
             order by s.student_id, s.assignment_id,
                      s.work_score - s.course_total_penalty desc nulls last,
                      s.kind = 'regular' desc
+        ), cells as (
+            select students_page.id as student_id, a.id, a.title, a.deadline_at,
+                   case when best.student_id is null then a.max_score
+                        else best.grade_max_score end as max_score,
+                   best.work_score, best.course_total_penalty, best.kind = 'makeup' as makeup
+            from students_page
+            cross join assignments a
+            left join best on best.assignment_id = a.id and best.student_id = students_page.id
+            where a.teaching_course_id = $1 and a.published_at is not null
+              and exists (
+                  select 1 from assignment_groups issued
+                  where issued.assignment_id = a.id and issued.student_group_id = $2
+              )
         )
         select
             students.id as "student_id!",
@@ -483,33 +496,18 @@ where
             coalesce(totals.max_total, 0)::bigint as "max_total!"
         from students_page students
         cross join lateral (
-            select sum(best.work_score) as work_total,
-                   sum(best.course_total_penalty) as penalty_total,
-                   sum(case when best.student_id is null then a.max_score
-                            else best.grade_max_score end) as max_total
-            from assignments a
-            left join best on best.assignment_id = a.id and best.student_id = students.id
-            where a.teaching_course_id = $1 and a.published_at is not null
-              and exists (
-                  select 1 from assignment_groups issued
-                  where issued.assignment_id = a.id and issued.student_group_id = $2
-              )
+            select sum(cells.work_score) as work_total,
+                   sum(cells.course_total_penalty) as penalty_total,
+                   sum(cells.max_score) as max_total
+            from cells
+            where cells.student_id = students.id
         ) totals
         left join lateral (
-            select a.id, a.title, a.deadline_at,
-                   case when best.student_id is null then a.max_score
-                        else best.grade_max_score end as max_score,
-                   best.work_score, best.course_total_penalty, best.kind = 'makeup' as makeup
-            from assignments a
-            left join best on best.assignment_id = a.id and best.student_id = students.id
-            where a.teaching_course_id = $1 and a.published_at is not null
-              and exists (
-                  select 1 from assignment_groups issued
-                  where issued.assignment_id = a.id and issued.student_group_id = $2
-              )
-              and case when best.student_id is null then a.max_score
-                       else best.grade_max_score end is not null
-            order by a.deadline_at, a.id limit $6 offset $7
+            select cells.id, cells.title, cells.deadline_at, cells.max_score,
+                   cells.work_score, cells.course_total_penalty, cells.makeup
+            from cells
+            where cells.student_id = students.id and cells.max_score is not null
+            order by cells.deadline_at, cells.id limit $6 offset $7
         ) grades on true
         order by students.display_name, students.id, grades.deadline_at, grades.id
         "#,
@@ -720,7 +718,7 @@ macro_rules! reviewer_scope {
               and ($4::text is null or submissions.kind = $4)
               and ($5::timestamptz is null or submissions.submitted_at <= $5)
             "# + $tail,
-            matches!($reviewer.role(), Role::Admin),
+            $reviewer.role().can_manage_all_teaching_courses(),
             $reviewer.id().as_uuid(),
             $stream.sandbox(),
             $stream.kind(),

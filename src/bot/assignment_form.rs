@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use teloxide::types::MessageId;
 
 use super::callbacks::TermsAction;
+use super::form::{Form, InputMode};
 use crate::app::MakeupQuestion;
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, Grading, LatePolicy,
@@ -305,13 +306,6 @@ impl TermsStep {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InputMode {
-    Buttons,
-    Manual,
-    Calendar(NaiveDate),
-}
-
 #[derive(Clone)]
 pub(super) struct TermsForm {
     pub terms: AssignmentTerms,
@@ -341,11 +335,6 @@ impl TermsForm {
             return_to_summary: false,
             previous_closes_at: None,
         }
-    }
-
-    pub fn can_go_back(&self) -> bool {
-        // Из итога /cancel ведёт на шаг назад. Всю форму отменяет отдельная кнопка.
-        self.step != TermsStep::Summary && self.previous_step().is_some()
     }
 
     pub fn previous_step(&self) -> Option<TermsStep> {
@@ -435,11 +424,105 @@ impl TermsForm {
         Ok(())
     }
 
-    pub fn apply_date(
-        &mut self,
-        at: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> Result<(), TermsInputError> {
+    pub fn apply_duration_periods(&mut self, periods: u16) -> Result<(), TermsInputError> {
+        if self.step != TermsStep::DurationDate {
+            return Err(TermsInputError::UnexpectedStep);
+        }
+        let mut form = self.clone();
+        form.step = TermsStep::Periods;
+        form.apply_number(periods)?;
+        *self = form;
+        Ok(())
+    }
+
+    pub fn confirm_duration(&mut self) -> bool {
+        let TermsStep::DurationConfirm { periods, .. } = self.step else {
+            return false;
+        };
+        self.terms.max_periods = Some(periods);
+        self.advance();
+        true
+    }
+
+    pub fn edit_summary(&mut self, action: TermsAction) -> bool {
+        if self.step != TermsStep::Summary {
+            return false;
+        }
+        let Some(complete) = self.terms.complete() else {
+            return false;
+        };
+        let Some(step) = TermsStep::summary_edit(action, &self.terms) else {
+            return false;
+        };
+        self.previous_closes_at.get_or_insert(complete.closes_at);
+        self.go(step);
+        self.return_to_summary = true;
+        true
+    }
+}
+
+impl Form for TermsForm {
+    type Step = TermsStep;
+    type InputError = TermsInputError;
+
+    fn step(&self) -> TermsStep {
+        self.step
+    }
+
+    fn mode(&self) -> InputMode {
+        self.mode
+    }
+
+    fn set_mode(&mut self, mode: InputMode) {
+        self.mode = mode;
+    }
+
+    fn message_id(&self) -> Option<MessageId> {
+        self.message_id
+    }
+
+    fn message_id_mut(&mut self) -> &mut Option<MessageId> {
+        &mut self.message_id
+    }
+
+    fn can_go_back(&self) -> bool {
+        // Из итога /cancel ведёт на шаг назад. Всю форму отменяет отдельная кнопка.
+        self.step != TermsStep::Summary && self.previous_step().is_some()
+    }
+
+    fn back(&mut self) -> bool {
+        match (self.mode, self.step) {
+            (InputMode::Manual, step) if step != TermsStep::Period => {
+                self.mode = InputMode::Buttons
+            }
+            (InputMode::Calendar(_), _) => self.mode = InputMode::Buttons,
+            _ => {
+                let Some(step) = self.previous_step() else {
+                    return false;
+                };
+                // Незавершённую политику нельзя показать в итоге, но её числа пригодятся при повторном включении.
+                if step == TermsStep::Summary && self.terms.complete().is_none() {
+                    self.terms.deducted_from = None;
+                }
+                self.go(step);
+            }
+        }
+        true
+    }
+
+    fn accepts_text(&self) -> bool {
+        match self.step {
+            TermsStep::Deadline
+            | TermsStep::DurationDate
+            | TermsStep::Penalty
+            | TermsStep::Period
+            | TermsStep::Periods => true,
+            TermsStep::Makeup => self.terms.grading().is_scored(),
+            TermsStep::Policy | TermsStep::DurationConfirm { .. } | TermsStep::Summary => false,
+        }
+    }
+
+    fn apply_date(&mut self, at: DateTime<Utc>, now: DateTime<Utc>) -> Result<(), TermsInputError> {
         if self.step == TermsStep::DurationDate {
             let deadline = self
                 .terms
@@ -479,61 +562,6 @@ impl TermsForm {
             self.advance();
         }
         Ok(())
-    }
-
-    pub fn confirm_duration(&mut self) -> bool {
-        let TermsStep::DurationConfirm { periods, .. } = self.step else {
-            return false;
-        };
-        self.terms.max_periods = Some(periods);
-        self.advance();
-        true
-    }
-
-    pub fn back(&mut self) -> bool {
-        match (self.mode, self.step) {
-            (InputMode::Manual, step) if step != TermsStep::Period => {
-                self.mode = InputMode::Buttons
-            }
-            (InputMode::Calendar(_), _) => self.mode = InputMode::Buttons,
-            _ => {
-                let Some(step) = self.previous_step() else {
-                    return false;
-                };
-                // Незавершённую политику нельзя показать в итоге, но её числа пригодятся при повторном включении.
-                if step == TermsStep::Summary && self.terms.complete().is_none() {
-                    self.terms.deducted_from = None;
-                }
-                self.go(step);
-            }
-        }
-        true
-    }
-
-    pub fn step_back(&mut self) -> bool {
-        if !self.can_go_back() {
-            return false;
-        }
-        if matches!(self.mode, InputMode::Calendar(_)) {
-            self.mode = InputMode::Buttons;
-        }
-        self.back()
-    }
-
-    pub fn edit_summary(&mut self, action: TermsAction) -> bool {
-        if self.step != TermsStep::Summary {
-            return false;
-        }
-        let Some(complete) = self.terms.complete() else {
-            return false;
-        };
-        let Some(step) = TermsStep::summary_edit(action, &self.terms) else {
-            return false;
-        };
-        self.previous_closes_at.get_or_insert(complete.closes_at);
-        self.go(step);
-        self.return_to_summary = true;
-        true
     }
 }
 
@@ -722,6 +750,33 @@ mod tests {
         form.apply_number(3).unwrap();
         assert_eq!(form.step, TermsStep::Summary);
         assert_eq!(form.terms.max_periods, Some(3));
+    }
+
+    #[test]
+    fn a_duration_preset_sets_the_period_count_without_a_confirmation() {
+        let mut form = complete_form();
+        form.go(TermsStep::DurationDate);
+
+        assert_eq!(form.apply_duration_periods(3), Ok(()));
+
+        assert_eq!(form.terms.max_periods, Some(3));
+        assert_eq!(form.step, TermsStep::Summary);
+    }
+
+    #[test]
+    fn a_duration_preset_is_refused_outside_the_date_step_and_beyond_the_horizon() {
+        let mut form = complete_form();
+        form.go(TermsStep::Periods);
+        assert_eq!(
+            form.apply_duration_periods(1),
+            Err(TermsInputError::UnexpectedStep)
+        );
+
+        form.go(TermsStep::DurationDate);
+        let before = form.terms.complete();
+        assert!(form.apply_duration_periods(MAX_LATE_PERIODS + 1).is_err());
+        assert_eq!(form.step, TermsStep::DurationDate);
+        assert_eq!(form.terms.complete(), before);
     }
 
     #[test]

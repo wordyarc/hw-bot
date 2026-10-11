@@ -15,18 +15,8 @@ pub(crate) async fn load_managed_versioned_assignment(
     assignment_id: AssignmentId,
     action: &'static str,
 ) -> AppResult<VersionedAssignment> {
-    load_managed_versioned_assignment_on(&mut *pool.acquire().await?, actor, assignment_id, action)
-        .await
-}
-
-pub(crate) async fn load_managed_versioned_assignment_on(
-    connection: &mut PgConnection,
-    actor: Actor,
-    assignment_id: AssignmentId,
-    action: &'static str,
-) -> AppResult<VersionedAssignment> {
     Ok(
-        load_managed_assignment_on(connection, actor, assignment_id, action)
+        load_managed_assignment_on(&mut *pool.acquire().await?, actor, assignment_id, action)
             .await?
             .stored,
     )

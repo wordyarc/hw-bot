@@ -138,7 +138,7 @@ pub(crate) async fn handle_extra_attempts(
         return screen.stale().await;
     };
     let Some(amount) = chosen_amount(choice) else {
-        return screen.ask(&texts::number_prompt(MAX_ATTEMPTS)).await;
+        return screen.ask(&texts::attempts_prompt(MAX_ATTEMPTS)).await;
     };
     grant_attempts(screen, assignment_id, student_id, amount).await
 }
@@ -192,7 +192,7 @@ pub(crate) async fn submit_attempt_amount(
         return Ok(());
     };
     let Some(amount) = parse_positive_attempts(text) else {
-        bot.send_message(chat_id, texts::number_error(MAX_ATTEMPTS))
+        bot.send_message(chat_id, texts::attempts_prompt(MAX_ATTEMPTS))
             .await?;
         return Ok(());
     };

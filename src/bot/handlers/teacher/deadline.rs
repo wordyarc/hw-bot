@@ -1,15 +1,15 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use teloxide::types::MessageId;
 
-use super::makeup::handle_date;
-use super::terms::{apply_date, render};
-use crate::bot::assignment_form::{InputMode, TermsStep};
+use super::form::handle_date;
+use crate::bot::HandlerResult;
+use crate::bot::assignment_form::TermsStep;
 use crate::bot::callbacks::DeadlineAction;
 use crate::bot::context::Screen;
+use crate::bot::form::InputMode;
 use crate::bot::makeup_form::MakeupStep;
 use crate::bot::state::BotState;
 use crate::bot::timezone::BotTimezone;
-use crate::bot::{HandlerResult, texts};
 
 pub(super) enum DateChoice {
     Mode(InputMode),
@@ -41,7 +41,10 @@ pub(crate) async fn handle_deadline(
 ) -> HandlerResult {
     if state.active_makeup().is_some() {
         return match state.makeup_form(message_id, MakeupStep::Date) {
-            Some(form) => handle_date(screen, form, action).await,
+            Some(form) => {
+                let today = screen.timezone().today();
+                handle_date(screen, form, action, today).await
+            }
             None => screen.stale().await,
         };
     }
@@ -54,7 +57,7 @@ pub(crate) async fn handle_deadline(
     if !matches!(step, TermsStep::Deadline | TermsStep::DurationDate) || !presets_allowed {
         return screen.stale().await;
     }
-    let Some(mut form) = state.terms_form(message_id, step) else {
+    let Some(form) = state.terms_form(message_id, step) else {
         return screen.stale().await;
     };
     let timezone = screen.timezone();
@@ -62,12 +65,5 @@ pub(crate) async fn handle_deadline(
         (TermsStep::DurationDate, Some(deadline)) => timezone.first_date_ending_after(deadline),
         _ => timezone.today(),
     };
-    match choose_date(action, timezone, calendar_from) {
-        DateChoice::Mode(mode) => {
-            form.mode = mode;
-            render(screen.chat(), form, None).await
-        }
-        DateChoice::At(Some(at)) => apply_date(screen, form, at).await,
-        DateChoice::At(None) => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
-    }
+    handle_date(screen, form, action, calendar_from).await
 }

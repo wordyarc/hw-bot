@@ -31,10 +31,10 @@ pub use ids::{
 pub use invites::InviteGeneration;
 pub use makeup::{
     Acceptance, CourseMakeup, MAX_MAKEUP_ATTEMPTS, MAX_MAKEUP_DAYS, MakeupBalance, MakeupCredit,
-    MakeupRequest, MakeupTerms, Offer,
+    MakeupOffer, MakeupRequest, MakeupTerms,
 };
 pub use submission::{
-    Grade, ReviewDecision, ReviewScore, Submission, SubmissionHistory, SubmissionKind,
+    Grade, Review, ReviewDecision, ReviewScore, Submission, SubmissionHistory, SubmissionKind,
     SubmissionStatus,
 };
 pub use text::{

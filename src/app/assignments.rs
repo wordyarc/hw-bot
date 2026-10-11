@@ -12,9 +12,9 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    MakeupBalance, MakeupCredit, MakeupRequest, MakeupTerms, NewAssignment, Offer,
-    StoredFileMetadata, StudentAssignmentProgress, StudentGroupId, Subject, Submission,
-    SubmissionHistory, TeachingCourse, TeachingCourseId, User, UserId,
+    MakeupOffer, MakeupRequest, MakeupTerms, NewAssignment, StoredFileMetadata,
+    StudentAssignmentProgress, StudentGroupId, Subject, Submission, SubmissionHistory,
+    TeachingCourse, TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{AssignmentStudentSummary, MakeupPool, VersionedAssignment};
@@ -74,41 +74,21 @@ pub struct StudentAssignment {
     pub assignment: Assignment,
     pub subject: Subject,
     pub history: SubmissionHistory,
-    pub makeup: Option<StudentMakeup>,
+    pub makeup: Option<MakeupOffer>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StudentMakeup {
-    pub until: DateTime<Utc>,
-    pub credit: Option<MakeupCredit>,
-    pub balance: MakeupBalance,
-}
-
-impl StudentMakeup {
-    fn offered(
-        assignment: &Assignment,
-        history: SubmissionHistory,
-        pool: Option<MakeupPool>,
-        at: DateTime<Utc>,
-    ) -> Option<Self> {
-        let pool = pool?;
-        match history.offer_at(
-            assignment,
-            at,
-            MakeupRequest::consented(Some(pool.course), pool.balance),
-        )? {
-            Offer::Makeup {
-                credit,
-                until,
-                balance,
-            } => Some(Self {
-                until,
-                credit,
-                balance,
-            }),
-            Offer::Regular => None,
-        }
-    }
+fn makeup_offer(
+    assignment: &Assignment,
+    history: SubmissionHistory,
+    pool: Option<MakeupPool>,
+    at: DateTime<Utc>,
+) -> Option<MakeupOffer> {
+    let pool = pool?;
+    history.makeup_offer_at(
+        assignment,
+        at,
+        MakeupRequest::consented(Some(pool.course), pool.balance),
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -331,7 +311,7 @@ impl AssignmentService {
                 let history = histories.remove(&card.assignment.id()).unwrap_or_default();
                 let pool = pools.get(&card.assignment.teaching_course_id()).copied();
                 StudentAssignment {
-                    makeup: StudentMakeup::offered(&card.assignment, history, pool, now),
+                    makeup: makeup_offer(&card.assignment, history, pool, now),
                     history,
                     assignment: card.assignment,
                     subject: card.subject,
@@ -356,16 +336,17 @@ impl AssignmentService {
         let latest_submission =
             db::submissions::latest_for_student(&self.pool, assignment.id(), student.id()).await?;
         let files = db::files::list_for_assignment(&self.pool, assignment.id()).await?;
-        let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
-            .await?
-            .required("subject")?;
+        let (subject, _) =
+            db::academic::find_subject_with_sandbox(&self.pool, assignment.subject_id())
+                .await?
+                .required("subject")?;
         let pool =
             db::makeup::pool_for_student(&self.pool, assignment.teaching_course_id(), student.id())
                 .await?;
 
         Ok(StudentAssignmentDetails {
             assignment: StudentAssignment {
-                makeup: StudentMakeup::offered(&assignment, history, pool, Utc::now()),
+                makeup: makeup_offer(&assignment, history, pool, Utc::now()),
                 assignment,
                 subject,
                 history,
@@ -392,9 +373,10 @@ impl AssignmentService {
     ) -> AppResult<AssignmentSubmissionHistory> {
         let (student, assignment) =
             load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
-        let subject = db::academic::find_subject_by_id(&self.pool, assignment.subject_id())
-            .await?
-            .required("subject")?;
+        let (subject, _) =
+            db::academic::find_subject_with_sandbox(&self.pool, assignment.subject_id())
+                .await?
+                .required("subject")?;
         let submissions = Page::from_rows(
             db::submissions::list_for_student(&self.pool, assignment.id(), student.id(), page)
                 .await?,

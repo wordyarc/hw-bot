@@ -2,10 +2,10 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::domain::{
     Acceptance, Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom,
-    DomainError, Grade, Grading, LATEST_TERM_YEAR, LatePolicy, MakeupRequest, MakeupTerms,
-    NewAssignment, Offer, ReviewScore, Role, StaffRole, StudentAssignmentProgress, Submission,
-    SubmissionHistory, SubmissionId, SubmissionKind, SubmissionStatus, TeachingCourse,
-    TelegramUserId, User, UserId,
+    DomainError, Grade, Grading, LATEST_TERM_YEAR, LatePolicy, MakeupOffer, MakeupRequest,
+    MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role, StaffRole,
+    StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId, SubmissionKind,
+    SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL,
@@ -546,6 +546,67 @@ fn teacher_can_review_pending_submission_once() {
         second_review.unwrap_err(),
         DomainError::SubmissionIsNotPendingReview
     );
+}
+
+fn rejection_with_a_score() -> Review {
+    Review {
+        decision: ReviewDecision::Reject,
+        score: out_of(4, 5),
+        comment: "Нет тестов".to_owned(),
+        reviewed_at: reviewed_at(),
+    }
+}
+
+#[test]
+fn a_rejection_with_a_score_from_an_outsider_is_refused_for_access_first() {
+    let outsider = teacher(3);
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    let result = submission.review(&assignment, &course, &outsider, rejection_with_a_score());
+
+    assert_eq!(
+        result,
+        Err(DomainError::PermissionDenied {
+            action: "review homework"
+        })
+    );
+}
+
+#[test]
+fn a_rejection_with_a_score_of_a_finished_review_reports_the_finished_review() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+    submission
+        .reject(&assignment, &course, &teacher, "Нет тестов", reviewed_at())
+        .unwrap();
+
+    let result = submission.review(&assignment, &course, &teacher, rejection_with_a_score());
+
+    assert_eq!(result, Err(DomainError::SubmissionIsNotPendingReview));
+}
+
+#[test]
+fn a_rejection_carries_no_score() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).scored(5).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    let result = submission.review(&assignment, &course, &teacher, rejection_with_a_score());
+
+    assert_eq!(result, Err(DomainError::ScoreNotAllowed));
+    assert_eq!(submission.status(), SubmissionStatus::PendingReview);
 }
 
 fn weekly_penalty_assignment(
@@ -2019,29 +2080,30 @@ fn the_card_offers_a_makeup_with_its_balance_or_nothing() {
     let work = credit_assignment(&course, &teacher);
     let at = after_closing(&work);
     let window = makeup_window();
-    let offer =
-        |history: SubmissionHistory, used| history.offer_at(&work, at, makeup_with_used(used));
+    let offer = |history: SubmissionHistory, used| {
+        history.makeup_offer_at(&work, at, makeup_with_used(used))
+    };
 
     assert_eq!(
         offer(history().used(1).accepted_with(5).build(), 1),
-        Some(Offer::Makeup {
-            credit: work.makeup().and_then(MakeupTerms::credit),
+        Some(MakeupOffer {
             until: window.until(),
+            credit: work.makeup().and_then(MakeupTerms::credit),
             balance: window.balance(0, 1),
         })
     );
-    let Some(Offer::Makeup { balance, .. }) = offer(history().build(), 3) else {
+    let Some(MakeupOffer { balance, .. }) = offer(history().build(), 3) else {
         panic!("an empty pool still shows the makeup");
     };
     assert_eq!(balance.remaining(), 0);
     assert_eq!(offer(history().used(1).accepted_with(6).build(), 0), None);
     assert_eq!(
-        history().build().offer_at(
+        history().build().makeup_offer_at(
             &work,
             work.deadline_at() - Duration::hours(1),
             makeup_with_used(0)
         ),
-        Some(Offer::Regular)
+        None
     );
 }
 
