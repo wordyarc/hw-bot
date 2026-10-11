@@ -37,7 +37,7 @@ pub fn contact_username(username: &str) -> String {
 }
 
 pub const GUEST_NEEDS_INVITE: &str = "Чтобы открыть задания, сначала зарегистрируйтесь. Сейчас у вас нет регистрации.\n\n\
-    Учитесь в группе? Перейдите по её ссылке-приглашению. Ссылку можно получить у преподавателя.\n\
+    Вы студент? Попросите у преподавателя ссылку-приглашение предмета и перейдите по ней. По ссылке бот спросит вашу группу.\n\
     Если вы преподаватель, попросите администратора добавить вас в бот.";
 pub const GUEST_START_DESCRIPTION: &str = "Как получить доступ";
 pub const GUEST_HELP_DESCRIPTION: &str = "Помощь с подключением";
@@ -140,9 +140,8 @@ pub const BODY_REQUIRED: &str = "Опишите, что нужно сделат�
 pub const TEXT_REQUIRED: &str = "Отправьте ответ текстовым сообщением.";
 pub const REGISTRATION_COMPLETE: &str = "🎉 Вы зарегистрированы! Теперь можно открыть задания.";
 pub const FILE_SIZE_MISMATCH: &str = "Telegram сообщил другой размер файла, чем получилось скачать. Попробуйте отправить файл снова.";
-pub const INVITE_REUSE_HINT: &str =
-    "Перешлите ссылку группе. Каждый студент сможет зарегистрироваться по ней.";
-pub const INVITE_ROTATION_CONFIRM: &str = "После перевыпуска старая ссылка сразу перестанет работать во всех предметах группы. На доступ уже зарегистрированных студентов это не повлияет. Создать новую ссылку?";
+pub const INVITE_REUSE_HINT: &str = "Перешлите эту ссылку всему потоку, например в общий чат. По ней зарегистрируется студент любой группы предмета: бот спросит, в какой группе он учится.";
+pub const INVITE_ROTATION_CONFIRM: &str = "После перевыпуска старая ссылка этого предмета сразу перестанет работать. На доступ уже зарегистрированных студентов это не повлияет. Создать новую ссылку?";
 pub const REVIEW_SAVED: &str =
     "✅ Проверка сохранена. Студент получит от бота результат вместе с вашим комментарием.";
 
@@ -156,8 +155,23 @@ pub fn timezone_note(timezone: &str) -> String {
     )
 }
 
-pub fn registration_prompt(group: &str) -> String {
-    format!("Группа для регистрации: {group}.\n\nНапишите, как вас зовут.")
+pub fn registration_group_prompt(subject: &str) -> String {
+    format!(
+        "Регистрация по ссылке предмета «{subject}».\n\nВыберите свою группу. После регистрации сменить её нельзя."
+    )
+}
+
+pub fn registration_prompt(subject: &str, group: &str) -> String {
+    format!("Предмет: {subject}.\nГруппа для регистрации: {group}.\n\nНапишите, как вас зовут.")
+}
+
+pub fn groups_line(codes: &[&str]) -> String {
+    let label = if codes.len() == 1 {
+        "Группа"
+    } else {
+        "Группы"
+    };
+    format!("👥 {label}: {}", codes.join(", "))
 }
 
 pub fn home_greeting(name: &str) -> String {
@@ -317,14 +331,15 @@ pub fn student_help() -> String {
         Пока работа ждёт проверки, в «{BUTTON_QUEUE}» можно посмотреть, сколько работ стоят перед ней. Определить время проверки по этому числу нельзя.\n\n\
         Решение преподавателя и его комментарий придут от бота после проверки. Если работу отклонили, повторная сдача доступна до закрытия приёма, пока есть попытки. Условия штрафа за опоздание смотрите в задании.\n\n\
         Если приём закрылся, а по предмету открыта досдача, в карточке задания появится кнопка «{BUTTON_SUBMIT_MAKEUP}». Досдача засчитывается на минимальный балл, который задал преподаватель, и доступна, пока работа не принята на этот минимум. Попытки досдачи общие на все задания предмета: каждая отправка тратит одну, даже если досдачу отклонят.\n\n\
-        Закрытое задание вместе с историей сдач можно найти в «{BUTTON_ARCHIVE}»."
+        Закрытое задание вместе с историей сдач можно найти в «{BUTTON_ARCHIVE}».\n\n\
+        Задания всех предметов вашей группы появляются в «{BUTTON_ASSIGNMENTS}» сами: ссылку-приглашение другого предмета открывать не нужно."
     )
 }
 
 pub fn teacher_help() -> String {
     format!(
         "❓ Как вести предмет\n\n\
-        Новое задание создаётся внутри предмета в «{BUTTON_COURSES}». Бот спросит текст, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Штраф за опоздание снижает балл работы либо вычитается из итога по предмету: способ выбирается вместе с допуском опозданий. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
+        Новое задание создаётся внутри предмета в «{BUTTON_COURSES}». Бот спросит текст, группы, если предмет читается нескольким группам, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Штраф за опоздание снижает балл работы либо вычитается из итога по предмету: способ выбирается вместе с допуском опозданий. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
         После проверки условий сохраните черновик и при необходимости прикрепите файлы. На этом этапе задание доступно только преподавателям предмета. Студенты увидят его, когда вы нажмёте «{BUTTON_PUBLISH}».\n\n\
         Для проверки нажмите «{BUTTON_REVIEW}»: бот откроет следующую работу из очереди. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
         Работы по предмету-песочнице в очередь не попадают: их список открывает «{BUTTON_SANDBOX}». Работу можно проверить по одной или ответить всем сразу кнопкой «{BUTTON_ACCEPT_ALL}» или «{BUTTON_REJECT_ALL}» с одним комментарием. Такое решение касается работ, отправленных до открытия списка. При принятии оценочные задания получают максимальный балл с учётом штрафа за опоздание.\n\n\
@@ -528,8 +543,16 @@ pub fn makeup_queue_line(makeups: u32) -> String {
     format!("🩹 Досдач на проверку: {makeups}")
 }
 
-pub fn review_summary(subject: &str, title: &str, student: &str, attempt: u16) -> String {
-    format!("📘 {subject} · {title}\n👤 Студент: {student}\n🔁 Попытка {attempt}")
+pub fn review_summary(
+    subject: &str,
+    title: &str,
+    student: &str,
+    group: &str,
+    attempt: u16,
+) -> String {
+    format!(
+        "📘 {subject} · {title}\n👤 Студент: {student}\n👥 Группа: {group}\n🔁 Попытка {attempt}"
+    )
 }
 
 pub fn late_submission_line(late: LatePenalty, max_score: u16) -> String {
@@ -628,7 +651,7 @@ pub const ASSIGNMENT_PUBLISHED: &str = "🚀 Задание опубликова
 pub const ASSIGNMENT_ARCHIVED: &str = "📦 Задание архивировано.";
 pub const BUTTON_CREATE_ASSIGNMENT: &str = "➕ Создать задание";
 pub const BUTTON_GRADEBOOK: &str = "📊 Оценки";
-pub const BUTTON_GROUP_INVITE: &str = "🔗 Ссылка для группы";
+pub const BUTTON_COURSE_INVITE: &str = "🔗 Ссылка для студентов";
 pub const BUTTON_BACK_TO_COURSES: &str = "⬅️ К списку предметов";
 pub const BUTTON_BACK_TO_COURSE: &str = "⬅️ К предмету";
 pub const BUTTON_BACK_TO_COURSE_ASSIGNMENTS: &str = "⬅️ К заданиям предмета";
@@ -806,6 +829,17 @@ pub fn course_button(subject: &str, group: &str) -> String {
     format!("📘 {group} · {subject}")
 }
 
+pub fn course_groups_button(subject: &str, groups: usize) -> String {
+    format!(
+        "📘 {subject} · {groups} {}",
+        plural(groups as u32, "группа", "группы", "групп")
+    )
+}
+
+pub fn course_header(subject: &str, codes: &[&str]) -> String {
+    format!("📘 {subject}\n{}", groups_line(codes))
+}
+
 pub fn course_assignment_entry(title: &str, status: &str, deadline: &str) -> String {
     format!("{title} · {status}\n⏰ {deadline}")
 }
@@ -821,17 +855,30 @@ pub fn published_line(at: &str) -> String {
 pub fn teacher_assignment_card(
     title: &str,
     status: &str,
+    groups: Option<&str>,
     terms: &str,
     attempts: u16,
     published: Option<&str>,
     body: &str,
 ) -> String {
+    let groups = groups.map(|line| format!("\n{line}")).unwrap_or_default();
     let published = published
         .map(|line| format!("\n{line}"))
         .unwrap_or_default();
     format!(
-        "{title}\n\nСтатус: {status}{terms}\n🔁 Попыток: {attempts}{published}\n\n{ASSIGNMENT_BODY_HEADER}\n{body}"
+        "{title}\n\nСтатус: {status}{groups}{terms}\n🔁 Попыток: {attempts}{published}\n\n{ASSIGNMENT_BODY_HEADER}\n{body}"
     )
+}
+
+pub const ASSIGNMENT_GROUPS_QUESTION: &str =
+    "Каким группам выдать задание? Снимите отметку с лишних групп и нажмите «Продолжить».";
+pub const ASSIGNMENT_GROUPS_REQUIRED: &str =
+    "Отметьте хотя бы одну группу: задание нужно выдать кому-то из потока.";
+pub const BUTTON_GROUPS_DONE: &str = "➡️ Продолжить";
+
+pub fn group_choice_button(code: &str, selected: bool) -> String {
+    let mark = if selected { "☑️" } else { "⬜" };
+    format!("{mark} {code}")
 }
 
 pub const BUTTON_OTHER_AMOUNT: &str = "✍️ Другое число";
@@ -952,6 +999,15 @@ pub const STUDENT_ACCEPTED_MARK: &str = " · ✅ работа принята";
 pub const CHOOSE_STUDENT_PROMPT: &str = "Выберите студента:";
 pub const EXTRA_ATTEMPTS_QUESTION: &str = "Сколько дополнительных попыток выдать?";
 pub const GRADEBOOK_CHOOSE_STUDENT: &str = "📊 Оценки по предмету. Выберите студента:";
+pub const GRADEBOOK_CHOOSE_GROUP: &str = "📊 Оценки по предмету. Выберите группу:";
+
+pub fn group_button(code: &str) -> String {
+    format!("👥 {code}")
+}
+
+pub fn group_student(code: &str, name: &str) -> String {
+    format!("{code} · {name}")
+}
 pub const NO_SCORED_ASSIGNMENTS: &str = "По этому предмету пока нет оценочных заданий.";
 pub const BUTTON_BACK_TO_STUDENTS: &str = "⬅️ К студентам группы";
 
@@ -1006,8 +1062,11 @@ pub const INVITE_ROTATED: &str = "♻️ Прежняя ссылка больш�
 pub const BUTTON_ROTATE_INVITE: &str = "♻️ Перевыпустить ссылку";
 pub const BUTTON_CONFIRM_ROTATE: &str = "♻️ Перевыпустить";
 
-pub fn invite_header(group: &str) -> String {
-    format!("🔗 Ссылка для регистрации в группу {group}:")
+pub fn invite_header(subject: &str, codes: &[&str]) -> String {
+    format!(
+        "🔗 Ссылка для регистрации на предмет «{subject}».\n{}",
+        groups_line(codes)
+    )
 }
 
 pub const BUTTON_PREVIOUS_PAGE: &str = "◀️ Назад";

@@ -186,6 +186,7 @@ fn review_card_summary(item: &ReviewQueueItem, target: ReviewTarget) -> String {
         item.subject.name().as_str(),
         item.assignment.title().as_str(),
         item.student.display_name().as_str(),
+        &item.group_code,
         item.submission.attempt_number(),
     )];
     match target {

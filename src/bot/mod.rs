@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app::{ApplicationContainer, ErrorCode};
 use crate::domain::TelegramUserId;
 use crate::health::ComponentHealth;
-use crate::invites::GroupInviteCodec;
+use crate::invites::CourseInviteCodec;
 
 pub const MAX_CONCURRENT_UPDATES: usize = 1024;
 
@@ -63,7 +63,7 @@ pub struct TelegramBot {
     timezone: BotTimezone,
     admission: Arc<UpdateAdmission>,
     file_transfers: FileTransfers,
-    codec: GroupInviteCodec,
+    codec: CourseInviteCodec,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -99,7 +99,7 @@ pub enum TelegramBotError {
     #[error("Telegram bot startup request failed: {0}")]
     Startup(&'static str),
 
-    #[error("Telegram bot has no username, group invite links cannot be built")]
+    #[error("Telegram bot has no username, course invite links cannot be built")]
     MissingBotUsername,
 
     #[error("Telegram dispatcher stopped unexpectedly")]
@@ -113,7 +113,7 @@ impl TelegramBot {
         api_base_url: &str,
         settings: TelegramBotSettings,
         timezone: BotTimezone,
-        codec: GroupInviteCodec,
+        codec: CourseInviteCodec,
     ) -> anyhow::Result<Self> {
         let quota = Quota::with_period(settings.rate_limit_replenish)
             .context("Telegram rate limit replenishment must be positive")?

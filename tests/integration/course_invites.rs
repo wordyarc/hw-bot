@@ -1,17 +1,18 @@
 use std::time::Duration;
 
-use hw_bot::app::{Actor, ErrorCode};
+use chrono::Utc;
+use hw_bot::app::{Actor, ErrorCode, RegisterStudent};
 use hw_bot::db;
-use hw_bot::domain::{InviteGeneration, StudentGroupId};
-use sqlx::PgPool;
+use hw_bot::domain::{InviteGeneration, StudentGroupId, TelegramUserId};
+use hw_bot::invites::VerifiedInvite;
 
-use crate::harness::{TestApp, fresh_database, wait_for_blocked_connection};
+use crate::harness::{TestApp, wait_for_blocked_connection};
 
 #[tokio::test]
-async fn every_group_gets_an_invite_when_it_is_created() {
+async fn every_course_gets_an_invite_when_it_is_created() {
     let app = TestApp::start().await;
 
-    let generation = db::group_invites::find_generation(&app.pool, app.fixture.group.id())
+    let generation = db::course_invites::find_generation(&app.pool, app.fixture.course.id())
         .await
         .unwrap();
 
@@ -19,20 +20,20 @@ async fn every_group_gets_an_invite_when_it_is_created() {
 }
 
 #[tokio::test]
-async fn a_group_has_at_most_one_invite() {
+async fn a_course_has_at_most_one_invite() {
     let app = TestApp::start().await;
 
     let duplicate = sqlx::query(
-        "insert into student_group_invites (student_group_id, generation) values ($1, 2)",
+        "insert into teaching_course_invites (teaching_course_id, generation) values ($1, 2)",
     )
-    .bind(app.fixture.group.id().as_uuid())
+    .bind(app.fixture.course.id().as_uuid())
     .execute(&app.pool)
     .await;
 
     let error = duplicate.unwrap_err();
     let database = error.as_database_error().unwrap();
     assert_eq!(database.code().as_deref(), Some("23505"), "{error}");
-    assert_eq!(database.constraint(), Some("student_group_invites_pkey"));
+    assert_eq!(database.constraint(), Some("teaching_course_invites_pkey"));
 }
 
 #[tokio::test]
@@ -41,9 +42,9 @@ async fn generation_stays_inside_the_u32_range() {
 
     for generation in [0i64, -1, i64::from(u32::MAX) + 1] {
         let stored = sqlx::query(
-            "update student_group_invites set generation = $2 where student_group_id = $1",
+            "update teaching_course_invites set generation = $2 where teaching_course_id = $1",
         )
-        .bind(app.fixture.group.id().as_uuid())
+        .bind(app.fixture.course.id().as_uuid())
         .bind(generation)
         .execute(&app.pool)
         .await;
@@ -57,73 +58,24 @@ async fn generation_stays_inside_the_u32_range() {
         );
         assert_eq!(
             database.constraint(),
-            Some("student_group_invites_generation_check")
+            Some("teaching_course_invites_generation_check")
         );
     }
 }
 
 #[tokio::test]
-async fn deleting_a_group_deletes_its_invite() {
-    let pool = fresh_database().await;
-    db::run_migrations(&pool).await.unwrap();
-    let group_id = insert_bare_group(&pool, "DELETE-ME").await;
-
-    sqlx::query("delete from student_groups where id = $1")
-        .bind(group_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let left: i64 = sqlx::query_scalar(
-        "select count(*) from student_group_invites where student_group_id = $1",
-    )
-    .bind(group_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(left, 0);
-}
-
-#[tokio::test]
-async fn the_migration_backfills_existing_groups() {
-    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
-    let pool = fresh_database().await;
-    db::run_migrations(&pool).await.unwrap();
-    MIGRATOR.undo(&pool, 2).await.unwrap();
-    sqlx::query(
-        "insert into student_groups (code, education_level, study_year) values ('OLD', 'bachelor', 1)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    db::run_migrations(&pool).await.unwrap();
-
-    let generation: i64 = sqlx::query_scalar(
-        "select generation from student_group_invites
-         join student_groups on student_groups.id = student_group_invites.student_group_id
-         where student_groups.code = 'OLD'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(generation, 1);
-}
-
-#[tokio::test]
 async fn only_one_of_two_concurrent_rotations_wins() {
     let app = TestApp::start().await;
-    let group_id = app.fixture.group.id();
+    let course_id = app.fixture.course.id();
 
     let (first, second) = tokio::join!(
-        db::group_invites::rotate(&app.pool, group_id, InviteGeneration::FIRST),
-        db::group_invites::rotate(&app.pool, group_id, InviteGeneration::FIRST),
+        db::course_invites::rotate(&app.pool, course_id, InviteGeneration::FIRST),
+        db::course_invites::rotate(&app.pool, course_id, InviteGeneration::FIRST),
     );
 
     assert_eq!(first.is_ok(), second.is_err(), "exactly one must win");
     assert_eq!(
-        db::group_invites::find_generation(&app.pool, group_id)
+        db::course_invites::find_generation(&app.pool, course_id)
             .await
             .unwrap(),
         Some(InviteGeneration::new(2).unwrap())
@@ -135,7 +87,7 @@ async fn only_one_of_two_concurrent_rotations_wins() {
 #[tokio::test]
 async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
     let app = TestApp::start().await;
-    let group_id = app.fixture.group.id();
+    let course_id = app.fixture.course.id();
     let mut registration = app.pool.begin().await.unwrap();
 
     let blocker = sqlx::query_scalar("select pg_backend_pid()")
@@ -143,9 +95,9 @@ async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
         .await
         .unwrap();
 
-    let locked = db::group_invites::lock_group_for_registration(
+    let locked = db::course_invites::lock_course_for_registration(
         &mut registration,
-        group_id,
+        course_id,
         InviteGeneration::FIRST,
     )
     .await
@@ -154,7 +106,7 @@ async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
 
     let pool = app.pool.clone();
     let rotation = tokio::spawn(async move {
-        db::group_invites::rotate(&pool, group_id, InviteGeneration::FIRST).await
+        db::course_invites::rotate(&pool, course_id, InviteGeneration::FIRST).await
     });
 
     wait_for_blocked_connection(&app.pool, blocker).await;
@@ -166,7 +118,7 @@ async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
         .expect("rotation task does not panic")
         .expect("rotation succeeds");
     assert_eq!(
-        db::group_invites::find_generation(&app.pool, group_id)
+        db::course_invites::find_generation(&app.pool, course_id)
             .await
             .unwrap(),
         Some(InviteGeneration::new(2).unwrap())
@@ -174,17 +126,17 @@ async fn rotation_waits_for_a_registration_that_already_holds_the_lock() {
 }
 
 #[tokio::test]
-async fn a_rotated_invite_stops_resolving_the_group() {
+async fn a_rotated_invite_stops_resolving_the_course() {
     let app = TestApp::start().await;
-    let group_id = app.fixture.group.id();
-    db::group_invites::rotate(&app.pool, group_id, InviteGeneration::FIRST)
+    let course_id = app.fixture.course.id();
+    db::course_invites::rotate(&app.pool, course_id, InviteGeneration::FIRST)
         .await
         .unwrap();
 
     let mut registration = app.pool.begin().await.unwrap();
-    let locked = db::group_invites::lock_group_for_registration(
+    let locked = db::course_invites::lock_course_for_registration(
         &mut registration,
-        group_id,
+        course_id,
         InviteGeneration::FIRST,
     )
     .await
@@ -196,8 +148,8 @@ async fn a_rotated_invite_stops_resolving_the_group() {
 #[tokio::test]
 async fn a_link_issued_before_rotation_no_longer_registers() {
     let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
-    db::group_invites::rotate(&app.pool, app.fixture.group.id(), InviteGeneration::FIRST)
+    let token = app.course_invite_token().await;
+    db::course_invites::rotate(&app.pool, app.fixture.course.id(), InviteGeneration::FIRST)
         .await
         .unwrap();
 
@@ -207,35 +159,38 @@ async fn a_link_issued_before_rotation_no_longer_registers() {
 }
 
 #[tokio::test]
-async fn two_courses_of_one_group_share_a_single_link() {
+async fn a_course_has_one_link_for_all_of_its_groups() {
     let app = TestApp::start().await;
-    let second = app.add_subject_course("Databases").await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
 
-    let first_invite = app
+    let invite = app
         .application
         .courses
-        .get_group_invite(app.teacher_actor(), app.fixture.course.id())
-        .await
-        .unwrap();
-    let second_invite = app
-        .application
-        .courses
-        .get_group_invite(app.teacher_actor(), second.id())
+        .get_course_invite(app.teacher_actor(), app.fixture.course.id())
         .await
         .unwrap();
 
-    assert_eq!(first_invite.group.id(), second_invite.group.id());
-    assert_eq!(first_invite.generation, second_invite.generation);
+    let mut codes: Vec<&str> = invite
+        .groups
+        .iter()
+        .map(|group| group.code().as_str())
+        .collect();
+    codes.sort_unstable();
+    let mut expected = vec![app.fixture.group.code().as_str(), second.code().as_str()];
+    expected.sort_unstable();
+    assert_eq!(codes, expected);
+    assert_eq!(invite.subject.id(), app.fixture.subject.id());
 }
 
 #[tokio::test]
-async fn rotating_from_one_course_replaces_the_link_of_the_whole_group() {
+async fn rotating_the_link_of_one_course_keeps_the_link_of_another_course_of_the_group() {
     let app = TestApp::start().await;
     let second = app.add_subject_course("Databases").await;
+    let kept = app.invite_token(second.id()).await;
 
     app.application
         .courses
-        .rotate_group_invite(
+        .rotate_course_invite(
             app.teacher_actor(),
             app.fixture.course.id(),
             InviteGeneration::FIRST,
@@ -246,10 +201,13 @@ async fn rotating_from_one_course_replaces_the_link_of_the_whole_group() {
     let invite = app
         .application
         .courses
-        .get_group_invite(app.teacher_actor(), second.id())
+        .get_course_invite(app.teacher_actor(), second.id())
         .await
         .unwrap();
-    assert_eq!(invite.generation, InviteGeneration::new(2).unwrap());
+    assert_eq!(invite.generation, InviteGeneration::FIRST);
+    app.register_student(app.next_telegram_id(), "Ivan", &kept)
+        .await
+        .created();
 }
 
 #[tokio::test]
@@ -260,7 +218,7 @@ async fn a_teacher_of_another_course_cannot_read_the_link() {
     let error = app
         .application
         .courses
-        .get_group_invite(Actor::new(foreign.teacher.id()), app.fixture.course.id())
+        .get_course_invite(Actor::new(foreign.teacher.id()), app.fixture.course.id())
         .await
         .unwrap_err();
 
@@ -275,7 +233,7 @@ async fn a_teacher_of_another_course_cannot_rotate_the_link() {
     let error = app
         .application
         .courses
-        .rotate_group_invite(
+        .rotate_course_invite(
             Actor::new(foreign.teacher.id()),
             app.fixture.course.id(),
             InviteGeneration::FIRST,
@@ -287,14 +245,14 @@ async fn a_teacher_of_another_course_cannot_rotate_the_link() {
 }
 
 #[tokio::test]
-async fn an_admin_manages_the_link_of_any_group() {
+async fn an_admin_manages_the_link_of_any_course() {
     let app = TestApp::start().await;
     let admin = app.add_admin().await;
 
     let invite = app
         .application
         .courses
-        .rotate_group_invite(
+        .rotate_course_invite(
             Actor::new(admin.id()),
             app.fixture.course.id(),
             InviteGeneration::FIRST,
@@ -308,14 +266,14 @@ async fn an_admin_manages_the_link_of_any_group() {
 #[tokio::test]
 async fn a_stale_expected_generation_is_a_concurrent_modification() {
     let app = TestApp::start().await;
-    db::group_invites::rotate(&app.pool, app.fixture.group.id(), InviteGeneration::FIRST)
+    db::course_invites::rotate(&app.pool, app.fixture.course.id(), InviteGeneration::FIRST)
         .await
         .unwrap();
 
     let error = app
         .application
         .courses
-        .rotate_group_invite(
+        .rotate_course_invite(
             app.teacher_actor(),
             app.fixture.course.id(),
             InviteGeneration::FIRST,
@@ -327,11 +285,11 @@ async fn a_stale_expected_generation_is_a_concurrent_modification() {
 }
 
 #[tokio::test]
-async fn a_group_without_an_invite_row_never_falls_back_to_open_registration() {
+async fn a_course_without_an_invite_row_never_falls_back_to_open_registration() {
     let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
-    sqlx::query("delete from student_group_invites where student_group_id = $1")
-        .bind(app.fixture.group.id().as_uuid())
+    let token = app.course_invite_token().await;
+    sqlx::query("delete from teaching_course_invites where teaching_course_id = $1")
+        .bind(app.fixture.course.id().as_uuid())
         .execute(&app.pool)
         .await
         .unwrap();
@@ -341,20 +299,61 @@ async fn a_group_without_an_invite_row_never_falls_back_to_open_registration() {
         .error(axum::http::StatusCode::FORBIDDEN, "invite_invalid");
 }
 
-async fn insert_bare_group(pool: &PgPool, code: &str) -> uuid::Uuid {
-    let group_id: uuid::Uuid = sqlx::query_scalar(
-        "insert into student_groups (code, education_level, study_year)
-         values ($1, 'bachelor', 1)
-         returning id",
-    )
-    .bind(code)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+fn invite(app: &TestApp) -> VerifiedInvite {
+    let generation = InviteGeneration::FIRST;
+    app.invites
+        .decode(&app.invites.encode(app.fixture.course.id(), generation))
+        .unwrap()
+}
 
-    db::group_invites::ensure(pool, StudentGroupId::from_uuid(group_id))
+async fn register(
+    app: &TestApp,
+    student_group_id: Option<StudentGroupId>,
+) -> Result<StudentGroupId, ErrorCode> {
+    app.application
+        .users
+        .register_student(RegisterStudent {
+            telegram_user_id: TelegramUserId::new(app.next_telegram_id()).unwrap(),
+            display_name: "Ivan".to_owned(),
+            invite: invite(app),
+            student_group_id,
+            registered_at: Utc::now(),
+        })
         .await
-        .unwrap();
+        .map(|registered| registered.student_group.unwrap().id())
+        .map_err(|error| error.code())
+}
 
-    group_id
+#[tokio::test]
+async fn a_student_registers_into_the_chosen_group_of_the_course() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+
+    assert_eq!(register(&app, Some(second.id())).await, Ok(second.id()));
+}
+
+#[tokio::test]
+async fn a_group_outside_the_course_is_invalid_input() {
+    let app = TestApp::start().await;
+    let foreign = app.add_foreign_course().await;
+
+    assert_eq!(
+        register(&app, Some(foreign.group.id())).await,
+        Err(ErrorCode::InvalidInput)
+    );
+}
+
+#[tokio::test]
+async fn a_course_of_one_group_registers_without_a_chosen_group() {
+    let app = TestApp::start().await;
+
+    assert_eq!(register(&app, None).await, Ok(app.fixture.group.id()));
+}
+
+#[tokio::test]
+async fn a_course_of_several_groups_requires_a_chosen_group() {
+    let app = TestApp::start().await;
+    app.add_group_to_course(&app.fixture.course).await;
+
+    assert_eq!(register(&app, None).await, Err(ErrorCode::InvalidInput));
 }

@@ -27,10 +27,15 @@ pub(crate) async fn show_students_page(
     let chat_id = screen.chat_id();
     let dialogue = screen.dialogue();
     let services = screen.services();
+    let assignment = services
+        .assignments
+        .find_for_teacher(actor, assignment_id)
+        .await?;
     let students = services
         .assignments
         .list_students_for_assignment(actor, assignment_id, page)
         .await?;
+    let with_groups = assignment.groups().len() > 1;
 
     if students.items.is_empty() {
         bot.send_message(chat_id, texts::NO_STUDENTS).await?;
@@ -44,8 +49,14 @@ pub(crate) async fn show_students_page(
             if history.has_accepted_submission() {
                 marks.push_str(texts::STUDENT_ACCEPTED_MARK);
             }
+            let name = student.student.display_name().as_str();
+            let name = if with_groups {
+                texts::group_student(&student.group_code, name)
+            } else {
+                name.to_owned()
+            };
             texts::student_entry(
-                student.student.display_name().as_str(),
+                &name,
                 history.used_attempts(),
                 history.extra_attempts(),
                 &marks,
@@ -58,7 +69,7 @@ pub(crate) async fn show_students_page(
     let message = bot
         .send_message(chat_id, texts::CHOOSE_STUDENT_PROMPT)
         .reply_markup(paginated_keyboard(
-            assignment_students_keyboard(assignment_id, &students.items),
+            assignment_students_keyboard(assignment_id, &students.items, with_groups),
             PageTarget::Students(assignment_id),
             students.page,
             students.next_page,

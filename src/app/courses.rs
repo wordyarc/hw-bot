@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
-use crate::app::access::{load_group_student, load_managing_teacher, load_managing_teacher_on};
+use crate::app::access::{load_course_student, load_managing_teacher, load_managing_teacher_on};
 use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     AssignmentId, AssignmentStatus, CourseMakeup, DomainError, Grading, InviteGeneration,
-    MakeupTerms, StudentGroup, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
+    MakeupTerms, StudentGroup, StudentGroupId, Subject, TeachingCourse, TeachingCourseId,
+    TelegramUserId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{
@@ -16,8 +17,9 @@ use crate::read_models::{
 };
 
 #[derive(Clone, Debug)]
-pub struct GroupInviteState {
-    pub group: StudentGroup,
+pub struct CourseInviteState {
+    pub subject: Subject,
+    pub groups: Vec<StudentGroup>,
     pub generation: InviteGeneration,
 }
 
@@ -63,6 +65,7 @@ impl StudentGrades {
 #[derive(Clone, Debug)]
 pub struct StudentGradesCard {
     pub grades: StudentGrades,
+    pub group_id: StudentGroupId,
     pub makeup: Option<MakeupPool>,
 }
 
@@ -131,54 +134,67 @@ impl CourseService {
         ))
     }
 
-    pub async fn get_group_invite(
+    pub async fn find_for_teacher(
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
-    ) -> AppResult<GroupInviteState> {
-        let group = self
-            .managed_group(actor, course_id, "read group invite")
-            .await?;
-        let generation = db::group_invites::find_generation(&self.pool, group.id())
-            .await?
-            .required("group invite")?;
-
-        Ok(GroupInviteState { group, generation })
+    ) -> AppResult<TeachingCourseSummary> {
+        self.managed_summary(actor, course_id, "read teaching course")
+            .await
     }
 
-    pub async fn rotate_group_invite(
+    pub async fn get_course_invite(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+    ) -> AppResult<CourseInviteState> {
+        let summary = self
+            .managed_summary(actor, course_id, "read course invite")
+            .await?;
+        let generation = db::course_invites::find_generation(&self.pool, course_id)
+            .await?
+            .required("course invite")?;
+
+        Ok(CourseInviteState {
+            subject: summary.subject,
+            groups: summary.groups,
+            generation,
+        })
+    }
+
+    pub async fn rotate_course_invite(
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
         expected: InviteGeneration,
-    ) -> AppResult<GroupInviteState> {
-        let group = self
-            .managed_group(actor, course_id, "rotate group invite")
+    ) -> AppResult<CourseInviteState> {
+        let summary = self
+            .managed_summary(actor, course_id, "rotate course invite")
             .await?;
         let generation = super::on_conflict(
-            db::group_invites::rotate(&self.pool, group.id(), expected).await,
-            AppError::GroupInviteChangedConcurrently,
+            db::course_invites::rotate(&self.pool, course_id, expected).await,
+            AppError::CourseInviteChangedConcurrently,
         )?;
 
-        Ok(GroupInviteState { group, generation })
+        Ok(CourseInviteState {
+            subject: summary.subject,
+            groups: summary.groups,
+            generation,
+        })
     }
 
     pub async fn gradebook(
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
+        group_id: StudentGroupId,
         page: PageRequest,
     ) -> AppResult<Page<StudentGrades>> {
-        let (_, course) =
-            load_managing_teacher(&self.pool, actor, course_id, "read course gradebook").await?;
+        self.ensure_course_group(actor, course_id, group_id, "read course gradebook")
+            .await?;
 
-        let rows = db::submissions::course_gradebook_page(
-            &self.pool,
-            course_id,
-            course.student_group_id(),
-            page,
-        )
-        .await?;
+        let rows =
+            db::submissions::course_gradebook_page(&self.pool, course_id, group_id, page).await?;
         Ok(Page::from_rows(
             group_grades(rows, PageRequest::default()),
             page,
@@ -189,12 +205,13 @@ impl CourseService {
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
+        group_id: StudentGroupId,
         page: PageRequest,
     ) -> AppResult<Page<CourseStudent>> {
-        let (_, course) =
-            load_managing_teacher(&self.pool, actor, course_id, "read course students").await?;
+        self.ensure_course_group(actor, course_id, group_id, "read course students")
+            .await?;
         Ok(Page::from_rows(
-            db::users::list_student_names(&self.pool, course.student_group_id(), page).await?,
+            db::users::list_student_names(&self.pool, group_id, page).await?,
             page,
         ))
     }
@@ -208,8 +225,9 @@ impl CourseService {
     ) -> AppResult<StudentGrades> {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read student grades").await?;
+        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
 
-        load_student_grades(&self.pool, &course, student_id, page).await
+        load_student_grades(&self.pool, &course, group_id, student.id(), page).await
     }
 
     pub async fn student_grades_card(
@@ -221,10 +239,15 @@ impl CourseService {
     ) -> AppResult<StudentGradesCard> {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read student grades").await?;
-        let grades = load_student_grades(&self.pool, &course, student_id, page).await?;
-        let makeup = active_makeup_pool(&self.pool, course_id, student_id, Utc::now()).await?;
+        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+        let grades = load_student_grades(&self.pool, &course, group_id, student.id(), page).await?;
+        let makeup = active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await?;
 
-        Ok(StudentGradesCard { grades, makeup })
+        Ok(StudentGradesCard {
+            grades,
+            group_id,
+            makeup,
+        })
     }
 
     pub async fn student_contact(
@@ -233,10 +256,12 @@ impl CourseService {
         course_id: TeachingCourseId,
         student_id: UserId,
     ) -> AppResult<StudentContact> {
-        let group = self
-            .managed_group(actor, course_id, "read student contact")
-            .await?;
-        let student = load_group_student(&self.pool, group.id(), student_id).await?;
+        let (_, course) =
+            load_managing_teacher(&self.pool, actor, course_id, "read student contact").await?;
+        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+        let group = db::academic::find_student_group_by_id(&self.pool, group_id)
+            .await?
+            .required("student group")?;
 
         Ok(StudentContact {
             student_id: student.id(),
@@ -349,7 +374,7 @@ impl CourseService {
     ) -> AppResult<Option<MakeupPool>> {
         let (_, course) =
             load_managing_teacher(&self.pool, actor, course_id, "read student makeup").await?;
-        let student = load_group_student(&self.pool, course.student_group_id(), student_id).await?;
+        let (student, _) = load_course_student(&self.pool, &course, student_id).await?;
 
         active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await
     }
@@ -364,7 +389,7 @@ impl CourseService {
 
         let (_, course) =
             load_managing_teacher_on(&mut tx, actor, course_id, "grant makeup attempt").await?;
-        let student = load_group_student(&mut *tx, course.student_group_id(), student_id).await?;
+        let (student, _) = load_course_student(&mut *tx, &course, student_id).await?;
         let makeup = db::makeup::find_course(&mut *tx, course_id)
             .await?
             .ok_or(DomainError::MakeupNotOffered)?;
@@ -386,17 +411,34 @@ impl CourseService {
         Ok(pool)
     }
 
-    async fn managed_group(
+    async fn managed_summary(
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
         action: &'static str,
-    ) -> AppResult<StudentGroup> {
-        let (_, course) = load_managing_teacher(&self.pool, actor, course_id, action).await?;
+    ) -> AppResult<TeachingCourseSummary> {
+        load_managing_teacher(&self.pool, actor, course_id, action).await?;
 
-        db::academic::find_student_group_by_id(&self.pool, course.student_group_id())
+        db::academic::find_teaching_course_summary(&self.pool, course_id)
             .await?
-            .required("student group")
+            .required("teaching course")
+    }
+
+    async fn ensure_course_group(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+        group_id: StudentGroupId,
+        action: &'static str,
+    ) -> AppResult<()> {
+        let (_, course) = load_managing_teacher(&self.pool, actor, course_id, action).await?;
+        if !course.includes_group(group_id) {
+            return Err(AppError::NotFound {
+                resource: "student group",
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -419,17 +461,12 @@ where
 async fn load_student_grades(
     pool: &PgPool,
     course: &TeachingCourse,
+    group_id: StudentGroupId,
     student_id: UserId,
     page: PageRequest,
 ) -> AppResult<StudentGrades> {
-    let rows = db::submissions::one_student_grades(
-        pool,
-        course.id(),
-        course.student_group_id(),
-        student_id,
-        page,
-    )
-    .await?;
+    let rows =
+        db::submissions::one_student_grades(pool, course.id(), group_id, student_id, page).await?;
     group_grades(rows, page)
         .into_iter()
         .next()

@@ -22,9 +22,25 @@ async fn course_teacher_creates_an_assignment_as_a_draft() {
     assert_eq!(body["title"], json!("Rust lifetimes"));
 }
 
+fn assignment_with_groups(groups: serde_json::Value) -> serde_json::Value {
+    json!({
+        "title": "Rust lifetimes",
+        "body": "Send a pull request link.",
+        "max_attempts": 2,
+        "deadline_at": Utc::now() + Duration::days(7),
+        "student_group_ids": groups,
+    })
+}
+
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort_unstable();
+    ids
+}
+
 #[tokio::test]
-async fn a_created_assignment_inherits_the_group_of_its_course() {
+async fn an_assignment_created_without_groups_is_issued_to_every_group_of_its_course() {
     let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
 
     let body = app
         .create_assignment(app.course(), app.teacher())
@@ -32,9 +48,79 @@ async fn a_created_assignment_inherits_the_group_of_its_course() {
         .created();
 
     assert_eq!(
-        body["student_group_id"],
-        json!(app.fixture.group.id().as_uuid().to_string())
+        body["student_group_ids"],
+        json!(sorted(vec![
+            app.fixture.group.id().as_uuid().to_string(),
+            second.id().as_uuid().to_string(),
+        ]))
     );
+}
+
+#[tokio::test]
+async fn an_assignment_created_for_one_group_is_issued_only_to_it() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let third = app.add_group_to_course(&app.fixture.course).await;
+    let outsider = app.add_student_to_group("Third", &third).await;
+
+    let body = app
+        .create_assignment_raw(
+            app.course(),
+            app.teacher(),
+            assignment_with_groups(json!([second.id().as_uuid()])),
+        )
+        .await
+        .created();
+    let assignment = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
+    app.publish_assignment(assignment, app.teacher()).await.ok();
+
+    assert_eq!(body["student_group_ids"], json!([second.id().as_uuid()]));
+    let listed = app
+        .student_assignments(outsider.telegram_user_id().as_i64())
+        .await
+        .ok();
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["assignment"]["id"] != json!(assignment)),
+        "{listed:#}"
+    );
+}
+
+#[tokio::test]
+async fn a_group_outside_the_course_is_rejected_without_creating_the_assignment() {
+    let app = TestApp::start().await;
+    let foreign = app.add_foreign_course().await;
+
+    app.create_assignment_raw(
+        app.course(),
+        app.teacher(),
+        assignment_with_groups(json!([foreign.group.id().as_uuid()])),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+
+    let listed = app
+        .course_assignments(app.course(), app.teacher())
+        .await
+        .ok();
+    assert_eq!(listed.as_array().unwrap().len(), 1, "{listed:#}");
+}
+
+#[tokio::test]
+async fn a_repeated_group_is_rejected() {
+    let app = TestApp::start().await;
+    let group = app.fixture.group.id().as_uuid();
+
+    app.create_assignment_raw(
+        app.course(),
+        app.teacher(),
+        assignment_with_groups(json!([group, group])),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
 }
 
 #[tokio::test]

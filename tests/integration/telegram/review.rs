@@ -18,7 +18,7 @@ use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
-use crate::harness::{TestApp, out_of, submission_id};
+use crate::harness::{TestApp, insert_assignment, out_of, submission_id, wall_clock_assignment};
 
 fn regular_grade(grade: Grade) -> String {
     texts::grade_line(SubmissionKind::Regular, Some(grade)).unwrap()
@@ -44,9 +44,7 @@ async fn assert_previous_attempts_on_the_card(
         .max_attempts(previous + 1)
         .published()
         .build();
-    db::assignments::insert(&app.pool, &assignment)
-        .await
-        .unwrap();
+    insert_assignment(&app.pool, &assignment).await;
     for used in 0..previous {
         let mut attempt = submission_of(&assignment, &app.fixture.student)
             .history(history().used(used).build())
@@ -1342,4 +1340,104 @@ async fn the_confirmation_shows_the_deduction_saved_after_a_policy_change() {
         .find(|text| text.starts_with(texts::REVIEW_SAVED))
         .unwrap_or_else(|| panic!("the review is not confirmed: {sent:#?}"));
     assert!(confirmation.contains(&line), "{confirmation}");
+}
+
+#[tokio::test]
+async fn the_review_card_names_the_group_of_the_author() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let course = app.reload_course(&app.fixture.course).await;
+    let author = app.add_student_to_group("Second group", &second).await;
+    let assignment = wall_clock_assignment(&course, &app.fixture.teacher)
+        .title("Stream lab")
+        .published()
+        .build();
+    insert_assignment(&app.pool, &assignment).await;
+    let submission = submission_id(
+        &app.submit(
+            assignment.id().as_uuid(),
+            author.telegram_user_id().as_i64(),
+            "pull/stream",
+        )
+        .await
+        .created(),
+    );
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, submission),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let summary = texts::review_summary(
+        app.fixture.subject.name().as_str(),
+        "Stream lab",
+        "Second group",
+        second.code().as_str(),
+        1,
+    );
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&summary), "{sent:#?}");
+}
+
+#[tokio::test]
+async fn a_gradebook_of_several_groups_starts_with_the_choice_of_the_group() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let student = app.add_student_to_group("Second group", &second).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::GRADES_PREFIX, app.course()))
+        .await;
+    let first_group = telegram
+        .button_with_text(
+            app.teacher(),
+            &texts::group_button(app.fixture.group.code().as_str()),
+        )
+        .await;
+    let second_group = telegram
+        .button_with_text(app.teacher(), &texts::group_button(second.code().as_str()))
+        .await;
+    telegram.click(app.teacher(), &second_group);
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::STUDENT_PREFIX, student.id().as_uuid()),
+        )
+        .await;
+    let back = telegram
+        .button_with_text(app.teacher(), texts::BUTTON_BACK_TO_STUDENTS)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let chooser = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| message["message_id"] == second_group.message_id)
+        .unwrap();
+    assert_eq!(chooser["text"], texts::GRADEBOOK_CHOOSE_GROUP);
+    assert_eq!(first_group.message_id, second_group.message_id);
+    assert_ne!(first_group.data(), second_group.data());
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(
+        sent.iter()
+            .any(|text| text.starts_with(&format!("👤 {}", student.display_name().as_str()))),
+        "{sent:#?}"
+    );
+    assert_eq!(
+        back.data(),
+        second_group.data(),
+        "the back button leads to the list of the student's group"
+    );
 }

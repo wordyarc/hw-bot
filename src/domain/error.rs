@@ -67,6 +67,15 @@ pub enum DomainError {
     #[error("teaching course has no teachers")]
     TeachingCourseHasNoTeachers,
 
+    #[error("teaching course has no student groups")]
+    TeachingCourseHasNoGroups,
+
+    #[error("assignment must be issued to at least one student group")]
+    AssignmentHasNoGroups,
+
+    #[error("assignment can only be issued to student groups of its course")]
+    AssignmentGroupOutsideCourse,
+
     #[error("assignment is not published")]
     AssignmentIsNotPublished,
 
@@ -162,6 +171,12 @@ pub enum DomainError {
 
     #[error("telegram user is already registered")]
     UserAlreadyRegistered,
+
+    #[error("student group does not belong to the invited course")]
+    StudentGroupNotInCourse,
+
+    #[error("the invited course has several student groups, one must be chosen")]
+    StudentGroupChoiceRequired,
 
     #[error("invite generation must be positive, got {value}")]
     InvalidInviteGeneration { value: u32 },

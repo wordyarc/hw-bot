@@ -2,12 +2,14 @@ use axum::http::StatusCode;
 use chrono::{Duration, Utc};
 use hw_bot::app::{GradebookScore, StudentGrades};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, DeductedFrom, Grading, MakeupTerms};
+use hw_bot::domain::{Assignment, DeductedFrom, Grading, MakeupTerms, StudentGroupId};
 use hw_bot::pagination::PageRequest;
-use serde_json::json;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::harness::{TestApp, assignment_id, out_of, submission_id};
+use crate::harness::{
+    TestApp, assignment_id, insert_assignment, out_of, submission_id, wall_clock_assignment,
+};
 
 async fn scored_submission(app: &TestApp, max_score: u16) -> uuid::Uuid {
     let assignment = app.add_scored_assignment(max_score).await;
@@ -251,13 +253,7 @@ async fn a_review_freezes_the_scale_after_the_assignment_becomes_pass_fail() {
         .ok();
     assert_eq!(details["submissions"][0]["max_score"], json!(5));
 
-    let gradebook = app
-        .get_as(
-            &format!("/me/courses/{}/gradebook", app.course()),
-            app.teacher(),
-        )
-        .await
-        .ok();
+    let gradebook = gradebook(&app, app.teacher()).await.ok();
     assert_eq!(gradebook["students"][0]["grades"][0]["max_score"], json!(5));
     assert_eq!(gradebook["students"][0]["max_total"], json!(5));
 }
@@ -541,7 +537,7 @@ async fn moving_a_deadline_back_does_not_truncate_the_stored_lateness_counter() 
         .late_policy(1, 1, 1, DeductedFrom::WorkScore)
         .published()
         .build();
-    db::assignments::insert(&app.pool, &work).await.unwrap();
+    insert_assignment(&app.pool, &work).await;
     let id = submission_id(
         &app.submit(work.id().as_uuid(), app.student(), "pull/1")
             .await
@@ -571,11 +567,85 @@ async fn moving_a_deadline_back_does_not_truncate_the_stored_lateness_counter() 
 }
 
 async fn gradebook(app: &TestApp, telegram_id: i64) -> crate::harness::TestResponse {
+    group_gradebook(app, app.fixture.group.id(), telegram_id).await
+}
+
+async fn group_gradebook(
+    app: &TestApp,
+    group_id: StudentGroupId,
+    telegram_id: i64,
+) -> crate::harness::TestResponse {
     app.get_as(
-        &format!("/me/courses/{}/gradebook", app.course()),
+        &format!(
+            "/me/courses/{}/groups/{}/gradebook",
+            app.course(),
+            group_id.as_uuid()
+        ),
         telegram_id,
     )
     .await
+}
+
+#[tokio::test]
+async fn the_gradebook_of_a_group_holds_only_its_students_and_the_assignments_issued_to_it() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let course = app.reload_course(&app.fixture.course).await;
+    let other = app
+        .add_student_to_group("Other group student", &second)
+        .await;
+    let shared = wall_clock_assignment(&course, &app.fixture.teacher)
+        .title("Shared")
+        .scored(5)
+        .published()
+        .build();
+    let only_second = wall_clock_assignment(&course, &app.fixture.teacher)
+        .title("Second only")
+        .scored(10)
+        .groups([&second])
+        .published()
+        .build();
+    insert_assignment(&app.pool, &shared).await;
+    insert_assignment(&app.pool, &only_second).await;
+
+    let first = gradebook(&app, app.teacher()).await.ok();
+    let second_book = group_gradebook(&app, second.id(), app.teacher()).await.ok();
+
+    let names = |book: &Value| -> Vec<String> {
+        book["students"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|student| student["display_name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let titles = |book: &Value| -> Vec<String> {
+        book["students"][0]["grades"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|grade| grade["title"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(&first),
+        vec![app.fixture.student.display_name().as_str()]
+    );
+    assert_eq!(titles(&first), vec!["Shared"]);
+    assert_eq!(first["students"][0]["max_total"], json!(5));
+    assert_eq!(names(&second_book), vec![other.display_name().as_str()]);
+    assert_eq!(titles(&second_book), vec!["Shared", "Second only"]);
+    assert_eq!(second_book["students"][0]["max_total"], json!(15));
+}
+
+#[tokio::test]
+async fn the_gradebook_of_a_group_outside_the_course_is_not_found() {
+    let app = TestApp::start().await;
+    let foreign = app.add_foreign_course().await;
+
+    group_gradebook(&app, foreign.group.id(), app.teacher())
+        .await
+        .error(StatusCode::NOT_FOUND, "not_found");
 }
 
 #[tokio::test]

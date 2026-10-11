@@ -4,7 +4,7 @@ use crate::domain::{DomainError, DomainResult};
 
 macro_rules! uuid_id {
     ($name:ident, $generator:expr) => {
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize)]
+        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize)]
         #[serde(transparent)]
         pub struct $name(Uuid);
 

@@ -464,6 +464,7 @@ async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> H
                     actor: screen.actor(),
                     title: draft.text.title,
                     body: draft.text.body,
+                    student_group_ids: Some(draft.groups.ids()),
                     max_attempts: draft.max_attempts,
                     grading: draft.grading,
                     late_policy: complete.late_policy,

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use teloxide::types::MessageId;
 
@@ -5,7 +7,8 @@ use super::callbacks::TermsAction;
 use crate::app::MakeupQuestion;
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, Grading, LatePolicy,
-    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_PENALTY_PER_PERIOD, MakeupTerms, TeachingCourseId,
+    MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_PENALTY_PER_PERIOD, MakeupTerms, StudentGroup,
+    StudentGroupId, TeachingCourseId,
 };
 
 const DEFAULT_PERIOD_DAYS: u16 = 7;
@@ -18,16 +21,42 @@ pub(super) struct AssignmentText {
 }
 
 #[derive(Clone)]
+pub(super) enum IssuedGroups {
+    Single(StudentGroupId),
+    Chosen(Vec<StudentGroup>),
+}
+
+impl IssuedGroups {
+    pub fn ids(&self) -> BTreeSet<StudentGroupId> {
+        match self {
+            Self::Single(group_id) => BTreeSet::from([*group_id]),
+            Self::Chosen(groups) => groups.iter().map(StudentGroup::id).collect(),
+        }
+    }
+
+    pub fn listed(&self) -> Option<Vec<&str>> {
+        match self {
+            Self::Single(_) => None,
+            Self::Chosen(groups) => {
+                Some(groups.iter().map(|group| group.code().as_str()).collect())
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct DraftAssignment {
     pub text: AssignmentText,
+    pub groups: IssuedGroups,
     pub max_attempts: u16,
     pub grading: Grading,
 }
 
 impl DraftAssignment {
-    pub fn new(text: AssignmentText, max_attempts: u16) -> Self {
+    pub fn new(text: AssignmentText, groups: IssuedGroups, max_attempts: u16) -> Self {
         Self {
             text,
+            groups,
             max_attempts,
             grading: Grading::PassFail,
         }
@@ -527,6 +556,7 @@ mod tests {
                 title: "Title".into(),
                 body: "Body".into(),
             },
+            IssuedGroups::Single(StudentGroupId::new()),
             1,
         );
         draft.grading = Grading::scored(5).unwrap();
@@ -922,6 +952,7 @@ mod tests {
                 title: "Title".into(),
                 body: "Body".into(),
             },
+            IssuedGroups::Single(StudentGroupId::new()),
             1,
         );
         draft.grading = Grading::scored(10).unwrap();

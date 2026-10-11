@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            teaching_courses.id,\n            teaching_courses.subject_id,\n            teaching_courses.student_group_id,\n            teaching_courses.created_at,\n            array_remove(array_agg(teaching_course_teachers.teacher_id), null)\n                as \"teacher_ids!: Vec<Uuid>\"\n        from teaching_courses\n        left join teaching_course_teachers\n          on teaching_course_teachers.teaching_course_id = teaching_courses.id\n        where teaching_courses.id = $1\n        group by teaching_courses.id\n        ",
+  "query": "\n        select\n            id,\n            subject_id,\n            created_at,\n            array(\n                select student_group_id\n                from teaching_course_groups\n                where teaching_course_id = teaching_courses.id\n            ) as \"group_ids!: Vec<Uuid>\",\n            array(\n                select teacher_id\n                from teaching_course_teachers\n                where teaching_course_id = teaching_courses.id\n            ) as \"teacher_ids!: Vec<Uuid>\"\n        from teaching_courses\n        where id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -27,17 +27,6 @@
       },
       {
         "ordinal": 2,
-        "name": "student_group_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "teaching_courses",
-            "name": "student_group_id"
-          }
-        }
-      },
-      {
-        "ordinal": 3,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -46,6 +35,12 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
@@ -63,9 +58,9 @@
       false,
       false,
       false,
-      false,
+      null,
       null
     ]
   },
-  "hash": "1864801a020b186d663557d105c0b700efd03ca3a81a8d8c4b453db5811dc089"
+  "hash": "f86511012e77f29fe5c57d5c8da5fb2b2dc564a0bfb71e4407b2072372dd3f90"
 }

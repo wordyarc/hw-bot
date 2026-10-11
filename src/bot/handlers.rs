@@ -221,8 +221,8 @@ pub(super) async fn handle_message(
             BotState::Screen(ScreenState::Guest) => {
                 home::send_guest_hint(&bot, message.chat.id).await?;
             }
-            BotState::Flow(FlowState::AwaitingRegistrationName { invite }) => {
-                registration::submit_name(step, invite).await?;
+            BotState::Flow(FlowState::AwaitingRegistrationName { invite, group_id }) => {
+                registration::submit_name(step, invite, group_id).await?;
             }
             BotState::Flow(FlowState::AwaitingSubmission {
                 assignment_id,
@@ -266,8 +266,12 @@ pub(super) async fn handle_message(
             BotState::Flow(FlowState::AwaitingAssignmentBody { course_id, title }) => {
                 teacher::submit_body(step, course_id, title).await?;
             }
-            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts { message_id, text }) => {
-                teacher::submit_max_attempts(step, message_id, text).await?;
+            BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
+                message_id,
+                text,
+                groups,
+            }) => {
+                teacher::submit_max_attempts(step, message_id, text, groups).await?;
             }
             BotState::Flow(FlowState::ChoosingGrading { message_id, draft }) => {
                 teacher::submit_grading_text(step, Some(message_id), draft).await?;
@@ -387,6 +391,9 @@ pub(super) async fn handle_callback(
             dialogue: &dialogue,
         };
         let chat = Chat::new(&bot, chat_id, deps);
+        if let CallbackAction::Flow(FlowAction::RegistrationGroup(group_id)) = action {
+            return registration::choose_group(chat, message.id, group_id, &state).await;
+        }
         let Some(screen) = chat.resolve(telegram_user_id).await? else {
             return Ok(());
         };
@@ -430,7 +437,9 @@ async fn handle_replayable_action(
                     teacher::show_course_assignments_page(screen, id, page).await
                 }
                 PageTarget::Students(id) => teacher::show_students_page(screen, id, page).await,
-                PageTarget::Gradebook(id) => teacher::show_gradebook_page(screen, id, page).await,
+                PageTarget::Gradebook(course, group) => {
+                    teacher::show_gradebook_page(screen, course, group, page).await
+                }
                 PageTarget::History(id) => student::show_history(screen, id, page).await,
                 PageTarget::StudentGrades(course, student) => {
                     teacher::show_student_grades_page(screen, course, student, page, None).await
@@ -463,8 +472,11 @@ async fn handle_replayable_action(
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await
         }
-        ReplayableAction::GroupInvite(course_id) => {
-            teacher::show_group_invite(screen, course_id).await
+        ReplayableAction::CourseInvite(course_id) => {
+            teacher::show_course_invite(screen, course_id).await
+        }
+        ReplayableAction::GradebookGroups(course_id) => {
+            teacher::show_gradebook_groups(screen, course_id).await
         }
         ReplayableAction::ReviewSubmission(submission_id) => {
             review::open(screen, submission_id).await
@@ -504,7 +516,7 @@ async fn handle_screen_action(
         ScreenAction::ChangeDeadline(id) => {
             teacher::begin_terms_edit(screen, message_id, id, &state).await
         }
-        ScreenAction::RotateGroupInvite => {
+        ScreenAction::RotateCourseInvite => {
             teacher::ask_invite_rotation(screen, message_id, &state).await
         }
         ScreenAction::BulkReview(decision) => {
@@ -580,6 +592,15 @@ async fn handle_flow_action(
         FlowAction::CancelInviteRotation => {
             teacher::cancel_invite_rotation(screen, message_id, &state).await?;
         }
+        FlowAction::RegistrationGroup(group_id) => {
+            registration::choose_group(screen.chat(), message_id, group_id, &state).await?;
+        }
+        FlowAction::AssignmentGroup(group_id) => {
+            teacher::toggle_assignment_group(screen, message_id, group_id, state).await?;
+        }
+        FlowAction::AssignmentGroupsDone => {
+            teacher::finish_assignment_groups(screen, message_id, state).await?;
+        }
         FlowAction::MakeupAnswer(choice) => {
             if state.active_makeup().is_some() {
                 teacher::handle_makeup_answer(screen, message_id, choice, state).await?;
@@ -631,7 +652,7 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
             Some(texts::CHOOSE_ASSIGNMENT_ACTION)
         }
         BotState::Screen(
-            ScreenState::GroupInvite { .. }
+            ScreenState::CourseInvite { .. }
             | ScreenState::SandboxSubmissions { .. }
             | ScreenState::MakeupReviewed { .. }
             | ScreenState::StudentGrades { .. },
@@ -645,7 +666,11 @@ fn button_hint(state: &BotState) -> Option<&'static str> {
         BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
             Some(texts::CONFIRM_FILE_DELETION)
         }
-        BotState::Flow(FlowState::ConfirmingTermsExit { .. }) => Some(texts::CHOOSE_BUTTON),
+        BotState::Flow(
+            FlowState::ConfirmingTermsExit { .. }
+            | FlowState::ChoosingRegistrationGroup { .. }
+            | FlowState::ChoosingAssignmentGroups { .. },
+        ) => Some(texts::CHOOSE_BUTTON),
         BotState::Flow(FlowState::ChoosingStudent { .. }) => Some(texts::CHOOSE_STUDENT),
         BotState::Idle
         | BotState::Screen(ScreenState::Guest)
@@ -740,29 +765,39 @@ mod tests {
 
     #[test]
     fn every_button_the_bot_sends_is_routable() {
+        use crate::app::TeachingCourseSummary;
         use crate::app::{MakeupQuestion, UndecidedAssignment};
         use crate::bot::assignment_form::{AssignmentTerms, TermsForm, TermsStep};
         use crate::bot::callbacks::MakeupFormAction;
         use crate::bot::makeup_form::{MakeupForm, MakeupStep};
         use crate::bot::views::{
-            assignment_files_keyboard, assignment_students_keyboard, attempts_keyboard,
-            calendar_keyboard, confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard,
-            contact_keyboard, course_assignments_keyboard, deadline_options_keyboard,
-            gradebook_students_keyboard, grading_keyboard, group_invite_keyboard,
-            late_policy_keyboard, makeup_answer_keyboard, makeup_attempts_keyboard,
-            makeup_followup_keyboard, makeup_form_view, penalty_keyboard, review_decision_keyboard,
-            review_hub_keyboard, review_score_keyboard, sandbox_keyboard, student_grades_keyboard,
-            terms_exit_keyboard, terms_form_view, terms_keyboard,
+            assignment_files_keyboard, assignment_groups_keyboard, assignment_students_keyboard,
+            attempts_keyboard, calendar_keyboard, confirm_file_deletion_keyboard,
+            confirm_invite_rotation_keyboard, contact_keyboard, course_assignments_keyboard,
+            course_invite_keyboard, deadline_options_keyboard, gradebook_groups_keyboard,
+            gradebook_students_keyboard, grading_keyboard, late_policy_keyboard,
+            makeup_answer_keyboard, makeup_attempts_keyboard, makeup_followup_keyboard,
+            makeup_form_view, penalty_keyboard, registration_groups_keyboard,
+            review_decision_keyboard, review_hub_keyboard, review_score_keyboard, sandbox_keyboard,
+            student_grades_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
             StoredFileMetadata, StoredFileOwner, StoredFileParts,
         };
-        use crate::test_support::{assignment, course_for, student_group, teacher};
+        use crate::test_support::{
+            assignment, course_for, student_group, subject, teacher, teaching_course,
+        };
 
         let teacher = teacher(1);
         let group = student_group("test-group");
+        let other_group = student_group("other-group");
         let course = course_for(&group, &teacher);
+        let stream = TeachingCourseSummary {
+            course: teaching_course(&subject("Stream"), &[&group, &other_group], &teacher),
+            subject: subject("Stream"),
+            groups: vec![group.clone(), other_group.clone()],
+        };
         let assignment = assignment(&course, &teacher).scored(5).published().build();
         let file = StoredFileMetadata::restore(StoredFileParts {
             id: StoredFileId::new(),
@@ -818,7 +853,7 @@ mod tests {
             review_decision_keyboard(SubmissionId::new()),
             review_hub_keyboard(12, 5),
             makeup_followup_keyboard(true, true),
-            student_grades_keyboard(course.id(), student_id, true),
+            student_grades_keyboard(course.id(), group.id(), student_id, true),
             contact_keyboard(
                 contact,
                 Some("https://t.me/student_name".parse().unwrap()),
@@ -868,9 +903,15 @@ mod tests {
             assignment_files_keyboard(&assignment, &[file], true, true),
             assignment_files_keyboard(&assignment, &[], true, false),
             confirm_file_deletion_keyboard(),
-            assignment_students_keyboard(assignment.id(), &[]),
+            assignment_students_keyboard(assignment.id(), &[], true),
             gradebook_students_keyboard(course.id(), &[]),
-            group_invite_keyboard(course.id()),
+            gradebook_groups_keyboard(stream.course.id(), &stream.groups),
+            registration_groups_keyboard(&stream.groups),
+            assignment_groups_keyboard(
+                &stream.groups,
+                &std::collections::BTreeSet::from([group.id()]),
+            ),
+            course_invite_keyboard(course.id()),
             confirm_invite_rotation_keyboard(),
             sandbox_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
         ];
@@ -1033,8 +1074,8 @@ mod tests {
             Ok(Command::Start(payload)) if payload.is_empty()
         ));
         assert!(matches!(
-            Command::parse("/start gi_payload", "hw_test_bot"),
-            Ok(Command::Start(payload)) if payload == "gi_payload"
+            Command::parse("/start ci_payload", "hw_test_bot"),
+            Ok(Command::Start(payload)) if payload == "ci_payload"
         ));
     }
 }

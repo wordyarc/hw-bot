@@ -26,6 +26,20 @@ async fn teacher_reads_registered_identity_and_group_of_own_student() {
 }
 
 #[tokio::test]
+async fn teacher_reads_the_contact_of_a_student_of_another_group_of_the_course() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let student = app.add_student_to_group("Second group", &second).await;
+
+    let result = contact(&app, app.teacher_actor(), student.id())
+        .await
+        .unwrap();
+
+    assert_eq!(result.student_id, student.id());
+    assert_eq!(result.group_code, second.code().as_str());
+}
+
+#[tokio::test]
 async fn admin_reads_contact_without_course_assignment() {
     let app = TestApp::start().await;
     let admin = app.add_admin().await;

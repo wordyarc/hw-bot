@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)\n        select id, subject_id, $2\n        from teaching_courses\n        where id = $1\n        on conflict (teaching_course_id, student_group_id) do nothing\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53990696887d563e9300a584377202b1bcf1d903f6ea776c632ff0b315744ce2"
+}

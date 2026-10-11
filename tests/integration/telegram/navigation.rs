@@ -7,6 +7,7 @@ use wiremock::matchers::{body_json, body_partial_json, method, path};
 
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
+use crate::harness::telegram_scenario::TelegramScenario;
 
 #[tokio::test]
 async fn help_command_resolves_the_registered_role_and_sends_its_commands() {
@@ -191,5 +192,39 @@ async fn navigation_from_an_older_message_still_opens_the_screen() {
             .messages(app.teacher())
             .iter()
             .any(|message| message["text"] == texts::STALE_BUTTON)
+    );
+}
+
+#[tokio::test]
+async fn a_course_of_several_groups_is_listed_by_its_subject_and_lists_the_groups_inside() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    let course = telegram
+        .button_with_text(
+            app.teacher(),
+            &texts::course_groups_button(app.fixture.subject.name().as_str(), 2),
+        )
+        .await;
+    telegram.click(app.teacher(), &course);
+    telegram
+        .button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let mut codes = vec![app.fixture.group.code().as_str(), second.code().as_str()];
+    codes.sort_unstable();
+    let header = texts::course_header(app.fixture.subject.name().as_str(), &codes);
+    let sent: Vec<String> = telegram
+        .messages(app.teacher())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        sent.iter().any(|text| text.starts_with(&header)),
+        "{sent:#?}"
     );
 }

@@ -40,19 +40,25 @@ create table users (
 create index users_student_group_id_idx on users (student_group_id)
 where student_group_id is not null;
 
--- Teaching courses and course teachers.
+-- Teaching courses, their student groups and course teachers.
 
 create table teaching_courses (
     id uuid primary key default uuidv7(),
     subject_id uuid not null references subjects (id) on delete restrict,
-    student_group_id uuid not null references student_groups (id) on delete restrict,
     created_at timestamptz not null default now(),
-    unique (subject_id, student_group_id),
-    unique (id, subject_id, student_group_id)
+    unique (id, subject_id)
 );
 
-create index teaching_courses_student_group_id_idx
-    on teaching_courses (student_group_id);
+create table teaching_course_groups (
+    teaching_course_id uuid not null,
+    student_group_id uuid not null references student_groups (id) on delete restrict,
+    subject_id uuid not null,
+    primary key (teaching_course_id, student_group_id),
+    unique (subject_id, student_group_id),
+    foreign key (teaching_course_id, subject_id)
+        references teaching_courses (id, subject_id)
+        on delete cascade
+);
 
 create table teaching_course_teachers (
     teaching_course_id uuid not null references teaching_courses (id) on delete cascade,
@@ -70,7 +76,6 @@ create table assignments (
     id uuid primary key default uuidv7(),
     teaching_course_id uuid not null,
     subject_id uuid not null,
-    student_group_id uuid not null,
     title text not null check (btrim(title) <> '' and char_length(title) <= 200),
     body text not null check (btrim(body) <> '' and char_length(body) <= 4096),
     max_attempts smallint not null check (max_attempts between 1 and 32767),
@@ -86,16 +91,29 @@ create table assignments (
         or (status = 'published' and published_at is not null)
         or status = 'archived'
     ),
-    foreign key (teaching_course_id, subject_id, student_group_id)
-        references teaching_courses (id, subject_id, student_group_id)
+    unique (id, teaching_course_id),
+    foreign key (teaching_course_id, subject_id)
+        references teaching_courses (id, subject_id)
         on delete restrict
 );
 
 create index assignments_teaching_course_id_idx
     on assignments (teaching_course_id);
 
-create index assignments_student_group_status_idx
-    on assignments (student_group_id, status);
+create table assignment_groups (
+    assignment_id uuid not null,
+    teaching_course_id uuid not null,
+    student_group_id uuid not null,
+    primary key (assignment_id, student_group_id),
+    foreign key (assignment_id, teaching_course_id)
+        references assignments (id, teaching_course_id)
+        on delete restrict,
+    foreign key (teaching_course_id, student_group_id)
+        references teaching_course_groups (teaching_course_id, student_group_id)
+);
+
+create index assignment_groups_student_group_idx
+    on assignment_groups (student_group_id, assignment_id);
 
 -- Submissions and review queue.
 

@@ -1,10 +1,14 @@
-use teloxide::payloads::SendMessageSetters;
+use std::collections::BTreeSet;
+
+use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
 use teloxide::types::MessageId;
 
 use super::attempts::chosen_amount;
 use super::terms::detach;
 use crate::bot::HandlerResult;
-use crate::bot::assignment_form::{AssignmentTerms, AssignmentText, DraftAssignment, TermsForm};
+use crate::bot::assignment_form::{
+    AssignmentTerms, AssignmentText, DraftAssignment, IssuedGroups, TermsForm,
+};
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::handlers::input::{
@@ -12,8 +16,11 @@ use crate::bot::handlers::input::{
 };
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
-use crate::bot::views::{attempts_keyboard, grading_keyboard};
-use crate::domain::{ASSIGNMENT_TITLE_MAX_LEN, Grading, MAX_ATTEMPTS, MAX_SCORE, TeachingCourseId};
+use crate::bot::views::{assignment_groups_keyboard, attempts_keyboard, grading_keyboard};
+use crate::domain::{
+    ASSIGNMENT_TITLE_MAX_LEN, Grading, MAX_ATTEMPTS, MAX_SCORE, StudentGroup, StudentGroupId,
+    TeachingCourseId,
+};
 
 pub(crate) async fn handle_max_attempts(
     screen: Screen<'_>,
@@ -21,13 +28,17 @@ pub(crate) async fn handle_max_attempts(
     choice: AmountChoice,
     state: BotState,
 ) -> HandlerResult {
-    let Some(text) = state.awaiting_max_attempts(message_id) else {
+    let Some((text, groups)) = state.awaiting_max_attempts(message_id) else {
         return screen.stale().await;
     };
     let Some(max_attempts) = chosen_amount(choice) else {
         return screen.ask(&texts::attempts_prompt(MAX_ATTEMPTS)).await;
     };
-    ask_grading(screen.chat(), DraftAssignment::new(text, max_attempts)).await
+    ask_grading(
+        screen.chat(),
+        DraftAssignment::new(text, groups, max_attempts),
+    )
+    .await
 }
 
 pub(super) async fn ask_grading(chat: Chat<'_>, draft: DraftAssignment) -> HandlerResult {
@@ -95,7 +106,11 @@ pub(super) async fn apply_grading(
     super::terms::render(screen.chat(), form, None).await
 }
 
-pub(super) async fn ask_max_attempts(chat: Chat<'_>, text: AssignmentText) -> HandlerResult {
+pub(super) async fn ask_max_attempts(
+    chat: Chat<'_>,
+    text: AssignmentText,
+    groups: IssuedGroups,
+) -> HandlerResult {
     let bot = chat.bot();
     let chat_id = chat.chat_id();
     let sent = bot
@@ -106,9 +121,96 @@ pub(super) async fn ask_max_attempts(chat: Chat<'_>, text: AssignmentText) -> Ha
         .update(BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {
             message_id: sent.id,
             text,
+            groups,
         }))
         .await?;
     Ok(())
+}
+
+async fn ask_groups(
+    chat: Chat<'_>,
+    text: AssignmentText,
+    groups: &[StudentGroup],
+) -> HandlerResult {
+    let selected: BTreeSet<StudentGroupId> = groups.iter().map(StudentGroup::id).collect();
+    let sent = chat
+        .bot()
+        .send_message(chat.chat_id(), texts::ASSIGNMENT_GROUPS_QUESTION)
+        .reply_markup(assignment_groups_keyboard(groups, &selected))
+        .await?;
+    chat.dialogue()
+        .update(BotState::Flow(FlowState::ChoosingAssignmentGroups {
+            message_id: sent.id,
+            text,
+            selected,
+        }))
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn toggle_assignment_group(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    group_id: StudentGroupId,
+    state: BotState,
+) -> HandlerResult {
+    let Some((text, mut selected)) = state.choosing_assignment_groups(message_id) else {
+        return screen.stale().await;
+    };
+    let course = screen
+        .services()
+        .courses
+        .find_for_teacher(screen.actor(), text.course_id)
+        .await?;
+    if !course.course.includes_group(group_id) {
+        return screen.stale().await;
+    }
+    if !selected.remove(&group_id) {
+        selected.insert(group_id);
+    }
+    screen
+        .bot()
+        .edit_message_reply_markup(screen.chat_id(), message_id)
+        .reply_markup(assignment_groups_keyboard(&course.groups, &selected))
+        .await?;
+    screen
+        .dialogue()
+        .update(BotState::Flow(FlowState::ChoosingAssignmentGroups {
+            message_id,
+            text,
+            selected,
+        }))
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn finish_assignment_groups(
+    screen: Screen<'_>,
+    message_id: MessageId,
+    state: BotState,
+) -> HandlerResult {
+    let Some((text, selected)) = state.choosing_assignment_groups(message_id) else {
+        return screen.stale().await;
+    };
+    if selected.is_empty() {
+        screen
+            .bot()
+            .send_message(screen.chat_id(), texts::ASSIGNMENT_GROUPS_REQUIRED)
+            .await?;
+        return Ok(());
+    }
+    let course = screen
+        .services()
+        .courses
+        .find_for_teacher(screen.actor(), text.course_id)
+        .await?;
+    let chosen = course
+        .groups
+        .into_iter()
+        .filter(|group| selected.contains(&group.id()))
+        .collect();
+    detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
+    ask_max_attempts(screen.chat(), text, IssuedGroups::Chosen(chosen)).await
 }
 
 pub(crate) async fn submit_title(step: TextStep<'_>, course_id: TeachingCourseId) -> HandlerResult {
@@ -167,15 +269,25 @@ pub(crate) async fn submit_body(
         title,
         body: text.to_owned(),
     };
-    ask_max_attempts(step.chat(), text).await?;
-
-    Ok(())
+    let Some(screen) = step.resolve().await? else {
+        return Ok(());
+    };
+    let course = screen
+        .services()
+        .courses
+        .find_for_teacher(screen.actor(), course_id)
+        .await?;
+    match course.groups.as_slice() {
+        [group] => ask_max_attempts(screen.chat(), text, IssuedGroups::Single(group.id())).await,
+        groups => ask_groups(screen.chat(), text, groups).await,
+    }
 }
 
 pub(crate) async fn submit_max_attempts(
     step: TextStep<'_>,
     message_id: MessageId,
     assignment: AssignmentText,
+    groups: IssuedGroups,
 ) -> HandlerResult {
     let bot = step.bot();
     let message = step.message();
@@ -190,7 +302,11 @@ pub(crate) async fn submit_max_attempts(
         return Ok(());
     };
     detach(bot, chat_id, Some(message_id)).await?;
-    ask_grading(step.chat(), DraftAssignment::new(assignment, max_attempts)).await?;
+    ask_grading(
+        step.chat(),
+        DraftAssignment::new(assignment, groups, max_attempts),
+    )
+    .await?;
 
     Ok(())
 }

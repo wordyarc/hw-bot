@@ -67,6 +67,7 @@ pub struct ReviewQueueItem {
     pub assignment: Assignment,
     pub subject: Subject,
     pub student: User,
+    pub group_code: String,
     pub previous_attempts: Vec<Submission>,
     pub earlier_attempts_hidden: bool,
     pub makeup: Option<MakeupPool>,
@@ -343,6 +344,10 @@ async fn load_queue_item(
     let student = db::users::find_by_id(&mut *connection, submission.student_id())
         .await?
         .required("student")?;
+    let group_id = student.student_group_id().required("student group")?;
+    let group = db::academic::find_student_group_by_id(&mut *connection, group_id)
+        .await?
+        .required("student group")?;
     let mut previous_attempts = db::submissions::list_previous_attempts(
         &mut *connection,
         &submission,
@@ -369,6 +374,7 @@ async fn load_queue_item(
         assignment: context.assignment,
         subject: context.subject,
         student,
+        group_code: group.code().as_str().to_owned(),
         previous_attempts,
         earlier_attempts_hidden,
         makeup,

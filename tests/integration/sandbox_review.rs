@@ -9,7 +9,7 @@ use hw_bot::test_support::assignment;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id, wait_for_blocked_connection};
+use crate::harness::{TestApp, insert_assignment, submission_id, wait_for_blocked_connection};
 
 const COMMENT: &str = "Учебная сдача";
 
@@ -196,9 +196,7 @@ async fn bulk_acceptance_gives_the_maximum_minus_the_late_penalty() {
         .late_policy(1, 2, 4, DeductedFrom::WorkScore)
         .published()
         .build();
-    db::assignments::insert(&app.pool, &late)
-        .await
-        .expect("insert late trial");
+    insert_assignment(&app.pool, &late).await;
     let submission = submit(&app, &late, &app.fixture.student).await;
 
     review_sandbox(&app, ReviewDecision::Accept).await;

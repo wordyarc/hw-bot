@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            select\n                teaching_courses.id,\n                teaching_courses.subject_id,\n                teaching_courses.created_at,\n                array(\n                    select teacher_id\n                    from teaching_course_teachers\n                    where teaching_course_id = teaching_courses.id\n                ) as \"teacher_ids!: Vec<Uuid>\",\n                subjects.name as subject_name,\n                course_groups.ids as \"group_ids!: Vec<Uuid>\",\n                course_groups.codes as \"group_codes!: Vec<String>\",\n                course_groups.education_levels as \"group_education_levels!: Vec<String>\",\n                course_groups.study_years as \"group_study_years!: Vec<i16>\"\n            from teaching_courses\n            join subjects\n              on subjects.id = teaching_courses.subject_id\n            cross join lateral (\n                select\n                    coalesce(array_agg(student_groups.id order by student_groups.code), '{}')\n                        as ids,\n                    coalesce(array_agg(student_groups.code order by student_groups.code), '{}')\n                        as codes,\n                    coalesce(\n                        array_agg(student_groups.education_level order by student_groups.code),\n                        '{}'\n                    ) as education_levels,\n                    coalesce(\n                        array_agg(student_groups.study_year order by student_groups.code),\n                        '{}'\n                    ) as study_years,\n                    min(student_groups.code) as first_code\n                from teaching_course_groups\n                join student_groups\n                  on student_groups.id = teaching_course_groups.student_group_id\n                where teaching_course_groups.teaching_course_id = teaching_courses.id\n            ) course_groups\n            \n        where $1 or exists (\n            select 1\n            from teaching_course_teachers mine\n            where mine.teaching_course_id = teaching_courses.id\n              and mine.teacher_id = $2\n        )\n        order by subjects.name, course_groups.first_code, teaching_courses.id\n        limit $3 offset $4\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "subject_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "teacher_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "group_codes!: Vec<String>",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "group_education_levels!: Vec<String>",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "group_study_years!: Vec<i16>",
+        "type_info": "Int2Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8870eb1c44f1d56e3c30b74ceac7dda57047a354e126fe8fd7dc8c1f4fe1add1"
+}

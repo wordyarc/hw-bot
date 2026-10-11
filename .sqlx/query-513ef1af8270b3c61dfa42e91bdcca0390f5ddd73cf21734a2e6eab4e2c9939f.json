@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select exists (\n            select 1\n            from teaching_courses course\n            where not exists (\n                select 1\n                from teaching_course_groups course_group\n                where course_group.teaching_course_id = course.id\n            )\n        ) as \"exists!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "513ef1af8270b3c61dfa42e91bdcca0390f5ddd73cf21734a2e6eab4e2c9939f"
+}

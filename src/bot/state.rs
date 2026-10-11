@@ -1,13 +1,17 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
-use super::assignment_form::{AssignmentText, DraftAssignment, InputMode, TermsForm, TermsStep};
+use super::assignment_form::{
+    AssignmentText, DraftAssignment, InputMode, IssuedGroups, TermsForm, TermsStep,
+};
 use super::makeup_form::{MakeupForm, MakeupStep};
 use super::views::MenuAction;
 use crate::domain::{
     AssignmentId, Grading, InviteGeneration, LatePenalty, ReviewDecision, ReviewScore,
-    StoredFileId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
+    StoredFileId, StudentGroupId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::invites::VerifiedInvite;
 
@@ -54,16 +58,43 @@ impl BotState {
         }
     }
 
-    pub(super) fn group_invite(
+    pub(super) fn course_invite(
         &self,
         message_id: MessageId,
     ) -> Option<(TeachingCourseId, InviteGeneration)> {
         match self {
-            Self::Screen(ScreenState::GroupInvite {
+            Self::Screen(ScreenState::CourseInvite {
                 message_id: current,
                 course_id,
                 generation,
             }) if *current == message_id => Some((*course_id, *generation)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn choosing_registration_group(
+        &self,
+        message_id: MessageId,
+    ) -> Option<VerifiedInvite> {
+        match self {
+            Self::Flow(FlowState::ChoosingRegistrationGroup {
+                invite,
+                message_id: current,
+            }) if *current == message_id => Some(*invite),
+            _ => None,
+        }
+    }
+
+    pub(super) fn choosing_assignment_groups(
+        self,
+        message_id: MessageId,
+    ) -> Option<(AssignmentText, BTreeSet<StudentGroupId>)> {
+        match self {
+            Self::Flow(FlowState::ChoosingAssignmentGroups {
+                message_id: current,
+                text,
+                selected,
+            }) if current == message_id => Some((text, selected)),
             _ => None,
         }
     }
@@ -183,12 +214,16 @@ impl BotState {
         }
     }
 
-    pub(super) fn awaiting_max_attempts(self, message_id: MessageId) -> Option<AssignmentText> {
+    pub(super) fn awaiting_max_attempts(
+        self,
+        message_id: MessageId,
+    ) -> Option<(AssignmentText, IssuedGroups)> {
         match self {
             Self::Flow(FlowState::AwaitingAssignmentMaxAttempts {
                 message_id: current,
                 text,
-            }) if current == message_id => Some(text),
+                groups,
+            }) if current == message_id => Some((text, groups)),
             _ => None,
         }
     }
@@ -345,7 +380,7 @@ pub(super) enum ScreenState {
         deletion_requires_confirmation: bool,
         creation_flow: bool,
     },
-    GroupInvite {
+    CourseInvite {
         message_id: MessageId,
         course_id: TeachingCourseId,
         generation: InviteGeneration,
@@ -371,8 +406,13 @@ pub(super) enum ScreenState {
 #[derive(Clone)]
 pub(super) enum FlowState {
     /// После проверки подписи исходный bearer credential больше не хранится.
+    ChoosingRegistrationGroup {
+        invite: VerifiedInvite,
+        message_id: MessageId,
+    },
     AwaitingRegistrationName {
         invite: VerifiedInvite,
+        group_id: StudentGroupId,
     },
     ConfirmingInviteRotation {
         message_id: MessageId,
@@ -417,9 +457,15 @@ pub(super) enum FlowState {
         course_id: TeachingCourseId,
         title: String,
     },
+    ChoosingAssignmentGroups {
+        message_id: MessageId,
+        text: AssignmentText,
+        selected: BTreeSet<StudentGroupId>,
+    },
     AwaitingAssignmentMaxAttempts {
         message_id: MessageId,
         text: AssignmentText,
+        groups: IssuedGroups,
     },
     ChoosingGrading {
         message_id: MessageId,

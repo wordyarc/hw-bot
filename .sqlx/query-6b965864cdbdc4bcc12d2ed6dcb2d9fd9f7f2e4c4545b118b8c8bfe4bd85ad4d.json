@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into teaching_course_invites (teaching_course_id, generation)\n        values ($1, 1)\n        on conflict (teaching_course_id) do nothing\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b965864cdbdc4bcc12d2ed6dcb2d9fd9f7f2e4c4545b118b8c8bfe4bd85ad4d"
+}

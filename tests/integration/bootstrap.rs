@@ -26,7 +26,9 @@ async fn bootstrap_creates_complete_initial_structure() -> anyhow::Result<()> {
         select subjects.name, student_groups.code, users.telegram_user_id, users.role
         from teaching_courses
         join subjects on subjects.id = teaching_courses.subject_id
-        join student_groups on student_groups.id = teaching_courses.student_group_id
+        join teaching_course_groups
+          on teaching_course_groups.teaching_course_id = teaching_courses.id
+        join student_groups on student_groups.id = teaching_course_groups.student_group_id
         join teaching_course_teachers
           on teaching_course_teachers.teaching_course_id = teaching_courses.id
         join users on users.id = teaching_course_teachers.teacher_id
@@ -48,15 +50,16 @@ async fn bootstrap_creates_complete_initial_structure() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn bootstrap_gives_every_group_an_invite() -> anyhow::Result<()> {
+async fn bootstrap_gives_every_course_an_invite() -> anyhow::Result<()> {
     let pool = migrated_database().await;
 
     db::run_bootstrap(&pool, &seed()).await?;
 
     let generation: i64 = sqlx::query_scalar(
-        "select generation from student_group_invites
-         join student_groups on student_groups.id = student_group_invites.student_group_id
-         where student_groups.code = 'b9122-02.03.21'",
+        "select generation from teaching_course_invites
+         join teaching_courses on teaching_courses.id = teaching_course_invites.teaching_course_id
+         join subjects on subjects.id = teaching_courses.subject_id
+         where subjects.name = 'Backend Development'",
     )
     .fetch_one(&pool)
     .await?;
@@ -65,18 +68,145 @@ async fn bootstrap_gives_every_group_an_invite() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn seed_with_groups(codes: &[&str]) -> serde_json::Value {
+    let mut seed = seed();
+    seed["student_groups"] = codes
+        .iter()
+        .map(|code| json!({"code": code, "education_level": "bachelor", "study_year": 1}))
+        .collect();
+    seed["courses"][0]["student_group_codes"] = json!(codes);
+    seed
+}
+
+#[tokio::test]
+async fn a_course_of_five_groups_is_one_course_with_one_invite() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+
+    db::run_bootstrap(&pool, &seed_with_groups(&["g1", "g2", "g3", "g4", "g5"])).await?;
+
+    assert_eq!(count(&pool, "teaching_courses").await?, 1);
+    assert_eq!(count(&pool, "teaching_course_groups").await?, 5);
+    assert_eq!(count(&pool, "teaching_course_invites").await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_group_added_to_a_stored_course_keeps_its_invite_and_assignments() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    db::run_bootstrap(&pool, &seed_with_groups(&["g1"])).await?;
+    sqlx::query("update teaching_course_invites set generation = 7")
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        r#"
+        with issued as (
+            insert into assignments (
+                teaching_course_id, subject_id, title, body, max_attempts, status, created_by,
+                deadline_at
+            )
+            select teaching_courses.id, teaching_courses.subject_id, 'Lab', 'Body', 1, 'draft',
+                   users.id, now() + interval '7 days'
+            from teaching_courses, users
+            where users.telegram_user_id = 100000002
+            returning id, teaching_course_id
+        )
+        insert into assignment_groups (assignment_id, teaching_course_id, student_group_id)
+        select issued.id, issued.teaching_course_id, student_groups.id
+        from issued, student_groups
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    db::run_bootstrap(&pool, &seed_with_groups(&["g1", "g2"])).await?;
+
+    assert_eq!(count(&pool, "teaching_courses").await?, 1);
+    assert_eq!(count(&pool, "teaching_course_groups").await?, 2);
+    let generation: i64 = sqlx::query_scalar("select generation from teaching_course_invites")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(generation, 7);
+    let issued: Vec<String> = sqlx::query_scalar(
+        "select student_groups.code from assignment_groups
+         join student_groups on student_groups.id = assignment_groups.student_group_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(issued, vec!["g1".to_owned()]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_seed_joining_two_stored_courses_of_a_subject_is_rolled_back() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    let mut split = seed_with_groups(&["g1", "g2"]);
+    split["courses"] = json!([
+        {
+            "subject_name": "Backend Development",
+            "student_group_codes": ["g1"],
+            "teacher_telegram_user_ids": [100000002]
+        },
+        {
+            "subject_name": "Backend Development",
+            "student_group_codes": ["g2"],
+            "teacher_telegram_user_ids": [100000002]
+        }
+    ]);
+    db::run_bootstrap(&pool, &split).await?;
+    let mut joined = seed_with_groups(&["g1", "g2", "g3"]);
+    joined["courses"][0]["student_group_codes"] = json!(["g1", "g2"]);
+
+    let error = db::run_bootstrap(&pool, &joined).await.unwrap_err();
+
+    assert!(
+        matches!(&error, db::BootstrapError::InvalidData(_)),
+        "{error}"
+    );
+    assert_eq!(count(&pool, "teaching_courses").await?, 2);
+    assert_eq!(count(&pool, "student_groups").await?, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_seed_splitting_a_stored_course_is_rolled_back() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    db::run_bootstrap(&pool, &seed_with_groups(&["g1", "g2"])).await?;
+    let mut split = seed_with_groups(&["g1", "g2"]);
+    split["courses"] = json!([
+        {
+            "subject_name": "Backend Development",
+            "student_group_codes": ["g1"],
+            "teacher_telegram_user_ids": [100000002]
+        },
+        {
+            "subject_name": "Backend Development",
+            "student_group_codes": ["g2"],
+            "teacher_telegram_user_ids": [100000001]
+        }
+    ]);
+
+    let error = db::run_bootstrap(&pool, &split).await.unwrap_err();
+
+    assert!(
+        matches!(&error, db::BootstrapError::InvalidData(_)),
+        "{error}"
+    );
+    assert_eq!(count(&pool, "teaching_course_teachers").await?, 1);
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_repeated_bootstrap_never_resets_a_rotated_invite() -> anyhow::Result<()> {
     let pool = migrated_database().await;
     let seed = seed();
     db::run_bootstrap(&pool, &seed).await?;
-    sqlx::query("update student_group_invites set generation = 7")
+    sqlx::query("update teaching_course_invites set generation = 7")
         .execute(&pool)
         .await?;
 
     db::run_bootstrap(&pool, &seed).await?;
 
-    let generation: i64 = sqlx::query_scalar("select generation from student_group_invites")
+    let generation: i64 = sqlx::query_scalar("select generation from teaching_course_invites")
         .fetch_one(&pool)
         .await?;
 
@@ -200,10 +330,14 @@ async fn bootstrap_rejects_a_manually_seeded_course_without_teacher() -> anyhow:
             insert into subjects (name)
             values ('Manual Subject')
             returning id
+        ), seed_course as (
+            insert into teaching_courses (subject_id)
+            select id from seed_subject
+            returning id, subject_id
         )
-        insert into teaching_courses (subject_id, student_group_id)
-        select seed_subject.id, seed_group.id
-        from seed_subject, seed_group
+        insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)
+        select seed_course.id, seed_course.subject_id, seed_group.id
+        from seed_course, seed_group
         "#,
     )
     .execute(&pool)
@@ -271,6 +405,8 @@ async fn count(pool: &PgPool, table: &str) -> Result<i64, sqlx::Error> {
         "subjects" => "select count(*) from subjects",
         "users" => "select count(*) from users",
         "teaching_courses" => "select count(*) from teaching_courses",
+        "teaching_course_groups" => "select count(*) from teaching_course_groups",
+        "teaching_course_invites" => "select count(*) from teaching_course_invites",
         "teaching_course_teachers" => "select count(*) from teaching_course_teachers",
         _ => unreachable!("unsupported table"),
     };

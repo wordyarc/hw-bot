@@ -90,7 +90,7 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             get(courses::student_grades),
         )
         .route(
-            "/me/courses/{teaching_course_id}/gradebook",
+            "/me/courses/{course_id}/groups/{group_id}/gradebook",
             get(courses::course_gradebook),
         )
         .route("/me/review-queue", get(review::queue_size))

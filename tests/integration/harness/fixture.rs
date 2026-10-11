@@ -51,13 +51,11 @@ impl Fixture {
         let student = named_student(1001, "Student", &group);
         insert_user(pool, &student).await;
 
-        let course = teaching_course(&subject, &group, &teacher);
+        let course = teaching_course(&subject, &[&group], &teacher);
         insert_course(pool, &course).await;
 
         let assignment = wall_clock_assignment(&course, &teacher).published().build();
-        db::assignments::insert(pool, &assignment)
-            .await
-            .expect("insert assignment");
+        insert_assignment(pool, &assignment).await;
 
         Self {
             group,
@@ -78,6 +76,14 @@ pub async fn insert_group(pool: &PgPool, group: &StudentGroup) {
     db::academic::insert_student_group(pool, group)
         .await
         .expect("insert student group");
+}
+
+pub async fn insert_assignment(pool: &PgPool, assignment: &Assignment) {
+    let mut tx = pool.begin().await.expect("begin transaction");
+    db::assignments::insert(&mut tx, assignment)
+        .await
+        .expect("insert assignment");
+    tx.commit().await.expect("commit transaction");
 }
 
 pub async fn insert_course(pool: &PgPool, course: &TeachingCourse) {

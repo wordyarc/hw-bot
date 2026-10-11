@@ -490,6 +490,10 @@ where
             from assignments a
             left join best on best.assignment_id = a.id and best.student_id = students.id
             where a.teaching_course_id = $1 and a.published_at is not null
+              and exists (
+                  select 1 from assignment_groups issued
+                  where issued.assignment_id = a.id and issued.student_group_id = $2
+              )
         ) totals
         left join lateral (
             select a.id, a.title, a.deadline_at,
@@ -499,6 +503,10 @@ where
             from assignments a
             left join best on best.assignment_id = a.id and best.student_id = students.id
             where a.teaching_course_id = $1 and a.published_at is not null
+              and exists (
+                  select 1 from assignment_groups issued
+                  where issued.assignment_id = a.id and issued.student_group_id = $2
+              )
               and case when best.student_id is null then a.max_score
                        else best.grade_max_score end is not null
             order by a.deadline_at, a.id limit $6 offset $7

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,\n                deadline_at, published_at\n             from assignments where id = $1",
+  "query": "\n            select\n                id, teaching_course_id, subject_id,\n                array(\n                    select student_group_id\n                    from assignment_groups\n                    where assignment_id = assignments.id\n                ) as \"group_ids!: Vec<Uuid>\",\n                title, body, max_attempts, max_score, late_period_days, late_penalty_per_period,\n                late_max_periods, late_deducted_from, makeup_offered, makeup_credit, status,\n                created_by, created_at, deadline_at, published_at\n            , revision  from assignments where id = $1",
   "describe": {
     "columns": [
       {
@@ -38,14 +38,9 @@
       },
       {
         "ordinal": 3,
-        "name": "student_group_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "assignments",
-            "name": "student_group_id"
-          }
-        }
+        "name": "group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
@@ -211,6 +206,17 @@
             "name": "published_at"
           }
         }
+      },
+      {
+        "ordinal": 19,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "revision"
+          }
+        }
       }
     ],
     "parameters": {
@@ -222,7 +228,7 @@
       false,
       false,
       false,
-      false,
+      null,
       false,
       false,
       false,
@@ -237,8 +243,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "1af85830ad823fc01216b24f5de5b71e4cf8a16766b67ebcc1ca56240d8a7aa4"
+  "hash": "303aad20c1dcaa3043592c48dadf7c16e7eb3af2adc7f65d4f509211d1c12f3a"
 }

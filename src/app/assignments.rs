@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -23,6 +25,7 @@ pub struct CreateAssignment {
     pub actor: Actor,
     pub title: String,
     pub body: String,
+    pub student_group_ids: Option<BTreeSet<StudentGroupId>>,
     pub max_attempts: u16,
     pub grading: Grading,
     pub late_policy: Option<LatePolicy>,
@@ -149,6 +152,7 @@ impl AssignmentService {
             NewAssignment {
                 title: command.title,
                 body: command.body,
+                groups: command.student_group_ids,
                 max_attempts: command.max_attempts,
                 grading: command.grading,
                 late_policy: command.late_policy,
@@ -158,7 +162,7 @@ impl AssignmentService {
             },
         )?;
 
-        db::assignments::insert(&mut *tx, &assignment).await?;
+        db::assignments::insert(&mut tx, &assignment).await?;
 
         tx.commit().await?;
 
@@ -414,13 +418,8 @@ impl AssignmentService {
             .await?;
 
         Ok(Page::from_rows(
-            db::users::list_students_with_assignment_history(
-                &self.pool,
-                assignment.id(),
-                assignment.student_group_id(),
-                page,
-            )
-            .await?,
+            db::users::list_students_with_assignment_history(&self.pool, assignment.id(), page)
+                .await?,
             page,
         ))
     }
@@ -527,7 +526,7 @@ pub(crate) async fn load_visible_assignment_for_student(
             resource: "assignment",
         });
     }
-    if student.student_group_id() != Some(assignment.student_group_id()) {
+    if !assignment.is_issued_to(&student) {
         return Err(DomainError::StudentDoesNotBelongToAssignmentGroup.into());
     }
 

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
@@ -105,7 +106,7 @@ macro_rules! assignment_row {
             id: $row.id,
             teaching_course_id: $row.teaching_course_id,
             subject_id: $row.subject_id,
-            student_group_id: $row.student_group_id,
+            group_ids: $row.group_ids,
             title: $row.title,
             body: $row.body,
             max_attempts: $row.max_attempts,
@@ -130,10 +131,15 @@ macro_rules! select_assignments {
         sqlx::query!(
             r#"
             select
-                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-                max_score, late_period_days, late_penalty_per_period, late_max_periods,
-                late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,
-                deadline_at, published_at
+                id, teaching_course_id, subject_id,
+                array(
+                    select student_group_id
+                    from assignment_groups
+                    where assignment_id = assignments.id
+                ) as "group_ids!: Vec<Uuid>",
+                title, body, max_attempts, max_score, late_period_days, late_penalty_per_period,
+                late_max_periods, late_deducted_from, makeup_offered, makeup_credit, status,
+                created_by, created_at, deadline_at, published_at
             "# + $extra + $tail
             $(, $arg)*
         )
@@ -146,7 +152,12 @@ macro_rules! select_assignment_cards {
             r#"
             select
                 assignments.id, assignments.teaching_course_id, assignments.subject_id,
-                assignments.student_group_id, assignments.title, assignments.body,
+                array(
+                    select student_group_id
+                    from assignment_groups
+                    where assignment_id = assignments.id
+                ) as "group_ids!: Vec<Uuid>",
+                assignments.title, assignments.body,
                 assignments.max_attempts, assignments.max_score, assignments.late_period_days,
                 assignments.late_penalty_per_period, assignments.late_max_periods,
                 assignments.late_deducted_from, assignments.makeup_offered,
@@ -162,29 +173,25 @@ macro_rules! select_assignment_cards {
     };
 }
 
-pub async fn insert<'e, E>(executor: E, assignment: &Assignment) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn insert(conn: &mut PgConnection, assignment: &Assignment) -> DbResult<()> {
     let late_policy = LatePolicyColumns::of(assignment)?;
     let makeup = MakeupColumns::of(assignment)?;
 
     sqlx::query!(
         r#"
         insert into assignments (
-            id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            max_score, late_period_days, late_penalty_per_period, late_max_periods,
-            late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,
-            deadline_at, published_at
+            id, teaching_course_id, subject_id, title, body, max_attempts, max_score,
+            late_period_days, late_penalty_per_period, late_max_periods, late_deducted_from,
+            makeup_offered, makeup_credit, status, created_by, created_at, deadline_at,
+            published_at
         )
         values (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
         )
         "#,
         assignment.id().as_uuid(),
         assignment.teaching_course_id().as_uuid(),
         assignment.subject_id().as_uuid(),
-        assignment.student_group_id().as_uuid(),
         assignment.title().as_str(),
         assignment.body().as_str(),
         checked_num_cast::<_, i16>(MAX_ATTEMPTS, assignment.max_attempts())?,
@@ -201,7 +208,22 @@ where
         assignment.deadline_at(),
         assignment.published_at(),
     )
-    .execute(executor)
+    .execute(&mut *conn)
+    .await?;
+
+    let group_ids: Vec<Uuid> = assignment.groups().iter().map(|id| id.as_uuid()).collect();
+
+    sqlx::query!(
+        r#"
+        insert into assignment_groups (assignment_id, teaching_course_id, student_group_id)
+        select $1, $2, student_group_id
+        from unnest($3::uuid[]) as issued (student_group_id)
+        "#,
+        assignment.id().as_uuid(),
+        assignment.teaching_course_id().as_uuid(),
+        &group_ids,
+    )
+    .execute(conn)
     .await?;
 
     Ok(())
@@ -331,7 +353,9 @@ where
     E: PgExecutor<'e>,
 {
     select_assignment_cards!(
-        " where assignments.student_group_id = $1
+        " join assignment_groups issued
+            on issued.assignment_id = assignments.id
+         where issued.student_group_id = $1
            and assignments.status = 'published'
          order by subjects.name, assignments.deadline_at, assignments.id limit $2 offset $3",
         student_group_id.as_uuid(),
@@ -359,7 +383,9 @@ where
     E: PgExecutor<'e>,
 {
     select_assignment_cards!(
-        " where assignments.student_group_id = $1
+        " join assignment_groups issued
+            on issued.assignment_id = assignments.id
+         where issued.student_group_id = $1
            and assignments.status = 'archived'
            and assignments.published_at is not null
          order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
@@ -406,7 +432,7 @@ struct AssignmentRow {
     id: Uuid,
     teaching_course_id: Uuid,
     subject_id: Uuid,
-    student_group_id: Uuid,
+    group_ids: Vec<Uuid>,
     title: String,
     body: String,
     max_attempts: i16,
@@ -451,7 +477,11 @@ impl TryFrom<AssignmentRow> for Assignment {
             id: AssignmentId::from_uuid(row.id),
             teaching_course_id: TeachingCourseId::from_uuid(row.teaching_course_id),
             subject_id: SubjectId::from_uuid(row.subject_id),
-            student_group_id: StudentGroupId::from_uuid(row.student_group_id),
+            groups: row
+                .group_ids
+                .into_iter()
+                .map(StudentGroupId::from_uuid)
+                .collect(),
             title: row.title,
             body: row.body,
             max_attempts,

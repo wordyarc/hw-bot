@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -17,7 +19,7 @@ use crate::app::{
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DeductedFrom, FilePresentation, Grading,
     LatePolicy, MakeupCredit, MakeupTerms, StoredFileMetadata, StudentAssignmentProgress,
-    TeachingCourseId, UserId,
+    StudentGroupId, TeachingCourseId, UserId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +27,8 @@ use crate::domain::{
 pub struct CreateAssignmentRequest {
     title: String,
     body: String,
+    #[serde(default)]
+    student_group_ids: Option<Vec<StudentGroupId>>,
     max_attempts: u16,
     #[serde(default)]
     max_score: Option<u16>,
@@ -84,6 +88,19 @@ impl LatePolicyRequest {
     }
 }
 
+fn distinct_groups(ids: Vec<StudentGroupId>) -> Result<BTreeSet<StudentGroupId>, ApiError> {
+    let count = ids.len();
+    let groups: BTreeSet<_> = ids.into_iter().collect();
+    if groups.len() != count {
+        return Err(ApiError::from_code(
+            ErrorCode::InvalidInput,
+            "student_group_ids must not repeat a group",
+        ));
+    }
+
+    Ok(groups)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChangeDeadlineRequest {
@@ -127,7 +144,7 @@ pub struct AssignmentResponse {
     id: Uuid,
     teaching_course_id: Uuid,
     subject_id: Uuid,
-    student_group_id: Uuid,
+    student_group_ids: Vec<Uuid>,
     title: String,
     body: String,
     max_attempts: u16,
@@ -150,7 +167,11 @@ impl From<&Assignment> for AssignmentResponse {
             id: assignment.id().as_uuid(),
             teaching_course_id: assignment.teaching_course_id().as_uuid(),
             subject_id: assignment.subject_id().as_uuid(),
-            student_group_id: assignment.student_group_id().as_uuid(),
+            student_group_ids: assignment
+                .groups()
+                .iter()
+                .map(|group_id| group_id.as_uuid())
+                .collect(),
             title: assignment.title().as_str().to_owned(),
             body: assignment.body().as_str().to_owned(),
             max_attempts: assignment.max_attempts(),
@@ -338,6 +359,7 @@ pub async fn create_assignment(
         actor,
         title: request.title,
         body: request.body,
+        student_group_ids: request.student_group_ids.map(distinct_groups).transpose()?,
         max_attempts: request.max_attempts,
         grading: Grading::from_max_score(request.max_score)?,
         late_policy: request.late_policy.parse()?,

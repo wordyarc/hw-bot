@@ -1,15 +1,15 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use hw_bot::domain::{InviteGeneration, StudentGroupId};
+use hw_bot::domain::{InviteGeneration, TeachingCourseId};
 
 use crate::harness::TestApp;
 
 #[tokio::test]
-async fn student_registers_themselves_with_a_group_invite() {
+async fn student_registers_themselves_with_a_course_invite() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();
-    let token = app.group_invite_token().await;
+    let token = app.course_invite_token().await;
 
     let body = app.register_student(2001, "Ivan", &token).await.created();
 
@@ -23,7 +23,7 @@ async fn student_registers_themselves_with_a_group_invite() {
 #[tokio::test]
 async fn repeated_registration_is_a_conflict() {
     let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
+    let token = app.course_invite_token().await;
     app.register_student(2001, "Ivan", &token).await.created();
 
     app.register_student(2001, "Ivan again", &token)
@@ -34,7 +34,7 @@ async fn repeated_registration_is_a_conflict() {
 #[tokio::test]
 async fn one_invite_registers_several_students() {
     let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
+    let token = app.course_invite_token().await;
 
     app.register_student(2101, "Ivan", &token).await.created();
     app.register_student(2102, "Petr", &token).await.created();
@@ -52,7 +52,7 @@ async fn registration_without_an_invite_is_rejected() {
 #[tokio::test]
 async fn a_tampered_invite_is_rejected() {
     let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
+    let token = app.course_invite_token().await;
     let replacement = if token.ends_with('A') { 'B' } else { 'A' };
     let tampered = format!("{}{replacement}", &token[..token.len() - 1]);
     assert_ne!(tampered, token);
@@ -63,11 +63,37 @@ async fn a_tampered_invite_is_rejected() {
 }
 
 #[tokio::test]
-async fn a_signed_invite_for_an_unknown_group_is_rejected() {
+async fn a_student_registers_into_the_group_chosen_from_a_course_of_several_groups() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let token = app.course_invite_token().await;
+
+    let body = app
+        .register_student_in(2001, "Ivan", &token, second.id())
+        .await
+        .created();
+
+    assert_eq!(body["student_group"]["code"], json!(second.code().as_str()));
+}
+
+#[tokio::test]
+async fn a_course_of_several_groups_needs_the_chosen_group() {
+    let app = TestApp::start().await;
+    app.add_group_to_course(&app.fixture.course).await;
+    let token = app.course_invite_token().await;
+
+    app.register_student(2001, "Ivan", &token)
+        .await
+        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    app.get_as("/me", 2001).await.not_found();
+}
+
+#[tokio::test]
+async fn a_signed_invite_for_an_unknown_course_is_rejected() {
     let app = TestApp::start().await;
     let token = app
         .invites
-        .encode(StudentGroupId::new(), InviteGeneration::FIRST);
+        .encode(TeachingCourseId::new(), InviteGeneration::FIRST);
 
     app.register_student(2002, "Petr", &token)
         .await
@@ -78,7 +104,7 @@ async fn a_signed_invite_for_an_unknown_group_is_rejected() {
 async fn a_registered_caller_reads_their_own_profile() {
     let app = TestApp::start().await;
     let code = app.fixture.group.code().as_str().to_owned();
-    let token = app.group_invite_token().await;
+    let token = app.course_invite_token().await;
     app.register_student(2001, "Ivan", &token).await.created();
 
     let body = app.get_as("/me", 2001).await.ok();
@@ -138,7 +164,7 @@ async fn a_student_cannot_make_themselves_staff() {
 #[tokio::test]
 async fn a_student_registered_over_http_can_submit_right_away() {
     let app = TestApp::start().await;
-    let token = app.group_invite_token().await;
+    let token = app.course_invite_token().await;
     app.register_student(2001, "Ivan", &token).await.created();
 
     let body = app

@@ -2,14 +2,14 @@ use std::time::Duration;
 
 use chrono::{DateTime, Datelike, FixedOffset, Months, Utc};
 use hw_bot::bot::{callbacks, texts};
-use hw_bot::domain::{DeductedFrom, LATEST_TERM_YEAR};
+use hw_bot::domain::{DeductedFrom, LATEST_TERM_YEAR, StudentGroup};
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 
-use crate::harness::TestApp;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
+use crate::harness::{TestApp, insert_assignment, wall_clock_assignment};
 
 #[tokio::test]
 async fn teacher_creates_a_draft_through_telegram() {
@@ -1462,4 +1462,230 @@ async fn teacher_changes_an_assignment_and_grants_attempts_through_telegram() {
         assert!(callbacks.contains(&expected), "missing callback {expected}");
     }
     assert!(callbacks.iter().all(|callback| callback.len() <= 64));
+}
+
+async fn open_groups_step(app: &TestApp, telegram: &TelegramScenario, title: &str) {
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
+        .await;
+    telegram.message(app.teacher(), title);
+    telegram.message(app.teacher(), "Send a pull request.");
+}
+
+fn group_toggle(group: &StudentGroup) -> String {
+    cb(callbacks::ASSIGNMENT_GROUP_PREFIX, group.id().as_uuid())
+}
+
+fn group_button_text(
+    telegram: &TelegramScenario,
+    user: i64,
+    message_id: i32,
+    data: &str,
+) -> String {
+    telegram
+        .messages(user)
+        .into_iter()
+        .find(|message| message["message_id"] == message_id)
+        .unwrap()["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row.as_array().unwrap())
+        .find(|button| button["callback_data"] == data)
+        .unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_course_of_several_groups_issues_the_assignment_to_the_chosen_groups() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_groups_step(&app, &telegram, "Stream lab").await;
+
+    let first = group_toggle(&app.fixture.group);
+    let shown = telegram.button(app.teacher(), &first).await;
+    let offered = [
+        group_button_text(&telegram, app.teacher(), shown.message_id, &first),
+        group_button_text(
+            &telegram,
+            app.teacher(),
+            shown.message_id,
+            &group_toggle(&second),
+        ),
+    ];
+    let toggled = telegram.click_button(app.teacher(), &first).await;
+    let unchecked = group_button_text(&telegram, app.teacher(), toggled.message_id, &first);
+    telegram
+        .click_button(app.teacher(), callbacks::ASSIGNMENT_GROUPS_DONE)
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::GRADING_PREFIX, "passfail"))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+        .await;
+    let summary = summary_text(&app, &telegram).await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_SAVE)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        offered,
+        [
+            texts::group_choice_button(app.fixture.group.code().as_str(), true),
+            texts::group_choice_button(second.code().as_str(), true),
+        ]
+    );
+    assert_eq!(toggled.message_id, shown.message_id);
+    assert_eq!(
+        unchecked,
+        texts::group_choice_button(app.fixture.group.code().as_str(), false)
+    );
+    assert!(
+        summary.contains(&texts::groups_line(&[second.code().as_str()])),
+        "{summary}"
+    );
+    let listed = app
+        .course_assignments(app.course(), app.teacher())
+        .await
+        .ok();
+    let created = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|assignment| assignment["title"] == "Stream lab")
+        .unwrap_or_else(|| panic!("the draft was not saved: {listed:#}"));
+    assert_eq!(created["student_group_ids"], json!([second.id().as_uuid()]));
+}
+
+#[tokio::test]
+async fn continuing_without_a_group_keeps_the_group_step() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_groups_step(&app, &telegram, "Nobody").await;
+
+    telegram
+        .click_button(app.teacher(), &group_toggle(&app.fixture.group))
+        .await;
+    telegram
+        .click_button(app.teacher(), &group_toggle(&second))
+        .await;
+    let refused = telegram
+        .click_button(app.teacher(), callbacks::ASSIGNMENT_GROUPS_DONE)
+        .await;
+    let refusal = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .any(|message| message["text"] == texts::ASSIGNMENT_GROUPS_REQUIRED);
+    telegram
+        .click_button(app.teacher(), &group_toggle(&second))
+        .await;
+    let accepted = telegram
+        .click_button(app.teacher(), callbacks::ASSIGNMENT_GROUPS_DONE)
+        .await;
+    telegram
+        .button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(refusal, "the teacher is told that one group is needed");
+    assert_eq!(refused.message_id, accepted.message_id);
+}
+
+#[tokio::test]
+async fn a_course_of_one_group_skips_the_group_step() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_groups_step(&app, &telegram, "Single group").await;
+
+    telegram
+        .button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        telegram
+            .messages(app.teacher())
+            .iter()
+            .all(|message| message["text"] != texts::ASSIGNMENT_GROUPS_QUESTION)
+    );
+}
+
+#[tokio::test]
+async fn a_stream_assignment_names_its_groups_on_the_card_and_in_the_attempts_list() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let third = app.add_group_to_course(&app.fixture.course).await;
+    let course = app.reload_course(&app.fixture.course).await;
+    let other = app.add_student_to_group("Other", &second).await;
+    app.add_student_to_group("Skipped", &third).await;
+    let assignment = wall_clock_assignment(&course, &app.fixture.teacher)
+        .title("Two groups")
+        .groups([&app.fixture.group, &second])
+        .published()
+        .build();
+    insert_assignment(&app.pool, &assignment).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::MANAGE_PREFIX, assignment.id().as_uuid()),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::ATTEMPTS_PREFIX, assignment.id().as_uuid()),
+        )
+        .await;
+    let labelled = telegram
+        .button_with_text(
+            app.teacher(),
+            &texts::student_button(&texts::group_student(
+                second.code().as_str(),
+                other.display_name().as_str(),
+            )),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent: Vec<String> = telegram
+        .messages(app.teacher())
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    let mut codes = vec![app.fixture.group.code().as_str(), second.code().as_str()];
+    codes.sort_unstable();
+    let groups = texts::groups_line(&codes);
+    assert!(
+        sent.iter()
+            .any(|text| text.starts_with("Two groups") && text.contains(&groups)),
+        "{sent:#?}"
+    );
+    assert!(labelled.data().ends_with(&other.id().as_uuid().to_string()));
+    assert!(
+        sent.iter().all(|text| !text.contains("Skipped")),
+        "students of a group the assignment is not issued to are not listed: {sent:#?}"
+    );
 }

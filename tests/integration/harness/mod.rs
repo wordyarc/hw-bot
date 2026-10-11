@@ -11,10 +11,10 @@ use hw_bot::app::{Actor, ApplicationContainer, ConfigureMakeup, FilePolicy, Make
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, CourseMakeup, DeductedFrom, EducationLevel, Grading, MakeupTerms, ReviewScore,
-    StudentGroup, StudentGroupId, Subject, TeachingCourse, User,
+    StudentGroup, StudentGroupId, Subject, TeachingCourse, TeachingCourseId, User,
 };
 use hw_bot::health::HealthState;
-use hw_bot::invites::{GroupInviteCodec, InviteSigningSecret};
+use hw_bot::invites::{CourseInviteCodec, InviteSigningSecret};
 use hw_bot::test_support::{
     assignment as assignment_of, named_admin, named_student, named_teacher, student_group_in,
     subject, teaching_course,
@@ -34,23 +34,23 @@ pub mod telegram_scenario;
 pub use database::{
     fresh_database, migrated_database, saturated_database, wait_for_blocked_connection,
 };
-pub use fixture::{CourseFixture, Fixture};
+pub use fixture::{CourseFixture, Fixture, insert_assignment, wall_clock_assignment};
 pub use response::TestResponse;
 pub use response_gate::ResponseGate;
 
-use fixture::{insert_course, insert_group, insert_user, wall_clock_assignment};
+use fixture::{insert_course, insert_group, insert_user};
 
 const INVITE_SIGNING_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
-pub fn invite_codec() -> GroupInviteCodec {
-    GroupInviteCodec::new(InviteSigningSecret::from_base64url(INVITE_SIGNING_SECRET).unwrap())
+pub fn invite_codec() -> CourseInviteCodec {
+    CourseInviteCodec::new(InviteSigningSecret::from_base64url(INVITE_SIGNING_SECRET).unwrap())
 }
 
 pub struct TestApp {
     pub pool: PgPool,
     pub fixture: Fixture,
     pub application: ApplicationContainer,
-    pub invites: GroupInviteCodec,
+    pub invites: CourseInviteCodec,
     router: Router,
     next_telegram_id: AtomicI64,
 }
@@ -356,17 +356,17 @@ impl TestApp {
     }
 
     /// Токен подписывается с текущей generation из БД. После ротации нужен новый вызов.
-    pub async fn invite_token(&self, group_id: StudentGroupId) -> String {
-        let generation = db::group_invites::find_generation(&self.pool, group_id)
+    pub async fn invite_token(&self, course_id: TeachingCourseId) -> String {
+        let generation = db::course_invites::find_generation(&self.pool, course_id)
             .await
             .expect("read invite generation")
-            .expect("group has an invite");
+            .expect("course has an invite");
 
-        self.invites.encode(group_id, generation)
+        self.invites.encode(course_id, generation)
     }
 
-    pub async fn group_invite_token(&self) -> String {
-        self.invite_token(self.fixture.group.id()).await
+    pub async fn course_invite_token(&self) -> String {
+        self.invite_token(self.fixture.course.id()).await
     }
 
     pub async fn register_student(
@@ -381,6 +381,25 @@ impl TestApp {
             json!({
                 "display_name": display_name,
                 "invite_token": invite_token,
+            }),
+        )
+        .await
+    }
+
+    pub async fn register_student_in(
+        &self,
+        telegram_id: i64,
+        display_name: &str,
+        invite_token: &str,
+        group_id: StudentGroupId,
+    ) -> TestResponse {
+        self.post_as(
+            "/students",
+            telegram_id,
+            json!({
+                "display_name": display_name,
+                "invite_token": invite_token,
+                "student_group_id": group_id.as_uuid(),
             }),
         )
         .await
@@ -459,6 +478,27 @@ impl TestApp {
         admin
     }
 
+    pub async fn add_group_to_course(&self, course: &TeachingCourse) -> StudentGroup {
+        let group = student_group_in(
+            &format!("TEST-GROUP-{}", self.next_telegram_id()),
+            EducationLevel::Bachelor,
+            1,
+        );
+        insert_group(&self.pool, &group).await;
+        db::academic::add_teaching_course_group(&self.pool, course.id(), group.id())
+            .await
+            .expect("add the group to the course");
+
+        group
+    }
+
+    pub async fn reload_course(&self, course: &TeachingCourse) -> TeachingCourse {
+        db::academic::find_teaching_course_by_id(&self.pool, course.id())
+            .await
+            .expect("read the course")
+            .expect("the course exists")
+    }
+
     pub async fn add_outsider_student(&self) -> User {
         let group = student_group_in(
             &format!("TEST-GROUP-{}", self.next_telegram_id()),
@@ -477,9 +517,7 @@ impl TestApp {
             .max_attempts(1)
             .build();
 
-        db::assignments::insert(&self.pool, &draft)
-            .await
-            .expect("insert draft assignment");
+        insert_assignment(&self.pool, &draft).await;
 
         draft
     }
@@ -491,9 +529,7 @@ impl TestApp {
             .published()
             .build();
 
-        db::assignments::insert(&self.pool, &assignment)
-            .await
-            .expect("insert scored assignment");
+        insert_assignment(&self.pool, &assignment).await;
 
         assignment
     }
@@ -519,9 +555,7 @@ impl TestApp {
         }
 
         let assignment = builder.published().build();
-        db::assignments::insert(&self.pool, &assignment)
-            .await
-            .expect("insert overdue assignment");
+        insert_assignment(&self.pool, &assignment).await;
 
         assignment
     }
@@ -541,9 +575,7 @@ impl TestApp {
             .late_policy(7, penalty_per_period, 4, deducted_from)
             .published()
             .build();
-        db::assignments::insert(&self.pool, &assignment)
-            .await
-            .expect("insert late assignment");
+        insert_assignment(&self.pool, &assignment).await;
 
         assignment
     }
@@ -563,7 +595,7 @@ impl TestApp {
         let teacher = named_teacher(self.next_telegram_id(), "Foreign teacher");
         insert_user(&self.pool, &teacher).await;
 
-        let course = teaching_course(subject, &group, &teacher);
+        let course = teaching_course(subject, &[&group], &teacher);
         insert_course(&self.pool, &course).await;
 
         CourseFixture {
@@ -588,7 +620,7 @@ impl TestApp {
     }
 
     pub async fn add_course_on(&self, subject: &Subject) -> TeachingCourse {
-        let course = teaching_course(subject, &self.fixture.group, &self.fixture.teacher);
+        let course = teaching_course(subject, &[&self.fixture.group], &self.fixture.teacher);
         insert_course(&self.pool, &course).await;
 
         course
@@ -606,7 +638,7 @@ impl TestApp {
             .await
             .expect("insert subject");
 
-        let course = teaching_course(&subject, &self.fixture.group, &self.fixture.teacher);
+        let course = teaching_course(&subject, &[&self.fixture.group], &self.fixture.teacher);
         insert_course(&self.pool, &course).await;
 
         course
@@ -671,9 +703,7 @@ impl TestApp {
             .makeup(makeup)
             .published()
             .build();
-        db::assignments::insert(&self.pool, &assignment)
-            .await
-            .expect("insert makeup assignment");
+        insert_assignment(&self.pool, &assignment).await;
 
         assignment
     }
@@ -704,9 +734,7 @@ impl TestApp {
             .title(title)
             .published()
             .build();
-        db::assignments::insert(&self.pool, &assignment)
-            .await
-            .expect("insert published assignment");
+        insert_assignment(&self.pool, &assignment).await;
 
         assignment
     }

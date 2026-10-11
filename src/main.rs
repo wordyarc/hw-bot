@@ -13,7 +13,7 @@ use hw_bot::config::{
 };
 use hw_bot::db;
 use hw_bot::health::{CriticalComponent, HealthState};
-use hw_bot::invites::GroupInviteCodec;
+use hw_bot::invites::CourseInviteCodec;
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, new_bot};
 use sqlx::PgPool;
@@ -56,7 +56,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let cancellation = CancellationToken::new();
     let health = HealthState::new(config.telegram.enabled, config.notification_worker.enabled);
     let application = ApplicationContainer::new(db_pool.clone(), file_policy);
-    let invites = GroupInviteCodec::new(config.group_invites.invite_signing_secret.clone());
+    let invites = CourseInviteCodec::new(config.group_invites.invite_signing_secret.clone());
     let telegram_bot = build_telegram_bot(&config, application.clone(), invites.clone())?;
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
@@ -171,7 +171,7 @@ async fn bootstrap(pool: &PgPool, file: &Path) -> anyhow::Result<()> {
 fn build_telegram_bot(
     config: &ValidatedAppConfig,
     application: ApplicationContainer,
-    invites: GroupInviteCodec,
+    invites: CourseInviteCodec,
 ) -> anyhow::Result<Option<TelegramBot>> {
     let Some(token) = config.telegram_bot_token() else {
         tracing::info!("Telegram bot disabled");

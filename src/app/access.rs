@@ -98,17 +98,22 @@ pub(crate) fn ensure_manages(
     Ok(())
 }
 
-pub(crate) async fn load_group_student<'e, E>(
+pub(crate) async fn load_course_student<'e, E>(
     executor: E,
-    group_id: StudentGroupId,
+    course: &TeachingCourse,
     student_id: UserId,
-) -> AppResult<User>
+) -> AppResult<(User, StudentGroupId)>
 where
     E: PgExecutor<'e>,
 {
     db::users::find_by_id(executor, student_id)
         .await?
-        .filter(|user| user.student_group_id() == Some(group_id))
+        .and_then(|user| {
+            let group_id = user
+                .student_group_id()
+                .filter(|&group_id| course.includes_group(group_id))?;
+            Some((user, group_id))
+        })
         .required("student")
 }
 

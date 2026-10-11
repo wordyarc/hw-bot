@@ -1,11 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
 use uuid::Uuid;
 
-use crate::db::{DbError, DbResult, checked_num_cast};
+use crate::db::{DbError, DbResult, checked_num_cast, course_invites};
 use crate::domain::{
     EducationLevel, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, TeachingCourse,
     TeachingCourseId, User, UserId,
@@ -16,20 +16,62 @@ use crate::read_models::TeachingCourseSummary;
 const EDUCATION_LEVEL: &str = "student_groups.education_level";
 const STUDY_YEAR: &str = "student_groups.study_year";
 
+macro_rules! select_course_summaries {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            TeachingCourseSummaryRow,
+            r#"
+            select
+                teaching_courses.id,
+                teaching_courses.subject_id,
+                teaching_courses.created_at,
+                array(
+                    select teacher_id
+                    from teaching_course_teachers
+                    where teaching_course_id = teaching_courses.id
+                ) as "teacher_ids!: Vec<Uuid>",
+                subjects.name as subject_name,
+                course_groups.ids as "group_ids!: Vec<Uuid>",
+                course_groups.codes as "group_codes!: Vec<String>",
+                course_groups.education_levels as "group_education_levels!: Vec<String>",
+                course_groups.study_years as "group_study_years!: Vec<i16>"
+            from teaching_courses
+            join subjects
+              on subjects.id = teaching_courses.subject_id
+            cross join lateral (
+                select
+                    coalesce(array_agg(student_groups.id order by student_groups.code), '{}')
+                        as ids,
+                    coalesce(array_agg(student_groups.code order by student_groups.code), '{}')
+                        as codes,
+                    coalesce(
+                        array_agg(student_groups.education_level order by student_groups.code),
+                        '{}'
+                    ) as education_levels,
+                    coalesce(
+                        array_agg(student_groups.study_year order by student_groups.code),
+                        '{}'
+                    ) as study_years,
+                    min(student_groups.code) as first_code
+                from teaching_course_groups
+                join student_groups
+                  on student_groups.id = teaching_course_groups.student_group_id
+                where teaching_course_groups.teaching_course_id = teaching_courses.id
+            ) course_groups
+            "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
 pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> DbResult<()>
 where
     E: PgExecutor<'e>,
 {
-    // Создаём инвайт при добавлении группы, чтобы открытие экрана ссылки оставалось чтением.
     sqlx::query!(
         r#"
-        with created as (
-            insert into student_groups (id, code, education_level, study_year)
-            values ($1, $2, $3, $4)
-            returning id
-        )
-        insert into student_group_invites (student_group_id, generation)
-        select id, 1 from created
+        insert into student_groups (id, code, education_level, study_year)
+        values ($1, $2, $3, $4)
         "#,
         group.id().as_uuid(),
         group.code().as_str(),
@@ -127,20 +169,34 @@ where
     .transpose()
 }
 
-/// Вызывающий обязан объединить оба INSERT транзакцией: нельзя оставить курс без преподавателей.
+/// Вызывающий обязан объединить все INSERT транзакцией: нельзя оставить курс без групп и преподавателей.
 pub async fn insert_teaching_course(
     conn: &mut PgConnection,
     course: &TeachingCourse,
 ) -> DbResult<()> {
     sqlx::query!(
         r#"
-        insert into teaching_courses (id, subject_id, student_group_id, created_at)
-        values ($1, $2, $3, $4)
+        insert into teaching_courses (id, subject_id, created_at)
+        values ($1, $2, $3)
         "#,
         course.id().as_uuid(),
         course.subject_id().as_uuid(),
-        course.student_group_id().as_uuid(),
         course.created_at(),
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    let group_ids: Vec<Uuid> = course.group_ids().iter().map(|id| id.as_uuid()).collect();
+
+    sqlx::query!(
+        r#"
+        insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)
+        select $1, $2, student_group_id
+        from unnest($3::uuid[]) as course_groups (student_group_id)
+        "#,
+        course.id().as_uuid(),
+        course.subject_id().as_uuid(),
+        &group_ids,
     )
     .execute(&mut *conn)
     .await?;
@@ -156,7 +212,32 @@ pub async fn insert_teaching_course(
         course.id().as_uuid(),
         &teacher_ids,
     )
-    .execute(conn)
+    .execute(&mut *conn)
+    .await?;
+
+    course_invites::ensure(conn, course.id()).await
+}
+
+pub async fn add_teaching_course_group<'e, E>(
+    executor: E,
+    course_id: TeachingCourseId,
+    group_id: StudentGroupId,
+) -> DbResult<()>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)
+        select id, subject_id, $2
+        from teaching_courses
+        where id = $1
+        on conflict (teaching_course_id, student_group_id) do nothing
+        "#,
+        course_id.as_uuid(),
+        group_id.as_uuid(),
+    )
+    .execute(executor)
     .await?;
 
     Ok(())
@@ -169,22 +250,25 @@ pub async fn find_teaching_course_by_id<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    // Через left join обнаружится курс без преподавателей. Inner join скрыл бы повреждённую запись.
     let row = sqlx::query_as!(
         TeachingCourseRow,
         r#"
         select
-            teaching_courses.id,
-            teaching_courses.subject_id,
-            teaching_courses.student_group_id,
-            teaching_courses.created_at,
-            array_remove(array_agg(teaching_course_teachers.teacher_id), null)
-                as "teacher_ids!: Vec<Uuid>"
+            id,
+            subject_id,
+            created_at,
+            array(
+                select student_group_id
+                from teaching_course_groups
+                where teaching_course_id = teaching_courses.id
+            ) as "group_ids!: Vec<Uuid>",
+            array(
+                select teacher_id
+                from teaching_course_teachers
+                where teaching_course_id = teaching_courses.id
+            ) as "teacher_ids!: Vec<Uuid>"
         from teaching_courses
-        left join teaching_course_teachers
-          on teaching_course_teachers.teaching_course_id = teaching_courses.id
-        where teaching_courses.id = $1
-        group by teaching_courses.id
+        where id = $1
         "#,
         id.as_uuid(),
     )
@@ -192,6 +276,20 @@ where
     .await?;
 
     row.map(TeachingCourse::try_from).transpose()
+}
+
+pub(crate) async fn find_teaching_course_summary<'e, E>(
+    executor: E,
+    id: TeachingCourseId,
+) -> DbResult<Option<TeachingCourseSummary>>
+where
+    E: PgExecutor<'e>,
+{
+    select_course_summaries!(" where teaching_courses.id = $1", id.as_uuid())
+        .fetch_optional(executor)
+        .await?
+        .map(TeachingCourseSummary::try_from)
+        .transpose()
 }
 
 pub(crate) async fn list_teaching_courses_for_teacher<'e, E>(
@@ -204,36 +302,15 @@ where
 {
     let sees_every_course = teacher.role().can_manage_all_teaching_courses();
 
-    sqlx::query_as!(
-        TeachingCourseCardRow,
+    select_course_summaries!(
         r#"
-        select
-            teaching_courses.id,
-            teaching_courses.subject_id,
-            teaching_courses.student_group_id,
-            teaching_courses.created_at,
-            array_remove(array_agg(teaching_course_teachers.teacher_id), null)
-                as "teacher_ids!: Vec<Uuid>",
-            subjects.name as subject_name,
-            student_groups.code as group_code,
-            student_groups.education_level,
-            student_groups.study_year
-        from teaching_courses
-        join subjects
-          on subjects.id = teaching_courses.subject_id
-        join student_groups
-          on student_groups.id = teaching_courses.student_group_id
-        left join teaching_course_teachers
-          on teaching_course_teachers.teaching_course_id = teaching_courses.id
         where $1 or exists (
             select 1
             from teaching_course_teachers mine
             where mine.teaching_course_id = teaching_courses.id
               and mine.teacher_id = $2
         )
-        group by teaching_courses.id, subjects.name, student_groups.code,
-                 student_groups.education_level, student_groups.study_year
-        order by subjects.name, student_groups.code, teaching_courses.id
+        order by subjects.name, course_groups.first_code, teaching_courses.id
         limit $3 offset $4
         "#,
         sees_every_course,
@@ -276,8 +353,8 @@ impl TryFrom<StudentGroupRow> for StudentGroup {
 struct TeachingCourseRow {
     id: Uuid,
     subject_id: Uuid,
-    student_group_id: Uuid,
     created_at: DateTime<Utc>,
+    group_ids: Vec<Uuid>,
     teacher_ids: Vec<Uuid>,
 }
 
@@ -285,13 +362,18 @@ impl TryFrom<TeachingCourseRow> for TeachingCourse {
     type Error = DbError;
 
     fn try_from(row: TeachingCourseRow) -> Result<Self, Self::Error> {
+        let group_ids: BTreeSet<StudentGroupId> = row
+            .group_ids
+            .into_iter()
+            .map(StudentGroupId::from_uuid)
+            .collect();
         let teacher_ids: HashSet<UserId> =
             row.teacher_ids.into_iter().map(UserId::from_uuid).collect();
 
         Ok(TeachingCourse::restore(
             TeachingCourseId::from_uuid(row.id),
             SubjectId::from_uuid(row.subject_id),
-            StudentGroupId::from_uuid(row.student_group_id),
+            group_ids,
             teacher_ids,
             row.created_at,
         )?)
@@ -299,41 +381,50 @@ impl TryFrom<TeachingCourseRow> for TeachingCourse {
 }
 
 #[derive(Debug)]
-struct TeachingCourseCardRow {
+struct TeachingCourseSummaryRow {
     id: Uuid,
     subject_id: Uuid,
-    student_group_id: Uuid,
     created_at: DateTime<Utc>,
     teacher_ids: Vec<Uuid>,
     subject_name: String,
-    group_code: String,
-    education_level: String,
-    study_year: i16,
+    group_ids: Vec<Uuid>,
+    group_codes: Vec<String>,
+    group_education_levels: Vec<String>,
+    group_study_years: Vec<i16>,
 }
 
-impl TryFrom<TeachingCourseCardRow> for TeachingCourseSummary {
+impl TryFrom<TeachingCourseSummaryRow> for TeachingCourseSummary {
     type Error = DbError;
 
-    fn try_from(row: TeachingCourseCardRow) -> Result<Self, Self::Error> {
+    fn try_from(row: TeachingCourseSummaryRow) -> Result<Self, Self::Error> {
         let subject = Subject::new(SubjectId::from_uuid(row.subject_id), row.subject_name)?;
-        let group = StudentGroup::try_from(StudentGroupRow {
-            id: row.student_group_id,
-            code: row.group_code,
-            education_level: row.education_level,
-            study_year: row.study_year,
-        })?;
+        let groups = row
+            .group_ids
+            .iter()
+            .zip(row.group_codes)
+            .zip(row.group_education_levels)
+            .zip(row.group_study_years)
+            .map(|(((&id, code), education_level), study_year)| {
+                StudentGroup::try_from(StudentGroupRow {
+                    id,
+                    code,
+                    education_level,
+                    study_year,
+                })
+            })
+            .collect::<DbResult<Vec<_>>>()?;
         let course = TeachingCourse::try_from(TeachingCourseRow {
             id: row.id,
             subject_id: row.subject_id,
-            student_group_id: row.student_group_id,
             created_at: row.created_at,
+            group_ids: row.group_ids,
             teacher_ids: row.teacher_ids,
         })?;
 
         Ok(Self {
             course,
             subject,
-            group,
+            groups,
         })
     }
 }

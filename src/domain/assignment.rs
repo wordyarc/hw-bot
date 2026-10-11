@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Datelike, Duration, Utc};
 
 use crate::domain::{
@@ -91,7 +93,7 @@ pub struct Assignment {
     id: AssignmentId,
     teaching_course_id: TeachingCourseId,
     subject_id: SubjectId,
-    student_group_id: StudentGroupId,
+    groups: BTreeSet<StudentGroupId>,
     title: NonEmptyString,
     body: NonEmptyString,
     max_attempts: u16,
@@ -273,7 +275,7 @@ pub(crate) struct AssignmentParts {
     pub id: AssignmentId,
     pub teaching_course_id: TeachingCourseId,
     pub subject_id: SubjectId,
-    pub student_group_id: StudentGroupId,
+    pub groups: BTreeSet<StudentGroupId>,
     pub title: String,
     pub body: String,
     pub max_attempts: u16,
@@ -299,6 +301,7 @@ struct ProposedTerms {
 pub struct NewAssignment {
     pub title: String,
     pub body: String,
+    pub groups: Option<BTreeSet<StudentGroupId>>,
     pub max_attempts: u16,
     pub grading: Grading,
     pub late_policy: Option<LatePolicy>,
@@ -342,7 +345,7 @@ impl Assignment {
             id: parts.id,
             teaching_course_id: parts.teaching_course_id,
             subject_id: parts.subject_id,
-            student_group_id: parts.student_group_id,
+            groups: parts.groups,
             title: NonEmptyString::new_bounded(
                 "assignment.title",
                 parts.title,
@@ -377,11 +380,20 @@ impl Assignment {
             policy.validate_horizon(input.deadline_at)?;
         }
 
+        let groups = match input.groups {
+            None => teaching_course.group_ids().clone(),
+            Some(groups) if groups.is_empty() => return Err(DomainError::AssignmentHasNoGroups),
+            Some(groups) if !groups.is_subset(teaching_course.group_ids()) => {
+                return Err(DomainError::AssignmentGroupOutsideCourse);
+            }
+            Some(groups) => groups,
+        };
+
         Self::restore(AssignmentParts {
             id,
             teaching_course_id: teaching_course.id(),
             subject_id: teaching_course.subject_id(),
-            student_group_id: teaching_course.student_group_id(),
+            groups,
             title: input.title,
             body: input.body,
             max_attempts: input.max_attempts,
@@ -558,8 +570,14 @@ impl Assignment {
         self.subject_id
     }
 
-    pub fn student_group_id(&self) -> StudentGroupId {
-        self.student_group_id
+    pub fn groups(&self) -> &BTreeSet<StudentGroupId> {
+        &self.groups
+    }
+
+    pub fn is_issued_to(&self, student: &User) -> bool {
+        student
+            .student_group_id()
+            .is_some_and(|group_id| self.groups.contains(&group_id))
     }
 
     pub fn ensure_belongs_to_course(&self, teaching_course: &TeachingCourse) -> DomainResult<()> {
@@ -750,7 +768,9 @@ mod tests {
     use chrono::Duration;
 
     use super::*;
-    use crate::test_support::{assignment, course_for, student_group, t0, teacher};
+    use crate::test_support::{
+        assignment, course_for, student, student_group, subject, t0, teacher, teaching_course,
+    };
 
     fn restore(
         status: AssignmentStatus,
@@ -763,7 +783,7 @@ mod tests {
             id: AssignmentId::new(),
             teaching_course_id: TeachingCourseId::new(),
             subject_id: SubjectId::new(),
-            student_group_id: StudentGroupId::new(),
+            groups: BTreeSet::from([StudentGroupId::new()]),
             title: "Rust ownership".to_owned(),
             body: "Send a pull request link.".to_owned(),
             max_attempts,
@@ -925,7 +945,7 @@ mod tests {
             id: work.id,
             teaching_course_id: work.teaching_course_id,
             subject_id: work.subject_id,
-            student_group_id: work.student_group_id,
+            groups: work.groups.clone(),
             title: work.title.as_str().to_owned(),
             body: work.body.as_str().to_owned(),
             max_attempts: work.max_attempts,
@@ -994,6 +1014,71 @@ mod tests {
             pass_fail.regular_grade(out_of(1, 1), t0()),
             Err(DomainError::ScoreNotAllowed)
         );
+    }
+
+    #[test]
+    fn an_assignment_without_chosen_groups_is_issued_to_every_group_of_its_course() {
+        let teacher = teacher(1);
+        let (first, second) = (student_group("first"), student_group("second"));
+        let course = teaching_course(&subject("Backend"), &[&first, &second], &teacher);
+
+        let issued = assignment(&course, &teacher).build();
+
+        assert_eq!(issued.groups(), course.group_ids());
+        assert!(issued.is_issued_to(&student(2, &first)));
+        assert!(issued.is_issued_to(&student(3, &second)));
+    }
+
+    #[test]
+    fn an_assignment_keeps_the_chosen_part_of_the_course_groups() {
+        let teacher = teacher(1);
+        let (first, second) = (student_group("first"), student_group("second"));
+        let course = teaching_course(&subject("Backend"), &[&first, &second], &teacher);
+
+        let issued = assignment(&course, &teacher).groups([&second]).build();
+
+        assert_eq!(issued.groups(), &BTreeSet::from([second.id()]));
+        assert!(issued.is_issued_to(&student(2, &second)));
+        assert!(!issued.is_issued_to(&student(3, &first)));
+        assert!(!issued.is_issued_to(&teacher));
+    }
+
+    #[test]
+    fn an_assignment_cannot_be_issued_to_no_group_or_a_group_outside_its_course() {
+        let teacher = teacher(1);
+        let (own, foreign) = (student_group("own"), student_group("foreign"));
+        let course = course_for(&own, &teacher);
+
+        assert_eq!(
+            assignment(&course, &teacher).groups([]).try_build(),
+            Err(DomainError::AssignmentHasNoGroups)
+        );
+        assert_eq!(
+            assignment(&course, &teacher)
+                .groups([&own, &foreign])
+                .try_build(),
+            Err(DomainError::AssignmentGroupOutsideCourse)
+        );
+    }
+
+    #[test]
+    fn changing_an_assignment_never_changes_the_groups_it_is_issued_to() {
+        let teacher = teacher(1);
+        let (first, second) = (student_group("first"), student_group("second"));
+        let course = teaching_course(&subject("Backend"), &[&first, &second], &teacher);
+        let mut issued = assignment(&course, &teacher).groups([&first]).build();
+        let groups = issued.groups().clone();
+
+        issued.publish(&course, &teacher, t0()).unwrap();
+        issued
+            .change_deadline(&course, &teacher, t0() + Duration::days(14))
+            .unwrap();
+        issued
+            .change_grading(&course, &teacher, Grading::scored(10).unwrap(), None)
+            .unwrap();
+        issued.archive(&course, &teacher).unwrap();
+
+        assert_eq!(issued.groups(), &groups);
     }
 
     #[test]

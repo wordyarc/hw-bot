@@ -18,7 +18,7 @@ impl StudentAssignmentProgress {
             });
         }
 
-        if student.student_group_id() != Some(assignment.student_group_id()) {
+        if !assignment.is_issued_to(student) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
         }
 

@@ -14,6 +14,11 @@
       "code": "b9122-02.03.21",
       "education_level": "bachelor",
       "study_year": 1
+    },
+    {
+      "code": "b9122-02.03.22",
+      "education_level": "bachelor",
+      "study_year": 1
     }
   ],
   "subjects": [
@@ -28,12 +33,12 @@
   "courses": [
     {
       "subject_name": "Backend Development",
-      "student_group_code": "b9122-02.03.21",
+      "student_group_codes": ["b9122-02.03.21", "b9122-02.03.22"],
       "teacher_telegram_user_ids": [100000002]
     },
     {
       "subject_name": "Sandbox",
-      "student_group_code": "b9122-02.03.21",
+      "student_group_codes": ["b9122-02.03.21", "b9122-02.03.22"],
       "teacher_telegram_user_ids": [100000002]
     }
   ]

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Utc};
 
@@ -126,7 +126,7 @@ impl Subject {
 pub struct TeachingCourse {
     id: TeachingCourseId,
     subject_id: SubjectId,
-    student_group_id: StudentGroupId,
+    group_ids: BTreeSet<StudentGroupId>,
     teacher_ids: HashSet<UserId>,
     created_at: DateTime<Utc>,
 }
@@ -135,10 +135,14 @@ impl TeachingCourse {
     pub(crate) fn restore(
         id: TeachingCourseId,
         subject_id: SubjectId,
-        student_group_id: StudentGroupId,
+        group_ids: BTreeSet<StudentGroupId>,
         teacher_ids: HashSet<UserId>,
         created_at: DateTime<Utc>,
     ) -> DomainResult<Self> {
+        if group_ids.is_empty() {
+            return Err(DomainError::TeachingCourseHasNoGroups);
+        }
+
         if teacher_ids.is_empty() {
             return Err(DomainError::TeachingCourseHasNoTeachers);
         }
@@ -146,7 +150,7 @@ impl TeachingCourse {
         Ok(Self {
             id,
             subject_id,
-            student_group_id,
+            group_ids,
             teacher_ids,
             created_at,
         })
@@ -155,7 +159,7 @@ impl TeachingCourse {
     pub fn new(
         id: TeachingCourseId,
         subject: &Subject,
-        student_group: &StudentGroup,
+        groups: &[&StudentGroup],
         teacher: &User,
         created_at: DateTime<Utc>,
     ) -> DomainResult<Self> {
@@ -168,7 +172,7 @@ impl TeachingCourse {
         Self::restore(
             id,
             subject.id(),
-            student_group.id(),
+            groups.iter().map(|group| group.id()).collect(),
             HashSet::from([teacher.id()]),
             created_at,
         )
@@ -205,8 +209,12 @@ impl TeachingCourse {
         self.subject_id
     }
 
-    pub fn student_group_id(&self) -> StudentGroupId {
-        self.student_group_id
+    pub fn group_ids(&self) -> &BTreeSet<StudentGroupId> {
+        &self.group_ids
+    }
+
+    pub fn includes_group(&self, group_id: StudentGroupId) -> bool {
+        self.group_ids.contains(&group_id)
     }
 
     pub fn teacher_ids(&self) -> &HashSet<UserId> {
@@ -221,7 +229,7 @@ impl TeachingCourse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::t0;
+    use crate::test_support::{student_group, subject, t0, teacher, teaching_course};
 
     #[test]
     fn study_program_validates_year_by_education_level() {
@@ -241,13 +249,44 @@ mod tests {
             TeachingCourse::restore(
                 TeachingCourseId::new(),
                 SubjectId::new(),
-                StudentGroupId::new(),
+                BTreeSet::from([StudentGroupId::new()]),
                 HashSet::new(),
                 t0(),
             )
             .unwrap_err(),
             DomainError::TeachingCourseHasNoTeachers
         );
+    }
+
+    #[test]
+    fn restore_rejects_teaching_course_without_groups() {
+        assert_eq!(
+            TeachingCourse::restore(
+                TeachingCourseId::new(),
+                SubjectId::new(),
+                BTreeSet::new(),
+                HashSet::from([UserId::new()]),
+                t0(),
+            )
+            .unwrap_err(),
+            DomainError::TeachingCourseHasNoGroups
+        );
+    }
+
+    #[test]
+    fn a_course_includes_only_its_own_groups() {
+        let teacher = teacher(1);
+        let (first, second, foreign) = (
+            student_group("first"),
+            student_group("second"),
+            student_group("foreign"),
+        );
+        let course = teaching_course(&subject("Backend"), &[&first, &second], &teacher);
+
+        assert!(course.includes_group(first.id()));
+        assert!(course.includes_group(second.id()));
+        assert!(!course.includes_group(foreign.id()));
+        assert_eq!(course.group_ids().len(), 2);
     }
 
     #[test]

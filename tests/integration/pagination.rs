@@ -5,7 +5,7 @@ use hw_bot::{
     pagination::{PAGE_SIZE, PageRequest},
 };
 
-use crate::harness::TestApp;
+use crate::harness::{TestApp, insert_assignment};
 
 #[tokio::test]
 async fn telegram_opens_the_next_assignment_page_using_a_real_navigation_button() {
@@ -157,9 +157,7 @@ async fn the_card_reads_only_the_latest_attempt_and_history_is_paged_newest_firs
         .max_attempts(20)
         .published()
         .build();
-    db::assignments::insert(&app.pool, &assignment)
-        .await
-        .unwrap();
+    insert_assignment(&app.pool, &assignment).await;
     for index in 0..PAGE_SIZE + 1 {
         let submission = hw_bot::test_support::submission(&assignment, &app.fixture.student)
             .history(hw_bot::test_support::history().used(index as u16).build())

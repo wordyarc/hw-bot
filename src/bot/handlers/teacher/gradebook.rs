@@ -7,28 +7,52 @@ use crate::bot::context::Screen;
 use crate::bot::state::{BotState, FlowState, ScreenState, StudentChoice, StudentList};
 use crate::bot::texts;
 use crate::bot::views::{
-    gradebook_students_keyboard, paginated_keyboard, send_screen, student_grades_keyboard,
+    gradebook_groups_keyboard, gradebook_students_keyboard, paginated_keyboard, send_screen,
+    student_grades_keyboard,
 };
-use crate::domain::{TeachingCourseId, UserId};
+use crate::domain::{StudentGroupId, TeachingCourseId, UserId};
 use crate::pagination::{Page, PageRequest};
+
+pub(crate) async fn show_gradebook_groups(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+) -> HandlerResult {
+    let course = screen
+        .services()
+        .courses
+        .find_for_teacher(screen.actor(), course_id)
+        .await?;
+    if let [group] = course.groups.as_slice() {
+        return show_gradebook_page(screen, course_id, group.id(), PageRequest::default()).await;
+    }
+
+    screen
+        .bot()
+        .send_message(screen.chat_id(), texts::GRADEBOOK_CHOOSE_GROUP)
+        .reply_markup(gradebook_groups_keyboard(course_id, &course.groups))
+        .await?;
+    Ok(())
+}
 
 pub(crate) async fn show_gradebook_page(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
+    group_id: StudentGroupId,
     page: PageRequest,
 ) -> HandlerResult {
     let students = screen
         .services()
         .courses
-        .list_students(screen.actor(), course_id, page)
+        .list_students(screen.actor(), course_id, group_id, page)
         .await?;
 
-    render_gradebook(screen, course_id, &students).await
+    render_gradebook(screen, course_id, group_id, &students).await
 }
 
 async fn render_gradebook(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
+    group_id: StudentGroupId,
     students: &Page<CourseStudent>,
 ) -> HandlerResult {
     if students.items.is_empty() && students.page == 0 {
@@ -44,7 +68,7 @@ async fn render_gradebook(
         .send_message(screen.chat_id(), texts::GRADEBOOK_CHOOSE_STUDENT)
         .reply_markup(paginated_keyboard(
             gradebook_students_keyboard(course_id, &students.items),
-            PageTarget::Gradebook(course_id),
+            PageTarget::Gradebook(course_id, group_id),
             students.page,
             students.next_page,
         ))
@@ -73,6 +97,7 @@ pub(crate) async fn show_student_grades_page(
 ) -> HandlerResult {
     let StudentGradesCard {
         grades: student,
+        group_id,
         makeup,
     } = screen
         .services()
@@ -112,7 +137,7 @@ pub(crate) async fn show_student_grades_page(
     let text = lines.join("\n");
 
     let keyboard = paginated_keyboard(
-        student_grades_keyboard(course_id, student_id, makeup.is_some()),
+        student_grades_keyboard(course_id, group_id, student_id, makeup.is_some()),
         PageTarget::StudentGrades(course_id, student_id),
         student.grade_page,
         student.next_grade_page,

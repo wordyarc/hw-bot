@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,\n                deadline_at, published_at\n            , revision  from assignments where id = $1",
+  "query": "\n            select\n                id, teaching_course_id, subject_id,\n                array(\n                    select student_group_id\n                    from assignment_groups\n                    where assignment_id = assignments.id\n                ) as \"group_ids!: Vec<Uuid>\",\n                title, body, max_attempts, max_score, late_period_days, late_penalty_per_period,\n                late_max_periods, late_deducted_from, makeup_offered, makeup_credit, status,\n                created_by, created_at, deadline_at, published_at\n             from assignments where id = $1",
   "describe": {
     "columns": [
       {
@@ -38,14 +38,9 @@
       },
       {
         "ordinal": 3,
-        "name": "student_group_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "assignments",
-            "name": "student_group_id"
-          }
-        }
+        "name": "group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
@@ -211,17 +206,6 @@
             "name": "published_at"
           }
         }
-      },
-      {
-        "ordinal": 19,
-        "name": "revision",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "assignments",
-            "name": "revision"
-          }
-        }
       }
     ],
     "parameters": {
@@ -233,24 +217,23 @@
       false,
       false,
       false,
+      null,
       false,
       false,
       false,
-      false,
+      true,
       true,
       true,
       true,
       true,
       true,
       true,
-      true,
       false,
       false,
       false,
       false,
-      true,
-      false
+      true
     ]
   },
-  "hash": "6243eff7dff3be631bf6614db360fafff3b93cd23623050a115e1777576e92c9"
+  "hash": "042f1002f6f5ac714d55d57f8189662e883630ec27df9ee224dfb4cb3f5f9bb3"
 }

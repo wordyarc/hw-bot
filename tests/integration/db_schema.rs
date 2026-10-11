@@ -51,15 +51,14 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         sqlx::query(
             r#"
             insert into assignments (
-                teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-                status, created_by, deadline_at, published_at
+                teaching_course_id, subject_id, title, body, max_attempts, status, created_by,
+                deadline_at, published_at
             )
-            values ($1, $2, $3, $4, 'body', 1, $5, $6, $7, $8)
+            values ($1, $2, $3, 'body', 1, $4, $5, $6, $7)
             "#,
         )
         .bind(fixture.course.id().as_uuid())
         .bind(fixture.subject.id().as_uuid())
-        .bind(fixture.group.id().as_uuid())
         .bind(format!("assignment-{}", status.as_str()))
         .bind(status.as_str())
         .bind(fixture.teacher.id().as_uuid())
@@ -556,15 +555,14 @@ async fn assignment_status_requires_the_matching_published_at_shape() -> anyhow:
         let result = sqlx::query(
             r#"
             insert into assignments (
-                teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-                status, created_by, deadline_at, published_at
+                teaching_course_id, subject_id, title, body, max_attempts, status, created_by,
+                deadline_at, published_at
             )
-            values ($1, $2, $3, $4, 'body', 1, $5, $6, $7, $8)
+            values ($1, $2, $3, 'body', 1, $4, $5, $6, $7)
             "#,
         )
         .bind(fixture.course.id().as_uuid())
         .bind(fixture.subject.id().as_uuid())
-        .bind(fixture.group.id().as_uuid())
         .bind(format!("invalid-{status}"))
         .bind(status)
         .bind(fixture.teacher.id().as_uuid())
@@ -587,15 +585,14 @@ async fn schema_rejects_user_text_over_the_product_limit() -> anyhow::Result<()>
     let result = sqlx::query(
         r#"
         insert into assignments (
-            teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            status, created_by, deadline_at
+            teaching_course_id, subject_id, title, body, max_attempts, status, created_by,
+            deadline_at
         )
-        values ($1, $2, $3, 'title', $4, 1, 'draft', $5, $6)
+        values ($1, $2, 'title', $3, 1, 'draft', $4, $5)
         "#,
     )
     .bind(fixture.course.id().as_uuid())
     .bind(fixture.subject.id().as_uuid())
-    .bind(fixture.group.id().as_uuid())
     .bind("я".repeat(4097))
     .bind(fixture.teacher.id().as_uuid())
     .bind(Utc::now() + Duration::days(7))
@@ -622,15 +619,14 @@ async fn check_constraints_reject_unknown_enum_values() -> anyhow::Result<()> {
     let assignment = sqlx::query(
         r#"
         insert into assignments (
-            teaching_course_id, subject_id, student_group_id, title, body, max_attempts,
-            status, created_by, deadline_at
+            teaching_course_id, subject_id, title, body, max_attempts, status, created_by,
+            deadline_at
         )
-        values ($1, $2, $3, 'bogus', 'body', 1, 'postponed', $4, $5)
+        values ($1, $2, 'bogus', 'body', 1, 'postponed', $3, $4)
         "#,
     )
     .bind(fixture.course.id().as_uuid())
     .bind(fixture.subject.id().as_uuid())
-    .bind(fixture.group.id().as_uuid())
     .bind(fixture.teacher.id().as_uuid())
     .bind(Utc::now() + Duration::days(7))
     .execute(&app.pool)
@@ -838,4 +834,99 @@ fn assert_check(error: sqlx::Error, constraint: Option<&str>) {
     if let Some(constraint) = constraint {
         assert_eq!(database.constraint(), Some(constraint), "{error}");
     }
+}
+
+#[tokio::test]
+async fn a_group_belongs_to_at_most_one_course_of_a_subject() {
+    let app = TestApp::start().await;
+    let second = app.add_foreign_course_on(&app.fixture.subject).await.course;
+
+    let error =
+        db::academic::add_teaching_course_group(&app.pool, second.id(), app.fixture.group.id())
+            .await
+            .unwrap_err();
+
+    let db::DbError::Database(error) = error else {
+        panic!("a constraint violation, got {error:?}");
+    };
+    let database = error.as_database_error().unwrap();
+    assert_eq!(database.code().as_deref(), Some("23505"), "{error}");
+    assert_eq!(
+        database.constraint(),
+        Some("teaching_course_groups_subject_id_student_group_id_key")
+    );
+}
+
+#[tokio::test]
+async fn an_assignment_is_issued_only_to_groups_of_its_course() {
+    let app = TestApp::start().await;
+    let foreign = app.add_foreign_course().await;
+
+    let error = sqlx::query(
+        "insert into assignment_groups (assignment_id, teaching_course_id, student_group_id)
+         values ($1, $2, $3)",
+    )
+    .bind(app.fixture.assignment.id().as_uuid())
+    .bind(app.fixture.course.id().as_uuid())
+    .bind(foreign.group.id().as_uuid())
+    .execute(&app.pool)
+    .await
+    .unwrap_err();
+
+    let database = error.as_database_error().unwrap();
+    assert_eq!(database.code().as_deref(), Some("23503"), "{error}");
+    assert_eq!(
+        database.constraint(),
+        Some("assignment_groups_teaching_course_id_student_group_id_fkey")
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_course_deletes_its_invite_and_groups() {
+    let app = TestApp::start().await;
+    let course = app.add_foreign_course().await.course;
+
+    sqlx::query("delete from teaching_courses where id = $1")
+        .bind(course.id().as_uuid())
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (invites, groups): (i64, i64) = sqlx::query_as(
+        "select
+            (select count(*) from teaching_course_invites where teaching_course_id = $1),
+            (select count(*) from teaching_course_groups where teaching_course_id = $1)",
+    )
+    .bind(course.id().as_uuid())
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!((invites, groups), (0, 0));
+}
+
+#[tokio::test]
+async fn the_invite_migration_backfills_courses_created_without_an_invite() {
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+    let pool = fresh_database().await;
+    db::run_migrations(&pool).await.unwrap();
+    MIGRATOR.undo(&pool, 2).await.unwrap();
+    let course_id: Uuid = sqlx::query_scalar(
+        "with subject as (insert into subjects (name) values ('Old') returning id)
+         insert into teaching_courses (subject_id) select id from subject returning id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    db::run_migrations(&pool).await.unwrap();
+
+    let generation: i64 = sqlx::query_scalar(
+        "select generation from teaching_course_invites where teaching_course_id = $1",
+    )
+    .bind(course_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(generation, 1);
 }

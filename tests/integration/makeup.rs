@@ -12,7 +12,7 @@ use hw_bot::pagination::PageRequest;
 use hw_bot::test_support::{assignment as assignment_of, submission as submission_of};
 use uuid::Uuid;
 
-use crate::harness::{TestApp, out_of, submission_id};
+use crate::harness::{TestApp, insert_assignment, out_of, submission_id};
 
 fn ten() -> Grading {
     Grading::scored(10).unwrap()
@@ -782,7 +782,7 @@ async fn closed_with_accepted_work(
         submitted_at = now - Duration::days(39);
     }
     let work = builder.build();
-    db::assignments::insert(&app.pool, &work).await.unwrap();
+    insert_assignment(&app.pool, &work).await;
     let accepted = submission_of(&work, &app.fixture.student)
         .submitted_at(submitted_at)
         .build();

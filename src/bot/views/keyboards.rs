@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, KeyboardMarkup};
 
@@ -9,11 +11,12 @@ use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, InputMode, TermsForm, TermsStep, TermsTarget,
 };
 use crate::bot::callbacks::{
-    AmountChoice, CALENDAR_NOOP, DEADLINE_CALENDAR, DEADLINE_MANUAL, DEADLINE_OPTIONS,
-    DeadlineAction, FILE_CANCEL_DELETE, FILE_CONFIRM_DELETE, GradingChoice, INVITE_CANCEL_ROTATE,
-    INVITE_CONFIRM_ROTATE, InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice,
-    MAKEUP_ATTEMPTS, MAKEUP_ATTEMPTS_PREFIX, MAKEUP_BACK, MAKEUP_CANCEL, MAKEUP_DATE,
-    MAKEUP_DISABLE, MAKEUP_SAVE, MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget,
+    ASSIGNMENT_GROUP_PREFIX, ASSIGNMENT_GROUPS_DONE, AmountChoice, CALENDAR_NOOP,
+    DEADLINE_CALENDAR, DEADLINE_MANUAL, DEADLINE_OPTIONS, DeadlineAction, FILE_CANCEL_DELETE,
+    FILE_CONFIRM_DELETE, GradingChoice, INVITE_CANCEL_ROTATE, INVITE_CONFIRM_ROTATE,
+    InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice, MAKEUP_ATTEMPTS,
+    MAKEUP_ATTEMPTS_PREFIX, MAKEUP_BACK, MAKEUP_CANCEL, MAKEUP_DATE, MAKEUP_DISABLE, MAKEUP_SAVE,
+    MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REGISTRATION_GROUP_PREFIX,
     REVIEW_ACCEPT_PREFIX, REVIEW_CHANGE_PREFIX, REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX,
     ReplayableAction, STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
     TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_EXIT, TERMS_MAKEUP, TERMS_PENALTY,
@@ -24,7 +27,8 @@ use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom, Grading,
-    ReviewDecision, Role, StoredFileMetadata, SubmissionId, TeachingCourseId, UserId,
+    ReviewDecision, Role, StoredFileMetadata, StudentGroup, StudentGroupId, SubmissionId,
+    TeachingCourseId, UserId,
 };
 
 type Row = Vec<InlineKeyboardButton>;
@@ -216,6 +220,7 @@ fn student_contact_button(course_id: TeachingCourseId, student_id: UserId) -> In
 
 pub(crate) fn student_grades_keyboard(
     course_id: TeachingCourseId,
+    group_id: StudentGroupId,
     student_id: UserId,
     grant_makeup: bool,
 ) -> InlineKeyboardMarkup {
@@ -228,7 +233,7 @@ pub(crate) fn student_grades_keyboard(
     }
     rows.push(row(
         texts::BUTTON_BACK_TO_STUDENTS,
-        ReplayableAction::Page(PageTarget::Gradebook(course_id), 0).callback(),
+        ReplayableAction::Page(PageTarget::Gradebook(course_id, group_id), 0).callback(),
     ));
     InlineKeyboardMarkup::new(rows)
 }
@@ -284,11 +289,13 @@ pub(crate) fn sandbox_keyboard(
 
 pub(crate) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(courses.iter().map(|course| {
+        let subject = course.subject.name().as_str();
+        let label = match course.groups.as_slice() {
+            [group] => texts::course_button(subject, group.code().as_str()),
+            groups => texts::course_groups_button(subject, groups.len()),
+        };
         row(
-            button_label(&texts::course_button(
-                course.subject.name().as_str(),
-                course.group.code().as_str(),
-            )),
+            button_label(&label),
             ReplayableAction::Page(PageTarget::Course(course.course.id()), 0).callback(),
         )
     }))
@@ -319,7 +326,7 @@ pub(crate) fn course_assignments_keyboard(
         ),
         row(
             texts::BUTTON_GRADEBOOK,
-            ReplayableAction::Page(PageTarget::Gradebook(course_id), 0).callback(),
+            ReplayableAction::GradebookGroups(course_id).callback(),
         ),
         row(
             makeup.map_or_else(
@@ -334,8 +341,8 @@ pub(crate) fn course_assignments_keyboard(
             ReplayableAction::CourseMakeup(course_id).callback(),
         ),
         row(
-            texts::BUTTON_GROUP_INVITE,
-            ReplayableAction::GroupInvite(course_id).callback(),
+            texts::BUTTON_COURSE_INVITE,
+            ReplayableAction::CourseInvite(course_id).callback(),
         ),
         row(
             texts::BUTTON_BACK_TO_COURSES,
@@ -913,11 +920,11 @@ pub(crate) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
     ]])
 }
 
-pub(crate) fn group_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
+pub(crate) fn course_invite_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         row(
             texts::BUTTON_ROTATE_INVITE,
-            ScreenAction::RotateGroupInvite.callback(),
+            ScreenAction::RotateCourseInvite.callback(),
         ),
         row(
             texts::BUTTON_BACK_TO_COURSE,
@@ -931,6 +938,55 @@ pub(crate) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
         button(texts::BUTTON_CONFIRM_ROTATE, INVITE_CONFIRM_ROTATE),
         button(texts::BUTTON_CANCEL, INVITE_CANCEL_ROTATE),
     ]])
+}
+
+pub(crate) fn registration_groups_keyboard(groups: &[StudentGroup]) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(groups.iter().map(|group| {
+        row(
+            button_label(group.code().as_str()),
+            format!("{REGISTRATION_GROUP_PREFIX}{}", group.id().as_uuid()),
+        )
+    }))
+}
+
+pub(crate) fn assignment_groups_keyboard(
+    groups: &[StudentGroup],
+    selected: &BTreeSet<StudentGroupId>,
+) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Row> = groups
+        .iter()
+        .map(|group| {
+            row(
+                button_label(&texts::group_choice_button(
+                    group.code().as_str(),
+                    selected.contains(&group.id()),
+                )),
+                format!("{ASSIGNMENT_GROUP_PREFIX}{}", group.id().as_uuid()),
+            )
+        })
+        .collect();
+    rows.push(row(texts::BUTTON_GROUPS_DONE, ASSIGNMENT_GROUPS_DONE));
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn gradebook_groups_keyboard(
+    course_id: TeachingCourseId,
+    groups: &[StudentGroup],
+) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Row> = groups
+        .iter()
+        .map(|group| {
+            row(
+                button_label(&texts::group_button(group.code().as_str())),
+                ReplayableAction::Page(PageTarget::Gradebook(course_id, group.id()), 0).callback(),
+            )
+        })
+        .collect();
+    rows.push(row(
+        texts::BUTTON_BACK_TO_COURSE,
+        ReplayableAction::Page(PageTarget::Course(course_id), 0).callback(),
+    ));
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub(crate) fn gradebook_students_keyboard(
@@ -951,11 +1007,24 @@ pub(crate) fn gradebook_students_keyboard(
 pub(crate) fn assignment_students_keyboard(
     assignment_id: AssignmentId,
     students: &[AssignmentStudentSummary],
+    with_groups: bool,
 ) -> InlineKeyboardMarkup {
+    let names: Vec<String> = students
+        .iter()
+        .map(|item| {
+            let name = item.student.display_name().as_str();
+            if with_groups {
+                texts::group_student(&item.group_code, name)
+            } else {
+                name.to_owned()
+            }
+        })
+        .collect();
     students_keyboard(
         students
             .iter()
-            .map(|item| (item.student.id(), item.student.display_name().as_str())),
+            .zip(&names)
+            .map(|(item, name)| (item.student.id(), name.as_str())),
         row(
             texts::BUTTON_BACK_TO_ASSIGNMENT,
             ReplayableAction::ManageAssignment(assignment_id).callback(),
@@ -1004,7 +1073,7 @@ mod tests {
 
     use super::super::render::{penalty_schedule, terms_form_view};
     use super::*;
-    use crate::bot::assignment_form::{AssignmentText, DraftAssignment};
+    use crate::bot::assignment_form::{AssignmentText, DraftAssignment, IssuedGroups};
     use crate::bot::callbacks::CALENDAR_PICK_PREFIX;
     use crate::bot::texts::deadline_left;
     use crate::domain::{Grading, LatePolicy, MaxScore};
@@ -1017,6 +1086,7 @@ mod tests {
                 title: "Task".into(),
                 body: "Body".into(),
             },
+            IssuedGroups::Single(StudentGroupId::new()),
             2,
         );
         draft.grading = Grading::scored(10).unwrap();

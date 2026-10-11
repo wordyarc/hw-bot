@@ -8,8 +8,9 @@ use crate::domain::{
     TelegramUserId, User, UserId,
 };
 use crate::test_support::{
-    ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL, admin,
-    assignment, course_for, history, student, student_group, submission, t0, teacher,
+    ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL,
+    SUBJECT_NAME, admin, assignment, course_for, history, student, student_group, subject,
+    submission, t0, teacher, teaching_course,
 };
 
 fn reviewed_at() -> DateTime<Utc> {
@@ -34,6 +35,7 @@ fn only_teacher_or_admin_can_create_assignment() {
         NewAssignment {
             title: ASSIGNMENT_TITLE.to_owned(),
             body: ASSIGNMENT_BODY.to_owned(),
+            groups: None,
             max_attempts: 2,
             grading: Grading::PassFail,
             late_policy: None,
@@ -307,6 +309,40 @@ fn student_from_another_group_cannot_submit_assignment() {
         result.unwrap_err(),
         DomainError::StudentDoesNotBelongToAssignmentGroup
     );
+}
+
+#[test]
+fn only_a_student_of_an_issued_group_submits_and_receives_extra_attempts() {
+    let teacher = teacher(1);
+    let issued = student_group(GROUP_CODE);
+    let skipped = student_group(OTHER_GROUP_CODE);
+    let course = teaching_course(&subject(SUBJECT_NAME), &[&issued, &skipped], &teacher);
+    let assignment = assignment(&course, &teacher)
+        .groups([&issued])
+        .published()
+        .build();
+
+    for (group, expected) in [
+        (&issued, Ok(())),
+        (
+            &skipped,
+            Err(DomainError::StudentDoesNotBelongToAssignmentGroup),
+        ),
+    ] {
+        let student = student(2, group);
+        let code = group.code().as_str();
+
+        assert_eq!(
+            submission(&assignment, &student).try_build().map(drop),
+            expected,
+            "submission of {code}"
+        );
+        assert_eq!(
+            StudentAssignmentProgress::new(&assignment, &student, 0).map(drop),
+            expected,
+            "extra attempts of {code}"
+        );
+    }
 }
 
 #[test]

@@ -14,8 +14,9 @@ fn ids(body: &Value) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn a_teacher_sees_their_course_with_subject_and_group() {
+async fn a_teacher_sees_their_course_with_subject_and_every_group() {
     let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
 
     let body = app.teacher_courses(app.teacher()).await.ok();
 
@@ -23,13 +24,22 @@ async fn a_teacher_sees_their_course_with_subject_and_group() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["id"], json!(app.course()));
     assert_eq!(items[0]["subject"]["name"], json!("Backend development"));
-    assert_eq!(
-        items[0]["student_group"]["code"],
-        json!(app.fixture.group.code().as_str())
-    );
-    assert_eq!(
-        items[0]["student_group"]["education_level"],
-        json!("bachelor")
+    let groups = items[0]["student_groups"]
+        .as_array()
+        .expect("a group array");
+    let mut codes: Vec<&str> = groups
+        .iter()
+        .map(|group| group["code"].as_str().unwrap())
+        .collect();
+    codes.sort_unstable();
+    let mut expected = vec![app.fixture.group.code().as_str(), second.code().as_str()];
+    expected.sort_unstable();
+    assert_eq!(codes, expected);
+    assert!(
+        groups
+            .iter()
+            .all(|group| group["id"].is_string() && group["education_level"] == "bachelor"),
+        "{groups:#?}"
     );
 }
 

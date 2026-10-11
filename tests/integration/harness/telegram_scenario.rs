@@ -34,6 +34,10 @@ pub struct Button {
 }
 
 impl Button {
+    pub fn data(&self) -> &str {
+        &self.data
+    }
+
     pub fn with_data(mut self, data: String) -> Self {
         self.data = data;
         self

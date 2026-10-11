@@ -10,7 +10,7 @@ use crate::domain::{
 pub struct TeachingCourseSummary {
     pub course: TeachingCourse,
     pub subject: Subject,
-    pub group: StudentGroup,
+    pub groups: Vec<StudentGroup>,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +56,7 @@ pub struct SandboxSubmission {
 #[derive(Clone, Debug)]
 pub struct AssignmentStudentSummary {
     pub student: User,
+    pub group_code: String,
     pub history: SubmissionHistory,
 }
 

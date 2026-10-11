@@ -4,7 +4,7 @@ use hw_bot::domain::FilePresentation;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::harness::TestApp;
+use crate::harness::{TestApp, insert_assignment, wall_clock_assignment};
 
 #[track_caller]
 fn only(body: &Value) -> &Value {
@@ -23,6 +23,39 @@ async fn a_student_sees_the_published_assignments_of_their_group() {
     let item = only(&body);
     assert_eq!(item["assignment"]["id"], json!(app.assignment()));
     assert_eq!(item["assignment"]["title"], json!("Rust ownership"));
+}
+
+#[tokio::test]
+async fn a_student_of_a_group_the_assignment_is_not_issued_to_never_sees_it() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let course = app.reload_course(&app.fixture.course).await;
+    let outsider = app
+        .add_student_to_group("Second group", &second)
+        .await
+        .telegram_user_id()
+        .as_i64();
+    let current = wall_clock_assignment(&course, &app.fixture.teacher)
+        .title("First group only")
+        .groups([&app.fixture.group])
+        .published()
+        .build();
+    insert_assignment(&app.pool, &current).await;
+    let archived = app
+        .add_published_assignment(&app.fixture.course, &app.fixture.teacher, "Old")
+        .await;
+    app.archive_assignment(archived.id().as_uuid(), app.teacher())
+        .await
+        .ok();
+
+    let listed = app.student_assignments(outsider).await.ok();
+    let archive = app.archived_student_assignments(outsider).await.ok();
+
+    assert_eq!(listed, json!([]));
+    assert_eq!(archive, json!([]));
+    app.student_assignment(current.id().as_uuid(), outsider)
+        .await
+        .error(StatusCode::FORBIDDEN, "permission_denied");
 }
 
 #[tokio::test]

@@ -99,11 +99,16 @@ fn terms_summary(
         late_policy: policy,
         closes_at: closing,
     } = complete;
-    let mut text = format!(
-        "{}\n{}",
-        texts::TERMS_CONFIRM,
+    let mut text = texts::TERMS_CONFIRM.to_owned();
+    if let TermsTarget::Create(draft) = &terms.target
+        && let Some(codes) = draft.groups.listed()
+    {
+        text.push_str(&format!("\n{}", texts::groups_line(&codes)));
+    }
+    text.push_str(&format!(
+        "\n{}",
         terms_lines(terms.grading(), deadline, policy, closing, timezone)
-    );
+    ));
     if terms.makeup_enabled {
         text.push_str(&format!(
             "\n{}",

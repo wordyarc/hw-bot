@@ -41,13 +41,13 @@ pub enum AppError {
     #[error("assignment was changed by a concurrent request")]
     AssignmentChangedConcurrently,
 
-    #[error("group invite was rotated by a concurrent request")]
-    GroupInviteChangedConcurrently,
+    #[error("course invite was rotated by a concurrent request")]
+    CourseInviteChangedConcurrently,
 
     #[error("course makeup settings were changed by a concurrent request")]
     CourseMakeupChangedConcurrently,
 
-    #[error("group invite is not valid")]
+    #[error("course invite is not valid")]
     InviteInvalid,
 
     #[error("file must be at most {max_bytes} bytes, got {actual_bytes}")]
@@ -93,7 +93,11 @@ impl AppError {
                 | DomainError::InvalidMakeupCredit { .. }
                 | DomainError::InvalidMakeupAttempts { .. }
                 | DomainError::MakeupUntilOutOfRange { .. }
-                | DomainError::MakeupGrantLimitExceeded { .. } => ErrorCode::InvalidInput,
+                | DomainError::MakeupGrantLimitExceeded { .. }
+                | DomainError::AssignmentHasNoGroups
+                | DomainError::AssignmentGroupOutsideCourse
+                | DomainError::StudentGroupNotInCourse
+                | DomainError::StudentGroupChoiceRequired => ErrorCode::InvalidInput,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }
                 | DomainError::AssignmentIsArchived => ErrorCode::AssignmentUnavailable,
@@ -111,6 +115,7 @@ impl AppError {
                 | DomainError::InviteGenerationExhausted
                 | DomainError::AssignmentDoesNotBelongToTeachingCourse
                 | DomainError::TeachingCourseHasNoTeachers
+                | DomainError::TeachingCourseHasNoGroups
                 | DomainError::InvalidAssignmentPublishedState
                 | DomainError::InvalidSubmissionAttemptNumber { .. }
                 | DomainError::InvalidSubmissionReviewState
@@ -121,7 +126,7 @@ impl AppError {
             },
             Self::NotFound { .. } => ErrorCode::NotFound,
             Self::AssignmentChangedConcurrently
-            | Self::GroupInviteChangedConcurrently
+            | Self::CourseInviteChangedConcurrently
             | Self::CourseMakeupChangedConcurrently => ErrorCode::ConcurrentModification,
             Self::InviteInvalid => ErrorCode::InviteInvalid,
             Self::FileTooLarge { .. } => ErrorCode::FileTooLarge,

@@ -10,14 +10,14 @@ use super::pagination::{Pagination, page_headers, page_json};
 use crate::api::users::StudentGroupResponse;
 use crate::api::{Actor, ApiError, AppState};
 use crate::app::{StudentGrades, TeachingCourseSummary};
-use crate::domain::{TeachingCourseId, UserId};
+use crate::domain::{StudentGroupId, TeachingCourseId, UserId};
 use crate::pagination::Page;
 
 #[derive(Debug, Serialize)]
 pub struct TeachingCourseResponse {
     id: Uuid,
     subject: SubjectResponse,
-    student_group: StudentGroupResponse,
+    student_groups: Vec<StudentGroupResponse>,
     teacher_count: usize,
     created_at: DateTime<Utc>,
 }
@@ -36,7 +36,7 @@ impl From<&TeachingCourseSummary> for TeachingCourseResponse {
                 id: card.subject.id().as_uuid(),
                 name: card.subject.name().as_str().to_owned(),
             },
-            student_group: StudentGroupResponse::from(&card.group),
+            student_groups: card.groups.iter().map(StudentGroupResponse::from).collect(),
             teacher_count: card.course.teacher_ids().len(),
             created_at: card.course.created_at(),
         }
@@ -109,13 +109,13 @@ impl From<&StudentGrades> for StudentGradesResponse {
 pub async fn course_gradebook(
     State(state): State<AppState>,
     actor: Actor,
-    Path(course_id): Path<TeachingCourseId>,
+    Path((course_id, group_id)): Path<(TeachingCourseId, StudentGroupId)>,
     Pagination(page): Pagination,
 ) -> Result<(HeaderMap, Json<CourseGradebookResponse>), ApiError> {
     let gradebook = state
         .application
         .courses
-        .gradebook(actor, course_id, page)
+        .gradebook(actor, course_id, group_id, page)
         .await?;
 
     Ok((

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Duration, Utc};
 
 pub mod telegram;
@@ -35,7 +37,7 @@ pub fn bootstrap_seed() -> serde_json::Value {
         "subjects": [{"name": "Backend Development"}],
         "courses": [{
             "subject_name": "Backend Development",
-            "student_group_code": "b9122-02.03.21",
+            "student_group_codes": ["b9122-02.03.21"],
             "teacher_telegram_user_ids": [100000002]
         }]
     })
@@ -115,13 +117,17 @@ fn telegram_user_id(value: i64) -> TelegramUserId {
     TelegramUserId::new(value).expect("positive telegram user id")
 }
 
-pub fn teaching_course(subject: &Subject, group: &StudentGroup, teacher: &User) -> TeachingCourse {
-    TeachingCourse::new(TeachingCourseId::new(), subject, group, teacher, t0())
+pub fn teaching_course(
+    subject: &Subject,
+    groups: &[&StudentGroup],
+    teacher: &User,
+) -> TeachingCourse {
+    TeachingCourse::new(TeachingCourseId::new(), subject, groups, teacher, t0())
         .expect("valid teaching course")
 }
 
 pub fn course_for(group: &StudentGroup, teacher: &User) -> TeachingCourse {
-    teaching_course(&subject(SUBJECT_NAME), group, teacher)
+    teaching_course(&subject(SUBJECT_NAME), &[group], teacher)
 }
 
 pub fn assignment<'a>(course: &'a TeachingCourse, author: &'a User) -> AssignmentBuilder<'a> {
@@ -130,6 +136,7 @@ pub fn assignment<'a>(course: &'a TeachingCourse, author: &'a User) -> Assignmen
         author,
         title: ASSIGNMENT_TITLE.to_owned(),
         body: ASSIGNMENT_BODY.to_owned(),
+        groups: None,
         max_attempts: 2,
         grading: Grading::PassFail,
         late_policy: None,
@@ -146,6 +153,7 @@ pub struct AssignmentBuilder<'a> {
     author: &'a User,
     title: String,
     body: String,
+    groups: Option<BTreeSet<StudentGroupId>>,
     max_attempts: u16,
     grading: Grading,
     late_policy: Option<LatePolicy>,
@@ -164,6 +172,11 @@ impl<'a> AssignmentBuilder<'a> {
 
     pub fn body(mut self, value: impl Into<String>) -> Self {
         self.body = value.into();
+        self
+    }
+
+    pub fn groups<'g>(mut self, groups: impl IntoIterator<Item = &'g StudentGroup>) -> Self {
+        self.groups = Some(groups.into_iter().map(StudentGroup::id).collect());
         self
     }
 
@@ -249,6 +262,7 @@ impl<'a> AssignmentBuilder<'a> {
             NewAssignment {
                 title: self.title,
                 body: self.body,
+                groups: self.groups,
                 max_attempts: self.max_attempts,
                 grading: self.grading,
                 late_policy: self.late_policy,

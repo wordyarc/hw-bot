@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, teaching_course_id, subject_id, student_group_id, title, body, max_attempts,\n                max_score, late_period_days, late_penalty_per_period, late_max_periods,\n                late_deducted_from, makeup_offered, makeup_credit, status, created_by, created_at,\n                deadline_at, published_at\n             from assignments where teaching_course_id = $1 order by created_at desc, id limit $2 offset $3",
+  "query": "\n            select\n                assignments.id, assignments.teaching_course_id, assignments.subject_id,\n                array(\n                    select student_group_id\n                    from assignment_groups\n                    where assignment_id = assignments.id\n                ) as \"group_ids!: Vec<Uuid>\",\n                assignments.title, assignments.body,\n                assignments.max_attempts, assignments.max_score, assignments.late_period_days,\n                assignments.late_penalty_per_period, assignments.late_max_periods,\n                assignments.late_deducted_from, assignments.makeup_offered,\n                assignments.makeup_credit, assignments.status, assignments.created_by,\n                assignments.created_at, assignments.deadline_at, assignments.published_at,\n                subjects.name as subject_name\n            from assignments\n            join subjects\n              on subjects.id = assignments.subject_id\n             join assignment_groups issued\n            on issued.assignment_id = assignments.id\n         where issued.student_group_id = $1\n           and assignments.status = 'archived'\n           and assignments.published_at is not null\n         order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
   "describe": {
     "columns": [
       {
@@ -38,14 +38,9 @@
       },
       {
         "ordinal": 3,
-        "name": "student_group_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "assignments",
-            "name": "student_group_id"
-          }
-        }
+        "name": "group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
@@ -211,6 +206,17 @@
             "name": "published_at"
           }
         }
+      },
+      {
+        "ordinal": 19,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
       }
     ],
     "parameters": {
@@ -224,7 +230,7 @@
       false,
       false,
       false,
-      false,
+      null,
       false,
       false,
       false,
@@ -239,8 +245,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "a3973ea0c75f033088cc8ec2eedaf3d3b4299ede85e3f1e0b3e8b1452b56d069"
+  "hash": "ac0b343d24bf9543e4a54a0a1d51ebcb412273e0b467e0351a34b2708d586858"
 }

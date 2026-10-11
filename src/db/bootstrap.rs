@@ -6,7 +6,7 @@ use sqlx::{PgConnection, PgPool};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::db::{DbError, group_invites};
+use crate::db::{DbError, academic, course_invites};
 use crate::domain::{
     DomainError, EducationLevel, Role, StudentGroup, StudentGroupId, StudyProgram, Subject,
     SubjectId, TeachingCourseId, TelegramUserId, User, UserId,
@@ -69,7 +69,7 @@ struct SubjectSeed {
 #[serde(deny_unknown_fields)]
 struct CourseSeed {
     subject_name: String,
-    student_group_code: String,
+    student_group_codes: Vec<String>,
     teacher_telegram_user_ids: Vec<i64>,
 }
 
@@ -87,7 +87,7 @@ struct ValidatedSubject {
 
 struct ValidatedCourse {
     subject_name: String,
-    student_group_code: String,
+    student_group_codes: Vec<String>,
     teacher_telegram_user_ids: Vec<TelegramUserId>,
 }
 
@@ -120,10 +120,21 @@ pub async fn run_bootstrap(pool: &PgPool, value: &serde_json::Value) -> Result<(
         subject_ids.insert(subject.subject.name().as_str(), id);
     }
 
+    let mut course_ids = HashSet::with_capacity(seed.courses.len());
     for course in &seed.courses {
         let subject_id = subject_ids[course.subject_name.as_str()];
-        let student_group_id = group_ids[course.student_group_code.as_str()];
-        let course_id = ensure_course(&mut transaction, subject_id, student_group_id).await?;
+        let student_group_ids: Vec<Uuid> = course
+            .student_group_codes
+            .iter()
+            .map(|code| group_ids[code.as_str()])
+            .collect();
+        let course_id = ensure_course(&mut transaction, subject_id, &student_group_ids).await?;
+        if !course_ids.insert(course_id) {
+            return Err(invalid(format!(
+                "two courses of subject {} resolve to one stored course",
+                course.subject_name
+            )));
+        }
 
         for telegram_user_id in &course.teacher_telegram_user_ids {
             ensure_course_teacher(&mut transaction, course_id, staff_ids[telegram_user_id]).await?;
@@ -187,14 +198,33 @@ fn validate_seed(seed: Seed) -> Result<ValidatedSeed, BootstrapError> {
     let mut course_keys = HashSet::with_capacity(seed.courses.len());
     for course in seed.courses {
         let subject_name = course.subject_name.trim().to_owned();
-        let student_group_code = course.student_group_code.trim().to_owned();
-        if !subject_names.contains(&subject_name) || !group_codes.contains(&student_group_code) {
+        if course.student_group_codes.is_empty() {
+            return Err(invalid("every course must have at least one student group"));
+        }
+        let student_group_codes: Vec<String> = course
+            .student_group_codes
+            .iter()
+            .map(|code| code.trim().to_owned())
+            .collect();
+        if !subject_names.contains(&subject_name)
+            || student_group_codes
+                .iter()
+                .any(|code| !group_codes.contains(code))
+        {
             return Err(invalid(
-                "every course must reference a subject and student group from this seed",
+                "every course must reference a subject and student groups from this seed",
             ));
         }
-        if !course_keys.insert((subject_name.clone(), student_group_code.clone())) {
-            return Err(invalid("subject and student group pairs must be unique"));
+        let unique_codes: HashSet<&String> = student_group_codes.iter().collect();
+        if unique_codes.len() != student_group_codes.len() {
+            return Err(invalid(
+                "a student group must not be repeated within a course",
+            ));
+        }
+        for code in &student_group_codes {
+            if !course_keys.insert((subject_name.clone(), code.clone())) {
+                return Err(invalid("subject and student group pairs must be unique"));
+            }
         }
         if course.teacher_telegram_user_ids.is_empty() {
             return Err(invalid("every course must have at least one teacher"));
@@ -217,7 +247,7 @@ fn validate_seed(seed: Seed) -> Result<ValidatedSeed, BootstrapError> {
 
         courses.push(ValidatedCourse {
             subject_name,
-            student_group_code,
+            student_group_codes,
             teacher_telegram_user_ids: teacher_ids,
         });
     }
@@ -324,8 +354,6 @@ async fn ensure_student_group(
         )));
     }
 
-    group_invites::ensure(connection, StudentGroupId::from_uuid(row.id)).await?;
-
     Ok(row.id)
 }
 
@@ -372,33 +400,57 @@ async fn ensure_subject(
 async fn ensure_course(
     connection: &mut PgConnection,
     subject_id: Uuid,
-    student_group_id: Uuid,
+    student_group_ids: &[Uuid],
 ) -> Result<Uuid, BootstrapError> {
-    sqlx::query!(
+    let mut stored = sqlx::query_scalar!(
         r#"
-        insert into teaching_courses (id, subject_id, student_group_id)
-        values ($1, $2, $3)
-        on conflict (subject_id, student_group_id) do nothing
-        "#,
-        TeachingCourseId::new().as_uuid(),
-        subject_id,
-        student_group_id,
-    )
-    .execute(&mut *connection)
-    .await?;
-
-    Ok(sqlx::query_scalar!(
-        r#"
-        select id
-        from teaching_courses
-        where subject_id = $1 and student_group_id = $2
+        select teaching_course_id
+        from teaching_course_groups
+        where subject_id = $1 and student_group_id = any($2)
         for share
         "#,
         subject_id,
-        student_group_id,
+        student_group_ids,
     )
-    .fetch_one(connection)
-    .await?)
+    .fetch_all(&mut *connection)
+    .await?;
+    stored.sort_unstable();
+    stored.dedup();
+
+    let course_id = match stored[..] {
+        [] => {
+            let course_id = TeachingCourseId::new();
+            sqlx::query!(
+                r#"
+                insert into teaching_courses (id, subject_id)
+                values ($1, $2)
+                "#,
+                course_id.as_uuid(),
+                subject_id,
+            )
+            .execute(&mut *connection)
+            .await?;
+            course_id
+        }
+        [course_id] => TeachingCourseId::from_uuid(course_id),
+        _ => {
+            return Err(invalid(
+                "a course of the seed joins student groups of different stored courses",
+            ));
+        }
+    };
+
+    for &student_group_id in student_group_ids {
+        academic::add_teaching_course_group(
+            &mut *connection,
+            course_id,
+            StudentGroupId::from_uuid(student_group_id),
+        )
+        .await?;
+    }
+    course_invites::ensure(connection, course_id).await?;
+
+    Ok(course_id.as_uuid())
 }
 
 async fn ensure_course_teacher(
@@ -452,11 +504,32 @@ async fn validate_stored_courses(connection: &mut PgConnection) -> Result<(), Bo
         ) as "exists!"
         "#,
     )
-    .fetch_one(connection)
+    .fetch_one(&mut *connection)
     .await?;
     if has_course_without_teacher {
         return Err(invalid(
             "every teaching course must have at least one teacher",
+        ));
+    }
+
+    let has_course_without_group = sqlx::query_scalar!(
+        r#"
+        select exists (
+            select 1
+            from teaching_courses course
+            where not exists (
+                select 1
+                from teaching_course_groups course_group
+                where course_group.teaching_course_id = course.id
+            )
+        ) as "exists!"
+        "#,
+    )
+    .fetch_one(connection)
+    .await?;
+    if has_course_without_group {
+        return Err(invalid(
+            "every teaching course must have at least one student group",
         ));
     }
 
@@ -529,21 +602,49 @@ mod tests {
         let mut seed = bootstrap_seed();
         let mut duplicate = seed["courses"][0].clone();
         duplicate["subject_name"] = json!(" Backend Development ");
-        duplicate["student_group_code"] = json!(" b9122-02.03.21 ");
+        duplicate["student_group_codes"] = json!([" b9122-02.03.21 "]);
         seed["courses"].as_array_mut().unwrap().push(duplicate);
         rejects(seed, "subject and student group pairs must be unique");
     }
 
     #[test]
     fn courses_reference_groups_and_subjects_from_the_same_seed() {
-        for field in ["subject_name", "student_group_code"] {
+        for (field, value) in [
+            ("subject_name", json!("unknown")),
+            ("student_group_codes", json!(["unknown"])),
+            ("student_group_codes", json!(["b9122-02.03.21", "unknown"])),
+        ] {
             let mut seed = bootstrap_seed();
-            seed["courses"][0][field] = json!("unknown");
+            seed["courses"][0][field] = value;
             rejects(
                 seed,
-                "every course must reference a subject and student group from this seed",
+                "every course must reference a subject and student groups from this seed",
             );
         }
+    }
+
+    #[test]
+    fn a_course_requires_at_least_one_student_group() {
+        let mut seed = bootstrap_seed();
+        seed["courses"][0]["student_group_codes"] = json!([]);
+        rejects(seed, "every course must have at least one student group");
+    }
+
+    #[test]
+    fn a_course_cannot_repeat_a_student_group() {
+        let mut seed = bootstrap_seed();
+        seed["courses"][0]["student_group_codes"] = json!(["b9122-02.03.21", " b9122-02.03.21 "]);
+        rejects(seed, "a student group must not be repeated within a course");
+    }
+
+    #[test]
+    fn a_course_of_the_former_format_is_rejected_before_the_database() {
+        let mut seed = bootstrap_seed();
+        let course = seed["courses"][0].as_object_mut().unwrap();
+        course.remove("student_group_codes");
+        course.insert("student_group_code".to_owned(), json!("b9122-02.03.21"));
+
+        assert!(Seed::deserialize(seed).is_err());
     }
 
     #[test]
@@ -582,10 +683,21 @@ mod tests {
             .iter()
             .find(|subject| subject.sandbox)
             .expect("the example shows a sandbox subject");
+        let sandbox_course = seed
+            .courses
+            .iter()
+            .find(|course| course.subject_name == sandbox.subject.name().as_str())
+            .expect("the example shows a sandbox course");
+        assert_eq!(
+            sandbox_course.student_group_codes.len(),
+            seed.student_groups.len(),
+            "the sandbox course spans every group"
+        );
         assert!(
             seed.courses
                 .iter()
-                .any(|course| course.subject_name == sandbox.subject.name().as_str())
+                .any(|course| course.student_group_codes.len() > 1),
+            "the example shows a course of several groups"
         );
     }
 

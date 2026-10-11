@@ -8,7 +8,7 @@ use super::*;
 use crate::app::{AppError, ApplicationContainer, FilePolicy};
 use crate::domain::AssignmentId;
 use crate::health::HealthState;
-use crate::invites::{GroupInviteCodec, InviteSigningSecret};
+use crate::invites::{CourseInviteCodec, InviteSigningSecret};
 use crate::test_support::{closed_pool, t0};
 
 async fn database_free_router() -> Router {
@@ -21,7 +21,7 @@ async fn database_free_router() -> Router {
             max_files_per_submission: 1,
         },
     );
-    let invites = GroupInviteCodec::new(
+    let invites = CourseInviteCodec::new(
         InviteSigningSecret::from_base64url("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8").unwrap(),
     );
     router(

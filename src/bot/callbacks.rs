@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use super::handlers::input::parse_u16;
 use crate::domain::{
-    AssignmentId, DeductedFrom, ReviewDecision, SubmissionId, TeachingCourseId, UserId,
+    AssignmentId, DeductedFrom, ReviewDecision, StudentGroupId, SubmissionId, TeachingCourseId,
+    UserId,
 };
 
 use CallbackAction::{Flow, Informational, Replayable, Screen};
@@ -85,6 +86,9 @@ pub const FILE_DELETE_PREFIX: &str = "file:delete:";
 pub const INVITE_ROTATE: &str = "invite:rotate";
 pub const INVITE_CONFIRM_ROTATE: &str = "invite:confirm-rotate";
 pub const INVITE_CANCEL_ROTATE: &str = "invite:cancel-rotate";
+pub const REGISTRATION_GROUP_PREFIX: &str = "reg-group:";
+pub const ASSIGNMENT_GROUP_PREFIX: &str = "agroup:";
+pub const ASSIGNMENT_GROUPS_DONE: &str = "agroup:done";
 
 pub const REVIEW_ACCEPT_PREFIX: &str = "review:accept:";
 pub const REVIEW_REJECT_PREFIX: &str = "review:reject:";
@@ -166,7 +170,8 @@ pub(super) enum ReplayableAction {
     StartAssignmentCreation(TeachingCourseId),
     StartSubmission(AssignmentId),
     AssignmentFiles(AssignmentId),
-    GroupInvite(TeachingCourseId),
+    CourseInvite(TeachingCourseId),
+    GradebookGroups(TeachingCourseId),
     ReviewSubmission(SubmissionId),
 }
 
@@ -180,7 +185,6 @@ impl ReplayableAction {
             Self::Page(PageTarget::Sandbox, 0) => MENU_SANDBOX.to_owned(),
             Self::Page(PageTarget::Course(id), 0) => format!("{COURSE_PREFIX}{}", id.as_uuid()),
             Self::Page(PageTarget::Students(id), 0) => format!("{ATTEMPTS_PREFIX}{}", id.as_uuid()),
-            Self::Page(PageTarget::Gradebook(id), 0) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::Page(target, page) => target.callback(page),
             Self::Profile => MENU_PROFILE.to_owned(),
             Self::ReviewHub => REVIEW_HUB.to_owned(),
@@ -192,7 +196,8 @@ impl ReplayableAction {
             Self::StartAssignmentCreation(id) => format!("{CREATE_PREFIX}{}", id.as_uuid()),
             Self::StartSubmission(id) => format!("{SUBMIT_PREFIX}{}", id.as_uuid()),
             Self::AssignmentFiles(id) => format!("{FILES_PREFIX}{}", id.as_uuid()),
-            Self::GroupInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
+            Self::CourseInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
+            Self::GradebookGroups(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::ReviewSubmission(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
         }
     }
@@ -207,7 +212,7 @@ pub(super) enum PageTarget {
     Sandbox,
     Course(TeachingCourseId),
     Students(AssignmentId),
-    Gradebook(TeachingCourseId),
+    Gradebook(TeachingCourseId, StudentGroupId),
     History(AssignmentId),
     StudentGrades(TeachingCourseId, UserId),
 }
@@ -223,7 +228,9 @@ impl PageTarget {
             Self::Sandbox => "sb".to_owned(),
             Self::Course(course) => format!("ca:{}", id(course.as_uuid())),
             Self::Students(assignment) => format!("s:{}", id(assignment.as_uuid())),
-            Self::Gradebook(course) => format!("g:{}", id(course.as_uuid())),
+            Self::Gradebook(course, group) => {
+                format!("g:{}:{}", id(course.as_uuid()), id(group.as_uuid()))
+            }
             Self::History(assignment) => format!("h:{}", id(assignment.as_uuid())),
             Self::StudentGrades(course, student) => {
                 format!("sg:{}:{}", id(course.as_uuid()), id(student.as_uuid()))
@@ -251,7 +258,10 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
         "sb" => PageTarget::Sandbox,
         "ca" => PageTarget::Course(TeachingCourseId::from_uuid(id()?)),
         "s" => PageTarget::Students(AssignmentId::from_uuid(id()?)),
-        "g" => PageTarget::Gradebook(TeachingCourseId::from_uuid(id()?)),
+        "g" => PageTarget::Gradebook(
+            TeachingCourseId::from_uuid(id()?),
+            StudentGroupId::from_uuid(id()?),
+        ),
         "h" => PageTarget::History(AssignmentId::from_uuid(id()?)),
         "sg" => {
             PageTarget::StudentGrades(TeachingCourseId::from_uuid(id()?), UserId::from_uuid(id()?))
@@ -273,7 +283,7 @@ pub(super) enum ScreenAction {
     OpenFile(usize),
     DeleteFile(usize),
     FinishFileCreation,
-    RotateGroupInvite,
+    RotateCourseInvite,
     BulkReview(ReviewDecision),
     GrantMakeupAttempt,
 }
@@ -288,7 +298,7 @@ impl ScreenAction {
             Self::OpenFile(index) => format!("{FILE_OPEN_PREFIX}{index}"),
             Self::DeleteFile(index) => format!("{FILE_DELETE_PREFIX}{index}"),
             Self::FinishFileCreation => FILE_FINISH.to_owned(),
-            Self::RotateGroupInvite => INVITE_ROTATE.to_owned(),
+            Self::RotateCourseInvite => INVITE_ROTATE.to_owned(),
             Self::BulkReview(ReviewDecision::Accept) => SANDBOX_ACCEPT_ALL.to_owned(),
             Self::BulkReview(ReviewDecision::Reject) => SANDBOX_REJECT_ALL.to_owned(),
             Self::GrantMakeupAttempt => MAKEUP_GRANT.to_owned(),
@@ -321,6 +331,9 @@ pub(super) enum FlowAction {
     CancelFileDeletion,
     ConfirmInviteRotation,
     CancelInviteRotation,
+    RegistrationGroup(StudentGroupId),
+    AssignmentGroup(StudentGroupId),
+    AssignmentGroupsDone,
     MakeupAnswer(MakeupChoice),
     MakeupAttempts(AmountChoice),
     MakeupForm(MakeupFormAction),
@@ -468,7 +481,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         NEXT_MAKEUP_REVIEW => Replayable(ReplayableAction::NextMakeupReview),
         FILE_ADD => Screen(ScreenAction::AddFile),
         FILE_FINISH => Screen(ScreenAction::FinishFileCreation),
-        INVITE_ROTATE => Screen(ScreenAction::RotateGroupInvite),
+        INVITE_ROTATE => Screen(ScreenAction::RotateCourseInvite),
         SANDBOX_ACCEPT_ALL => Screen(ScreenAction::BulkReview(ReviewDecision::Accept)),
         SANDBOX_REJECT_ALL => Screen(ScreenAction::BulkReview(ReviewDecision::Reject)),
         MAKEUP_GRANT => Screen(ScreenAction::GrantMakeupAttempt),
@@ -476,6 +489,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         FILE_CANCEL_DELETE => Flow(FlowAction::CancelFileDeletion),
         INVITE_CONFIRM_ROTATE => Flow(FlowAction::ConfirmInviteRotation),
         INVITE_CANCEL_ROTATE => Flow(FlowAction::CancelInviteRotation),
+        ASSIGNMENT_GROUPS_DONE => Flow(FlowAction::AssignmentGroupsDone),
         PENALTY_PERIOD => Flow(FlowAction::PenaltyPeriod),
         TERMS_SAVE => Flow(FlowAction::Terms(TermsAction::Save)),
         TERMS_DEADLINE => Flow(FlowAction::Terms(TermsAction::Deadline)),
@@ -549,14 +563,13 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         ))
     }),
     (INVITE_PREFIX, |id| {
-        Replayable(ReplayableAction::GroupInvite(TeachingCourseId::from_uuid(
+        Replayable(ReplayableAction::CourseInvite(TeachingCourseId::from_uuid(
             id,
         )))
     }),
     (GRADES_PREFIX, |id| {
-        Replayable(ReplayableAction::Page(
-            PageTarget::Gradebook(TeachingCourseId::from_uuid(id)),
-            0,
+        Replayable(ReplayableAction::GradebookGroups(
+            TeachingCourseId::from_uuid(id),
         ))
     }),
     (REVIEW_OPEN_PREFIX, |id| {
@@ -592,6 +605,12 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
     }),
     (STUDENT_PREFIX, |id| {
         Flow(FlowAction::SelectStudent(UserId::from_uuid(id)))
+    }),
+    (REGISTRATION_GROUP_PREFIX, |id| {
+        Flow(FlowAction::RegistrationGroup(StudentGroupId::from_uuid(id)))
+    }),
+    (ASSIGNMENT_GROUP_PREFIX, |id| {
+        Flow(FlowAction::AssignmentGroup(StudentGroupId::from_uuid(id)))
     }),
 ];
 
@@ -785,7 +804,6 @@ mod tests {
             PageTarget::Sandbox,
             PageTarget::Course(TeachingCourseId::new()),
             PageTarget::Students(AssignmentId::new()),
-            PageTarget::Gradebook(TeachingCourseId::new()),
         ] {
             let data = ReplayableAction::Page(target, 0).callback();
             assert!(!data.starts_with(PAGE_PREFIX), "{data}");
@@ -808,7 +826,7 @@ mod tests {
             PageTarget::Sandbox,
             PageTarget::Course(TeachingCourseId::new()),
             PageTarget::Students(AssignmentId::new()),
-            PageTarget::Gradebook(TeachingCourseId::new()),
+            PageTarget::Gradebook(TeachingCourseId::new(), StudentGroupId::new()),
             PageTarget::History(AssignmentId::new()),
             PageTarget::StudentGrades(TeachingCourseId::new(), UserId::new()),
         ] {
@@ -827,6 +845,7 @@ mod tests {
             "pg:a:4294967296",
             "pg:a:extra:0",
             "pg:sg:bad:bad:0",
+            "pg:g:bad:0",
             "pg:a:",
         ] {
             assert_eq!(parse(invalid), None, "{invalid}");
@@ -872,6 +891,7 @@ mod tests {
         let course = TeachingCourseId::new().as_uuid();
         let submission = SubmissionId::new().as_uuid();
         let student = UserId::new().as_uuid();
+        let group = StudentGroupId::new().as_uuid();
         let cases = [
             ("menu:assignments".to_owned(), "replayable"),
             ("menu:sandbox".to_owned(), "replayable"),
@@ -948,6 +968,11 @@ mod tests {
             ("file:confirm-delete".to_owned(), "flow"),
             ("invite:confirm-rotate".to_owned(), "flow"),
             ("invite:cancel-rotate".to_owned(), "flow"),
+            (format!("reg-group:{group}"), "flow"),
+            ("reg-group:done".to_owned(), "invalid"),
+            (format!("agroup:{group}"), "flow"),
+            ("agroup:done".to_owned(), "flow"),
+            ("agroup:all".to_owned(), "invalid"),
         ];
 
         for (data, expected) in cases {
@@ -960,6 +985,44 @@ mod tests {
                 None => "invalid",
             };
             assert_eq!(actual, expected, "{data}");
+        }
+    }
+
+    #[test]
+    fn group_buttons_fit_telegram_and_round_trip() {
+        let course = TeachingCourseId::new();
+        let group = StudentGroupId::new();
+
+        let gradebook = ReplayableAction::GradebookGroups(course).callback();
+        assert_eq!(
+            parse(&gradebook),
+            Some(Replayable(ReplayableAction::GradebookGroups(course)))
+        );
+        let first_page = ReplayableAction::Page(PageTarget::Gradebook(course, group), 0).callback();
+        assert!(first_page.len() <= 64, "{first_page}");
+        assert_eq!(
+            parse(&first_page),
+            Some(Replayable(ReplayableAction::Page(
+                PageTarget::Gradebook(course, group),
+                0
+            )))
+        );
+        for (data, action) in [
+            (
+                format!("{REGISTRATION_GROUP_PREFIX}{}", group.as_uuid()),
+                FlowAction::RegistrationGroup(group),
+            ),
+            (
+                format!("{ASSIGNMENT_GROUP_PREFIX}{}", group.as_uuid()),
+                FlowAction::AssignmentGroup(group),
+            ),
+            (
+                ASSIGNMENT_GROUPS_DONE.to_owned(),
+                FlowAction::AssignmentGroupsDone,
+            ),
+        ] {
+            assert!(data.len() <= 64, "{data}");
+            assert_eq!(parse(&data), Some(Flow(action)), "{data}");
         }
     }
 

@@ -1,6 +1,6 @@
 use hw_bot::app::{Actor, ErrorCode};
 
-use crate::harness::TestApp;
+use crate::harness::{TestApp, insert_assignment, wall_clock_assignment};
 
 #[tokio::test]
 async fn course_teacher_can_open_a_draft_assignment_card() {
@@ -85,6 +85,41 @@ async fn assignment_student_list_includes_only_its_group_with_default_progress()
         students
             .iter()
             .all(|item| item.history.extra_attempts() == 0)
+    );
+}
+
+#[tokio::test]
+async fn assignment_student_list_spans_the_issued_groups_only_and_names_their_codes() {
+    let app = TestApp::start().await;
+    let issued = app.add_group_to_course(&app.fixture.course).await;
+    let skipped = app.add_group_to_course(&app.fixture.course).await;
+    let course = app.reload_course(&app.fixture.course).await;
+    let issued_student = app.add_student_to_group("Issued student", &issued).await;
+    let skipped_student = app.add_student_to_group("Skipped student", &skipped).await;
+    let assignment = wall_clock_assignment(&course, &app.fixture.teacher)
+        .groups([&app.fixture.group, &issued])
+        .published()
+        .build();
+    insert_assignment(&app.pool, &assignment).await;
+
+    let students = app
+        .application
+        .assignments
+        .list_students_for_assignment(app.teacher_actor(), assignment.id(), Default::default())
+        .await
+        .unwrap()
+        .items;
+
+    let listed: Vec<_> = students
+        .iter()
+        .map(|item| (item.student.id(), item.group_code.as_str()))
+        .collect();
+    assert!(listed.contains(&(app.fixture.student.id(), app.fixture.group.code().as_str())));
+    assert!(listed.contains(&(issued_student.id(), issued.code().as_str())));
+    assert!(
+        listed
+            .iter()
+            .all(|(student_id, _)| *student_id != skipped_student.id())
     );
 }
 

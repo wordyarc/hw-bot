@@ -4,7 +4,10 @@ use sqlx::postgres::PgExecutor;
 
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
-use crate::domain::{StaffRole, StudentGroup, TelegramUserId, User, UserId};
+use crate::domain::{
+    DomainError, DomainResult, StaffRole, StudentGroup, StudentGroupId, Subject, TelegramUserId,
+    User, UserId,
+};
 use crate::invites::VerifiedInvite;
 use crate::read_models::UserStatistics;
 
@@ -26,7 +29,14 @@ pub struct RegisterStudent {
     pub telegram_user_id: TelegramUserId,
     pub display_name: String,
     pub invite: VerifiedInvite,
+    pub student_group_id: Option<StudentGroupId>,
     pub registered_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CourseInvitation {
+    pub subject: Subject,
+    pub groups: Vec<StudentGroup>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,13 +75,14 @@ impl UserService {
     pub async fn register_student(&self, command: RegisterStudent) -> AppResult<RegisteredUser> {
         let mut tx = self.pool.begin().await?;
 
-        let student_group = db::group_invites::lock_group_for_registration(
+        let course = db::course_invites::lock_course_for_registration(
             &mut tx,
-            command.invite.group_id(),
+            command.invite.course_id(),
             command.invite.generation(),
         )
         .await?
         .ok_or(AppError::InviteInvalid)?;
+        let student_group = chosen_group(course.groups, command.student_group_id)?;
 
         let student = User::new_student(
             UserId::new(),
@@ -153,14 +164,39 @@ impl UserService {
         })
     }
 
-    pub async fn resolve_group_invite(&self, invite: VerifiedInvite) -> AppResult<StudentGroup> {
-        let generation = db::group_invites::find_generation(&self.pool, invite.group_id()).await?;
+    pub async fn resolve_course_invite(
+        &self,
+        invite: VerifiedInvite,
+    ) -> AppResult<CourseInvitation> {
+        let generation =
+            db::course_invites::find_generation(&self.pool, invite.course_id()).await?;
         if generation != Some(invite.generation()) {
             return Err(AppError::InviteInvalid);
         }
 
-        db::academic::find_student_group_by_id(&self.pool, invite.group_id())
+        let course = db::academic::find_teaching_course_summary(&self.pool, invite.course_id())
             .await?
-            .ok_or(AppError::InviteInvalid)
+            .ok_or(AppError::InviteInvalid)?;
+
+        Ok(CourseInvitation {
+            subject: course.subject,
+            groups: course.groups,
+        })
+    }
+}
+
+fn chosen_group(
+    groups: Vec<StudentGroup>,
+    chosen: Option<StudentGroupId>,
+) -> DomainResult<StudentGroup> {
+    match chosen {
+        Some(group_id) => groups
+            .into_iter()
+            .find(|group| group.id() == group_id)
+            .ok_or(DomainError::StudentGroupNotInCourse),
+        None => match <[StudentGroup; 1]>::try_from(groups) {
+            Ok([group]) => Ok(group),
+            Err(_) => Err(DomainError::StudentGroupChoiceRequired),
+        },
     }
 }

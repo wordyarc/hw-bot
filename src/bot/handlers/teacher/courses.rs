@@ -52,15 +52,21 @@ pub(crate) async fn show_course_assignments_page(
     let dialogue = screen.dialogue();
     let services = screen.services();
     let timezone = screen.timezone();
+    let course = services.courses.find_for_teacher(actor, course_id).await?;
     let assignments = services
         .assignments
         .list_for_course(actor, course_id, page)
         .await?;
     let makeup = services.courses.active_makeup(actor, course_id).await?;
 
-    if assignments.items.is_empty() {
-        bot.send_message(chat_id, texts::NO_COURSE_ASSIGNMENTS)
-            .await?;
+    let codes: Vec<&str> = course
+        .groups
+        .iter()
+        .map(|group| group.code().as_str())
+        .collect();
+    let header = texts::course_header(course.subject.name().as_str(), &codes);
+    let text = if assignments.items.is_empty() {
+        format!("{header}\n\n{}", texts::NO_COURSE_ASSIGNMENTS)
     } else {
         let entries = assignments.items.iter().map(|assignment| {
             texts::course_assignment_entry(
@@ -69,9 +75,12 @@ pub(crate) async fn show_course_assignments_page(
                 &timezone.format(assignment.deadline_at()),
             )
         });
-        let text = list_text(texts::COURSE_ASSIGNMENTS_HEADER, entries);
-        send_message_chunks(bot, chat_id, text, None).await?;
-    }
+        format!(
+            "{header}\n\n{}",
+            list_text(texts::COURSE_ASSIGNMENTS_HEADER, entries)
+        )
+    };
+    send_message_chunks(bot, chat_id, text, None).await?;
 
     bot.send_message(chat_id, texts::CHOOSE_ASSIGNMENT)
         .reply_markup(paginated_keyboard(
@@ -98,12 +107,26 @@ pub(crate) async fn show_assignment(
         .assignments
         .find_for_teacher(actor, assignment_id)
         .await?;
+    let course = services
+        .courses
+        .find_for_teacher(actor, assignment.teaching_course_id())
+        .await?;
+    let groups = (course.groups.len() > 1).then(|| {
+        let codes: Vec<&str> = course
+            .groups
+            .iter()
+            .filter(|group| assignment.groups().contains(&group.id()))
+            .map(|group| group.code().as_str())
+            .collect();
+        texts::groups_line(&codes)
+    });
     let published = assignment
         .published_at()
         .map(|published_at| texts::published_line(&timezone.format(published_at)));
     let text = texts::teacher_assignment_card(
         assignment.title().as_str(),
         texts::assignment_status(assignment.status()),
+        groups.as_deref(),
         &grading_lines(&assignment, Utc::now(), timezone),
         assignment.max_attempts(),
         published.as_deref(),

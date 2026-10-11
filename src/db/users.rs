@@ -76,7 +76,6 @@ where
 pub(crate) async fn list_students_with_assignment_history<'e, E>(
     executor: E,
     assignment_id: AssignmentId,
-    student_group_id: StudentGroupId,
     page: PageRequest,
 ) -> DbResult<Vec<AssignmentStudentSummary>>
 where
@@ -92,22 +91,26 @@ where
         users.role,
         users.display_name,
         users.student_group_id,
-        users.registered_at
+        users.registered_at,
+        student_groups.code as group_code
         "#,
         r#"
         from users
+        join assignment_groups issued
+          on issued.assignment_id = $1
+         and issued.student_group_id = users.student_group_id
+        join student_groups
+          on student_groups.id = users.student_group_id
         left join history
           on history.student_id = users.id
         left join student_assignment_progress progress
           on progress.assignment_id = $1
          and progress.student_id = users.id
         where users.role = 'student'
-          and users.student_group_id = $2
         order by users.display_name, users.id
-        limit $3 offset $4
+        limit $2 offset $3
         "#,
         assignment_id.as_uuid(),
-        student_group_id.as_uuid(),
         PageRequest::FETCH_LIMIT,
         page.offset(),
     )
@@ -128,8 +131,10 @@ where
             (
                 select count(*)
                 from assignments
-                where student_group_id = $2
-                  and status = 'published'
+                join assignment_groups issued
+                  on issued.assignment_id = assignments.id
+                where issued.student_group_id = $2
+                  and assignments.status = 'published'
             ) as "assignments!",
             (
                 select count(*)
@@ -213,6 +218,7 @@ struct AssignmentStudentCardRow {
     display_name: String,
     student_group_id: Option<Uuid>,
     registered_at: DateTime<Utc>,
+    group_code: String,
     used_attempts: i64,
     submission_count: i64,
     extra_attempts: i16,
@@ -253,6 +259,10 @@ impl TryFrom<AssignmentStudentCardRow> for AssignmentStudentSummary {
         })?;
         let history = history_columns!(row).history()?;
 
-        Ok(Self { student, history })
+        Ok(Self {
+            student,
+            group_code: row.group_code,
+            history,
+        })
     }
 }

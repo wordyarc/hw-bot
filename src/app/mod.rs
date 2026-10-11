@@ -17,7 +17,7 @@ pub use assignments::{
 };
 pub use container::ApplicationContainer;
 pub use courses::{
-    ConfigureMakeup, CourseMakeupState, CourseService, GroupInviteState, MakeupDecision,
+    ConfigureMakeup, CourseInviteState, CourseMakeupState, CourseService, MakeupDecision,
     MakeupQuestion, MakeupSettings, StudentContact, StudentGrades, StudentGradesCard,
 };
 pub use error::{AppError, AppResult, ErrorCode, Required};
@@ -28,7 +28,7 @@ pub use review::{
     ReviewQueueItem, ReviewSandbox, ReviewService, ReviewSubmission, ReviewedSubmission,
 };
 pub use submissions::{SubmissionService, SubmitHomework, SubmittedHomework};
-pub use users::{RegisterStaff, RegisterStudent, RegisteredUser, UserService};
+pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser, UserService};
 
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{

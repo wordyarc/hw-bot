@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update teaching_course_invites\n        set generation = $3, updated_at = now()\n        where teaching_course_id = $1 and generation = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b35a91cb25b625577b65a5730a26d83ae9ef2e3a76fc8df31a735111aef9f005"
+}
