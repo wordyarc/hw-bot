@@ -1,5 +1,4 @@
 /target
-/.idea
 /logs
 /tools/deploy/.env.production
 /tools/deploy/production.toml
@@ -9,3 +8,6 @@
 /.deploy.lock
 /current-release.json
 /current-release.json.next
+
+.idea/*
+!.idea/icon.svg
