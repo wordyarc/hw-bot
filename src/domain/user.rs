@@ -85,6 +85,11 @@ impl User {
         display_name: impl Into<String>,
         registered_at: DateTime<Utc>,
     ) -> DomainResult<Self> {
+        let display_name: String = display_name.into();
+        let display_name = display_name
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         Ok(Self {
             id,
             telegram_user_id,
@@ -161,5 +166,17 @@ impl User {
 
     pub fn registered_at(&self) -> DateTime<Utc> {
         self.registered_at
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{named_student, student_group};
+
+    #[test]
+    fn a_display_name_is_kept_on_one_line_with_single_spaces() {
+        let student = named_student(1, " Иван \n\n Петров\tСергеевич ", &student_group("G-1"));
+
+        assert_eq!(student.display_name().as_str(), "Иван Петров Сергеевич");
     }
 }
