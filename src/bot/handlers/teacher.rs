@@ -12,6 +12,7 @@ mod form;
 mod gradebook;
 mod invites;
 mod makeup;
+mod roster;
 mod terms;
 
 pub(super) use attempts::handle_extra_attempts;
@@ -36,6 +37,7 @@ pub(super) use makeup::{
     handle_answer as handle_makeup_answer, handle_attempts as handle_makeup_attempts,
     handle_form as handle_makeup_form, open as open_makeup, submit_text as submit_makeup_text,
 };
+pub(super) use roster::show_roster_page;
 pub(super) use terms::{
     begin_terms_edit, confirm_exit, handle_duration_periods, handle_late_policy, handle_makeup,
     handle_penalty, handle_period, handle_periods, handle_terms, submit_terms,

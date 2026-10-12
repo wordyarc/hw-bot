@@ -10,6 +10,7 @@ mod assignments_api;
 mod attempts_api;
 mod bootstrap;
 mod course_invites;
+mod course_roster;
 mod db_schema;
 mod grading_api;
 mod health_api;

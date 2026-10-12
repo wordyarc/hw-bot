@@ -14,8 +14,8 @@ use crate::domain::{
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{
-    AssignmentGrade, CourseStudent, MakeupPool, TeachingCourseSummary, UndecidedAssignment,
-    VersionedAssignment,
+    AssignmentGrade, CourseRoster, CourseStudent, MakeupPool, RosterGroup, TeachingCourseSummary,
+    UndecidedAssignment, VersionedAssignment,
 };
 
 #[derive(Clone, Debug)]
@@ -216,6 +216,28 @@ impl CourseService {
             db::users::list_student_names(&self.pool, group_id, page).await?,
             page,
         ))
+    }
+
+    pub async fn roster(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+        page: PageRequest,
+    ) -> AppResult<CourseRoster> {
+        let summary = self
+            .managed_summary(actor, course_id, "read course roster")
+            .await?;
+        let rows = Page::from_rows(
+            db::users::course_roster(&self.pool, course_id, page).await?,
+            page,
+        );
+
+        Ok(CourseRoster {
+            subject: summary.subject,
+            groups: roster_groups(rows.items),
+            page: rows.page,
+            next_page: rows.next_page,
+        })
     }
 
     pub async fn student_grades(
@@ -546,4 +568,20 @@ fn group_grades(
         student.next_grade_page = grades.next_page;
     }
     students
+}
+
+fn roster_groups(rows: Vec<db::users::CourseRosterRow>) -> Vec<RosterGroup> {
+    let mut groups: Vec<RosterGroup> = Vec::new();
+    for row in rows {
+        match groups.last_mut() {
+            Some(last) if last.code == row.group_code => last.students.extend(row.student),
+            _ => groups.push(RosterGroup {
+                code: row.group_code,
+                size: row.group_size,
+                issued: row.issued,
+                students: row.student.into_iter().collect(),
+            }),
+        }
+    }
+    groups
 }

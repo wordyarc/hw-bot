@@ -21,7 +21,7 @@ use super::views::{
     MenuAction, menu_action, send_stale_button, student_keyboard, teacher_keyboard,
 };
 use crate::domain::{Role, TelegramUserId};
-use crate::pagination::PageRequest;
+use crate::pagination::{PageRequest, ROSTER_PAGE_SIZE};
 use crate::telegram::is_invalid_token;
 
 mod contact;
@@ -466,8 +466,8 @@ async fn handle_replayable_action(
     shown_at: DateTime<Utc>,
 ) -> HandlerResult {
     match action {
-        ReplayableAction::Page(target, page) => {
-            let page = PageRequest::new(page);
+        ReplayableAction::Page(target, number) => {
+            let page = PageRequest::new(number);
             match target {
                 PageTarget::Assignments => student::show_assignments_page(screen, page).await,
                 PageTarget::Archive => student::show_archive_page(screen, page).await,
@@ -484,6 +484,10 @@ async fn handle_replayable_action(
                 PageTarget::History(id) => student::show_history(screen, id, page).await,
                 PageTarget::StudentGrades(course, student) => {
                     teacher::show_student_grades_page(screen, course, student, page, None).await
+                }
+                PageTarget::Roster(course) => {
+                    let page = PageRequest::sized(number, ROSTER_PAGE_SIZE);
+                    teacher::show_roster_page(screen, course, page).await
                 }
             }
         }
@@ -821,9 +825,10 @@ mod tests {
             course_invite_keyboard, deadline_options_keyboard, gradebook_groups_keyboard,
             gradebook_students_keyboard, grading_keyboard, late_policy_keyboard,
             makeup_answer_keyboard, makeup_attempts_keyboard, makeup_followup_keyboard,
-            makeup_form_view, penalty_keyboard, registration_groups_keyboard,
-            review_decision_keyboard, review_hub_keyboard, review_score_keyboard, sandbox_keyboard,
-            student_grades_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
+            makeup_form_view, paginated_keyboard, penalty_keyboard, registration_groups_keyboard,
+            review_decision_keyboard, review_hub_keyboard, review_score_keyboard, roster_keyboard,
+            sandbox_keyboard, student_grades_keyboard, terms_exit_keyboard, terms_form_view,
+            terms_keyboard,
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
@@ -958,6 +963,12 @@ mod tests {
             course_invite_keyboard(course.id()),
             confirm_invite_rotation_keyboard(),
             sandbox_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
+            paginated_keyboard(
+                roster_keyboard(course.id()),
+                PageTarget::Roster(course.id()),
+                1,
+                Some(2),
+            ),
         ];
 
         let opened = CourseMakeup::open(

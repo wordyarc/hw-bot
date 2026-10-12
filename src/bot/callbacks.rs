@@ -216,6 +216,7 @@ pub(super) enum PageTarget {
     Gradebook(TeachingCourseId, StudentGroupId),
     History(AssignmentId),
     StudentGrades(TeachingCourseId, UserId),
+    Roster(TeachingCourseId),
 }
 
 impl PageTarget {
@@ -236,6 +237,7 @@ impl PageTarget {
             Self::StudentGrades(course, student) => {
                 format!("sg:{}:{}", id(course.as_uuid()), id(student.as_uuid()))
             }
+            Self::Roster(course) => format!("r:{}", id(course.as_uuid())),
         };
         format!("{PAGE_PREFIX}{target}:{page}")
     }
@@ -267,6 +269,7 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
         "sg" => {
             PageTarget::StudentGrades(TeachingCourseId::from_uuid(id()?), UserId::from_uuid(id()?))
         }
+        "r" => PageTarget::Roster(TeachingCourseId::from_uuid(id()?)),
         _ => return None,
     };
     parts
@@ -833,6 +836,7 @@ mod tests {
             PageTarget::Gradebook(TeachingCourseId::new(), StudentGroupId::new()),
             PageTarget::History(AssignmentId::new()),
             PageTarget::StudentGrades(TeachingCourseId::new(), UserId::new()),
+            PageTarget::Roster(TeachingCourseId::new()),
         ] {
             let data = target.callback(u32::MAX);
             assert!(data.len() <= 64, "{data}");
@@ -850,6 +854,8 @@ mod tests {
             "pg:a:extra:0",
             "pg:sg:bad:bad:0",
             "pg:g:bad:0",
+            "pg:r:bad:0",
+            "pg:r:0",
             "pg:a:",
         ] {
             assert_eq!(parse(invalid), None, "{invalid}");
@@ -929,6 +935,7 @@ mod tests {
             (format!("attempts:{assignment}"), "replayable"),
             (format!("invite:{course}"), "replayable"),
             (format!("grades:{course}"), "replayable"),
+            (format!("pg:r:{}:0", encode_id(course)), "replayable"),
             (
                 format!(
                     "{CONTACT_PREFIX}{}:{}",

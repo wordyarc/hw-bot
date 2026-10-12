@@ -342,6 +342,7 @@ pub fn teacher_help() -> String {
         Для проверки нажмите «{BUTTON_REVIEW}»: бот откроет следующую работу из очереди. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
         Работы по предмету-песочнице в очередь не попадают: их список открывает «{BUTTON_SANDBOX}». Работу можно проверить по одной или ответить всем сразу кнопкой «{BUTTON_ACCEPT_ALL}» или «{BUTTON_REJECT_ALL}» с одним комментарием. Такое решение касается работ, отправленных до открытия списка. При принятии оценочные задания получают максимальный балл с учётом штрафа за опоздание.\n\n\
         Досдача включается на экране предмета кнопкой «🩹 Досдача»: укажите последний день досдачи и сколько досдач положено каждому студенту на весь предмет. Бот спросит, на сколько баллов засчитывать досдачу заданий каждой шкалы. Досдачи не попадают в общую очередь: если они есть, «{BUTTON_REVIEW}» предложит выбрать между очередью и досдачами. Досдачу можно только засчитать на этот балл или отклонить. Отклонённая досдача попытку не возвращает: добавить попытку студенту можно сразу после отклонения или в «{BUTTON_GRADEBOOK}».\n\n\
+        Список студентов предмета открывает «{BUTTON_COURSES} → Предмет → {BUTTON_ROSTER}»: группы с числом студентов, а у каждого студента — сколько выданных его группе заданий принято. Ноль у группы значит, что из неё ещё никто не зарегистрировался по ссылке «{BUTTON_COURSE_INVITE}».\n\n\
         Кнопка «{BUTTON_STUDENT_CONTACT}» есть под работой и в «{BUTTON_COURSES} → Предмет → {BUTTON_GRADEBOOK} → Студент». Она сохраняет текущий шаг. Нажмите «{BUTTON_OPEN_TELEGRAM}», чтобы написать со своего личного аккаунта; доступность перехода зависит от Telegram. Если адрес изменился, нажмите «{BUTTON_REFRESH_CONTACT}».\n\n\
         Чтобы изменить условия, воспользуйтесь кнопкой «{BUTTON_EDIT_DATES}» в задании. Перенос срока также сдвигает конец приёма, поэтому перед сохранением сверьте новую дату. Команда /cancel во время настройки возвращает к предыдущему шагу. На первом шаге она завершает настройку."
     )
@@ -644,6 +645,7 @@ pub const ASSIGNMENT_PUBLISHED: &str = "🚀 Задание опубликова
 pub const ASSIGNMENT_ARCHIVED: &str = "📦 Задание архивировано.";
 pub const BUTTON_CREATE_ASSIGNMENT: &str = "➕ Создать задание";
 pub const BUTTON_GRADEBOOK: &str = "📊 Оценки";
+pub const BUTTON_ROSTER: &str = "📋 Студенты";
 pub const BUTTON_COURSE_INVITE: &str = "🔗 Ссылка для студентов";
 pub const BUTTON_BACK_TO_COURSES: &str = "⬅️ К списку предметов";
 pub const BUTTON_BACK_TO_COURSE: &str = "⬅️ К предмету";
@@ -1005,6 +1007,25 @@ pub fn group_button(code: &str) -> String {
 pub fn group_student(code: &str, name: &str) -> String {
     format!("{code} · {name}")
 }
+
+pub fn roster_header(subject: &str) -> String {
+    format!("📘 {subject}\n{BUTTON_ROSTER}")
+}
+
+pub fn roster_group_header(code: &str, size: u32) -> String {
+    format!(
+        "👥 {code} · {size} {}",
+        plural(size, "студент", "студента", "студентов")
+    )
+}
+
+pub fn roster_student(position: u32, name: &str, accepted: u32, issued: u32) -> String {
+    if issued == 0 {
+        return format!("{position}. {name}");
+    }
+    format!("{position}. {name} — сдано {accepted} из {issued}")
+}
+
 pub const NO_SCORED_ASSIGNMENTS: &str = "По этому предмету пока нет оценочных заданий.";
 pub const BUTTON_BACK_TO_STUDENTS: &str = "⬅️ К студентам группы";
 
@@ -1318,6 +1339,33 @@ mod tests {
         );
         assert_eq!(grade_line(SubmissionKind::Regular, None), None);
         assert!(!regular(Grade::new(6, 10, None)).contains(MAKEUP_MARK));
+    }
+
+    #[test]
+    fn a_roster_line_shows_progress_only_when_the_group_has_assignments() {
+        let with_progress = roster_student(7, "Анна", 2, 5);
+        let without_progress = roster_student(7, "Анна", 0, 0);
+
+        assert!(with_progress.starts_with('7'), "{with_progress}");
+        assert!(with_progress.contains("Анна"), "{with_progress}");
+        assert!(with_progress.contains("2 из 5"), "{with_progress}");
+        let rest = without_progress
+            .replacen('7', "", 1)
+            .replacen("Анна", "", 1);
+        assert!(
+            rest.chars().all(|character| !character.is_alphanumeric()),
+            "{without_progress}"
+        );
+    }
+
+    #[test]
+    fn the_teacher_help_names_the_way_to_the_roster() {
+        let help = teacher_help();
+
+        assert!(
+            help.contains(&format!("{BUTTON_COURSES} → Предмет → {BUTTON_ROSTER}")),
+            "{help}"
+        );
     }
 
     #[test]

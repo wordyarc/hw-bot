@@ -330,6 +330,10 @@ pub(crate) fn course_assignments_keyboard(
             ReplayableAction::GradebookGroups(course_id).callback(),
         ),
         row(
+            texts::BUTTON_ROSTER,
+            ReplayableAction::Page(PageTarget::Roster(course_id), 0).callback(),
+        ),
+        row(
             makeup.map_or_else(
                 || texts::BUTTON_MAKEUP_OFF.to_owned(),
                 |makeup| {
@@ -972,6 +976,23 @@ pub(crate) fn assignment_groups_keyboard(
         .collect();
     rows.push(row(texts::BUTTON_GROUPS_DONE, ASSIGNMENT_GROUPS_DONE));
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn roster_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        row(
+            texts::BUTTON_GRADEBOOK,
+            ReplayableAction::GradebookGroups(course_id).callback(),
+        ),
+        row(
+            texts::BUTTON_COURSE_INVITE,
+            ReplayableAction::CourseInvite(course_id).callback(),
+        ),
+        row(
+            texts::BUTTON_BACK_TO_COURSE,
+            ReplayableAction::Page(PageTarget::Course(course_id), 0).callback(),
+        ),
+    ])
 }
 
 pub(crate) fn gradebook_groups_keyboard(

@@ -20,6 +20,30 @@ pub struct CourseStudent {
 }
 
 #[derive(Clone, Debug)]
+pub struct CourseRoster {
+    pub subject: Subject,
+    pub groups: Vec<RosterGroup>,
+    pub page: u32,
+    pub next_page: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RosterGroup {
+    pub code: String,
+    pub size: u32,
+    pub issued: u32,
+    pub students: Vec<RosterStudent>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RosterStudent {
+    pub position: u32,
+    pub student_id: UserId,
+    pub display_name: String,
+    pub accepted: u32,
+}
+
+#[derive(Clone, Debug)]
 pub struct AssignmentGrade {
     pub assignment_id: AssignmentId,
     pub title: String,

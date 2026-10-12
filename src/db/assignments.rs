@@ -370,7 +370,7 @@ where
            and assignments.status = 'published'
          order by subjects.name, assignments.deadline_at, assignments.id limit $2 offset $3",
         student_group_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
 }
@@ -392,7 +392,7 @@ where
            and assignments.published_at is not null
          order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
         student_group_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
 }
@@ -409,7 +409,7 @@ where
         "",
         " from assignments where teaching_course_id = $1 order by created_at desc, id limit $2 offset $3",
         teaching_course_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
     .fetch_all(executor)

@@ -4,9 +4,11 @@ use uuid::Uuid;
 
 use crate::db::submissions::{history_columns, with_submission_history};
 use crate::db::{DbError, DbResult, checked_num_cast};
-use crate::domain::{AssignmentId, Role, StudentGroupId, TelegramUserId, User, UserId};
+use crate::domain::{
+    AssignmentId, Role, StudentGroupId, TeachingCourseId, TelegramUserId, User, UserId,
+};
 use crate::pagination::PageRequest;
-use crate::read_models::{AssignmentStudentSummary, CourseStudent, UserStatistics};
+use crate::read_models::{AssignmentStudentSummary, CourseStudent, RosterStudent, UserStatistics};
 
 pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
 where
@@ -111,7 +113,7 @@ where
         limit $2 offset $3
         "#,
         assignment_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
     .fetch_all(executor)
@@ -185,7 +187,7 @@ where
         limit $2 offset $3
         "#,
         group_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
     .fetch_all(executor)
@@ -198,6 +200,95 @@ where
             display_name: row.display_name,
         })
         .collect())
+}
+
+#[derive(Clone, Debug)]
+pub struct CourseRosterRow {
+    pub group_code: String,
+    pub group_size: u32,
+    pub issued: u32,
+    pub student: Option<RosterStudent>,
+}
+
+pub async fn course_roster<'e, E>(
+    executor: E,
+    course_id: TeachingCourseId,
+    page: PageRequest,
+) -> DbResult<Vec<CourseRosterRow>>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query!(
+        r#"
+        with issued as (
+            select issued.student_group_id, issued.assignment_id
+            from assignment_groups issued
+            join assignments on assignments.id = issued.assignment_id
+            where issued.teaching_course_id = $1
+              and assignments.published_at is not null
+        ), accepted as (
+            select submissions.student_id,
+                   count(distinct submissions.assignment_id) as assignments
+            from submissions
+            join users on users.id = submissions.student_id
+            join issued
+              on issued.assignment_id = submissions.assignment_id
+             and issued.student_group_id = users.student_group_id
+            where submissions.status = 'accepted'
+            group by submissions.student_id
+        )
+        select
+            student_groups.code as group_code,
+            count(users.id) over (partition by student_groups.id) as "group_size!",
+            row_number() over (
+                partition by student_groups.id order by users.display_name, users.id
+            ) as "position!",
+            (
+                select count(*) from issued
+                where issued.student_group_id = student_groups.id
+            ) as "issued!",
+            users.id as "student_id?",
+            users.display_name as "display_name?",
+            coalesce(accepted.assignments, 0) as "accepted!"
+        from teaching_course_groups course_groups
+        join student_groups on student_groups.id = course_groups.student_group_id
+        left join users
+          on users.student_group_id = student_groups.id
+         and users.role = 'student'
+        left join accepted on accepted.student_id = users.id
+        where course_groups.teaching_course_id = $1
+        order by student_groups.code, users.display_name, users.id
+        limit $2 offset $3
+        "#,
+        course_id.as_uuid(),
+        page.fetch_limit(),
+        page.offset(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(|row| {
+        let student = row
+            .student_id
+            .zip(row.display_name)
+            .map(|(id, display_name)| {
+                Ok::<_, DbError>(RosterStudent {
+                    position: checked_num_cast("roster.position", row.position)?,
+                    student_id: UserId::from_uuid(id),
+                    display_name,
+                    accepted: checked_num_cast("roster.accepted", row.accepted)?,
+                })
+            })
+            .transpose()?;
+
+        Ok(CourseRosterRow {
+            group_code: row.group_code,
+            group_size: checked_num_cast("roster.group_size", row.group_size)?,
+            issued: checked_num_cast("roster.issued", row.issued)?,
+            student,
+        })
+    })
+    .collect()
 }
 
 #[derive(Debug)]

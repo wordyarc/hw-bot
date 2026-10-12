@@ -343,7 +343,7 @@ where
         "where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
         assignment_id.as_uuid(),
         student_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
     .fetch_all(executor)
@@ -513,10 +513,10 @@ where
         "#,
         teaching_course_id.as_uuid(),
         student_group_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        student_page.fetch_limit(),
         student_page.offset(),
         student_id.map(UserId::as_uuid),
-        PageRequest::FETCH_LIMIT,
+        grade_page.fetch_limit(),
         grade_page.offset(),
     )
     .fetch_all(executor)
@@ -654,7 +654,7 @@ where
         order by submissions.submitted_at, submissions.id
         "#,
         student_id.as_uuid(),
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
         assignment_id.map(AssignmentId::as_uuid),
     )
@@ -803,7 +803,7 @@ where
         reviewer,
         ReviewStream::Sandbox,
         None::<DateTime<Utc>>,
-        PageRequest::FETCH_LIMIT,
+        page.fetch_limit(),
         page.offset(),
     )
     .fetch_all(executor)

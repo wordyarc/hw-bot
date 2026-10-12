@@ -229,6 +229,59 @@ async fn a_course_of_several_groups_is_listed_by_its_subject_and_lists_the_group
     );
 }
 
+#[tokio::test]
+async fn the_roster_button_of_the_subject_screen_lists_the_students_of_every_group() {
+    let app = TestApp::start().await;
+    let second = app.add_group_to_course(&app.fixture.course).await;
+    let classmate = app
+        .add_student_to_group("Second group student", &second)
+        .await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    let roster = telegram
+        .button_with_text(app.teacher(), texts::BUTTON_ROSTER)
+        .await;
+    telegram.click(app.teacher(), &roster);
+    let screen = telegram
+        .button_after(
+            app.teacher(),
+            &cb(callbacks::GRADES_PREFIX, app.course()),
+            roster.message_id,
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let message = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| message["message_id"] == screen.message_id)
+        .expect("the roster screen was sent");
+    let text = message["text"].as_str().unwrap();
+    for student in [&app.fixture.student, &classmate] {
+        assert!(text.contains(student.display_name().as_str()), "{text}");
+    }
+    let buttons: Vec<&str> = message["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row.as_array().unwrap())
+        .map(|button| button["callback_data"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        buttons,
+        [
+            cb(callbacks::GRADES_PREFIX, app.course()),
+            cb(callbacks::INVITE_PREFIX, app.course()),
+            cb(callbacks::COURSE_PREFIX, app.course()),
+        ]
+    );
+}
+
 async fn open_submission_prompt(app: &TestApp, telegram: &TelegramScenario) {
     telegram.message(app.student(), "/tasks");
     telegram
