@@ -362,6 +362,69 @@ async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
 }
 
 #[tokio::test]
+async fn a_concurrent_change_during_upload_brings_the_menu_back() {
+    use hw_bot::app::AddAssignmentFile;
+    use hw_bot::domain::FilePresentation;
+
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
+    mock_file_download(
+        &telegram.server,
+        "fixture-document",
+        "files/assignment-note.txt",
+        DOCUMENT_FIXTURE,
+    )
+    .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/courses");
+    for data in [
+        cb(callbacks::COURSE_PREFIX, app.course()),
+        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
+        callbacks::FILE_ADD.to_owned(),
+    ] {
+        telegram.click_button(app.teacher(), &data).await;
+    }
+    let card = app
+        .application
+        .files
+        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
+        .await
+        .unwrap();
+    app.application
+        .files
+        .add_assignment_file(AddAssignmentFile {
+            assignment_id: assignment,
+            actor: app.teacher_actor(),
+            expected_revision: card.revision,
+            presentation: FilePresentation::Document,
+            filename: "colleague-note.txt".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            telegram_file_id: None,
+            content: DOCUMENT_FIXTURE.to_vec(),
+        })
+        .await
+        .unwrap();
+
+    telegram.document(
+        app.teacher(),
+        "fixture-document",
+        "assignment-note.txt",
+        DOCUMENT_FIXTURE.len(),
+    );
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let conflict = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .find(|message| message["text"] == app_error_message(ErrorCode::ConcurrentModification))
+        .expect("the conflict was reported");
+    assert!(conflict["reply_markup"]["keyboard"].is_array());
+}
+
+#[tokio::test]
 async fn stale_file_callback_does_not_delete_the_attachment() {
     use hw_bot::app::AddAssignmentFile;
     use hw_bot::domain::FilePresentation;

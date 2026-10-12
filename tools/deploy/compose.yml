@@ -38,6 +38,7 @@ services:
 
   app:
     image: ${HW_BOT_IMAGE:?required}
+    init: true
     group_add:
       - ${HW_BOT_CONFIG_GID:?set to the group owning production.toml and bootstrap.production.json}
     restart: unless-stopped

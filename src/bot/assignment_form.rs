@@ -217,6 +217,17 @@ impl AssignmentTerms {
         Ok(())
     }
 
+    fn ensure_deadline_ahead(
+        &self,
+        deadline: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<(), TermsInputError> {
+        if matches!(self.target, TermsTarget::Create(_)) && deadline <= now {
+            return Err(TermsInputError::DeadlineInPast);
+        }
+        Ok(())
+    }
+
     pub fn grading(&self) -> Grading {
         match &self.target {
             TermsTarget::Create(draft) => draft.grading,
@@ -334,6 +345,14 @@ impl TermsForm {
             mode: step.input_mode(),
             return_to_summary: false,
             previous_closes_at: None,
+        }
+    }
+
+    pub fn validate_for_save(&self, now: DateTime<Utc>) -> Result<(), TermsInputError> {
+        self.terms.validate().map_err(TermsInputError::Domain)?;
+        match self.terms.deadline_at {
+            Some(deadline) => self.terms.ensure_deadline_ahead(deadline, now),
+            None => Ok(()),
         }
     }
 
@@ -552,9 +571,7 @@ impl Form for TermsForm {
             if self.step != TermsStep::Deadline {
                 return Err(TermsInputError::UnexpectedStep);
             }
-            if matches!(self.terms.target, TermsTarget::Create(_)) && at <= now {
-                return Err(TermsInputError::DeadlineInPast);
-            }
+            self.terms.ensure_deadline_ahead(at, now)?;
             let mut terms = self.terms.clone();
             terms.deadline_at = Some(at);
             terms.validate().map_err(TermsInputError::Domain)?;
@@ -860,6 +877,32 @@ mod tests {
         edit.apply_date(past, now).unwrap();
         assert_eq!(edit.terms.deadline_at, Some(past));
         assert_eq!(edit.step, TermsStep::Summary);
+    }
+
+    #[test]
+    fn saving_a_new_draft_rechecks_that_the_deadline_is_still_ahead() {
+        use crate::test_support::{assignment, course_for, student_group, teacher};
+
+        let creation = complete_form();
+        let deadline = creation.terms.deadline_at.unwrap();
+        assert_eq!(
+            creation.validate_for_save(deadline - Duration::seconds(1)),
+            Ok(())
+        );
+        assert_eq!(
+            creation.validate_for_save(deadline),
+            Err(TermsInputError::DeadlineInPast)
+        );
+
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let assignment = assignment(&course, &teacher).build();
+        let edit = TermsForm::new(
+            AssignmentTerms::editing(&assignment, 0, MakeupQuestion::default()),
+            TermsStep::Summary,
+        );
+        let deadline = edit.terms.deadline_at.unwrap();
+        assert_eq!(edit.validate_for_save(deadline + Duration::days(1)), Ok(()));
     }
 
     #[test]

@@ -19,13 +19,22 @@
   "subjects": [
     {
       "name": "Backend Development"
+    },
+    {
+      "name": "Песочница",
+      "sandbox": true
     }
   ],
   "courses": [
     {
       "subject_name": "Backend Development",
-      "student_group_code": "b9122-02.03.21",
+      "student_group_codes": ["b9122-02.03.21"],
       "teacher_telegram_user_ids": [100000001]
+    },
+    {
+      "subject_name": "Песочница",
+      "student_group_codes": ["b9122-02.03.21"],
+      "teacher_telegram_user_ids": [100000001, 100000002]
     }
   ]
 }

@@ -60,7 +60,7 @@ pub(super) fn looks_like_command(text: &str) -> bool {
         return false;
     };
     let name = name.split_once('@').map_or(name, |(name, _)| name);
-    !name.is_empty()
+    name.chars().next().is_some_and(char::is_alphabetic)
         && name
             .chars()
             .all(|character| character.is_alphanumeric() || character == '_')
@@ -92,6 +92,13 @@ mod tests {
             "/tasks now",
         ] {
             assert!(looks_like_command(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_slash_before_a_number_starts_text_rather_than_a_command() {
+        for text in ["/5 баллов: не хватает тестов", "/10", "/2_3"] {
+            assert!(!looks_like_command(text), "{text}");
         }
     }
 

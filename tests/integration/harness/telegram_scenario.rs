@@ -8,7 +8,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::telegram::{
-    callback_update, message_update, mount_startup_mocks, telegram_me_body, wait_for_some,
+    callback_update, document_update, message_update, mount_startup_mocks, telegram_me_body,
+    wait_for_some,
 };
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
@@ -175,6 +176,14 @@ impl TelegramScenario {
         state
             .updates
             .push(message_update(id, user, id as i32, text));
+    }
+
+    pub fn document(&self, user: i64, file_id: &str, filename: &str, size: usize) {
+        let mut state = self.state.lock().unwrap();
+        let id = state.updates.len() as u32 + 1;
+        state.updates.push(document_update(
+            id, user, id as i32, file_id, filename, size,
+        ));
     }
 
     pub async fn button(&self, user: i64, data: &str) -> Button {

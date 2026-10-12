@@ -276,6 +276,42 @@ async fn a_mistyped_command_is_not_taken_as_the_text_of_a_submission() {
 }
 
 #[tokio::test]
+async fn an_unknown_command_outside_a_flow_does_not_offer_to_cancel() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/stop");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let reply = telegram.messages(app.teacher())[0]["text"].clone();
+    assert!(
+        reply.as_str().is_some_and(|text| !text.contains("/cancel")),
+        "{reply}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_command_inside_a_flow_offers_to_cancel() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    let before = telegram.messages(app.student()).len();
+    telegram.message(app.student(), "/stop");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let reply = telegram.messages(app.student())[before]["text"].clone();
+    assert!(
+        reply.as_str().is_some_and(|text| text.contains("/cancel")),
+        "{reply}"
+    );
+}
+
+#[tokio::test]
 async fn leaving_the_submission_prompt_by_a_button_brings_the_menu_back() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;

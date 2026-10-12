@@ -346,8 +346,9 @@ pub(crate) async fn confirm_exit(
 }
 
 async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> HandlerResult {
-    if let Err(error) = form.terms.validate() {
-        return render(screen.chat(), form, Some(&validation_message(&error))).await;
+    if let Err(error) = form.validate_for_save(Utc::now()) {
+        let message = TermsForm::input_message(error);
+        return render(screen.chat(), form, message.as_deref()).await;
     }
     let TermsForm {
         terms, message_id, ..

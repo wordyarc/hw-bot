@@ -349,7 +349,8 @@ pub fn teacher_help() -> String {
 
 pub const CHOOSE_ACTION: &str = "Выберите действие:";
 pub const ACTION_CANCELLED: &str = "Текущее действие отменено.";
-pub const UNKNOWN_COMMAND: &str =
+pub const UNKNOWN_COMMAND: &str = "🤷 Такой команды нет. Все команды — /help.";
+pub const UNKNOWN_COMMAND_IN_FLOW: &str =
     "🤷 Такой команды нет. Отменить текущее действие — /cancel, все команды — /help.";
 pub const PRIVATE_CHATS_ONLY: &str = "Бот работает только в личных сообщениях.";
 pub const ASSIGNMENT_BODY_HEADER: &str = "📄 Текст задания:";

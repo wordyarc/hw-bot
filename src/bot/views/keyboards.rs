@@ -458,24 +458,27 @@ fn duration_presets(
         ),
         (texts::PRESET_MONTH_AFTER, timezone.add_months(deadline, 1)),
     ];
-    let rows = presets
+    let mut rows: Vec<(u16, Row)> = presets
         .into_iter()
+        .rev()
         .filter_map(|(label, at)| {
             let periods = u16::try_from(policy.periods_to_close_at(deadline, at?)).ok()?;
             let closes_at = terms.preview_policy(periods).and_then(|policy| {
                 policy.validate_horizon(deadline).ok()?;
                 policy.closes_at(deadline).ok()
             })?;
-            Some(row(
+            let button = row(
                 texts::date_preset(
                     label,
                     &texts::until(&timezone.format_until_short(closes_at)),
                 ),
                 format!("{TERMS_DURATION_PERIODS_PREFIX}{periods}"),
-            ))
+            );
+            Some((periods, button))
         })
         .collect();
-    Some(rows)
+    rows.dedup_by_key(|(periods, _)| *periods);
+    Some(rows.into_iter().rev().map(|(_, row)| row).collect())
 }
 
 pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {
@@ -1102,9 +1105,27 @@ mod tests {
         }
     }
 
+    fn preset_periods(keyboard: &InlineKeyboardMarkup) -> Vec<u16> {
+        use crate::bot::callbacks::{CallbackAction, FlowAction};
+        keyboard
+            .inline_keyboard
+            .iter()
+            .flatten()
+            .filter_map(|button| {
+                let teloxide::types::InlineKeyboardButtonKind::CallbackData(data) = &button.kind
+                else {
+                    panic!("expected a callback");
+                };
+                match crate::bot::callbacks::parse(data).expect("routable duration button") {
+                    CallbackAction::Flow(FlowAction::DurationPeriods(periods)) => Some(periods),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     #[test]
     fn duration_presets_count_whole_periods_from_the_deadline_moment() {
-        use crate::bot::callbacks::{CallbackAction, FlowAction};
         let timezone = timezone();
         for deadline in ["20.08.2027", "20.08.2027 23:59"] {
             let mut terms = scored_terms();
@@ -1112,24 +1133,28 @@ mod tests {
             terms.period_days = 7;
             let deadline = terms.deadline_at.unwrap();
             let keyboard = duration_options_keyboard(&terms, deadline, &timezone);
-            let periods: Vec<u16> = keyboard
-                .inline_keyboard
-                .iter()
-                .flatten()
-                .filter_map(|button| {
-                    let teloxide::types::InlineKeyboardButtonKind::CallbackData(data) =
-                        &button.kind
-                    else {
-                        panic!("expected a callback");
-                    };
-                    match crate::bot::callbacks::parse(data).expect("routable duration button") {
-                        CallbackAction::Flow(FlowAction::DurationPeriods(periods)) => Some(periods),
-                        _ => None,
-                    }
-                })
-                .collect();
-            assert_eq!(periods, [1, 2, 5], "{deadline}");
+            assert_eq!(preset_periods(&keyboard), [1, 2, 5], "{deadline}");
         }
+    }
+
+    #[test]
+    fn presets_rounding_up_to_the_same_period_leave_one_button_named_by_the_longest() {
+        let timezone = timezone();
+        let mut terms = scored_terms();
+        terms.deadline_at = timezone.parse_deadline("20.08.2027");
+        terms.period_days = 14;
+        let deadline = terms.deadline_at.unwrap();
+
+        let keyboard = duration_options_keyboard(&terms, deadline, &timezone);
+
+        assert_eq!(preset_periods(&keyboard), [1, 3]);
+        assert_eq!(
+            keyboard.inline_keyboard[0][0].text,
+            texts::date_preset(
+                texts::PRESET_TWO_WEEKS_AFTER,
+                &texts::until(&timezone.format_until_short(deadline + chrono::Duration::days(14)))
+            )
+        );
     }
 
     #[test]

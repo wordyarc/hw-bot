@@ -5,6 +5,7 @@ use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
 use teloxide::types::MessageId;
 
 use super::assignment_form::{AssignmentText, DraftAssignment, IssuedGroups, TermsForm, TermsStep};
+use super::callbacks::ReplayableAction;
 use super::form::InputMode;
 use super::makeup_form::{MakeupForm, MakeupStep};
 use super::views::MenuAction;
@@ -41,6 +42,16 @@ pub(super) enum ActiveForm<'a> {
 }
 
 impl BotState {
+    pub(super) fn is_restarted_by(&self, action: ReplayableAction) -> bool {
+        matches!(
+            (self, action),
+            (
+                Self::Flow(FlowState::AwaitingAssignmentTitle { course_id }),
+                ReplayableAction::StartAssignmentCreation(started),
+            ) if *course_id == started
+        )
+    }
+
     pub(super) fn is_managing_assignment(
         &self,
         message_id: MessageId,

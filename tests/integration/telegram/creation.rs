@@ -951,6 +951,35 @@ async fn manual_input_removes_the_old_buttons_and_cancel_preserves_the_draft() {
 }
 
 #[tokio::test]
+async fn tapping_create_again_on_the_title_step_restarts_without_a_discard_notice() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    let create = cb(callbacks::CREATE_PREFIX, app.course());
+
+    telegram.click_button(app.teacher(), &create).await;
+    telegram.click_button(app.teacher(), &create).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.messages(app.teacher());
+    assert!(
+        !sent
+            .iter()
+            .any(|message| message["text"] == texts::DRAFT_DISCARDED),
+        "{sent:#?}"
+    );
+    let prompts = sent
+        .iter()
+        .filter(|message| message["text"] == texts::input_prompt(texts::ASSIGNMENT_TITLE_PROMPT))
+        .count();
+    assert_eq!(prompts, 2);
+}
+
+#[tokio::test]
 async fn cancelling_the_first_terms_step_exits_with_a_message_and_menu() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;

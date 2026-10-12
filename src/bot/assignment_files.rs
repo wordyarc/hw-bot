@@ -3,7 +3,7 @@ use teloxide::types::MessageId;
 
 use super::HandlerResult;
 use super::context::{Screen, TextStep};
-use super::errors::{BotError, log_handler_error, send_error_code};
+use super::errors::{BotError, app_error_message, log_handler_error, send_error_code};
 use super::files::{TransferError, incoming_file};
 use super::state::{BotState, FileDeletion, FlowState, ScreenState};
 use super::texts;
@@ -93,7 +93,9 @@ pub(super) async fn submit_file(
             show(screen, assignment_id, creation_flow).await?;
         }
         Err(error) if error.code() == ErrorCode::ConcurrentModification => {
-            step.chat().fail(error).await?;
+            bot.send_message(chat_id, app_error_message(error.code()))
+                .reply_markup(teacher_keyboard())
+                .await?;
             show(screen, assignment_id, creation_flow).await?;
         }
         Err(error) => {

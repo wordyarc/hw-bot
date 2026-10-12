@@ -675,6 +675,13 @@ mod tests {
     }
 
     #[test]
+    fn the_seed_of_the_default_config_is_valid() {
+        let seed: Seed = serde_json::from_str(include_str!("../../config/bootstrap.json"))
+            .expect("the default seed matches the seed format");
+        validate_seed(seed).expect("the default seed is valid");
+    }
+
+    #[test]
     fn the_deployment_example_is_a_valid_seed_with_a_sandbox_course() {
         let seed: Seed =
             serde_json::from_str(include_str!("../../tools/deploy/bootstrap.example.json"))

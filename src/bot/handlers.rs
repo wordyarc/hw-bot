@@ -222,7 +222,11 @@ pub(super) async fn handle_message(
         }
 
         if message.text().is_some_and(input::looks_like_command) {
-            bot.send_message(chat_id, texts::UNKNOWN_COMMAND).await?;
+            let text = match state {
+                BotState::Flow(_) => texts::UNKNOWN_COMMAND_IN_FLOW,
+                BotState::Idle | BotState::Screen(_) => texts::UNKNOWN_COMMAND,
+            };
+            bot.send_message(chat_id, text).await?;
             return Ok(());
         }
 
@@ -416,9 +420,11 @@ pub(super) async fn handle_callback(
         if action == CallbackAction::Noop {
             return Ok(());
         }
-        if matches!(action, CallbackAction::Replayable(_)) {
+        if let CallbackAction::Replayable(replayable) = action {
             reset_dialogue(&dialogue).await?;
-            abandon_flow(&bot, chat_id, &state).await?;
+            if !state.is_restarted_by(replayable) {
+                abandon_flow(&bot, chat_id, &state).await?;
+            }
         }
 
         let deps = Deps {
