@@ -7,6 +7,7 @@ use super::reset_dialogue;
 use crate::app::ReviewSandbox;
 use crate::bot::HandlerResult;
 use crate::bot::context::{Screen, TextStep};
+use crate::bot::errors::optional_stat;
 use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{
@@ -32,7 +33,10 @@ pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerR
         return Ok(());
     }
 
-    let total = services.reviews.sandbox_size(actor, None).await?;
+    let total = optional_stat(
+        services.reviews.sandbox_size(actor, None).await,
+        "sandbox_total",
+    );
     let entries = submissions.items.iter().map(|submission| {
         texts::sandbox_entry(
             &submission.student_name,

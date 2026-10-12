@@ -72,7 +72,6 @@ pub(super) enum TermsTarget {
         grading: Grading,
         revision: i64,
         created_at: DateTime<Utc>,
-        original_closes_at: DateTime<Utc>,
     },
 }
 
@@ -122,7 +121,6 @@ impl AssignmentTerms {
                 grading: assignment.grading(),
                 revision,
                 created_at: assignment.created_at(),
-                original_closes_at: assignment.closes_at(),
             },
             deadline_at: Some(assignment.deadline_at()),
             deducted_from: policy.map(LatePolicy::deducted_from),

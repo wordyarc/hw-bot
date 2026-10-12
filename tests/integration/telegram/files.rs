@@ -8,6 +8,7 @@ use wiremock::matchers::{body_json, body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
+use crate::harness::telegram_scenario::TelegramScenario;
 use crate::harness::{TestApp, test_file_policy};
 
 #[tokio::test]
@@ -814,4 +815,94 @@ async fn sent_documents(telegram: &wiremock::MockServer) -> Vec<Vec<u8>> {
 
 fn contains(body: &[u8], needle: &[u8]) -> bool {
     body.windows(needle.len()).any(|window| window == needle)
+}
+
+fn assert_card_follows(telegram: &TelegramScenario, user: i64, notice: &str) {
+    let sent: Vec<String> = telegram
+        .messages(user)
+        .iter()
+        .filter_map(|message| message["text"].as_str().map(str::to_owned))
+        .collect();
+    let notice_at = sent
+        .iter()
+        .position(|text| text == notice)
+        .unwrap_or_else(|| panic!("{notice} is sent: {sent:#?}"));
+    assert!(
+        sent[notice_at..]
+            .iter()
+            .any(|text| text == texts::CHOOSE_ACTION),
+        "{sent:#?}"
+    );
+    assert!(
+        !sent.contains(&app_error_message(ErrorCode::InternalError).to_owned()),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn an_added_attachment_whose_card_cannot_be_read_again_shows_the_card_without_a_failure() {
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    let telegram = TelegramScenario::new().await;
+    mock_file_download(
+        &telegram.server,
+        "fixture-document",
+        "files/assignment-note.txt",
+        DOCUMENT_FIXTURE,
+    )
+    .await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/courses");
+    for data in [
+        cb(callbacks::COURSE_PREFIX, app.course()),
+        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
+        callbacks::FILE_ADD.to_owned(),
+    ] {
+        telegram.click_button(app.teacher(), &data).await;
+    }
+    app.rename_table_after_writing("stored_files", "assignment_groups")
+        .await;
+
+    telegram.document(
+        app.teacher(),
+        "fixture-document",
+        "assignment-note.txt",
+        DOCUMENT_FIXTURE.len(),
+    );
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 1);
+    assert_card_follows(&telegram, app.teacher(), texts::FILE_ADDED);
+}
+
+#[tokio::test]
+async fn a_deleted_attachment_whose_card_cannot_be_read_again_shows_the_card_without_a_failure() {
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    add_document(&app, None).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/courses");
+    for data in [
+        cb(callbacks::COURSE_PREFIX, app.course()),
+        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILE_DELETE_PREFIX, 0),
+    ] {
+        telegram.click_button(app.teacher(), &data).await;
+    }
+    let confirm = telegram
+        .button(app.teacher(), callbacks::FILE_CONFIRM_DELETE)
+        .await;
+    app.rename_table_after_writing("stored_files", "assignment_groups")
+        .await;
+
+    telegram.click(app.teacher(), &confirm);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 0);
+    assert_card_follows(&telegram, app.teacher(), texts::FILE_DELETED);
 }

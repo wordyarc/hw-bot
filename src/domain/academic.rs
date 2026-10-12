@@ -178,24 +178,6 @@ impl TeachingCourse {
         )
     }
 
-    pub fn add_teacher(&mut self, actor: &User, teacher: &User) -> DomainResult<()> {
-        if !self.can_be_managed_by(actor) {
-            return Err(DomainError::PermissionDenied {
-                action: "add course teacher",
-            });
-        }
-
-        if !teacher.role().can_manage_assignments() {
-            return Err(DomainError::PermissionDenied {
-                action: "teach course",
-            });
-        }
-
-        self.teacher_ids.insert(teacher.id());
-
-        Ok(())
-    }
-
     pub fn can_be_managed_by(&self, actor: &User) -> bool {
         actor.role().can_manage_all_teaching_courses()
             || (actor.role().can_manage_assignments() && self.teacher_ids.contains(&actor.id()))

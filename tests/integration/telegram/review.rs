@@ -10,7 +10,9 @@ use hw_bot::domain::{
     Assignment, DeductedFrom, Grade, ReviewDecision, SubmissionId, SubmissionKind,
     SubmissionStatus, USER_TEXT_MAX_LEN,
 };
-use hw_bot::test_support::{assignment as assignment_of, history, submission as submission_of};
+use hw_bot::test_support::{
+    ReviewShortcuts, assignment as assignment_of, history, submission as submission_of,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 use wiremock::matchers::{body_partial_json, method, path};
@@ -722,7 +724,7 @@ async fn the_sandbox_menu_item_lists_sandbox_submissions_with_bulk_buttons() {
     assert!(
         texts_sent(&telegram, app.teacher())
             .iter()
-            .any(|text| text.starts_with(&texts::sandbox_header(1)))
+            .any(|text| text.starts_with(&texts::sandbox_header(Some(1))))
     );
 }
 

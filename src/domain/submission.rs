@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Acceptance, Assignment, AssignmentId, DeductedFrom, DomainError, DomainResult, LatePenalty,
-    MAX_ATTEMPTS, MAX_SCORE, MakeupOffer, MakeupRequest, NonEmptyString, SubmissionId,
-    TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
+    Acceptance, Assignment, AssignmentId, CourseMakeup, DeductedFrom, DomainError, DomainResult,
+    LatePenalty, MAX_ATTEMPTS, MAX_SCORE, MakeupBalance, MakeupOffer, MakeupRequest,
+    NonEmptyString, SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -91,23 +91,22 @@ impl SubmissionHistory {
         self,
         assignment: &Assignment,
         at: DateTime<Utc>,
-        makeup: MakeupRequest,
+        course: CourseMakeup,
+        balance: MakeupBalance,
     ) -> Option<MakeupOffer> {
         if !assignment.is_published() {
             return None;
         }
-        let acceptance = assignment
-            .acceptance_at(at, makeup.consented_course())
-            .ok()?;
+        let acceptance = assignment.acceptance_at(at, Some(course)).ok()?;
         let Acceptance::Makeup { credit } = acceptance else {
             return None;
         };
         self.ensure_admits(assignment, acceptance).ok()?;
 
         Some(MakeupOffer {
-            until: makeup.course?.until(),
+            until: course.until(),
             credit,
-            balance: makeup.balance,
+            balance,
         })
     }
 
@@ -586,49 +585,6 @@ impl Submission {
             review_comment: None,
             grade: GradeParts::default(),
         })
-    }
-
-    pub fn accept(
-        &mut self,
-        assignment: &Assignment,
-        teaching_course: &TeachingCourse,
-        reviewer: &User,
-        score: Option<ReviewScore>,
-        comment: impl Into<String>,
-        reviewed_at: DateTime<Utc>,
-    ) -> DomainResult<()> {
-        self.review(
-            assignment,
-            teaching_course,
-            reviewer,
-            Review {
-                decision: ReviewDecision::Accept,
-                score,
-                comment: comment.into(),
-                reviewed_at,
-            },
-        )
-    }
-
-    pub fn reject(
-        &mut self,
-        assignment: &Assignment,
-        teaching_course: &TeachingCourse,
-        reviewer: &User,
-        comment: impl Into<String>,
-        reviewed_at: DateTime<Utc>,
-    ) -> DomainResult<()> {
-        self.review(
-            assignment,
-            teaching_course,
-            reviewer,
-            Review {
-                decision: ReviewDecision::Reject,
-                score: None,
-                comment: comment.into(),
-                reviewed_at,
-            },
-        )
     }
 
     pub fn review(

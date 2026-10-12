@@ -5,7 +5,7 @@ use hw_bot::db::{DbError, DbResult};
 use hw_bot::domain::{
     Assignment, DomainError, Submission, SubmissionHistory, SubmissionStatus, User,
 };
-use hw_bot::test_support::{history, submission};
+use hw_bot::test_support::{ReviewShortcuts, history, submission};
 use sqlx::PgPool;
 
 use crate::harness::TestApp;

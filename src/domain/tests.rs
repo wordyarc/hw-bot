@@ -1,20 +1,26 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::domain::{
     Acceptance, Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom,
-    DomainError, Grade, Grading, LATEST_TERM_YEAR, LatePolicy, MakeupOffer, MakeupRequest,
-    MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role, StaffRole,
-    StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId, SubmissionKind,
-    SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
+    DomainError, Grade, Grading, LATEST_TERM_YEAR, LatePenalty, LatePolicy, MakeupOffer,
+    MakeupRequest, MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role,
+    StaffRole, StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId,
+    SubmissionKind, SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL,
-    SUBJECT_NAME, admin, assignment, course_for, history, student, student_group, subject,
-    submission, t0, teacher, teaching_course,
+    ReviewShortcuts, SUBJECT_NAME, admin, assignment, course_for, history, student, student_group,
+    subject, submission, t0, teacher, teaching_course,
 };
 
 fn reviewed_at() -> DateTime<Utc> {
     t0() + Duration::hours(2)
+}
+
+fn points_at(assignment: &Assignment, at: DateTime<Utc>) -> Option<u16> {
+    assignment.late_penalty_at(at).map(LatePenalty::points)
 }
 
 fn out_of(value: u16, max_score: u16) -> Option<ReviewScore> {
@@ -172,12 +178,19 @@ fn archived_assignment_keeps_its_deadline() {
 }
 
 #[test]
-fn added_course_teacher_can_review_and_manage_assignment() {
+fn a_second_course_teacher_can_review_assignment() {
     let course_teacher = teacher(1);
     let reviewer = teacher(2);
     let group = student_group(GROUP_CODE);
-    let mut course = course_for(&group, &course_teacher);
-    course.add_teacher(&course_teacher, &reviewer).unwrap();
+    let single = course_for(&group, &course_teacher);
+    let course = TeachingCourse::restore(
+        single.id(),
+        single.subject_id(),
+        single.group_ids().clone(),
+        HashSet::from([course_teacher.id(), reviewer.id()]),
+        single.created_at(),
+    )
+    .unwrap();
     let student = student(3, &group);
     let assignment = assignment(&course, &course_teacher).published().build();
     let mut submission = submission(&assignment, &student).build();
@@ -634,9 +647,9 @@ fn the_deadline_moment_itself_is_already_late() {
 
     let just_before = deadline_at - Duration::nanoseconds(1);
     assert_eq!(assignment.late_periods_at(just_before), 0);
-    assert_eq!(assignment.penalty_at(just_before), 0);
+    assert_eq!(assignment.late_penalty_at(just_before), None);
     assert_eq!(assignment.late_periods_at(deadline_at), 1);
-    assert_eq!(assignment.penalty_at(deadline_at), 1);
+    assert_eq!(points_at(&assignment, deadline_at), Some(1));
 }
 
 #[test]
@@ -725,7 +738,7 @@ fn any_lateness_costs_the_first_period_at_once() {
     let at = Utc.with_ymd_and_hms(2026, 8, 25, 0, 0, 0).unwrap();
 
     assert_eq!(assignment.late_periods_at(at), 1);
-    assert_eq!(assignment.penalty_at(at), 1);
+    assert_eq!(points_at(&assignment, at), Some(1));
 }
 
 #[test]
@@ -797,7 +810,7 @@ fn zero_possible_score_does_not_close_submissions_early() {
         .published()
         .build();
     let last_moment = work.closes_at() - Duration::nanoseconds(1);
-    assert_eq!(work.penalty_at(last_moment), 4);
+    assert_eq!(points_at(&work, last_moment), Some(4));
     assert!(
         submission(&work, &student)
             .submitted_at(last_moment)
@@ -1100,7 +1113,10 @@ fn nonweekly_closing_is_an_exact_exclusive_cutoff() {
         .late_policy(5, 1, 2, DeductedFrom::WorkScore)
         .build();
     assert_eq!(work.closes_at(), closing);
-    assert_eq!(work.penalty_at(closing - Duration::nanoseconds(1)), 2);
+    assert_eq!(
+        points_at(&work, closing - Duration::nanoseconds(1)),
+        Some(2)
+    );
     assert!(
         work.ensure_open_for_submission(closing - Duration::nanoseconds(1))
             .is_ok()
@@ -1658,7 +1674,11 @@ fn makeup_window() -> CourseMakeup {
 
 fn makeup_with_used(used: u16) -> MakeupRequest {
     let window = makeup_window();
-    MakeupRequest::consented(Some(window), window.balance(0, used))
+    MakeupRequest {
+        course: Some(window),
+        consent: true,
+        balance: window.balance(0, used),
+    }
 }
 
 fn credit_assignment(course: &TeachingCourse, teacher: &User) -> Assignment {
@@ -2081,7 +2101,7 @@ fn the_card_offers_a_makeup_with_its_balance_or_nothing() {
     let at = after_closing(&work);
     let window = makeup_window();
     let offer = |history: SubmissionHistory, used| {
-        history.makeup_offer_at(&work, at, makeup_with_used(used))
+        history.makeup_offer_at(&work, at, window, window.balance(0, used))
     };
 
     assert_eq!(
@@ -2101,7 +2121,8 @@ fn the_card_offers_a_makeup_with_its_balance_or_nothing() {
         history().build().makeup_offer_at(
             &work,
             work.deadline_at() - Duration::hours(1),
-            makeup_with_used(0)
+            window,
+            window.balance(0, 0)
         ),
         None
     );

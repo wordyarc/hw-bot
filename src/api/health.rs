@@ -13,12 +13,11 @@ pub async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
-    match sqlx::query_scalar::<_, i32>("select 1")
+    match sqlx::query!("select 1 as ready")
         .fetch_one(&state.db_pool)
         .await
     {
-        Ok(1) => StatusCode::OK,
-        Ok(_) => StatusCode::SERVICE_UNAVAILABLE,
+        Ok(_) => StatusCode::OK,
         Err(error) => {
             crate::db::error::log_timeout(&error);
             StatusCode::SERVICE_UNAVAILABLE

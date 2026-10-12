@@ -8,10 +8,77 @@ pub mod telegram;
 
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainResult, EducationLevel, Grading, LatePolicy,
-    MakeupRequest, MakeupTerms, NewAssignment, Role, StudentGroup, StudentGroupId, StudyProgram,
-    Subject, SubjectId, Submission, SubmissionHistory, SubmissionHistoryParts, SubmissionId,
-    TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
+    MakeupRequest, MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role,
+    StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission, SubmissionHistory,
+    SubmissionHistoryParts, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User,
+    UserId,
 };
+
+pub trait ReviewShortcuts {
+    fn accept(
+        &mut self,
+        assignment: &Assignment,
+        teaching_course: &TeachingCourse,
+        reviewer: &User,
+        score: Option<ReviewScore>,
+        comment: impl Into<String>,
+        reviewed_at: DateTime<Utc>,
+    ) -> DomainResult<()>;
+
+    fn reject(
+        &mut self,
+        assignment: &Assignment,
+        teaching_course: &TeachingCourse,
+        reviewer: &User,
+        comment: impl Into<String>,
+        reviewed_at: DateTime<Utc>,
+    ) -> DomainResult<()>;
+}
+
+impl ReviewShortcuts for Submission {
+    fn accept(
+        &mut self,
+        assignment: &Assignment,
+        teaching_course: &TeachingCourse,
+        reviewer: &User,
+        score: Option<ReviewScore>,
+        comment: impl Into<String>,
+        reviewed_at: DateTime<Utc>,
+    ) -> DomainResult<()> {
+        self.review(
+            assignment,
+            teaching_course,
+            reviewer,
+            Review {
+                decision: ReviewDecision::Accept,
+                score,
+                comment: comment.into(),
+                reviewed_at,
+            },
+        )
+    }
+
+    fn reject(
+        &mut self,
+        assignment: &Assignment,
+        teaching_course: &TeachingCourse,
+        reviewer: &User,
+        comment: impl Into<String>,
+        reviewed_at: DateTime<Utc>,
+    ) -> DomainResult<()> {
+        self.review(
+            assignment,
+            teaching_course,
+            reviewer,
+            Review {
+                decision: ReviewDecision::Reject,
+                score: None,
+                comment: comment.into(),
+                reviewed_at,
+            },
+        )
+    }
+}
 
 #[cfg(test)]
 pub(crate) async fn closed_pool() -> sqlx::PgPool {

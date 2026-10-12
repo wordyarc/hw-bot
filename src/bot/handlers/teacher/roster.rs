@@ -56,7 +56,6 @@ fn group_section(group: &RosterGroup) -> String {
 mod tests {
     use super::*;
     use crate::app::RosterStudent;
-    use crate::domain::UserId;
     use crate::test_support::subject;
 
     fn group(code: &str, issued: u32, students: &[(&str, u32)]) -> RosterGroup {
@@ -69,7 +68,6 @@ mod tests {
                 .zip(1..)
                 .map(|(&(name, accepted), position)| RosterStudent {
                     position,
-                    student_id: UserId::new(),
                     display_name: name.to_owned(),
                     accepted,
                 })

@@ -12,7 +12,7 @@ use crate::bot::assignment_form::{
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::handlers::input::{
-    parse_max_score, parse_positive_attempts, require_text, require_text_within,
+    parse_max_score, require_attempts, require_text, require_text_within,
 };
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
@@ -42,7 +42,7 @@ pub(crate) async fn handle_max_attempts(
     .await
 }
 
-pub(super) async fn ask_grading(chat: Chat<'_>, draft: DraftAssignment) -> HandlerResult {
+async fn ask_grading(chat: Chat<'_>, draft: DraftAssignment) -> HandlerResult {
     let bot = chat.bot();
     let chat_id = chat.chat_id();
     let sent = bot
@@ -87,7 +87,7 @@ pub(crate) async fn handle_grading(
     apply_grading(screen, draft, grading, Some(message_id)).await
 }
 
-pub(super) async fn apply_grading(
+async fn apply_grading(
     screen: Screen<'_>,
     draft: DraftAssignment,
     grading: Grading,
@@ -107,7 +107,7 @@ pub(super) async fn apply_grading(
     render(screen.chat(), form, None).await
 }
 
-pub(super) async fn ask_max_attempts(
+async fn ask_max_attempts(
     chat: Chat<'_>,
     text: AssignmentText,
     groups: IssuedGroups,
@@ -283,26 +283,15 @@ pub(crate) async fn submit_max_attempts(
     assignment: AssignmentText,
     groups: IssuedGroups,
 ) -> HandlerResult {
-    let bot = step.bot();
-    let message = step.message();
-    let chat_id = step.chat_id();
-
-    let Some(text) = require_text(bot, message).await? else {
+    let Some(max_attempts) = require_attempts(step.bot(), step.message()).await? else {
         return Ok(());
     };
-    let Some(max_attempts) = parse_positive_attempts(&text) else {
-        bot.send_message(chat_id, texts::attempts_prompt(MAX_ATTEMPTS))
-            .await?;
-        return Ok(());
-    };
-    detach(bot, chat_id, Some(message_id)).await?;
+    detach(step.bot(), step.chat_id(), Some(message_id)).await?;
     ask_grading(
         step.chat(),
         DraftAssignment::new(assignment, groups, max_attempts),
     )
-    .await?;
-
-    Ok(())
+    .await
 }
 
 pub(crate) async fn submit_grading_text(

@@ -250,14 +250,6 @@ pub struct MakeupRequest {
 }
 
 impl MakeupRequest {
-    pub fn consented(course: Option<CourseMakeup>, balance: MakeupBalance) -> Self {
-        Self {
-            course,
-            consent: true,
-            balance,
-        }
-    }
-
     pub(crate) fn consented_course(self) -> Option<CourseMakeup> {
         self.course.filter(|_| self.consent)
     }

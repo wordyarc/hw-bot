@@ -9,8 +9,8 @@ use hw_bot::domain::{
     USER_TEXT_MAX_LEN,
 };
 use serde_json::json;
-use wiremock::Mock;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_json, body_partial_json, method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{
@@ -489,6 +489,41 @@ async fn a_second_submit_tap_that_fails_on_the_database_brings_the_menu_back() {
         replies
             .iter()
             .any(|message| message["reply_markup"]["keyboard"].is_array()),
+        "{replies:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_second_submit_tap_whose_prompt_fails_to_send_does_not_announce_a_cancel() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    let submit = open_submission_prompt(&app, &telegram).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .and(body_partial_json(
+            json!({"text": texts::input_prompt(texts::SUBMISSION_PROMPT)}),
+        ))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "ok": false,
+            "error_code": 400,
+            "description": "Bad Request: the prompt was not sent"
+        })))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&telegram.server)
+        .await;
+    let before = telegram.messages(app.student()).len();
+    telegram.click(app.student(), &submit);
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let replies = &telegram.messages(app.student())[before..];
+    assert!(
+        !replies
+            .iter()
+            .any(|message| message["text"] == texts::ACTION_CANCELLED),
         "{replies:#?}"
     );
 }

@@ -30,7 +30,9 @@ pub(super) use creation::submit_max_attempts;
 pub(super) use creation::submit_title;
 pub(super) use creation::{finish_assignment_groups, toggle_assignment_group};
 pub(super) use deadline::handle_deadline;
-pub(super) use gradebook::{show_gradebook_groups, show_gradebook_page, show_student_grades_page};
+pub(super) use gradebook::{
+    send_student_grades, show_gradebook_groups, show_gradebook_page, show_student_grades_page,
+};
 pub(super) use invites::show_course_invite;
 pub(super) use invites::{ask_invite_rotation, cancel_invite_rotation, confirm_invite_rotation};
 pub(super) use makeup::{

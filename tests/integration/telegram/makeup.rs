@@ -1280,3 +1280,32 @@ async fn a_followup_that_fails_after_a_saved_makeup_review_reports_no_failure() 
         "{sent:#?}"
     );
 }
+
+#[tokio::test]
+async fn a_grant_from_the_gradebook_whose_card_cannot_be_read_again_reports_no_failure() {
+    let app = TestApp::start().await;
+    spend_the_whole_pool(&app, 1).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_student_grades(&app, &telegram).await;
+    let grant = telegram
+        .button(app.teacher(), callbacks::MAKEUP_GRANT)
+        .await;
+    app.rename_table_after_writing("student_course_progress", "assignment_groups")
+        .await;
+
+    telegram.click(app.teacher(), &grant);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(pool_balance(&app).await, (1, 2));
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(
+        sent.contains(&texts::MAKEUP_ATTEMPT_GRANTED.to_owned()),
+        "{sent:#?}"
+    );
+    assert!(
+        !sent.contains(&app_error_message(ErrorCode::InternalError).to_owned()),
+        "{sent:#?}"
+    );
+}

@@ -8,7 +8,7 @@ use crate::app::{AppError, ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{PageTarget, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
-use crate::bot::errors::{app_error_message, log_handler_error};
+use crate::bot::errors::{app_error_message, log_handler_error, optional_stat};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{
@@ -212,16 +212,11 @@ pub(super) async fn show_assignment(
         history.remaining_attempts_for(assignment),
     );
     if history.has_pending_submission()
-        && let Ok(Some(place)) = services
-            .submissions
-            .queue_place(actor, assignment_id)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(
-                    code = error.code().as_str(),
-                    "student queue position is unavailable"
-                );
-            })
+        && let Some(place) = optional_stat(
+            services.submissions.queue_place(actor, assignment_id).await,
+            "student_queue_place",
+        )
+        .flatten()
     {
         summary.push('\n');
         summary.push_str(&texts::pending_place(&texts::queue_ahead(place.position)));
@@ -396,14 +391,7 @@ pub(super) async fn start_submission(
         });
     let (details, makeup) = match admitted {
         Ok(admitted) => admitted,
-        Err(error)
-            if matches!(
-                error.code(),
-                ErrorCode::InternalError | ErrorCode::Overloaded
-            ) =>
-        {
-            return Err(error.into());
-        }
+        Err(error) if error.code().is_server_failure() => return Err(error.into()),
         Err(error) => {
             screen
                 .bot()
@@ -487,14 +475,7 @@ pub(super) async fn submit_homework_text(
                 .await?;
             show_assignment(screen, assignment_id).await
         }
-        Err(error)
-            if matches!(
-                error.code(),
-                ErrorCode::InternalError | ErrorCode::Overloaded
-            ) =>
-        {
-            Err(error.into())
-        }
+        Err(error) if error.code().is_server_failure() => Err(error.into()),
         Err(error) => {
             reset_dialogue(step.dialogue()).await?;
             bot.send_message(chat_id, app_error_message(error.code()))

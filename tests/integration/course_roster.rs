@@ -265,8 +265,8 @@ async fn an_admin_reads_the_roster_without_teaching_the_course() {
         .unwrap();
 
     assert_eq!(
-        roster.groups[0].students[0].student_id,
-        app.fixture.student.id()
+        roster.groups[0].students[0].display_name,
+        app.fixture.student.display_name().as_str()
     );
 }
 

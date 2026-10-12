@@ -1,5 +1,6 @@
 use hw_bot::app::Actor;
 use hw_bot::domain::UserId;
+use hw_bot::test_support::ReviewShortcuts;
 use hw_bot::{
     db,
     pagination::{PAGE_SIZE, PageRequest},

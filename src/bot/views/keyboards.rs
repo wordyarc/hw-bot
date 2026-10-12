@@ -1208,7 +1208,6 @@ mod tests {
             grading: terms.grading(),
             revision: 0,
             created_at,
-            original_closes_at: terms.deadline_at.unwrap(),
         };
         let mut form = TermsForm::new(terms, TermsStep::Deadline);
         form.mode = InputMode::Calendar(timezone.local_date(created_at));

@@ -1,6 +1,7 @@
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
+use super::form::detach;
 use crate::app::{CourseInviteState, ErrorCode};
 use crate::bot::HandlerResult;
 use crate::bot::context::Screen;
@@ -95,10 +96,7 @@ pub(crate) async fn cancel_invite_rotation(
     let Some((course_id, _)) = state.confirming_invite_rotation(message_id) else {
         return screen.stale().await;
     };
-    screen
-        .bot()
-        .edit_message_reply_markup(screen.chat_id(), message_id)
-        .await?;
+    detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
     show_course_invite(screen, course_id).await
 }
 
@@ -111,10 +109,7 @@ pub(crate) async fn confirm_invite_rotation(
         return screen.stale().await;
     };
 
-    screen
-        .bot()
-        .edit_message_reply_markup(screen.chat_id(), message_id)
-        .await?;
+    detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
 
     match screen
         .services()

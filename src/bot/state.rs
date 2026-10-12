@@ -34,14 +34,14 @@ pub(super) struct FileDeletion {
     pub creation_flow: bool,
 }
 
-/// Кнопка допустима при совпадении двух условий: ожидаемого состояния диалога и ID сообщения.
-/// Оба условия проверяются в каждом методе разбора.
 #[derive(Clone, Copy)]
 pub(super) enum ActiveForm<'a> {
     Terms(&'a TermsForm),
     Makeup(&'a MakeupForm),
 }
 
+/// Кнопка допустима при совпадении двух условий: ожидаемого состояния диалога и ID сообщения.
+/// Оба условия проверяются в каждом методе разбора.
 impl BotState {
     pub(super) fn is_restarted_by(&self, action: ReplayableAction) -> bool {
         match (self, action) {
@@ -185,6 +185,20 @@ impl BotState {
                 },
                 late: *late,
             }),
+            _ => None,
+        }
+    }
+
+    pub(super) fn awaiting_review_score(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Option<(MaxScore, Option<LatePenalty>)> {
+        match self {
+            Self::Flow(FlowState::AwaitingReviewScore {
+                submission_id: current,
+                max_score,
+                late,
+            }) if *current == submission_id => Some((*max_score, *late)),
             _ => None,
         }
     }

@@ -7,7 +7,7 @@ use crate::app::GrantExtraAttempts;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX, PageTarget};
 use crate::bot::context::{Screen, TextStep};
-use crate::bot::handlers::input::{parse_positive_attempts, require_text};
+use crate::bot::handlers::input::require_attempts;
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, FlowState, StudentChoice};
 use crate::bot::texts;
@@ -154,7 +154,7 @@ pub(super) fn chosen_amount(choice: AmountChoice) -> Option<u16> {
     }
 }
 
-pub(super) async fn grant_attempts(
+async fn grant_attempts(
     screen: Screen<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
@@ -191,24 +191,13 @@ pub(crate) async fn submit_attempt_amount(
     assignment_id: AssignmentId,
     student_id: UserId,
 ) -> HandlerResult {
-    let bot = step.bot();
-    let message = step.message();
-    let chat_id = step.chat_id();
-
-    let Some(text) = require_text(bot, message).await? else {
-        return Ok(());
-    };
-    let Some(amount) = parse_positive_attempts(&text) else {
-        bot.send_message(chat_id, texts::attempts_prompt(MAX_ATTEMPTS))
-            .await?;
+    let Some(amount) = require_attempts(step.bot(), step.message()).await? else {
         return Ok(());
     };
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
-    grant_attempts(screen, message_id, assignment_id, student_id, amount).await?;
-
-    Ok(())
+    grant_attempts(screen, message_id, assignment_id, student_id, amount).await
 }
 
 #[cfg(test)]

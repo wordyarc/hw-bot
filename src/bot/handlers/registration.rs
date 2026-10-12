@@ -2,7 +2,7 @@ use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
-use super::home::show_home;
+use super::home::send_home;
 use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::{CourseInvitation, ErrorCode, RegisterStudent};
@@ -29,7 +29,7 @@ pub(super) async fn start_registration(
         .find_by_telegram_user_id(telegram_user_id)
         .await
     {
-        Ok(_) => return show_home(chat, telegram_user_id).await,
+        Ok(registered) => return send_home(chat, &registered.user).await,
         Err(error) if error.code() == ErrorCode::NotFound => {}
         Err(error) => return Err(error.into()),
     }
@@ -146,11 +146,9 @@ pub(super) async fn submit_name(
     {
         reset_dialogue(dialogue).await?;
     }
-    registered?;
+    let registered = registered?;
     reset_dialogue(dialogue).await?;
     bot.send_message(chat_id, texts::REGISTRATION_COMPLETE)
         .await?;
-    show_home(step.chat(), telegram_user_id).await?;
-
-    Ok(())
+    send_home(step.chat(), &registered.user).await
 }

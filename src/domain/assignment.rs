@@ -687,11 +687,6 @@ impl Assignment {
             .map_or(0, |policy| policy.periods_until(self.deadline_at, at))
     }
 
-    pub fn penalty_at(&self, at: DateTime<Utc>) -> u16 {
-        self.late_policy
-            .map_or(0, |policy| policy.penalty_for(self.late_periods_at(at)))
-    }
-
     pub fn late_penalty_at(&self, at: DateTime<Utc>) -> Option<LatePenalty> {
         self.late_policy
             .and_then(|policy| policy.late_penalty(self.late_periods_at(at)))

@@ -662,14 +662,14 @@ fn route<V, A>(routes: &[Route<V, A>], data: &str, parse: impl Fn(&str) -> Optio
 }
 
 fn parse_flow(data: &str) -> Option<FlowAction> {
-    if data.starts_with(GRADING_PREFIX) {
-        parse_grading(data).map(FlowAction::Grading)
-    } else if data.starts_with(MAKEUP_ANSWER_PREFIX) {
-        parse_makeup_answer(data).map(FlowAction::MakeupAnswer)
-    } else if data.starts_with(LATE_POLICY_PREFIX) {
-        parse_late_policy(data).map(FlowAction::LatePolicy)
-    } else if data.starts_with(REVIEW_SCORE_PREFIX) {
-        parse_review_score(data)
+    if let Some(choice) = data.strip_prefix(GRADING_PREFIX) {
+        parse_grading(choice).map(FlowAction::Grading)
+    } else if let Some(choice) = data.strip_prefix(MAKEUP_ANSWER_PREFIX) {
+        parse_makeup_answer(choice).map(FlowAction::MakeupAnswer)
+    } else if let Some(choice) = data.strip_prefix(LATE_POLICY_PREFIX) {
+        parse_late_policy(choice).map(FlowAction::LatePolicy)
+    } else if let Some(score) = data.strip_prefix(REVIEW_SCORE_PREFIX) {
+        parse_review_score(score)
     } else if let Some(periods) = data.strip_prefix(TERMS_DURATION_PERIODS_PREFIX) {
         parse_u16(periods).map(FlowAction::DurationPeriods)
     } else {
@@ -677,8 +677,7 @@ fn parse_flow(data: &str) -> Option<FlowAction> {
     }
 }
 
-fn parse_review_score(data: &str) -> Option<FlowAction> {
-    let value = data.strip_prefix(REVIEW_SCORE_PREFIX)?;
+fn parse_review_score(value: &str) -> Option<FlowAction> {
     let (submission_id, choice) = value.split_once(':')?;
     let submission_id = SubmissionId::from_uuid(submission_id.parse().ok()?);
     let choice = parse_amount_value(choice)?;
@@ -689,16 +688,16 @@ fn parse_review_score(data: &str) -> Option<FlowAction> {
     })
 }
 
-fn parse_grading(data: &str) -> Option<GradingChoice> {
-    match data.strip_prefix(GRADING_PREFIX)? {
+fn parse_grading(choice: &str) -> Option<GradingChoice> {
+    match choice {
         PASS_FAIL_GRADING => Some(GradingChoice::PassFail),
         MANUAL_CHOICE => Some(GradingChoice::Manual),
         value => parse_u16(value).map(GradingChoice::Preset),
     }
 }
 
-fn parse_makeup_answer(data: &str) -> Option<MakeupChoice> {
-    match data.strip_prefix(MAKEUP_ANSWER_PREFIX)? {
+fn parse_makeup_answer(choice: &str) -> Option<MakeupChoice> {
+    match choice {
         MAKEUP_ANSWER_MANUAL => Some(MakeupChoice::Manual),
         MAKEUP_ANSWER_NOT_OFFERED => Some(MakeupChoice::NotOffered),
         MAKEUP_ANSWER_PASS_FAIL => Some(MakeupChoice::PassFail),
@@ -706,8 +705,8 @@ fn parse_makeup_answer(data: &str) -> Option<MakeupChoice> {
     }
 }
 
-fn parse_late_policy(data: &str) -> Option<LatePolicyChoice> {
-    match data.strip_prefix(LATE_POLICY_PREFIX)? {
+fn parse_late_policy(choice: &str) -> Option<LatePolicyChoice> {
+    match choice {
         STRICT_LATE_POLICY => Some(LatePolicyChoice::Strict),
         value => DeductedFrom::parse_str(value).map(LatePolicyChoice::Penalty),
     }

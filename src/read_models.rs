@@ -38,7 +38,6 @@ pub struct RosterGroup {
 #[derive(Clone, Debug)]
 pub struct RosterStudent {
     pub position: u32,
-    pub student_id: UserId,
     pub display_name: String,
     pub accepted: u32,
 }

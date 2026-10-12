@@ -66,6 +66,12 @@ pub enum AppError {
     Db(DbError),
 }
 
+impl ErrorCode {
+    pub fn is_server_failure(self) -> bool {
+        matches!(self, Self::InternalError | Self::Overloaded)
+    }
+}
+
 impl AppError {
     pub fn code(&self) -> ErrorCode {
         match self {

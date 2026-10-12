@@ -5,7 +5,7 @@ use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 use super::home::show_home;
 use super::input::{parse_number, require_text, require_text_within};
 use super::reset_dialogue;
-use super::teacher::show_student_grades_page;
+use super::teacher::send_student_grades;
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
@@ -441,14 +441,23 @@ pub(super) async fn grant_makeup_attempt(
             .await
         }
         GrantOrigin::Grades { list } => {
-            show_student_grades_page(
-                screen,
-                grant.course_id,
-                grant.student_id,
-                PageRequest::default(),
-                list,
-            )
-            .await
+            let card = optional_stat(
+                screen
+                    .services()
+                    .courses
+                    .student_grades_card(
+                        screen.actor(),
+                        grant.course_id,
+                        grant.student_id,
+                        PageRequest::default(),
+                    )
+                    .await,
+                "student_grades",
+            );
+            match card {
+                Some(card) => send_student_grades(screen, grant.course_id, card, list).await,
+                None => Ok(()),
+            }
         }
     }
 }
@@ -641,21 +650,13 @@ pub(super) async fn change_decision(
 
 pub(super) async fn handle_review_score(
     screen: Screen<'_>,
-    callback_submission_id: SubmissionId,
+    submission_id: SubmissionId,
     choice: AmountChoice,
     state: BotState,
 ) -> HandlerResult {
-    let BotState::Flow(FlowState::AwaitingReviewScore {
-        submission_id,
-        max_score,
-        late,
-    }) = state
-    else {
+    let Some((max_score, late)) = state.awaiting_review_score(submission_id) else {
         return screen.stale().await;
     };
-    if submission_id != callback_submission_id {
-        return screen.stale().await;
-    }
     let max_score = max_score.get();
     let score = match choice {
         AmountChoice::Preset(score) if score <= max_score => score,

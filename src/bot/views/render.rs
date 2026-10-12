@@ -124,13 +124,7 @@ fn terms_summary(
             penalty_schedule(deadline, policy, closing, max_score, timezone)
         ));
     }
-    let previous = match terms.target {
-        TermsTarget::Edit {
-            original_closes_at, ..
-        } => Some(original_closes_at),
-        _ => form.previous_closes_at,
-    };
-    if let Some(previous) = previous
+    if let Some(previous) = form.previous_closes_at
         && closing != previous
     {
         text.push_str(&format!(
@@ -268,9 +262,14 @@ pub(crate) fn student_grading_lines(
         }
         _ => {}
     }
-    let penalty = assignment.penalty_at(now);
-    if penalty > 0 && open {
-        lines.push_str(&format!("\n{} −{penalty}", texts::LATE_PENALTY_LABEL));
+    if let Some(penalty) = assignment.late_penalty_at(now)
+        && open
+    {
+        lines.push_str(&format!(
+            "\n{} −{}",
+            texts::LATE_PENALTY_LABEL,
+            penalty.points()
+        ));
     }
     lines
 }

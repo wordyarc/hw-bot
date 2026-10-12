@@ -20,7 +20,7 @@ use hw_bot::test_support::{
     subject, teaching_course,
 };
 use serde_json::{Value, json};
-use sqlx::PgPool;
+use sqlx::{AssertSqlSafe, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -469,6 +469,26 @@ impl TestApp {
         .execute(&self.pool)
         .await
         .expect("detach teacher from the course");
+    }
+
+    pub async fn rename_table_after_writing(&self, written: &str, renamed: &str) {
+        sqlx::raw_sql(AssertSqlSafe(format!(
+            r#"
+            create function rename_after_writing() returns trigger language plpgsql as $$
+            begin
+                if to_regclass('{renamed}') is not null then
+                    alter table {renamed} rename to {renamed}_unavailable;
+                end if;
+                return null;
+            end
+            $$;
+            create trigger rename_after_writing after insert or update or delete on {written}
+            for each statement execute function rename_after_writing();
+            "#
+        )))
+        .execute(&self.pool)
+        .await
+        .expect("rename a table after the next write");
     }
 
     pub async fn add_admin(&self) -> User {

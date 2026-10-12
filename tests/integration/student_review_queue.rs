@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use hw_bot::app::Actor;
 use hw_bot::db;
 use hw_bot::domain::{Assignment, User};
-use hw_bot::test_support::submission;
+use hw_bot::test_support::{ReviewShortcuts, submission};
 
 use crate::harness::TestApp;
 

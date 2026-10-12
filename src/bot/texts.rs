@@ -625,8 +625,11 @@ pub const SANDBOX_NOTHING_TO_DECIDE: &str =
 pub const BUTTON_ACCEPT_ALL: &str = "✅ Принять все";
 pub const BUTTON_REJECT_ALL: &str = "❌ Отклонить все";
 
-pub fn sandbox_header(total: u32) -> String {
-    format!("{BUTTON_SANDBOX}\nРабот на проверке: {total}")
+pub fn sandbox_header(total: Option<u32>) -> String {
+    match total {
+        Some(total) => format!("{BUTTON_SANDBOX}\nРабот на проверке: {total}"),
+        None => BUTTON_SANDBOX.to_owned(),
+    }
 }
 
 pub fn sandbox_entry(student: &str, title: &str, sent_at: &str, kind: SubmissionKind) -> String {

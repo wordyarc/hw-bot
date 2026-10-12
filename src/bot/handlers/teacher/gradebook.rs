@@ -95,15 +95,26 @@ pub(crate) async fn show_student_grades_page(
     page: PageRequest,
     list: Option<StudentList>,
 ) -> HandlerResult {
-    let StudentGradesCard {
-        grades: student,
-        group_id,
-        makeup,
-    } = screen
+    let card = screen
         .services()
         .courses
         .student_grades_card(screen.actor(), course_id, student_id, page)
         .await?;
+    send_student_grades(screen, course_id, card, list).await
+}
+
+pub(crate) async fn send_student_grades(
+    screen: Screen<'_>,
+    course_id: TeachingCourseId,
+    card: StudentGradesCard,
+    list: Option<StudentList>,
+) -> HandlerResult {
+    let StudentGradesCard {
+        grades: student,
+        group_id,
+        makeup,
+    } = card;
+    let student_id = student.student_id;
 
     let mut lines = vec![texts::grades_header(
         &student.display_name,

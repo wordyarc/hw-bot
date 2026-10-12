@@ -15,7 +15,7 @@ use super::callbacks::{
     ScreenAction,
 };
 use super::context::{BotContext, Chat, Deps, Screen, TextStep};
-use super::errors::finish_handler;
+use super::errors::{BotError, finish_handler};
 use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button};
@@ -417,7 +417,7 @@ pub(super) async fn handle_callback(
             reset_dialogue(&dialogue).await?;
             if state.is_restarted_by(replayable) {
                 let restarted = replay(chat, telegram_user_id, replayable, message.date).await;
-                if restarted.is_err() {
+                if let Err(BotError::App(_)) = restarted {
                     abandon_flow(&bot, chat_id, &state).await?;
                 }
                 return restarted;

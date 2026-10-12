@@ -229,7 +229,6 @@ pub async fn course_roster(
                 select count(*) from issued
                 where issued.student_group_id = student_groups.id
             ) as "issued!",
-            users.id as "student_id?",
             users.display_name as "display_name?",
             coalesce(accepted.assignments, 0) as "accepted!"
         from teaching_course_groups course_groups
@@ -251,12 +250,10 @@ pub async fn course_roster(
     .into_iter()
     .map(|row| {
         let student = row
-            .student_id
-            .zip(row.display_name)
-            .map(|(id, display_name)| {
+            .display_name
+            .map(|display_name| {
                 Ok::<_, DbError>(RosterStudent {
                     position: checked_num_cast("roster.position", row.position)?,
-                    student_id: UserId::from_uuid(id),
                     display_name,
                     accepted: checked_num_cast("roster.accepted", row.accepted)?,
                 })

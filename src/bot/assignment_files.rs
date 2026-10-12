@@ -11,7 +11,7 @@ use super::views::{
     assignment_files_keyboard, confirm_file_deletion_keyboard, send_message_chunks,
     teacher_keyboard,
 };
-use crate::app::{AddAssignmentFile, DeleteAssignmentFile, ErrorCode};
+use crate::app::{AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, ErrorCode};
 use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata};
 
 pub(super) async fn submit_file(
@@ -86,11 +86,11 @@ pub(super) async fn submit_file(
         .await;
     drop(transfer);
     match result {
-        Ok(_) => {
+        Ok(card) => {
             bot.send_message(chat_id, texts::FILE_ADDED)
                 .reply_markup(teacher_keyboard())
                 .await?;
-            show(screen, assignment_id, creation_flow).await?;
+            render(screen, &card, creation_flow).await?;
         }
         Err(error) if error.code() == ErrorCode::ConcurrentModification => {
             bot.send_message(chat_id, app_error_message(error.code()))
@@ -224,16 +224,18 @@ pub(super) async fn show(
     assignment_id: AssignmentId,
     creation_flow: bool,
 ) -> HandlerResult {
-    let actor = screen.actor();
+    let card = screen
+        .services()
+        .files
+        .list_assignment_files_for_teacher(screen.actor(), assignment_id)
+        .await?;
+    render(screen, &card, creation_flow).await
+}
+
+async fn render(screen: Screen<'_>, card: &AssignmentFiles, creation_flow: bool) -> HandlerResult {
     let bot = screen.bot();
     let chat_id = screen.chat_id();
-    let dialogue = screen.dialogue();
-    let services = screen.services();
-    let card = services
-        .files
-        .list_assignment_files_for_teacher(actor, assignment_id)
-        .await?;
-    let policy = services.files.policy();
+    let policy = screen.services().files.policy();
     let mut lines = vec![if card.files.is_empty() {
         texts::NO_FILES.to_owned()
     } else {
@@ -264,10 +266,11 @@ pub(super) async fn show(
             creation_flow,
         ))
         .await?;
-    dialogue
+    screen
+        .dialogue()
         .update(BotState::Screen(ScreenState::ManagingAssignmentFiles {
             message_id: message.id,
-            assignment_id,
+            assignment_id: card.assignment.id(),
             revision: card.revision,
             file_ids: card.files.iter().map(StoredFileMetadata::id).collect(),
             deletion_requires_confirmation: card.assignment.status() != AssignmentStatus::Draft,
@@ -295,13 +298,16 @@ async fn delete(screen: Screen<'_>, deletion: FileDeletion) -> HandlerResult {
         })
         .await
     {
-        Ok(_) => {
+        Ok(card) => {
             screen
                 .bot()
                 .send_message(screen.chat_id(), texts::FILE_DELETED)
                 .await?;
+            render(screen, &card, creation_flow).await
         }
-        Err(error) => screen.fail(error).await?,
+        Err(error) => {
+            screen.fail(error).await?;
+            show(screen, assignment_id, creation_flow).await
+        }
     }
-    show(screen, assignment_id, creation_flow).await
 }

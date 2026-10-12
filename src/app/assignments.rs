@@ -11,9 +11,9 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    MakeupOffer, MakeupRequest, MakeupTerms, NewAssignment, StoredFileMetadata,
-    StudentAssignmentProgress, StudentGroupId, Subject, Submission, SubmissionHistory,
-    TeachingCourse, TeachingCourseId, User, UserId,
+    MakeupOffer, MakeupTerms, NewAssignment, StoredFileMetadata, StudentAssignmentProgress,
+    StudentGroupId, Subject, Submission, SubmissionHistory, TeachingCourse, TeachingCourseId, User,
+    UserId,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{AssignmentStudentSummary, MakeupPool, VersionedAssignment};
@@ -83,11 +83,7 @@ fn makeup_offer(
     at: DateTime<Utc>,
 ) -> Option<MakeupOffer> {
     let pool = pool?;
-    history.makeup_offer_at(
-        assignment,
-        at,
-        MakeupRequest::consented(Some(pool.course), pool.balance),
-    )
+    history.makeup_offer_at(assignment, at, pool.course, pool.balance)
 }
 
 #[derive(Clone, Debug)]

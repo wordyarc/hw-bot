@@ -808,3 +808,39 @@ async fn a_link_rotated_before_the_group_is_chosen_ends_the_group_step() {
 
     assert_eq!(reply["text"], texts::GUEST_NEEDS_INVITE);
 }
+
+#[tokio::test]
+async fn a_registration_whose_user_cannot_be_read_again_still_opens_the_home_screen() {
+    let app = TestApp::start().await;
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    app.rename_table_after_writing("users", "student_groups")
+        .await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    telegram.message(guest, "Ivan");
+    let home = texts::home_greeting("Ivan");
+    let failure = app_error_message(ErrorCode::InternalError);
+    wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .messages(guest)
+            .into_iter()
+            .find(|message| message["text"] == home.as_str() || message["text"] == failure)
+    })
+    .await
+    .expect("the registration is answered");
+    stop_bot(cancellation, &mut task).await;
+
+    let replies = telegram.messages(guest);
+    let home = replies
+        .iter()
+        .find(|message| message["text"] == home)
+        .unwrap_or_else(|| panic!("the home screen is shown: {replies:#?}"));
+    assert!(home["reply_markup"]["keyboard"].is_array(), "{home:#?}");
+    assert!(
+        !replies.iter().any(|message| message["text"] == failure),
+        "{replies:#?}"
+    );
+}

@@ -113,6 +113,18 @@ pub(super) fn parse_positive_attempts(text: &str) -> Option<u16> {
     parse_number(text).filter(|value| (1..=MAX_ATTEMPTS).contains(value))
 }
 
+pub(super) async fn require_attempts(bot: &Bot, message: &Message) -> HandlerResult<Option<u16>> {
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(None);
+    };
+    let attempts = parse_positive_attempts(&text);
+    if attempts.is_none() {
+        bot.send_message(message.chat.id, texts::attempts_prompt(MAX_ATTEMPTS))
+            .await?;
+    }
+    Ok(attempts)
+}
+
 pub(super) fn looks_like_command(text: &str) -> bool {
     let Some(name) = text
         .split_whitespace()

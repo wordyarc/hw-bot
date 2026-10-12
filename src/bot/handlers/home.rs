@@ -11,7 +11,7 @@ use crate::bot::errors::{log_request_error, optional_stat};
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{main_keyboard, main_menu, send_message_chunks};
-use crate::domain::{Role, TelegramUserId};
+use crate::domain::{Role, TelegramUserId, User};
 
 pub(crate) fn default_commands() -> Vec<BotCommand> {
     scoped_commands(None)
@@ -120,76 +120,74 @@ fn help_commands(role: Option<Role>) -> String {
 }
 
 pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) -> HandlerResult {
-    let bot = chat.bot();
-    let chat_id = chat.chat_id();
-    let services = chat.services();
-    match services
+    match chat
+        .services()
         .users
         .find_by_telegram_user_id(telegram_user_id)
         .await
     {
-        Ok(registered) => {
-            let role = registered.user.role();
-            sync_commands(bot, chat_id, Some(role)).await;
-            let name = registered.user.display_name().as_str();
-            let text = match role {
-                Role::Student { .. } => {
-                    let pending = optional_stat(
-                        services
-                            .users
-                            .statistics(Actor::new(registered.user.id()))
-                            .await,
-                        "student_pending_queue",
-                    )
-                    .map(|stats| stats.pending);
-                    match pending {
-                        Some(pending) if pending > 0 => format!(
-                            "{}\n\n{}",
-                            texts::home_greeting(name),
-                            texts::student_pending_line(pending)
-                        ),
-                        _ => texts::home_greeting(name),
-                    }
-                }
-                Role::Teacher | Role::Admin => {
-                    let actor = Actor::new(registered.user.id());
-                    let mut lines = Vec::new();
-                    let pending = optional_stat(
-                        services.reviews.queue_size(actor).await,
-                        "teacher_pending_queue",
-                    );
-                    if let Some(pending) = pending {
-                        lines.push(texts::review_queue_line(pending));
-                    }
-                    let makeups =
-                        optional_stat(services.reviews.makeup_size(actor).await, "teacher_makeups");
-                    if let Some(makeups) = makeups.filter(|&count| count > 0) {
-                        lines.push(texts::makeup_queue_line(makeups));
-                    }
-                    let sandbox = optional_stat(
-                        services.reviews.sandbox_size(actor, None).await,
-                        "teacher_sandbox",
-                    );
-                    if let Some(sandbox) = sandbox.filter(|&count| count > 0) {
-                        lines.push(texts::home_sandbox_line(sandbox));
-                    }
-                    let greeting = texts::home_greeting(name);
-                    if lines.is_empty() {
-                        greeting
-                    } else {
-                        format!("{greeting}\n\n{}", lines.join("\n"))
-                    }
-                }
-            };
-            bot.send_message(chat_id, text)
-                .reply_markup(main_keyboard(role))
-                .await?;
-        }
-        Err(error) if error.code() == ErrorCode::NotFound => {
-            open_guest(chat).await?;
-        }
-        Err(error) => return Err(error.into()),
+        Ok(registered) => send_home(chat, &registered.user).await,
+        Err(error) if error.code() == ErrorCode::NotFound => open_guest(chat).await,
+        Err(error) => Err(error.into()),
     }
+}
+
+pub(super) async fn send_home(chat: Chat<'_>, user: &User) -> HandlerResult {
+    let bot = chat.bot();
+    let chat_id = chat.chat_id();
+    let services = chat.services();
+    let role = user.role();
+    sync_commands(bot, chat_id, Some(role)).await;
+    let name = user.display_name().as_str();
+    let actor = Actor::new(user.id());
+    let text = match role {
+        Role::Student { .. } => {
+            let pending = optional_stat(
+                services.users.statistics(actor).await,
+                "student_pending_queue",
+            )
+            .map(|stats| stats.pending);
+            match pending {
+                Some(pending) if pending > 0 => format!(
+                    "{}\n\n{}",
+                    texts::home_greeting(name),
+                    texts::student_pending_line(pending)
+                ),
+                _ => texts::home_greeting(name),
+            }
+        }
+        Role::Teacher | Role::Admin => {
+            let mut lines = Vec::new();
+            let pending = optional_stat(
+                services.reviews.queue_size(actor).await,
+                "teacher_pending_queue",
+            );
+            if let Some(pending) = pending {
+                lines.push(texts::review_queue_line(pending));
+            }
+            let makeups =
+                optional_stat(services.reviews.makeup_size(actor).await, "teacher_makeups");
+            if let Some(makeups) = makeups.filter(|&count| count > 0) {
+                lines.push(texts::makeup_queue_line(makeups));
+            }
+            let sandbox = optional_stat(
+                services.reviews.sandbox_size(actor, None).await,
+                "teacher_sandbox",
+            );
+            if let Some(sandbox) = sandbox.filter(|&count| count > 0) {
+                lines.push(texts::home_sandbox_line(sandbox));
+            }
+            let greeting = texts::home_greeting(name);
+            if lines.is_empty() {
+                greeting
+            } else {
+                format!("{greeting}\n\n{}", lines.join("\n"))
+            }
+        }
+    };
+    bot.send_message(chat_id, text)
+        .reply_markup(main_keyboard(role))
+        .await?;
     Ok(())
 }
 
