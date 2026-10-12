@@ -6,7 +6,7 @@ use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 use teloxide::{ApiError, RequestError};
 
 use super::deadline::{DateChoice, choose_date};
-use crate::bot::callbacks::{DeadlineAction, ReplayableAction};
+use crate::bot::callbacks::{AmountChoice, DeadlineAction, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::form::{Form, InputMode};
 use crate::bot::handlers::input::require_text;
@@ -15,6 +15,7 @@ use crate::bot::state::BotState;
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::teacher_keyboard;
 use crate::bot::{Bot, HandlerResult, texts};
+use crate::domain::DomainError;
 
 pub(super) trait FormScreen: Form + Sized {
     fn view(
@@ -56,6 +57,44 @@ pub(super) async fn render_input_result<F: FormScreen>(
     match F::input_message(error) {
         Some(message) => render(screen.chat(), form, Some(&message)).await,
         None => screen.stale().await,
+    }
+}
+
+pub(super) async fn input_manually<F: FormScreen>(chat: Chat<'_>, mut form: F) -> HandlerResult {
+    form.set_mode(InputMode::Manual);
+    render(chat, form, None).await
+}
+
+pub(super) async fn choose_amount<F: FormScreen>(
+    screen: Screen<'_>,
+    mut form: F,
+    choice: AmountChoice,
+    apply: impl FnOnce(&mut F, u16) -> Result<(), F::InputError>,
+) -> HandlerResult {
+    match choice {
+        AmountChoice::Preset(value) => {
+            let result = apply(&mut form, value);
+            render_input_result(screen, form, result).await
+        }
+        AmountChoice::Manual => input_manually(screen.chat(), form).await,
+    }
+}
+
+pub(super) fn form_error(error: &DomainError) -> String {
+    match error {
+        DomainError::LateHorizonTooLong { max_days } => texts::horizon_too_long(*max_days),
+        DomainError::MakeupUntilOutOfRange { max_days } => {
+            texts::makeup_until_out_of_range(*max_days)
+        }
+        DomainError::AssignmentClosingOutOfRange => texts::HORIZON_OUT_OF_RANGE.into(),
+        DomainError::AssignmentDeadlineMustBeAfterCreatedAt => {
+            texts::DEADLINE_AFTER_CREATION.into()
+        }
+        DomainError::InvalidLatePolicy { max, .. }
+        | DomainError::InvalidMakeupAttempts { max, .. }
+        | DomainError::InvalidMakeupCredit { max, .. } => texts::number_prompt(*max),
+        DomainError::MakeupTermsDoNotFitGrading => texts::CHOOSE_BUTTON.into(),
+        _ => texts::INVALID_TERMS.into(),
     }
 }
 

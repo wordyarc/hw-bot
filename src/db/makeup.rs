@@ -47,13 +47,10 @@ impl CourseMakeupColumns {
     }
 }
 
-pub async fn find_course<'e, E>(
-    executor: E,
+pub async fn find_course(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
-) -> DbResult<Option<CourseMakeup>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<CourseMakeup>> {
     let Some(row) = sqlx::query!(
         r#"
         select makeup_until, makeup_attempts, makeup_opened_at
@@ -76,15 +73,12 @@ where
     .restore()
 }
 
-pub async fn update_course<'e, E>(
-    executor: E,
+pub async fn update_course(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     expected: Option<CourseMakeup>,
     makeup: Option<CourseMakeup>,
-) -> DbResult<Option<CourseMakeup>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<CourseMakeup>> {
     let expected = CourseMakeupColumns::of(expected)?;
     let makeup = CourseMakeupColumns::of(makeup)?;
 
@@ -123,10 +117,10 @@ where
     .restore()
 }
 
-pub async fn clear_pool<'e, E>(executor: E, course_id: TeachingCourseId) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn clear_pool(
+    executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
+) -> DbResult<()> {
     sqlx::query!(
         r#"
         delete from student_course_progress
@@ -190,14 +184,11 @@ pub async fn set_extra_attempts(
     )
 }
 
-pub async fn pool_for_student<'e, E>(
-    executor: E,
+pub async fn pool_for_student(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     student_id: UserId,
-) -> DbResult<Option<MakeupPool>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<MakeupPool>> {
     Ok(
         pools_for_student(executor, &[course_id.as_uuid()], student_id)
             .await?
@@ -205,14 +196,11 @@ where
     )
 }
 
-pub async fn pools_for_student<'e, E>(
-    executor: E,
+pub async fn pools_for_student(
+    executor: impl PgExecutor<'_>,
     course_ids: &[Uuid],
     student_id: UserId,
-) -> DbResult<HashMap<TeachingCourseId, MakeupPool>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<HashMap<TeachingCourseId, MakeupPool>> {
     let rows = sqlx::query!(
         r#"
         select
@@ -267,13 +255,10 @@ where
     Ok(pools)
 }
 
-pub async fn undecided_assignments<'e, E>(
-    executor: E,
+pub async fn undecided_assignments(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
-) -> DbResult<Vec<UndecidedAssignment>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<UndecidedAssignment>> {
     sqlx::query!(
         r#"
         select id, title, max_score
@@ -303,15 +288,12 @@ where
     .collect()
 }
 
-pub async fn common_credit<'e, E>(
-    executor: E,
+pub async fn common_credit(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     max_score: MaxScore,
     except: Option<AssignmentId>,
-) -> DbResult<Option<u16>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<u16>> {
     let row = sqlx::query!(
         r#"
         select min(makeup_credit) as lowest, max(makeup_credit) as highest

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-use super::input::require_text;
+use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::{AppError, ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::HandlerResult;
@@ -15,7 +15,9 @@ use crate::bot::views::{
     button_label, list_text, makeup_credit_terms, paginated_keyboard, send_message_chunks,
     student_grading_lines, student_keyboard, student_menu,
 };
-use crate::domain::{AssignmentId, AssignmentStatus, MakeupOffer, StoredFileMetadata, Submission};
+use crate::domain::{
+    AssignmentId, AssignmentStatus, MakeupOffer, StoredFileMetadata, Submission, USER_TEXT_MAX_LEN,
+};
 use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -256,8 +258,7 @@ pub(super) async fn show_assignment(
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
-    bot.send_message(chat_id, assignment.body().as_str())
-        .await?;
+    send_message_chunks(bot, chat_id, assignment.body().as_str().to_owned(), None).await?;
     if let Some(submission) = &details.latest_submission {
         send_submission(screen, submission).await?;
     }
@@ -308,26 +309,15 @@ async fn send_assignment_files(
 }
 
 async fn send_submission(screen: Screen<'_>, submission: &Submission) -> HandlerResult {
-    let bot = screen.bot();
-    let chat_id = screen.chat_id();
     let grade = texts::grade_line(submission.kind(), submission.grade());
-    bot.send_message(
-        chat_id,
-        texts::attempt_line(
-            submission.attempt_number(),
-            texts::submission_status(submission.status()),
-            grade.as_deref(),
-        ),
-    )
-    .await?;
-    bot.send_message(chat_id, submission.content().as_str())
-        .await?;
-    if let Some(comment) = submission.review_comment() {
-        bot.send_message(chat_id, texts::REVIEW_COMMENT_HEADER)
-            .await?;
-        bot.send_message(chat_id, comment.as_str()).await?;
-    }
-    Ok(())
+    let text = texts::attempt(
+        submission.attempt_number(),
+        texts::submission_status(submission.status()),
+        grade.as_deref(),
+        submission.content().as_str(),
+        submission.review_comment().map(|comment| comment.as_str()),
+    );
+    send_message_chunks(screen.bot(), screen.chat_id(), text, None).await
 }
 
 pub(super) async fn show_history(
@@ -449,7 +439,14 @@ pub(super) async fn submit_homework_text(
 ) -> HandlerResult {
     let bot = step.bot();
     let chat_id = step.chat_id();
-    let Some(text) = require_text(bot, step.message()).await? else {
+    let Some(text) = require_text_within(
+        bot,
+        step.message(),
+        USER_TEXT_MAX_LEN,
+        texts::FIELD_SUBMISSION,
+    )
+    .await?
+    else {
         return Ok(());
     };
     let Some(screen) = step.resolve().await? else {

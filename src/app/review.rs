@@ -19,10 +19,7 @@ use crate::read_models::{MakeupPool, SandboxSubmission};
 
 const PREVIOUS_ATTEMPTS_SHOWN: u16 = 10;
 
-async fn load_reviewer<'e, E>(executor: E, actor: Actor) -> AppResult<User>
-where
-    E: PgExecutor<'e>,
-{
+async fn load_reviewer(executor: impl PgExecutor<'_>, actor: Actor) -> AppResult<User> {
     let reviewer = load_actor(executor, actor, "reviewer").await?;
 
     if !reviewer.role().can_review_homework() {
@@ -173,36 +170,30 @@ impl ReviewService {
                 }
             };
 
-            let score = match submission.kind() {
-                SubmissionKind::Regular => {
-                    context
-                        .assignment
-                        .grading()
-                        .max_score()
-                        .map(|max_score| ReviewScore {
-                            value: max_score,
-                            max_score,
-                        })
+            let score = match (command.decision, submission.kind()) {
+                (ReviewDecision::Accept, SubmissionKind::Regular) => context
+                    .assignment
+                    .grading()
+                    .max_score()
+                    .map(|max_score| ReviewScore {
+                        value: max_score,
+                        max_score,
+                    }),
+                (ReviewDecision::Accept, SubmissionKind::Makeup) | (ReviewDecision::Reject, _) => {
+                    None
                 }
-                SubmissionKind::Makeup => None,
             };
-            let decided = match command.decision {
-                ReviewDecision::Accept => submission.accept(
-                    &context.assignment,
-                    &context.course,
-                    &reviewer,
+            let decided = submission.review(
+                &context.assignment,
+                &context.course,
+                &reviewer,
+                Review {
+                    decision: command.decision,
                     score,
-                    command.comment.as_str(),
-                    command.reviewed_at,
-                ),
-                ReviewDecision::Reject => submission.reject(
-                    &context.assignment,
-                    &context.course,
-                    &reviewer,
-                    command.comment.as_str(),
-                    command.reviewed_at,
-                ),
-            };
+                    comment: command.comment.clone(),
+                    reviewed_at: command.reviewed_at,
+                },
+            );
             match decided {
                 Err(DomainError::MakeupNotOffered) => continue,
                 decided => decided?,

@@ -3,7 +3,7 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
 use super::home::show_home;
-use super::input::{ensure_text_limit, require_text};
+use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::{CourseInvitation, ErrorCode, RegisterStudent};
 use crate::bot::HandlerResult;
@@ -70,8 +70,13 @@ pub(super) async fn choose_group(
     let Some(invite) = state.choosing_registration_group(message_id) else {
         return chat.stale().await;
     };
-    let CourseInvitation { subject, groups } =
-        chat.services().users.resolve_course_invite(invite).await?;
+    let invitation = chat.services().users.resolve_course_invite(invite).await;
+    if let Err(error) = &invitation
+        && error.code() == ErrorCode::InviteInvalid
+    {
+        reset_dialogue(chat.dialogue()).await?;
+    }
+    let CourseInvitation { subject, groups } = invitation?;
     let Some(group) = groups.iter().find(|group| group.id() == group_id) else {
         return chat.stale().await;
     };
@@ -113,14 +118,13 @@ pub(super) async fn submit_name(
     let dialogue = step.dialogue();
     let services = step.services();
 
-    let Some(text) = require_text(bot, message).await? else {
+    let Some(text) =
+        require_text_within(bot, message, DISPLAY_NAME_MAX_LEN, texts::FIELD_NAME).await?
+    else {
         return Ok(());
     };
     if text.trim().is_empty() {
         bot.send_message(chat_id, texts::NAME_REQUIRED).await?;
-        return Ok(());
-    }
-    if !ensure_text_limit(bot, chat_id, &text, DISPLAY_NAME_MAX_LEN, texts::FIELD_NAME).await? {
         return Ok(());
     }
 

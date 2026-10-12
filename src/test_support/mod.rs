@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 
+#[cfg(test)]
+pub(crate) mod logs;
 pub mod telegram;
 
 use crate::domain::{

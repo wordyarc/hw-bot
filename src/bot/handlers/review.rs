@@ -3,7 +3,7 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 
 use super::home::show_home;
-use super::input::{parse_number, require_text};
+use super::input::{parse_number, require_text, require_text_within};
 use super::reset_dialogue;
 use super::teacher::show_student_grades_page;
 use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission};
@@ -11,7 +11,7 @@ use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::AmountChoice;
 use crate::bot::context::{Chat, Screen, TextStep};
-use crate::bot::errors::{log_handler_error, send_app_error};
+use crate::bot::errors::{log_handler_error, optional_stat, send_app_error};
 use crate::bot::state::{BotState, FlowState, GrantOrigin, ReviewTarget, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{
@@ -20,7 +20,7 @@ use crate::bot::views::{
 };
 use crate::domain::{
     DomainError, Grade, Grading, LatePenalty, MaxScore, ReviewDecision, ReviewScore, SubmissionId,
-    SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, UserId,
+    SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, USER_TEXT_MAX_LEN, UserId,
 };
 use crate::pagination::PageRequest;
 
@@ -28,7 +28,7 @@ pub(super) async fn show_hub(screen: Screen<'_>) -> HandlerResult {
     let reviews = &screen.services().reviews;
     let makeups = reviews.makeup_size(screen.actor()).await?;
     if makeups == 0 {
-        return show_next(screen).await;
+        return show_next(screen, Queue::Main).await;
     }
     let queue = reviews.queue_size(screen.actor()).await?;
     reset_dialogue(screen.dialogue()).await?;
@@ -40,56 +40,49 @@ pub(super) async fn show_hub(screen: Screen<'_>) -> HandlerResult {
     Ok(())
 }
 
-pub(super) async fn show_next(screen: Screen<'_>) -> HandlerResult {
-    let actor = screen.actor();
-    let bot = screen.bot();
-    let chat_id = screen.chat_id();
-    let dialogue = screen.dialogue();
-    let services = screen.services();
-    let item = services.reviews.take_next_from_queue(actor).await?;
-    let Some(item) = item else {
-        let makeups = services.reviews.makeup_size(actor).await?;
-        reset_dialogue(dialogue).await?;
-        let (text, menu) = match makeups {
-            0 => (texts::REVIEW_QUEUE_EMPTY.to_owned(), teacher_menu(Some(0))),
-            _ => (
-                format!(
-                    "{}\n{}",
-                    texts::REVIEW_QUEUE_EMPTY,
-                    texts::makeup_queue_line(makeups)
-                ),
-                teacher_menu(None),
-            ),
-        };
-        bot.send_message(chat_id, text).reply_markup(menu).await?;
-        return Ok(());
-    };
-
-    show_item(screen, item).await
+#[derive(Clone, Copy)]
+pub(super) enum Queue {
+    Main,
+    Makeup,
 }
 
-pub(super) async fn show_next_makeup(screen: Screen<'_>) -> HandlerResult {
+pub(super) async fn show_next(screen: Screen<'_>, queue: Queue) -> HandlerResult {
+    let actor = screen.actor();
     let reviews = &screen.services().reviews;
-    let Some(item) = reviews.take_next_makeup(screen.actor()).await? else {
-        let queue = reviews.queue_size(screen.actor()).await?;
-        reset_dialogue(screen.dialogue()).await?;
-        let text = match queue {
-            0 => texts::MAKEUP_QUEUE_EMPTY.to_owned(),
-            _ => format!(
-                "{}\n{}",
-                texts::MAKEUP_QUEUE_EMPTY,
-                texts::review_queue_line(queue)
-            ),
-        };
-        screen
-            .bot()
-            .send_message(screen.chat_id(), text)
-            .reply_markup(teacher_menu(Some(queue)))
-            .await?;
-        return Ok(());
+    let next = match queue {
+        Queue::Main => reviews.take_next_from_queue(actor).await?,
+        Queue::Makeup => reviews.take_next_makeup(actor).await?,
     };
+    if let Some(item) = next {
+        return show_item(screen, item).await;
+    }
 
-    show_item(screen, item).await
+    let (empty, waiting, menu) = match queue {
+        Queue::Main => {
+            let makeups = reviews.makeup_size(actor).await?;
+            (
+                texts::REVIEW_QUEUE_EMPTY,
+                (makeups > 0).then(|| texts::makeup_queue_line(makeups)),
+                teacher_menu((makeups == 0).then_some(0)),
+            )
+        }
+        Queue::Makeup => {
+            let queue = reviews.queue_size(actor).await?;
+            (
+                texts::MAKEUP_QUEUE_EMPTY,
+                (queue > 0).then(|| texts::review_queue_line(queue)),
+                teacher_menu(Some(queue)),
+            )
+        }
+    };
+    reset_dialogue(screen.dialogue()).await?;
+    let text = waiting.map_or_else(|| empty.to_owned(), |line| format!("{empty}\n{line}"));
+    screen
+        .bot()
+        .send_message(screen.chat_id(), text)
+        .reply_markup(menu)
+        .await?;
+    Ok(())
 }
 
 pub(super) async fn open(screen: Screen<'_>, submission_id: SubmissionId) -> HandlerResult {
@@ -277,7 +270,9 @@ pub(super) async fn submit_comment(
     let dialogue = step.dialogue();
     let services = step.services();
 
-    let Some(text) = require_text(bot, message).await? else {
+    let Some(text) =
+        require_text_within(bot, message, USER_TEXT_MAX_LEN, texts::FIELD_COMMENT).await?
+    else {
         return Ok(());
     };
     let Some(screen) = step.resolve().await? else {
@@ -358,18 +353,25 @@ struct MakeupFollowup {
 
 async fn send_makeup_followup(screen: Screen<'_>, followup: MakeupFollowup) -> HandlerResult {
     let services = screen.services();
-    let makeups = match followup.sandbox {
-        true => None,
-        false => Some(services.reviews.makeup_size(screen.actor()).await?),
+    let makeups = if followup.sandbox {
+        None
+    } else {
+        optional_stat(
+            services.reviews.makeup_size(screen.actor()).await,
+            "makeups_left",
+        )
     };
-    let pool = match followup.offer_grant {
-        true => {
+    let pool = if followup.offer_grant {
+        optional_stat(
             services
                 .courses
                 .student_makeup(screen.actor(), followup.course_id, followup.student_id)
-                .await?
-        }
-        false => None,
+                .await,
+            "student_makeup",
+        )
+        .flatten()
+    } else {
+        None
     };
     let mut lines: Vec<String> = makeups.map(texts::makeups_left).into_iter().collect();
     lines.extend(pool.map(|pool| {

@@ -10,10 +10,7 @@ use crate::domain::{
 use crate::pagination::PageRequest;
 use crate::read_models::{AssignmentStudentSummary, CourseStudent, RosterStudent, UserStatistics};
 
-pub async fn insert<'e, E>(executor: E, user: &User) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn insert(executor: impl PgExecutor<'_>, user: &User) -> DbResult<()> {
     sqlx::query!(
         r#"
         insert into users (
@@ -34,10 +31,7 @@ where
     Ok(())
 }
 
-pub async fn find_by_id<'e, E>(executor: E, id: UserId) -> DbResult<Option<User>>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn find_by_id(executor: impl PgExecutor<'_>, id: UserId) -> DbResult<Option<User>> {
     let row = sqlx::query_as!(
         UserRow,
         r#"
@@ -53,13 +47,10 @@ where
     row.map(User::try_from).transpose()
 }
 
-pub async fn find_by_telegram_user_id<'e, E>(
-    executor: E,
+pub async fn find_by_telegram_user_id(
+    executor: impl PgExecutor<'_>,
     telegram_user_id: TelegramUserId,
-) -> DbResult<Option<User>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<User>> {
     let row = sqlx::query_as!(
         UserRow,
         r#"
@@ -75,14 +66,11 @@ where
     row.map(User::try_from).transpose()
 }
 
-pub(crate) async fn list_students_with_assignment_history<'e, E>(
-    executor: E,
+pub(crate) async fn list_students_with_assignment_history(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
     page: PageRequest,
-) -> DbResult<Vec<AssignmentStudentSummary>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<AssignmentStudentSummary>> {
     with_submission_history!(
         query_as, AssignmentStudentCardRow;
         "student_id",
@@ -123,10 +111,10 @@ where
     .collect()
 }
 
-pub async fn profile_statistics<'e, E>(executor: E, user: &User) -> DbResult<UserStatistics>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn profile_statistics(
+    executor: impl PgExecutor<'_>,
+    user: &User,
+) -> DbResult<UserStatistics> {
     let row = sqlx::query!(
         r#"
         select
@@ -169,14 +157,11 @@ where
     })
 }
 
-pub async fn list_student_names<'e, E>(
-    executor: E,
+pub async fn list_student_names(
+    executor: impl PgExecutor<'_>,
     group_id: StudentGroupId,
     page: PageRequest,
-) -> DbResult<Vec<CourseStudent>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<CourseStudent>> {
     let rows = sqlx::query!(
         r#"
         select id, display_name
@@ -210,14 +195,11 @@ pub struct CourseRosterRow {
     pub student: Option<RosterStudent>,
 }
 
-pub async fn course_roster<'e, E>(
-    executor: E,
+pub async fn course_roster(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     page: PageRequest,
-) -> DbResult<Vec<CourseRosterRow>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<CourseRosterRow>> {
     sqlx::query!(
         r#"
         with issued as (

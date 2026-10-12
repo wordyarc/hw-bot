@@ -44,15 +44,12 @@ macro_rules! stored_file_row {
     };
 }
 
-pub async fn insert_assignment_file<'e, E>(
-    executor: E,
+pub async fn insert_assignment_file(
+    executor: impl PgExecutor<'_>,
     metadata: &StoredFileMetadata,
     content: &[u8],
     telegram_file_id: Option<&str>,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let StoredFileOwner::Assignment(assignment_id) = metadata.owner() else {
         return Err(DbError::Precondition {
             message: "assignment file has a non-assignment owner",
@@ -86,13 +83,10 @@ where
     Ok(())
 }
 
-pub async fn list_for_assignment<'e, E>(
-    executor: E,
+pub async fn list_for_assignment(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
-) -> DbResult<Vec<StoredFileMetadata>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<StoredFileMetadata>> {
     select_stored_files!(
         "",
         " from stored_files where assignment_id = $1 order by position",
@@ -105,14 +99,11 @@ where
     .collect()
 }
 
-pub async fn find_assignment_file<'e, E>(
-    executor: E,
+pub async fn find_assignment_file(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
     file_id: StoredFileId,
-) -> DbResult<Option<StoredFile>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<StoredFile>> {
     let row = select_stored_files!(
         ", telegram_file_id ",
         " from stored_files where assignment_id = $1 and id = $2",
@@ -131,10 +122,10 @@ where
     .transpose()
 }
 
-pub async fn find_content<'e, E>(executor: E, file_id: StoredFileId) -> DbResult<Option<Vec<u8>>>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn find_content(
+    executor: impl PgExecutor<'_>,
+    file_id: StoredFileId,
+) -> DbResult<Option<Vec<u8>>> {
     Ok(sqlx::query_scalar!(
         "select content from stored_files where id = $1",
         file_id.as_uuid(),
@@ -143,14 +134,11 @@ where
     .await?)
 }
 
-pub async fn remember_telegram_file_id<'e, E>(
-    executor: E,
+pub async fn remember_telegram_file_id(
+    executor: impl PgExecutor<'_>,
     file_id: StoredFileId,
     telegram_file_id: &str,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     sqlx::query!(
         "update stored_files set telegram_file_id = $2 where id = $1",
         file_id.as_uuid(),
@@ -162,14 +150,11 @@ where
     Ok(())
 }
 
-pub async fn delete_assignment_file<'e, E>(
-    executor: E,
+pub async fn delete_assignment_file(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
     file_id: StoredFileId,
-) -> DbResult<bool>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<bool> {
     Ok(sqlx::query!(
         r#"
         delete from stored_files

@@ -12,14 +12,14 @@ use crate::bot::assignment_form::{
 use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::handlers::input::{
-    ensure_text_limit, parse_max_score, parse_positive_attempts, require_text,
+    parse_max_score, parse_positive_attempts, require_text, require_text_within,
 };
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{assignment_groups_keyboard, attempts_keyboard, grading_keyboard};
 use crate::domain::{
     ASSIGNMENT_TITLE_MAX_LEN, Grading, MAX_ATTEMPTS, MAX_SCORE, StudentGroup, StudentGroupId,
-    TeachingCourseId,
+    TeachingCourseId, USER_TEXT_MAX_LEN,
 };
 
 pub(crate) async fn handle_max_attempts(
@@ -220,22 +220,13 @@ pub(crate) async fn submit_title(step: TextStep<'_>, course_id: TeachingCourseId
     let chat_id = step.chat_id();
     let dialogue = step.dialogue();
 
-    let Some(text) = require_text(bot, message).await? else {
+    let Some(text) =
+        require_text_within(bot, message, ASSIGNMENT_TITLE_MAX_LEN, texts::FIELD_TITLE).await?
+    else {
         return Ok(());
     };
     if text.trim().is_empty() {
         bot.send_message(chat_id, texts::TITLE_REQUIRED).await?;
-        return Ok(());
-    }
-    if !ensure_text_limit(
-        bot,
-        chat_id,
-        &text,
-        ASSIGNMENT_TITLE_MAX_LEN,
-        texts::FIELD_TITLE,
-    )
-    .await?
-    {
         return Ok(());
     }
     dialogue
@@ -258,7 +249,9 @@ pub(crate) async fn submit_body(
     let message = step.message();
     let chat_id = step.chat_id();
 
-    let Some(text) = require_text(bot, message).await? else {
+    let Some(text) =
+        require_text_within(bot, message, USER_TEXT_MAX_LEN, texts::FIELD_BODY).await?
+    else {
         return Ok(());
     };
     if text.trim().is_empty() {

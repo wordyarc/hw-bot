@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use super::handlers::input::parse_u16;
 use crate::domain::{
-    AssignmentId, DeductedFrom, ReviewDecision, StudentGroupId, SubmissionId, TeachingCourseId,
-    UserId,
+    AssignmentId, DeductedFrom, DomainResult, Grading, MakeupTerms, ReviewDecision, StudentGroupId,
+    SubmissionId, TeachingCourseId, UserId,
 };
 
 use CallbackAction::{Flow, Informational, Replayable, Screen};
@@ -361,6 +361,15 @@ impl MakeupChoice {
             Self::PassFail => MAKEUP_ANSWER_PASS_FAIL.to_owned(),
         };
         format!("{MAKEUP_ANSWER_PREFIX}{value}")
+    }
+
+    pub(super) fn terms(self, grading: Grading) -> Option<DomainResult<MakeupTerms>> {
+        Some(match self {
+            Self::Manual => return None,
+            Self::NotOffered => Ok(MakeupTerms::NotOffered),
+            Self::PassFail => Ok(MakeupTerms::PassFail),
+            Self::Credit(credit) => MakeupTerms::scored(credit, grading),
+        })
     }
 }
 

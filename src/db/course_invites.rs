@@ -9,10 +9,7 @@ use crate::read_models::TeachingCourseSummary;
 
 const GENERATION: &str = "teaching_course_invites.generation";
 
-pub async fn ensure<'e, E>(executor: E, course_id: TeachingCourseId) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn ensure(executor: impl PgExecutor<'_>, course_id: TeachingCourseId) -> DbResult<()> {
     sqlx::query!(
         r#"
         insert into teaching_course_invites (teaching_course_id, generation)
@@ -27,13 +24,10 @@ where
     Ok(())
 }
 
-pub async fn find_generation<'e, E>(
-    executor: E,
+pub async fn find_generation(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
-) -> DbResult<Option<InviteGeneration>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<InviteGeneration>> {
     sqlx::query_scalar!(
         r#"
         select generation
@@ -48,14 +42,11 @@ where
     .transpose()
 }
 
-pub async fn rotate<'e, E>(
-    executor: E,
+pub async fn rotate(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     expected: InviteGeneration,
-) -> DbResult<InviteGeneration>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<InviteGeneration> {
     let rotated = expected.rotated()?;
     let result = sqlx::query!(
         r#"

@@ -960,7 +960,11 @@ async fn the_history_marks_a_credited_makeup() {
         texts::submission_status(SubmissionStatus::Accepted),
         Some(&grade_text(&stored(&app, makeup).await)),
     );
-    assert!(texts_sent(&telegram, app.student()).contains(&attempt));
+    assert!(
+        texts_sent(&telegram, app.student())
+            .iter()
+            .any(|text| text.starts_with(&attempt))
+    );
 }
 
 #[tokio::test]
@@ -1236,4 +1240,43 @@ async fn a_grant_after_the_makeup_was_turned_off_explains_it_and_drops_the_butto
         })
         .expect("the refusal is explained");
     assert!(!callbacks_of(&notice).contains(&callbacks::MAKEUP_GRANT.to_owned()));
+}
+
+#[tokio::test]
+async fn a_followup_that_fails_after_a_saved_makeup_review_reports_no_failure() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    open_makeup(&app, 1).await;
+    let makeup = makeup_of(&app, &closed, &app.fixture.student).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_next_makeup(&app, &telegram).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_REJECT_PREFIX, makeup))
+        .await;
+    telegram.flush(app.teacher()).await;
+    sqlx::query(
+        "alter table student_course_progress rename to student_course_progress_unavailable",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    telegram.message(app.teacher(), "Не то");
+    wait_for_review_result(&app.pool, makeup)
+        .await
+        .expect("the makeup is rejected");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(
+        sent.iter()
+            .any(|text| text.starts_with(texts::REVIEW_SAVED)),
+        "{sent:#?}"
+    );
+    assert!(
+        !sent.contains(&app_error_message(ErrorCode::InternalError).to_owned()),
+        "{sent:#?}"
+    );
 }

@@ -166,7 +166,8 @@ impl TelegramConfig {
     fn token(&self) -> Option<&str> {
         self.bot_token
             .as_deref()
-            .filter(|token| !token.trim().is_empty())
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
     }
 }
 
@@ -558,6 +559,17 @@ mod tests {
 
         assert_eq!(config.telegram_bot_token(), None);
         assert_eq!(config.notification_worker_token(), Some("123:secret"));
+    }
+
+    #[test]
+    fn the_bot_token_is_read_without_surrounding_whitespace() {
+        let mut config = app_config();
+        config.telegram.enabled = true;
+        config.telegram.bot_token = Some(" 123:secret\n".to_owned());
+
+        let config = config.validate().expect("config must be accepted");
+
+        assert_eq!(config.telegram_bot_token(), Some("123:secret"));
     }
 
     #[test]

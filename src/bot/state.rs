@@ -2,13 +2,14 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage};
-use teloxide::types::MessageId;
+use teloxide::types::{KeyboardMarkup, MessageId};
 
 use super::assignment_form::{AssignmentText, DraftAssignment, IssuedGroups, TermsForm, TermsStep};
 use super::callbacks::ReplayableAction;
 use super::form::InputMode;
 use super::makeup_form::{MakeupForm, MakeupStep};
-use super::views::MenuAction;
+use super::texts;
+use super::views::{MenuAction, student_keyboard, teacher_keyboard};
 use crate::domain::{
     AssignmentId, Grading, InviteGeneration, LatePenalty, MaxScore, ReviewDecision, ReviewScore,
     StoredFileId, StudentGroupId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
@@ -270,12 +271,10 @@ impl BotState {
         }
     }
 
-    pub(super) fn terms_form(self, message_id: MessageId, step: TermsStep) -> Option<TermsForm> {
+    pub(super) fn current_terms_form(self, message_id: MessageId) -> Option<TermsForm> {
         match self {
             Self::Flow(FlowState::ConfiguringTerms(form))
-                if form.message_id == Some(message_id)
-                    && form.step == step
-                    && form.mode != InputMode::Manual =>
+                if form.message_id == Some(message_id) && form.mode != InputMode::Manual =>
             {
                 Some(form)
             }
@@ -283,25 +282,25 @@ impl BotState {
         }
     }
 
-    pub(super) fn active_terms(&self) -> Option<&TermsForm> {
+    pub(super) fn terms_form(self, message_id: MessageId, step: TermsStep) -> Option<TermsForm> {
+        self.current_terms_form(message_id)
+            .filter(|form| form.step == step)
+    }
+
+    pub(super) fn current_makeup_form(self, message_id: MessageId) -> Option<MakeupForm> {
         match self {
-            Self::Flow(FlowState::ConfiguringTerms(form)) => Some(form),
-            Self::Flow(FlowState::ConfirmingTermsExit { form, .. }) => Some(form),
+            Self::Flow(FlowState::ConfiguringMakeup(form))
+                if form.message_id == Some(message_id) && form.mode != InputMode::Manual =>
+            {
+                Some(form)
+            }
             _ => None,
         }
     }
 
     pub(super) fn makeup_form(self, message_id: MessageId, step: MakeupStep) -> Option<MakeupForm> {
-        match self {
-            Self::Flow(FlowState::ConfiguringMakeup(form))
-                if form.message_id == Some(message_id)
-                    && form.step == step
-                    && form.mode != InputMode::Manual =>
-            {
-                Some(form)
-            }
-            _ => None,
-        }
+        self.current_makeup_form(message_id)
+            .filter(|form| form.step == step)
     }
 
     pub(super) fn active_makeup(&self) -> Option<&MakeupForm> {
@@ -524,6 +523,87 @@ pub(super) enum FlowState {
         assignment_id: AssignmentId,
         student_id: UserId,
     },
+}
+
+impl FlowState {
+    pub(super) fn abandon_notice(&self) -> Option<(&'static str, KeyboardMarkup)> {
+        let notice = match self {
+            Self::AwaitingSubmission { .. } => (texts::ACTION_CANCELLED, student_keyboard()),
+            Self::AwaitingAssignmentTitle { .. }
+            | Self::AwaitingAssignmentBody { .. }
+            | Self::ChoosingAssignmentGroups { .. }
+            | Self::AwaitingAssignmentMaxAttempts { .. }
+            | Self::ChoosingGrading { .. }
+            | Self::AwaitingGradingText { .. } => (texts::DRAFT_DISCARDED, teacher_keyboard()),
+            Self::AwaitingReviewScore { .. }
+            | Self::AwaitingReviewComment { .. }
+            | Self::AwaitingBulkReviewComment { .. }
+            | Self::AwaitingAssignmentFile { .. }
+            | Self::AwaitingAttemptAmount { .. } => (texts::ACTION_CANCELLED, teacher_keyboard()),
+            Self::ChoosingRegistrationGroup { .. }
+            | Self::AwaitingRegistrationName { .. }
+            | Self::ConfirmingInviteRotation { .. }
+            | Self::AwaitingReviewDecision { .. }
+            | Self::ConfirmingAssignmentFileDeletion { .. }
+            | Self::ConfiguringTerms(_)
+            | Self::ConfiguringMakeup(_)
+            | Self::ConfirmingTermsExit { .. }
+            | Self::ChoosingStudent { .. } => return None,
+        };
+        Some(notice)
+    }
+}
+
+impl BotState {
+    pub(super) fn button_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Flow(FlowState::AwaitingReviewDecision { .. }) => {
+                Some(texts::CHOOSE_REVIEW_DECISION)
+            }
+            Self::Screen(ScreenState::ManagingAssignment { .. }) => {
+                Some(texts::CHOOSE_ASSIGNMENT_ACTION)
+            }
+            Self::Screen(
+                ScreenState::CourseInvite { .. }
+                | ScreenState::SandboxSubmissions { .. }
+                | ScreenState::MakeupReviewed { .. }
+                | ScreenState::StudentGrades { .. },
+            )
+            | Self::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
+                Some(texts::CHOOSE_ACTION_ABOVE)
+            }
+            Self::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
+                Some(texts::CHOOSE_FILE_ACTION)
+            }
+            Self::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
+                Some(texts::CONFIRM_FILE_DELETION)
+            }
+            Self::Flow(
+                FlowState::ConfirmingTermsExit { .. }
+                | FlowState::ChoosingRegistrationGroup { .. }
+                | FlowState::ChoosingAssignmentGroups { .. },
+            ) => Some(texts::CHOOSE_BUTTON),
+            Self::Flow(FlowState::ChoosingStudent { .. }) => Some(texts::CHOOSE_STUDENT),
+            Self::Idle
+            | Self::Screen(ScreenState::Guest)
+            | Self::Flow(
+                FlowState::AwaitingRegistrationName { .. }
+                | FlowState::AwaitingSubmission { .. }
+                | FlowState::AwaitingReviewScore { .. }
+                | FlowState::AwaitingReviewComment { .. }
+                | FlowState::AwaitingBulkReviewComment { .. }
+                | FlowState::AwaitingAssignmentFile { .. }
+                | FlowState::AwaitingAssignmentTitle { .. }
+                | FlowState::AwaitingAssignmentBody { .. }
+                | FlowState::AwaitingAssignmentMaxAttempts { .. }
+                | FlowState::ChoosingGrading { .. }
+                | FlowState::AwaitingGradingText { .. }
+                | FlowState::ConfiguringTerms(_)
+                | FlowState::ConfiguringMakeup(_)
+                | FlowState::AwaitingAttemptAmount { .. },
+            ) => None,
+        }
+    }
 }
 
 #[cfg(test)]

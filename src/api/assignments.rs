@@ -214,7 +214,7 @@ pub struct StudentAssignmentDetailsResponse {
     #[serde(flatten)]
     assignment: StudentAssignmentResponse,
     files: Vec<StoredFileResponse>,
-    submissions: Vec<SubmissionResponse>,
+    latest_submission: Option<SubmissionResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -273,7 +273,7 @@ impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
         Self {
             assignment: StudentAssignmentResponse::from(&details.assignment),
             files: details.files.iter().map(Into::into).collect(),
-            submissions: details.latest_submission.iter().map(Into::into).collect(),
+            latest_submission: details.latest_submission.as_ref().map(Into::into),
         }
     }
 }

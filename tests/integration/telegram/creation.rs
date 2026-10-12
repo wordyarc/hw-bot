@@ -2,13 +2,17 @@ use std::time::Duration;
 
 use chrono::{DateTime, Datelike, FixedOffset, Months, Utc};
 use hw_bot::bot::{callbacks, texts};
-use hw_bot::domain::{DeductedFrom, LATEST_TERM_YEAR, MAX_PENALTY_PER_PERIOD, StudentGroup};
+use hw_bot::domain::{
+    DeductedFrom, LATEST_TERM_YEAR, MAX_PENALTY_PER_PERIOD, StudentGroup, USER_TEXT_MAX_LEN,
+};
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 
 use crate::harness::telegram::*;
-use crate::harness::telegram_scenario::TelegramScenario;
+use crate::harness::telegram_scenario::{
+    TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
+};
 use crate::harness::{TestApp, insert_assignment, wall_clock_assignment};
 
 #[tokio::test]
@@ -1872,4 +1876,43 @@ async fn a_negative_number_on_a_terms_step_is_answered_with_the_range() {
 
     let requests = recorded_requests(&telegram.server).await;
     assert!(requests.contains(&texts::number_prompt(MAX_PENALTY_PER_PERIOD)));
+}
+
+#[tokio::test]
+async fn an_assignment_body_over_the_limit_once_its_link_is_revealed_is_refused_and_the_step_stays()
+{
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
+        .await;
+    telegram.message(app.teacher(), "Linked task");
+    telegram.message_with(
+        app.teacher(),
+        text_over_the_limit_once_its_link_is_revealed(),
+    );
+    let refusal = texts::text_with_links_too_long(texts::FIELD_BODY, USER_TEXT_MAX_LEN);
+    let refused = wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .messages(app.teacher())
+            .into_iter()
+            .find(|message| message["text"] == refusal.as_str())
+    })
+    .await
+    .expect("the refusal names the length");
+    telegram.message(app.teacher(), "Send a pull request.");
+    telegram
+        .button_after(
+            app.teacher(),
+            &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2),
+            refused["message_id"].as_i64().unwrap() as i32,
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
 }

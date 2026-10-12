@@ -3,11 +3,11 @@ use teloxide::types::{BotCommand, BotCommandScope, ChatId, KeyboardRemove, Recip
 use teloxide::utils::command::BotCommands;
 
 use super::Command;
-use crate::app::{Actor, AppResult, ErrorCode};
+use crate::app::{Actor, ErrorCode};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::context::{Chat, Screen};
-use crate::bot::errors::log_request_error;
+use crate::bot::errors::{log_request_error, optional_stat};
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{main_keyboard, main_menu, send_message_chunks};
@@ -117,16 +117,6 @@ fn help_commands(role: Option<Role>) -> String {
             )
         })
         .collect()
-}
-
-fn optional_stat<T>(result: AppResult<T>, statistic: &'static str) -> Option<T> {
-    match result {
-        Ok(value) => Some(value),
-        Err(error) => {
-            tracing::warn!(statistic, error = ?error, "optional profile statistic is unavailable");
-            None
-        }
-    }
 }
 
 pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) -> HandlerResult {

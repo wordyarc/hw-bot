@@ -189,10 +189,10 @@ macro_rules! select_submissions {
     };
 }
 
-pub async fn find_by_id<'e, E>(executor: E, id: SubmissionId) -> DbResult<Option<Submission>>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn find_by_id(
+    executor: impl PgExecutor<'_>,
+    id: SubmissionId,
+) -> DbResult<Option<Submission>> {
     let row = select_submissions!("where id = $1", id.as_uuid())
         .fetch_optional(executor)
         .await?;
@@ -200,10 +200,7 @@ where
     row.map(Submission::try_from).transpose()
 }
 
-pub async fn insert<'e, E>(executor: E, submission: &Submission) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn insert(executor: impl PgExecutor<'_>, submission: &Submission) -> DbResult<()> {
     let grade = GradeColumns::of(submission)?;
 
     sqlx::query!(
@@ -242,10 +239,10 @@ where
     Ok(())
 }
 
-pub async fn save_review_result<'e, E>(executor: E, submission: &Submission) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn save_review_result(
+    executor: impl PgExecutor<'_>,
+    submission: &Submission,
+) -> DbResult<()> {
     if submission.status() == SubmissionStatus::PendingReview {
         return Err(DbError::Precondition {
             message: "pending submission cannot be saved as a review result",
@@ -294,14 +291,11 @@ where
     )
 }
 
-pub async fn load_histories<'e, E>(
-    executor: E,
+pub async fn load_histories(
+    executor: impl PgExecutor<'_>,
     assignment_ids: &[Uuid],
     student_id: UserId,
-) -> DbResult<HashMap<AssignmentId, SubmissionHistory>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<HashMap<AssignmentId, SubmissionHistory>> {
     let rows = with_submission_history!(
         query;
         "assignment_id",
@@ -330,15 +324,12 @@ where
         .collect()
 }
 
-pub async fn list_for_student<'e, E>(
-    executor: E,
+pub async fn list_for_student(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
     student_id: UserId,
     page: PageRequest,
-) -> DbResult<Vec<Submission>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<Submission>> {
     select_submissions!(
         "where assignment_id = $1 and student_id = $2 order by attempt_number desc limit $3 offset $4",
         assignment_id.as_uuid(),
@@ -353,8 +344,8 @@ where
     .collect()
 }
 
-pub async fn latest_for_student<'e, E: PgExecutor<'e>>(
-    executor: E,
+pub async fn latest_for_student(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
     student_id: UserId,
 ) -> DbResult<Option<Submission>> {
@@ -369,14 +360,11 @@ pub async fn latest_for_student<'e, E: PgExecutor<'e>>(
     .transpose()
 }
 
-pub async fn list_previous_attempts<'e, E>(
-    executor: E,
+pub async fn list_previous_attempts(
+    executor: impl PgExecutor<'_>,
     submission: &Submission,
     limit: u16,
-) -> DbResult<Vec<Submission>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<Submission>> {
     select_submissions!(
         "where assignment_id = $1 and student_id = $2 and attempt_number < $3 order by attempt_number desc limit $4",
         submission.assignment_id().as_uuid(),
@@ -439,17 +427,14 @@ pub async fn one_student_grades(
 /// Один запрос строит сводку от списка студентов группы. Оценочные задания курса
 /// и принятые сдачи присоединяются через left joins, чтобы студент без сдач
 /// остался в ведомости со строкой нулей.
-async fn course_grades<'e, E>(
-    executor: E,
+async fn course_grades(
+    executor: impl PgExecutor<'_>,
     teaching_course_id: TeachingCourseId,
     student_group_id: StudentGroupId,
     student_page: PageRequest,
     student_id: Option<UserId>,
     grade_page: PageRequest,
-) -> DbResult<Vec<CourseGradeRow>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<CourseGradeRow>> {
     sqlx::query!(
         r#"
         with students_page as (
@@ -586,15 +571,12 @@ pub async fn queue_place_for(
 /// Для позиции студента учитываем сдачи всех курсов, видимые хотя бы одному преподавателю
 /// этого задания: каждый ревьюер работает с общей очередью своих курсов.
 /// Сортировка здесь должна повторять `lock_next_for_reviewer`.
-async fn pending_queue_places<'e, E>(
-    executor: E,
+async fn pending_queue_places(
+    executor: impl PgExecutor<'_>,
     student_id: UserId,
     page: PageRequest,
     assignment_id: Option<AssignmentId>,
-) -> DbResult<Vec<QueuePlace>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<QueuePlace>> {
     sqlx::query!(
         r#"
         with mine_page as (
@@ -728,15 +710,12 @@ macro_rules! reviewer_scope {
     };
 }
 
-pub async fn count_for_reviewer<'e, E>(
-    executor: E,
+pub async fn count_for_reviewer(
+    executor: impl PgExecutor<'_>,
     reviewer: &User,
     stream: ReviewStream,
     cutoff: Option<DateTime<Utc>>,
-) -> DbResult<u32>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<u32> {
     let pending = reviewer_scope!(
         query_scalar;
         r#"select count(*) as "pending!""#, "", reviewer, stream, cutoff
@@ -778,14 +757,11 @@ pub async fn lock_next_for_reviewer(
     row.map(Submission::try_from).transpose()
 }
 
-pub async fn sandbox_page_for_reviewer<'e, E>(
-    executor: E,
+pub async fn sandbox_page_for_reviewer(
+    executor: impl PgExecutor<'_>,
     reviewer: &User,
     page: PageRequest,
-) -> DbResult<Vec<SandboxSubmission>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<SandboxSubmission>> {
     let rows = reviewer_scope!(query;
         r#"
         select

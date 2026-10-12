@@ -4,8 +4,8 @@ use teloxide::types::{InlineKeyboardMarkup, MessageId};
 
 use super::courses::show_assignment;
 use super::form::{
-    FormScreen, abandon, apply_date, cancel, detach, finish, render, render_input_result,
-    step_back, take_text,
+    FormScreen, abandon, apply_date, cancel, choose_amount, detach, finish, form_error,
+    input_manually, render, render_input_result, step_back, take_text,
 };
 use crate::app::{ChangeTerms, CreateAssignment, ErrorCode, VersionedAssignment};
 use crate::bot::assignment_form::{
@@ -16,14 +16,13 @@ use crate::bot::callbacks::{
 };
 use crate::bot::context::{Screen, TextStep};
 use crate::bot::errors::send_error_code;
-use crate::bot::form::InputMode;
 use crate::bot::handlers::input::parse_step_number;
 use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{MenuAction, terms_exit_keyboard, terms_form_view};
 use crate::bot::{HandlerResult, assignment_files, texts};
-use crate::domain::{AssignmentId, AssignmentStatus, DomainError, MakeupTerms, TelegramUserId};
+use crate::domain::{AssignmentId, AssignmentStatus, MakeupTerms, TelegramUserId};
 
 impl FormScreen for TermsForm {
     fn view(
@@ -54,7 +53,7 @@ impl FormScreen for TermsForm {
             TermsInputError::NumberOutOfRange { max } => texts::number_prompt(max),
             TermsInputError::InvalidDurationDate => texts::INVALID_DURATION_DATE.into(),
             TermsInputError::DeadlineInPast => texts::DEADLINE_IN_FUTURE.into(),
-            TermsInputError::Domain(error) => validation_message(&error),
+            TermsInputError::Domain(error) => form_error(&error),
         })
     }
 
@@ -111,20 +110,6 @@ pub(crate) async fn begin_terms_edit(
     render(screen.chat(), form, None).await
 }
 
-fn validation_message(error: &DomainError) -> String {
-    match error {
-        DomainError::LateHorizonTooLong { max_days } => texts::horizon_too_long(*max_days),
-        DomainError::AssignmentClosingOutOfRange => texts::HORIZON_OUT_OF_RANGE.into(),
-        DomainError::AssignmentDeadlineMustBeAfterCreatedAt => {
-            texts::DEADLINE_AFTER_CREATION.into()
-        }
-        DomainError::InvalidLatePolicy { max, .. }
-        | DomainError::InvalidMakeupCredit { max, .. } => texts::number_prompt(*max),
-        DomainError::MakeupTermsDoNotFitGrading => texts::CHOOSE_BUTTON.into(),
-        _ => texts::INVALID_TERMS.into(),
-    }
-}
-
 pub(crate) async fn handle_makeup(
     screen: Screen<'_>,
     message_id: MessageId,
@@ -134,14 +119,8 @@ pub(crate) async fn handle_makeup(
     let Some(mut form) = state.terms_form(message_id, TermsStep::Makeup) else {
         return screen.stale().await;
     };
-    let makeup = match choice {
-        MakeupChoice::Manual => {
-            form.mode = InputMode::Manual;
-            return render(screen.chat(), form, None).await;
-        }
-        MakeupChoice::NotOffered => Ok(MakeupTerms::NotOffered),
-        MakeupChoice::PassFail => Ok(MakeupTerms::PassFail),
-        MakeupChoice::Credit(credit) => MakeupTerms::scored(credit, form.terms.grading()),
+    let Some(makeup) = choice.terms(form.terms.grading()) else {
+        return input_manually(screen.chat(), form).await;
     };
     let result = makeup
         .map_err(TermsInputError::Domain)
@@ -162,41 +141,17 @@ pub(crate) async fn handle_late_policy(
     render_input_result(screen, form, result).await
 }
 
-pub(crate) async fn handle_penalty(
-    screen: Screen<'_>,
-    message_id: MessageId,
-    choice: AmountChoice,
-    state: BotState,
-) -> HandlerResult {
-    handle_amount(screen, message_id, choice, state, TermsStep::Penalty).await
-}
-
-pub(crate) async fn handle_periods(
-    screen: Screen<'_>,
-    message_id: MessageId,
-    choice: AmountChoice,
-    state: BotState,
-) -> HandlerResult {
-    handle_amount(screen, message_id, choice, state, TermsStep::Periods).await
-}
-
-async fn handle_amount(
+pub(crate) async fn handle_amount(
     screen: Screen<'_>,
     message_id: MessageId,
     choice: AmountChoice,
     state: BotState,
     step: TermsStep,
 ) -> HandlerResult {
-    let Some(mut form) = state.terms_form(message_id, step) else {
+    let Some(form) = state.terms_form(message_id, step) else {
         return screen.stale().await;
     };
-    match choice {
-        AmountChoice::Preset(value) => apply_number(screen, form, value).await,
-        AmountChoice::Manual => {
-            form.mode = InputMode::Manual;
-            render(screen.chat(), form, None).await
-        }
-    }
+    choose_amount(screen, form, choice, TermsForm::apply_number).await
 }
 
 pub(crate) async fn handle_duration_periods(
@@ -285,11 +240,7 @@ pub(crate) async fn handle_terms(
             _ => screen.stale().await,
         };
     }
-    let Some(active) = state.active_terms() else {
-        return screen.stale().await;
-    };
-    let expected_step = active.step;
-    let Some(mut form) = state.terms_form(message_id, expected_step) else {
+    let Some(mut form) = state.current_terms_form(message_id) else {
         return screen.stale().await;
     };
     if action == TermsAction::Back {

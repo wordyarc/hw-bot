@@ -251,7 +251,7 @@ async fn a_review_freezes_the_scale_after_the_assignment_becomes_pass_fail() {
         .student_assignment(assignment.id().as_uuid(), app.student())
         .await
         .ok();
-    assert_eq!(details["submissions"][0]["max_score"], json!(5));
+    assert_eq!(details["latest_submission"]["max_score"], json!(5));
 
     let gradebook = gradebook(&app, app.teacher()).await.ok();
     assert_eq!(gradebook["students"][0]["grades"][0]["max_score"], json!(5));
@@ -972,7 +972,7 @@ async fn moving_the_deadline_does_not_change_a_grade_that_was_already_given() {
         .await
         .ok();
 
-    let stored = &body["submissions"][0];
+    let stored = &body["latest_submission"];
     assert_eq!(stored["late_periods"], json!(1));
     assert_eq!(stored["penalty"], json!(1));
     assert_eq!(stored["work_score"], json!(4));

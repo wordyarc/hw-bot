@@ -182,6 +182,13 @@ pub fn text_too_long(field: &str, max_len: usize) -> String {
     format!("{field}: текст длиннее {max_len} символов. Пришлите сокращённый вариант.")
 }
 
+pub fn text_with_links_too_long(field: &str, max_len: usize) -> String {
+    format!(
+        "{field}: вместе с адресами скрытых ссылок текст длиннее {max_len} символов. \
+        Бот записывает адрес каждой ссылки рядом с её текстом. Сократите текст или ссылки."
+    )
+}
+
 pub fn review_score_question(max_score: u16, late: Option<LatePenalty>) -> String {
     let question = format!("Сначала поставьте балл от 0 до {max_score}.");
     match late {
@@ -357,6 +364,9 @@ pub const PRIVATE_CHATS_ONLY: &str = "Бот работает только в л
 pub const ASSIGNMENT_BODY_HEADER: &str = "📄 Текст задания:";
 pub const FIELD_NAME: &str = "Имя";
 pub const FIELD_TITLE: &str = "Название";
+pub const FIELD_BODY: &str = "Текст задания";
+pub const FIELD_SUBMISSION: &str = "Работа";
+pub const FIELD_COMMENT: &str = "Комментарий";
 
 pub fn student_pending_line(pending: u32) -> String {
     format!("⏳ Ваших работ на проверке: {pending}")
@@ -463,6 +473,22 @@ pub fn pending_place(ahead: &str) -> String {
 pub fn attempt_line(number: u16, status: &str, grade: Option<&str>) -> String {
     let grade = grade.map(|grade| format!("\n{grade}")).unwrap_or_default();
     format!("Попытка {number}: {status}{grade}")
+}
+
+pub fn attempt(
+    number: u16,
+    status: &str,
+    grade: Option<&str>,
+    content: &str,
+    comment: Option<&str>,
+) -> String {
+    let comment = comment
+        .map(|comment| format!("\n\n{REVIEW_COMMENT_HEADER}\n{comment}"))
+        .unwrap_or_default();
+    format!(
+        "{}\n\n{content}{comment}",
+        attempt_line(number, status, grade)
+    )
 }
 
 pub fn history_header(subject: &str, title: &str) -> String {

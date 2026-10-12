@@ -3,7 +3,7 @@ use teloxide::prelude::ChatId;
 
 use super::Bot;
 use super::HandlerResult;
-use crate::app::{AppError, ErrorCode};
+use crate::app::{AppError, AppResult, ErrorCode};
 use crate::telegram::is_invalid_token;
 pub(super) use crate::telegram::request_error_kind;
 
@@ -44,6 +44,16 @@ pub(super) async fn finish_handler(
     match result {
         Err(BotError::App(error)) => send_app_error(bot, chat_id, error).await,
         result => result,
+    }
+}
+
+pub(super) fn optional_stat<T>(result: AppResult<T>, statistic: &'static str) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(statistic, error = ?error, "optional statistic is unavailable");
+            None
+        }
     }
 }
 
@@ -119,46 +129,14 @@ pub fn app_error_message(code: ErrorCode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use super::*;
-
-    #[derive(Clone)]
-    struct Writer(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Writer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn captured(log: impl FnOnce()) -> Vec<u8> {
-        let buffer = Writer(Arc::default());
-        let writer = buffer.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .without_time()
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, log);
-        buffer.0.lock().unwrap().clone()
-    }
-
-    fn events(bytes: &[u8]) -> Vec<serde_json::Value> {
-        serde_json::Deserializer::from_slice(bytes)
-            .into_iter::<serde_json::Value>()
-            .map(Result::unwrap)
-            .collect()
-    }
+    use crate::test_support::logs::LogBuffer;
 
     #[test]
     fn transport_logs_keep_correlation_without_the_raw_telegram_response() {
-        let bytes = captured(|| {
+        let logs = LogBuffer::of(|| {
             let error = teloxide::RequestError::InvalidJson {
                 source: Arc::new(serde_json::from_str::<serde_json::Value>("invalid").unwrap_err()),
                 raw: "private-comment-and-token".into(),
@@ -177,19 +155,19 @@ mod tests {
                 assert!(!format!("{startup:?}: {startup}").contains("private-comment-and-token"));
             });
         });
-        let events = events(&bytes);
+        let events = logs.events();
         assert_eq!(events.len(), 4);
         for event in events {
             assert_eq!(event["span"]["update_id"], 7);
             assert_eq!(event["span"]["action"], "review");
             assert_eq!(event["fields"]["kind"], "telegram_invalid_response");
         }
-        assert!(!String::from_utf8_lossy(&bytes).contains("private-comment-and-token"));
+        assert!(!logs.text().contains("private-comment-and-token"));
     }
 
     #[test]
     fn an_api_error_is_named_but_its_description_is_not_logged() {
-        let bytes = captured(|| {
+        let logs = LogBuffer::of(|| {
             log_request_error(
                 "get_updates",
                 &teloxide::RequestError::Api(ApiError::TerminatedByOtherGetUpdates),
@@ -199,7 +177,7 @@ mod tests {
                 &teloxide::RequestError::Api(ApiError::Unknown("private-description".into())),
             );
         });
-        let events = events(&bytes);
+        let events = logs.events();
 
         assert_eq!(
             events[0]["fields"]["api_error"],
@@ -210,6 +188,6 @@ mod tests {
             "{}",
             events[1]
         );
-        assert!(!String::from_utf8_lossy(&bytes).contains("private-description"));
+        assert!(!logs.text().contains("private-description"));
     }
 }

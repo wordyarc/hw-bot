@@ -17,7 +17,9 @@ use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use crate::harness::telegram::*;
-use crate::harness::telegram_scenario::TelegramScenario;
+use crate::harness::telegram_scenario::{
+    TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
+};
 use crate::harness::{TestApp, insert_assignment, out_of, submission_id, wall_clock_assignment};
 
 fn regular_grade(grade: Grade) -> String {
@@ -1468,5 +1470,67 @@ async fn a_gradebook_of_several_groups_starts_with_the_choice_of_the_group() {
         back.data(),
         second_group.data(),
         "the back button leads to the list of the student's group"
+    );
+}
+
+#[tokio::test]
+async fn a_review_comment_over_the_limit_once_its_link_is_revealed_is_refused_and_the_step_stays() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_REJECT_PREFIX, submission),
+        )
+        .await;
+    telegram.message_with(
+        app.teacher(),
+        text_over_the_limit_once_its_link_is_revealed(),
+    );
+    telegram.message(app.teacher(), "Fix the tests");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let refusal = texts::text_with_links_too_long(texts::FIELD_COMMENT, USER_TEXT_MAX_LEN);
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&refusal), "{sent:#?}");
+    assert_eq!(
+        reviewed.map(|(status, _, _)| status).as_deref(),
+        Some("rejected")
+    );
+}
+
+#[tokio::test]
+async fn a_bulk_comment_over_the_limit_once_its_link_is_revealed_is_refused_and_the_step_stays() {
+    let app = TestApp::start().await;
+    let trial = add_trial(&app).await;
+    let submission = submit_trial(&app, &trial, app.student()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), texts::BUTTON_SANDBOX);
+    telegram
+        .click_button(app.teacher(), callbacks::SANDBOX_REJECT_ALL)
+        .await;
+    telegram.message_with(
+        app.teacher(),
+        text_over_the_limit_once_its_link_is_revealed(),
+    );
+    telegram.message(app.teacher(), "Учебная сдача");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let refusal = texts::text_with_links_too_long(texts::FIELD_COMMENT, USER_TEXT_MAX_LEN);
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&refusal), "{sent:#?}");
+    assert_eq!(
+        reviewed.map(|(status, _, _)| status).as_deref(),
+        Some("rejected")
     );
 }

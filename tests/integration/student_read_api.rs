@@ -247,7 +247,7 @@ async fn the_card_of_an_untouched_assignment_has_no_submissions() {
         .await
         .ok();
 
-    assert_eq!(body["submissions"], json!([]));
+    assert_eq!(body["latest_submission"], json!(null));
     assert_eq!(body["files"], json!([]));
     assert_eq!(
         body["assignment"]["body"],
@@ -328,7 +328,7 @@ async fn an_archived_card_keeps_submission_history_and_review_comments() {
         .ok();
 
     assert_eq!(
-        body["submissions"][0]["review_comment"],
+        body["latest_submission"]["review_comment"],
         json!("Add tests.")
     );
 }

@@ -9,6 +9,7 @@ use teloxide::utils::command::BotCommands;
 use super::Bot;
 use super::HandlerResult;
 use super::assignment_files;
+use super::assignment_form::TermsStep;
 use super::callbacks::{
     self, CallbackAction, FlowAction, InformationalAction, PageTarget, ReplayableAction,
     ScreenAction,
@@ -17,9 +18,7 @@ use super::context::{BotContext, Chat, Deps, Screen, TextStep};
 use super::errors::finish_handler;
 use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ScreenState};
 use super::texts;
-use super::views::{
-    MenuAction, menu_action, send_stale_button, student_keyboard, teacher_keyboard,
-};
+use super::views::{MenuAction, menu_action, send_stale_button};
 use crate::domain::{Role, TelegramUserId};
 use crate::pagination::{PageRequest, ROSTER_PAGE_SIZE};
 use crate::telegram::is_invalid_token;
@@ -95,28 +94,8 @@ async fn abandon_flow(bot: &Bot, chat_id: ChatId, state: &BotState) -> HandlerRe
     let BotState::Flow(flow) = state else {
         return Ok(());
     };
-    let (text, keyboard) = match flow {
-        FlowState::AwaitingSubmission { .. } => (texts::ACTION_CANCELLED, student_keyboard()),
-        FlowState::AwaitingAssignmentTitle { .. }
-        | FlowState::AwaitingAssignmentBody { .. }
-        | FlowState::ChoosingAssignmentGroups { .. }
-        | FlowState::AwaitingAssignmentMaxAttempts { .. }
-        | FlowState::ChoosingGrading { .. }
-        | FlowState::AwaitingGradingText { .. } => (texts::DRAFT_DISCARDED, teacher_keyboard()),
-        FlowState::AwaitingReviewScore { .. }
-        | FlowState::AwaitingReviewComment { .. }
-        | FlowState::AwaitingBulkReviewComment { .. }
-        | FlowState::AwaitingAssignmentFile { .. }
-        | FlowState::AwaitingAttemptAmount { .. } => (texts::ACTION_CANCELLED, teacher_keyboard()),
-        FlowState::ChoosingRegistrationGroup { .. }
-        | FlowState::AwaitingRegistrationName { .. }
-        | FlowState::ConfirmingInviteRotation { .. }
-        | FlowState::AwaitingReviewDecision { .. }
-        | FlowState::ConfirmingAssignmentFileDeletion { .. }
-        | FlowState::ConfiguringTerms(_)
-        | FlowState::ConfiguringMakeup(_)
-        | FlowState::ConfirmingTermsExit { .. }
-        | FlowState::ChoosingStudent { .. } => return Ok(()),
+    let Some((text, keyboard)) = flow.abandon_notice() else {
+        return Ok(());
     };
     bot.send_message(chat_id, text)
         .reply_markup(keyboard)
@@ -336,7 +315,7 @@ pub(super) async fn handle_message(
                 teacher::submit_attempt_amount(step, message_id, assignment_id, student_id).await?;
             }
             state => {
-                if let Some(hint) = button_hint(&state) {
+                if let Some(hint) = state.button_hint() {
                     bot.send_message(chat_id, hint).await?;
                 }
             }
@@ -357,12 +336,19 @@ async fn run_menu_action(
     let Some(target) = menu_target(action) else {
         return send_help(chat, telegram_user_id).await;
     };
+    replay(chat, telegram_user_id, target, Utc::now()).await
+}
 
+async fn replay(
+    chat: Chat<'_>,
+    telegram_user_id: TelegramUserId,
+    action: ReplayableAction,
+    shown_at: DateTime<Utc>,
+) -> HandlerResult {
     let Some(screen) = chat.resolve(telegram_user_id).await? else {
         return Ok(());
     };
-
-    handle_replayable_action(screen, target, Utc::now()).await
+    handle_replayable_action(screen, action, shown_at).await
 }
 
 fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
@@ -422,18 +408,22 @@ pub(super) async fn handle_callback(
         if action == CallbackAction::Noop {
             return Ok(());
         }
-        if let CallbackAction::Replayable(replayable) = action {
-            reset_dialogue(&dialogue).await?;
-            if !state.is_restarted_by(replayable) {
-                abandon_flow(&bot, chat_id, &state).await?;
-            }
-        }
-
         let deps = Deps {
             context: &context,
             dialogue: &dialogue,
         };
         let chat = Chat::new(&bot, chat_id, deps);
+        if let CallbackAction::Replayable(replayable) = action {
+            reset_dialogue(&dialogue).await?;
+            if state.is_restarted_by(replayable) {
+                let restarted = replay(chat, telegram_user_id, replayable, message.date).await;
+                if restarted.is_err() {
+                    abandon_flow(&bot, chat_id, &state).await?;
+                }
+                return restarted;
+            }
+            abandon_flow(&bot, chat_id, &state).await?;
+        }
         if let CallbackAction::Flow(FlowAction::RegistrationGroup(group_id)) = action {
             return registration::choose_group(chat, message.id, group_id, &state).await;
         }
@@ -495,8 +485,10 @@ async fn handle_replayable_action(
         }
         ReplayableAction::Profile => show_profile(screen).await,
         ReplayableAction::ReviewHub => review::show_hub(screen).await,
-        ReplayableAction::NextReview => review::show_next(screen).await,
-        ReplayableAction::NextMakeupReview => review::show_next_makeup(screen).await,
+        ReplayableAction::NextReview => review::show_next(screen, review::Queue::Main).await,
+        ReplayableAction::NextMakeupReview => {
+            review::show_next(screen, review::Queue::Makeup).await
+        }
         ReplayableAction::CourseMakeup(course_id) => teacher::open_makeup(screen, course_id).await,
         ReplayableAction::Assignment(assignment_id) => {
             student::show_assignment(screen, assignment_id).await
@@ -606,10 +598,12 @@ async fn handle_flow_action(
             teacher::handle_late_policy(screen, message_id, choice, state).await?;
         }
         FlowAction::Penalty(choice) => {
-            teacher::handle_penalty(screen, message_id, choice, state).await?
+            teacher::handle_terms_amount(screen, message_id, choice, state, TermsStep::Penalty)
+                .await?
         }
         FlowAction::Periods(choice) => {
-            teacher::handle_periods(screen, message_id, choice, state).await?
+            teacher::handle_terms_amount(screen, message_id, choice, state, TermsStep::Periods)
+                .await?
         }
         FlowAction::DurationPeriods(periods) => {
             teacher::handle_duration_periods(screen, message_id, periods, state).await?
@@ -691,56 +685,6 @@ fn message_sender_id(message: &Message) -> HandlerResult<TelegramUserId> {
 fn sender_id(user: &User) -> HandlerResult<TelegramUserId> {
     let value = i64::try_from(user.id.0).context("Telegram user id does not fit into i64")?;
     TelegramUserId::new(value).map_err(|error| anyhow!(error).into())
-}
-
-fn button_hint(state: &BotState) -> Option<&'static str> {
-    match state {
-        BotState::Flow(FlowState::AwaitingReviewDecision { .. }) => {
-            Some(texts::CHOOSE_REVIEW_DECISION)
-        }
-        BotState::Screen(ScreenState::ManagingAssignment { .. }) => {
-            Some(texts::CHOOSE_ASSIGNMENT_ACTION)
-        }
-        BotState::Screen(
-            ScreenState::CourseInvite { .. }
-            | ScreenState::SandboxSubmissions { .. }
-            | ScreenState::MakeupReviewed { .. }
-            | ScreenState::StudentGrades { .. },
-        )
-        | BotState::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
-            Some(texts::CHOOSE_ACTION_ABOVE)
-        }
-        BotState::Screen(ScreenState::ManagingAssignmentFiles { .. }) => {
-            Some(texts::CHOOSE_FILE_ACTION)
-        }
-        BotState::Flow(FlowState::ConfirmingAssignmentFileDeletion { .. }) => {
-            Some(texts::CONFIRM_FILE_DELETION)
-        }
-        BotState::Flow(
-            FlowState::ConfirmingTermsExit { .. }
-            | FlowState::ChoosingRegistrationGroup { .. }
-            | FlowState::ChoosingAssignmentGroups { .. },
-        ) => Some(texts::CHOOSE_BUTTON),
-        BotState::Flow(FlowState::ChoosingStudent { .. }) => Some(texts::CHOOSE_STUDENT),
-        BotState::Idle
-        | BotState::Screen(ScreenState::Guest)
-        | BotState::Flow(
-            FlowState::AwaitingRegistrationName { .. }
-            | FlowState::AwaitingSubmission { .. }
-            | FlowState::AwaitingReviewScore { .. }
-            | FlowState::AwaitingReviewComment { .. }
-            | FlowState::AwaitingBulkReviewComment { .. }
-            | FlowState::AwaitingAssignmentFile { .. }
-            | FlowState::AwaitingAssignmentTitle { .. }
-            | FlowState::AwaitingAssignmentBody { .. }
-            | FlowState::AwaitingAssignmentMaxAttempts { .. }
-            | FlowState::ChoosingGrading { .. }
-            | FlowState::AwaitingGradingText { .. }
-            | FlowState::ConfiguringTerms(_)
-            | FlowState::ConfiguringMakeup(_)
-            | FlowState::AwaitingAttemptAmount { .. },
-        ) => None,
-    }
 }
 
 #[cfg(test)]

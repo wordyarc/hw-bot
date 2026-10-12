@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
-use super::input::require_text;
+use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::ReviewSandbox;
 use crate::bot::HandlerResult;
@@ -12,7 +12,7 @@ use crate::bot::texts;
 use crate::bot::views::{
     list_text, sandbox_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
 };
-use crate::domain::ReviewDecision;
+use crate::domain::{ReviewDecision, USER_TEXT_MAX_LEN};
 use crate::pagination::PageRequest;
 
 pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -102,7 +102,9 @@ pub(super) async fn submit_comment(
     let bot = step.bot();
     let chat_id = step.chat_id();
 
-    let Some(text) = require_text(bot, step.message()).await? else {
+    let Some(text) =
+        require_text_within(bot, step.message(), USER_TEXT_MAX_LEN, texts::FIELD_COMMENT).await?
+    else {
         return Ok(());
     };
     let Some(screen) = step.resolve().await? else {

@@ -88,14 +88,11 @@ pub(crate) fn ensure_manages(
     Ok(())
 }
 
-pub(crate) async fn load_course_student<'e, E>(
-    executor: E,
+pub(crate) async fn load_course_student(
+    executor: impl PgExecutor<'_>,
     course: &TeachingCourse,
     student_id: UserId,
-) -> AppResult<(User, StudentGroupId)>
-where
-    E: PgExecutor<'e>,
-{
+) -> AppResult<(User, StudentGroupId)> {
     db::users::find_by_id(executor, student_id)
         .await?
         .and_then(|user| {
@@ -107,14 +104,11 @@ where
         .required("student")
 }
 
-pub(crate) async fn load_student<'e, E>(
-    executor: E,
+pub(crate) async fn load_student(
+    executor: impl PgExecutor<'_>,
     actor: Actor,
     action: &'static str,
-) -> AppResult<User>
-where
-    E: PgExecutor<'e>,
-{
+) -> AppResult<User> {
     let student = load_actor(executor, actor, "student").await?;
     if !student.role().can_submit_homework() {
         return Err(DomainError::PermissionDenied { action }.into());

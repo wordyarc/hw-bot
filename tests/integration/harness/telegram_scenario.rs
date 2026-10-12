@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use hw_bot::bot::texts;
+use hw_bot::domain::USER_TEXT_MAX_LEN;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -13,6 +14,18 @@ use super::telegram::{
 };
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
+
+pub fn text_over_the_limit_once_its_link_is_revealed() -> Value {
+    json!({
+        "text": "a".repeat(USER_TEXT_MAX_LEN - 10),
+        "entities": [{
+            "type": "text_link",
+            "offset": 0,
+            "length": 5,
+            "url": "https://example.test/a-hidden-link"
+        }]
+    })
+}
 
 #[derive(Default)]
 struct State {

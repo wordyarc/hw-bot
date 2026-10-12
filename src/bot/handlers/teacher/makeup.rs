@@ -3,8 +3,8 @@ use teloxide::types::{InlineKeyboardMarkup, MessageId};
 
 use super::courses::show_course_assignments_page;
 use super::form::{
-    FormScreen, apply_date, cancel, discard, finish, render, render_input_result, step_back,
-    take_text,
+    FormScreen, apply_date, cancel, choose_amount, discard, finish, form_error, input_manually,
+    render, render_input_result, step_back, take_text,
 };
 use crate::app::{AppError, ErrorCode};
 use crate::bot::HandlerResult;
@@ -12,7 +12,6 @@ use crate::bot::callbacks::{
     AmountChoice, MakeupChoice, MakeupFormAction, PageTarget, ReplayableAction,
 };
 use crate::bot::context::{Screen, TextStep};
-use crate::bot::form::InputMode;
 use crate::bot::handlers::input::parse_step_number;
 use crate::bot::makeup_form::{MakeupForm, MakeupInputError, MakeupStep};
 use crate::bot::state::{BotState, FlowState};
@@ -42,7 +41,7 @@ impl FormScreen for MakeupForm {
     fn input_message(error: MakeupInputError) -> Option<String> {
         match error {
             MakeupInputError::UnexpectedStep => None,
-            MakeupInputError::Domain(error) => Some(input_error(&error)),
+            MakeupInputError::Domain(error) => Some(form_error(&error)),
         }
     }
 
@@ -64,48 +63,23 @@ pub(crate) async fn open(screen: Screen<'_>, course_id: TeachingCourseId) -> Han
     render(screen.chat(), form, None).await
 }
 
-fn input_error(error: &DomainError) -> String {
-    match error {
-        DomainError::MakeupUntilOutOfRange { max_days } => {
-            texts::makeup_until_out_of_range(*max_days)
-        }
-        DomainError::InvalidMakeupAttempts { max, .. }
-        | DomainError::InvalidMakeupCredit { max, .. } => texts::number_prompt(*max),
-        DomainError::MakeupTermsDoNotFitGrading => texts::CHOOSE_BUTTON.to_owned(),
-        _ => texts::INVALID_TERMS.to_owned(),
-    }
-}
-
-fn scale_step(state: &BotState) -> Option<MakeupStep> {
-    state
-        .active_makeup()
-        .map(|form| form.step)
-        .filter(|step| matches!(step, MakeupStep::Scale(_)))
-}
-
 pub(crate) async fn handle_answer(
     screen: Screen<'_>,
     message_id: MessageId,
     choice: MakeupChoice,
     state: BotState,
 ) -> HandlerResult {
-    let Some(step) = scale_step(&state) else {
-        return screen.stale().await;
-    };
-    let Some(mut form) = state.makeup_form(message_id, step) else {
+    let Some(mut form) = state
+        .current_makeup_form(message_id)
+        .filter(|form| matches!(form.step, MakeupStep::Scale(_)))
+    else {
         return screen.stale().await;
     };
     let Some(grading) = form.current_scale().map(|scale| scale.grading) else {
         return screen.stale().await;
     };
-    let terms = match choice {
-        MakeupChoice::Manual => {
-            form.mode = InputMode::Manual;
-            return render(screen.chat(), form, None).await;
-        }
-        MakeupChoice::NotOffered => Ok(MakeupTerms::NotOffered),
-        MakeupChoice::PassFail => Ok(MakeupTerms::PassFail),
-        MakeupChoice::Credit(credit) => MakeupTerms::scored(credit, grading),
+    let Some(terms) = choice.terms(grading) else {
+        return input_manually(screen.chat(), form).await;
     };
     let result = terms
         .map_err(MakeupInputError::Domain)
@@ -119,19 +93,10 @@ pub(crate) async fn handle_attempts(
     choice: AmountChoice,
     state: BotState,
 ) -> HandlerResult {
-    let Some(mut form) = state.makeup_form(message_id, MakeupStep::Attempts) else {
+    let Some(form) = state.makeup_form(message_id, MakeupStep::Attempts) else {
         return screen.stale().await;
     };
-    match choice {
-        AmountChoice::Preset(attempts) => {
-            let result = form.apply_attempts(attempts);
-            render_input_result(screen, form, result).await
-        }
-        AmountChoice::Manual => {
-            form.mode = InputMode::Manual;
-            render(screen.chat(), form, None).await
-        }
-    }
+    choose_amount(screen, form, choice, MakeupForm::apply_attempts).await
 }
 
 pub(crate) async fn handle_form(
@@ -140,12 +105,10 @@ pub(crate) async fn handle_form(
     action: MakeupFormAction,
     state: BotState,
 ) -> HandlerResult {
-    let Some(step) = state.active_makeup().map(|form| form.step) else {
+    let Some(mut form) = state.current_makeup_form(message_id) else {
         return screen.stale().await;
     };
-    let Some(mut form) = state.makeup_form(message_id, step) else {
-        return screen.stale().await;
-    };
+    let step = form.step;
     match action {
         MakeupFormAction::Back => step_back(screen, form).await,
         _ if step != MakeupStep::Summary => screen.stale().await,
@@ -201,7 +164,7 @@ async fn save(screen: Screen<'_>, mut form: MakeupForm) -> HandlerResult {
             error @ (DomainError::MakeupUntilOutOfRange { .. }
             | DomainError::InvalidMakeupAttempts { .. }),
         )) => {
-            return render(screen.chat(), form, Some(&input_error(&error))).await;
+            return render(screen.chat(), form, Some(&form_error(&error))).await;
         }
         Err(error) => return Err(error.into()),
     };

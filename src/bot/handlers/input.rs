@@ -1,25 +1,42 @@
 use std::borrow::Cow;
 
-use teloxide::types::{ChatId, Message, MessageEntity, MessageEntityKind, MessageEntityRef};
+use teloxide::types::{Message, MessageEntity, MessageEntityKind, MessageEntityRef};
 
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::texts;
 use crate::domain::{Grading, MAX_ATTEMPTS};
 
-pub(super) async fn ensure_text_limit(
+pub(super) async fn require_text_within<'a>(
     bot: &Bot,
-    chat_id: ChatId,
-    text: &str,
+    message: &'a Message,
     max_len: usize,
     field: &str,
-) -> HandlerResult<bool> {
-    if text.trim().chars().count() <= max_len {
-        return Ok(true);
+) -> HandlerResult<Option<Cow<'a, str>>> {
+    let Some(text) = require_text(bot, message).await? else {
+        return Ok(None);
+    };
+    match within_limit(text, max_len, field) {
+        Ok(text) => Ok(Some(text)),
+        Err(refusal) => {
+            bot.send_message(message.chat.id, refusal).await?;
+            Ok(None)
+        }
     }
-    bot.send_message(chat_id, texts::text_too_long(field, max_len))
-        .await?;
-    Ok(false)
+}
+
+fn within_limit<'a>(
+    text: Cow<'a, str>,
+    max_len: usize,
+    field: &str,
+) -> Result<Cow<'a, str>, String> {
+    if text.trim().chars().count() <= max_len {
+        return Ok(text);
+    }
+    Err(match text {
+        Cow::Borrowed(_) => texts::text_too_long(field, max_len),
+        Cow::Owned(_) => texts::text_with_links_too_long(field, max_len),
+    })
 }
 
 pub(super) async fn require_text<'a>(
@@ -160,6 +177,25 @@ mod tests {
             reveal_links("Мой PR", &entities),
             Cow::Borrowed("Мой PR")
         ));
+    }
+
+    #[test]
+    fn a_text_over_the_limit_only_with_its_links_names_the_links() {
+        let entities = [link("https://example.test/a-hidden-link", 0, 1)];
+        let revealed = reveal_links("abc", &entities);
+
+        assert_eq!(
+            within_limit(revealed, 3, "Поле"),
+            Err(texts::text_with_links_too_long("Поле", 3))
+        );
+        assert_eq!(
+            within_limit(Cow::Borrowed("abcd"), 3, "Поле"),
+            Err(texts::text_too_long("Поле", 3))
+        );
+        assert_eq!(
+            within_limit(Cow::Borrowed(" abc "), 3, "Поле"),
+            Ok(Cow::Borrowed(" abc "))
+        );
     }
 
     #[test]

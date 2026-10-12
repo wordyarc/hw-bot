@@ -239,14 +239,11 @@ pub async fn insert(conn: &mut PgConnection, assignment: &Assignment) -> DbResul
     Ok(())
 }
 
-pub async fn update<'e, E>(
-    executor: E,
+pub async fn update(
+    executor: impl PgExecutor<'_>,
     assignment: &Assignment,
     expected_revision: i64,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let late_policy = LatePolicyColumns::of(assignment)?;
     let makeup = MakeupColumns::of(assignment)?;
 
@@ -292,14 +289,11 @@ where
     )
 }
 
-pub async fn advance_revision<'e, E>(
-    executor: E,
+pub async fn advance_revision(
+    executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,
     expected_revision: i64,
-) -> DbResult<i64>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<i64> {
     sqlx::query_scalar!(
         r#"
         update assignments
@@ -318,13 +312,10 @@ where
     })
 }
 
-pub async fn find_versioned_by_id<'e, E>(
-    executor: E,
+pub async fn find_versioned_by_id(
+    executor: impl PgExecutor<'_>,
     id: AssignmentId,
-) -> DbResult<Option<VersionedAssignment>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<VersionedAssignment>> {
     let row = select_assignments!(
         ", revision ",
         " from assignments where id = $1",
@@ -342,10 +333,10 @@ where
     .transpose()
 }
 
-pub async fn find_by_id<'e, E>(executor: E, id: AssignmentId) -> DbResult<Option<Assignment>>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn find_by_id(
+    executor: impl PgExecutor<'_>,
+    id: AssignmentId,
+) -> DbResult<Option<Assignment>> {
     let row = select_assignments!("", " from assignments where id = $1", id.as_uuid(),)
         .fetch_optional(executor)
         .await?;
@@ -354,14 +345,11 @@ where
         .transpose()
 }
 
-pub async fn list_published_for_group<'e, E>(
-    executor: E,
+pub async fn list_published_for_group(
+    executor: impl PgExecutor<'_>,
     student_group_id: StudentGroupId,
     page: PageRequest,
-) -> DbResult<Vec<StudentAssignmentCard>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<StudentAssignmentCard>> {
     fetch_assignment_cards!(
         executor,
         " join assignment_groups issued
@@ -375,14 +363,11 @@ where
     )
 }
 
-pub async fn list_archived_for_group<'e, E>(
-    executor: E,
+pub async fn list_archived_for_group(
+    executor: impl PgExecutor<'_>,
     student_group_id: StudentGroupId,
     page: PageRequest,
-) -> DbResult<Vec<StudentAssignmentCard>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<StudentAssignmentCard>> {
     fetch_assignment_cards!(
         executor,
         " join assignment_groups issued
@@ -397,14 +382,11 @@ where
     )
 }
 
-pub async fn list_for_course<'e, E>(
-    executor: E,
+pub async fn list_for_course(
+    executor: impl PgExecutor<'_>,
     teaching_course_id: TeachingCourseId,
     page: PageRequest,
-) -> DbResult<Vec<Assignment>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<Assignment>> {
     select_assignments!(
         "",
         " from assignments where teaching_course_id = $1 order by created_at desc, id limit $2 offset $3",

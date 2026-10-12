@@ -9,6 +9,7 @@ use crate::app::{AppError, ApplicationContainer, FilePolicy};
 use crate::domain::AssignmentId;
 use crate::health::HealthState;
 use crate::invites::{CourseInviteCodec, InviteSigningSecret};
+use crate::test_support::logs::LogBuffer;
 use crate::test_support::{closed_pool, t0};
 
 async fn database_free_router() -> Router {
@@ -290,39 +291,6 @@ async fn streamed_body_over_the_limit_keeps_the_transport_error_code() {
         "request_body_too_large",
     )
     .await;
-}
-
-#[derive(Clone, Default)]
-struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-impl std::io::Write for LogBuffer {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl LogBuffer {
-    fn capture(&self) -> tracing::subscriber::DefaultGuard {
-        let writer = self.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .without_time()
-            .with_env_filter("hw_bot=info,tower_http=info")
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::set_default(subscriber)
-    }
-
-    fn events(&self) -> Vec<Value> {
-        serde_json::Deserializer::from_slice(&self.0.lock().unwrap())
-            .into_iter::<Value>()
-            .map(Result::unwrap)
-            .collect()
-    }
 }
 
 #[tokio::test]

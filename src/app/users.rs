@@ -11,14 +11,11 @@ use crate::domain::{
 use crate::invites::VerifiedInvite;
 use crate::read_models::UserStatistics;
 
-pub(crate) async fn load_actor<'e, E>(
-    executor: E,
+pub(crate) async fn load_actor(
+    executor: impl PgExecutor<'_>,
     actor: Actor,
     resource: &'static str,
-) -> AppResult<User>
-where
-    E: PgExecutor<'e>,
-{
+) -> AppResult<User> {
     db::users::find_by_id(executor, actor.user_id())
         .await?
         .required(resource)

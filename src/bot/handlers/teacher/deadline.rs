@@ -48,18 +48,15 @@ pub(crate) async fn handle_deadline(
             None => screen.stale().await,
         };
     }
-    let Some(active) = state.active_terms() else {
+    let Some(form) = state.current_terms_form(message_id) else {
         return screen.stale().await;
     };
-    let step = active.step;
+    let step = form.step;
     let presets_allowed = step == TermsStep::Deadline
         || !matches!(action, DeadlineAction::Days(_) | DeadlineAction::Months(_));
     if !matches!(step, TermsStep::Deadline | TermsStep::DurationDate) || !presets_allowed {
         return screen.stale().await;
     }
-    let Some(form) = state.terms_form(message_id, step) else {
-        return screen.stale().await;
-    };
     let timezone = screen.timezone();
     let calendar_from = match (step, form.terms.deadline_at) {
         (TermsStep::DurationDate, Some(deadline)) => timezone.first_date_ending_after(deadline),

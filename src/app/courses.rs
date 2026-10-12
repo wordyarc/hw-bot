@@ -482,15 +482,12 @@ impl CourseService {
     }
 }
 
-pub(super) async fn active_makeup_pool<'e, E>(
-    executor: E,
+pub(super) async fn active_makeup_pool(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     student_id: UserId,
     now: DateTime<Utc>,
-) -> AppResult<Option<MakeupPool>>
-where
-    E: PgExecutor<'e>,
-{
+) -> AppResult<Option<MakeupPool>> {
     Ok(
         db::makeup::pool_for_student(executor, course_id, student_id)
             .await?

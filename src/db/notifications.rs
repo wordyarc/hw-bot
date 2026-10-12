@@ -59,16 +59,13 @@ macro_rules! release_lease {
     };
 }
 
-pub async fn enqueue_review_result<'e, E>(
-    executor: E,
+pub async fn enqueue_review_result(
+    executor: impl PgExecutor<'_>,
     submission: &Submission,
     assignment: &Assignment,
     subject: &Subject,
     student: &User,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let outcome = match submission.status() {
         SubmissionStatus::Accepted => ReviewOutcome::Accepted,
         SubmissionStatus::Rejected => ReviewOutcome::Rejected,
@@ -103,15 +100,12 @@ where
     Ok(())
 }
 
-pub async fn claim_next<'e, E>(
-    executor: E,
+pub async fn claim_next(
+    executor: impl PgExecutor<'_>,
     now: DateTime<Utc>,
     lease_token: Uuid,
     lease_expires_at: DateTime<Utc>,
-) -> DbResult<Option<ClaimedReviewNotification>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<ClaimedReviewNotification>> {
     let row = sqlx::query_as!(
         ClaimedReviewNotificationRow,
         r#"
@@ -163,15 +157,12 @@ where
     row.map(ClaimedReviewNotification::try_from).transpose()
 }
 
-pub async fn mark_delivered<'e, E>(
-    executor: E,
+pub async fn mark_delivered(
+    executor: impl PgExecutor<'_>,
     id: Uuid,
     lease_token: Uuid,
     delivered_at: DateTime<Utc>,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let result = release_lease!(
         "delivered_at = $3, last_error = null",
         "",
@@ -185,16 +176,13 @@ where
     ensure_updated(result, LOST_LEASE)
 }
 
-pub async fn reschedule<'e, E>(
-    executor: E,
+pub async fn reschedule(
+    executor: impl PgExecutor<'_>,
     id: Uuid,
     lease_token: Uuid,
     available_at: DateTime<Utc>,
     last_error: &str,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let result = release_lease!(
         "available_at = $3, last_error = $4",
         "",
@@ -209,15 +197,12 @@ where
     ensure_updated(result, LOST_LEASE)
 }
 
-pub async fn release_after_credentials_failure<'e, E>(
-    executor: E,
+pub async fn release_after_credentials_failure(
+    executor: impl PgExecutor<'_>,
     id: Uuid,
     lease_token: Uuid,
     last_error: &str,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let result = release_lease!(
         "attempt_count = attempt_count - 1, last_error = $3",
         "and attempt_count > 0",
@@ -231,16 +216,13 @@ where
     ensure_updated(result, LOST_LEASE)
 }
 
-pub async fn mark_failed<'e, E>(
-    executor: E,
+pub async fn mark_failed(
+    executor: impl PgExecutor<'_>,
     id: Uuid,
     lease_token: Uuid,
     failed_at: DateTime<Utc>,
     last_error: &str,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     let result = release_lease!(
         "failed_at = $3, last_error = $4",
         "",

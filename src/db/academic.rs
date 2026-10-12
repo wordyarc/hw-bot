@@ -64,10 +64,10 @@ macro_rules! select_course_summaries {
     };
 }
 
-pub async fn insert_student_group<'e, E>(executor: E, group: &StudentGroup) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn insert_student_group(
+    executor: impl PgExecutor<'_>,
+    group: &StudentGroup,
+) -> DbResult<()> {
     sqlx::query!(
         r#"
         insert into student_groups (id, code, education_level, study_year)
@@ -84,13 +84,10 @@ where
     Ok(())
 }
 
-pub async fn find_student_group_by_id<'e, E>(
-    executor: E,
+pub async fn find_student_group_by_id(
+    executor: impl PgExecutor<'_>,
     id: StudentGroupId,
-) -> DbResult<Option<StudentGroup>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<StudentGroup>> {
     let row = sqlx::query_as!(
         StudentGroupRow,
         r#"
@@ -106,10 +103,7 @@ where
     row.map(StudentGroup::try_from).transpose()
 }
 
-pub async fn insert_subject<'e, E>(executor: E, subject: &Subject) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+pub async fn insert_subject(executor: impl PgExecutor<'_>, subject: &Subject) -> DbResult<()> {
     sqlx::query!(
         r#"
         insert into subjects (id, name)
@@ -124,13 +118,10 @@ where
     Ok(())
 }
 
-pub async fn find_subject_with_sandbox<'e, E>(
-    executor: E,
+pub async fn find_subject_with_sandbox(
+    executor: impl PgExecutor<'_>,
     id: SubjectId,
-) -> DbResult<Option<(Subject, bool)>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<(Subject, bool)>> {
     let row = sqlx::query!(
         r#"
         select id, name, sandbox
@@ -198,14 +189,11 @@ pub async fn insert_teaching_course(
     course_invites::ensure(conn, course.id()).await
 }
 
-pub async fn add_teaching_course_group<'e, E>(
-    executor: E,
+pub async fn add_teaching_course_group(
+    executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     group_id: StudentGroupId,
-) -> DbResult<()>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<()> {
     sqlx::query!(
         r#"
         insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)
@@ -223,13 +211,10 @@ where
     Ok(())
 }
 
-pub async fn find_teaching_course_by_id<'e, E>(
-    executor: E,
+pub async fn find_teaching_course_by_id(
+    executor: impl PgExecutor<'_>,
     id: TeachingCourseId,
-) -> DbResult<Option<TeachingCourse>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<TeachingCourse>> {
     let row = sqlx::query_as!(
         TeachingCourseRow,
         r#"
@@ -258,13 +243,10 @@ where
     row.map(TeachingCourse::try_from).transpose()
 }
 
-pub(crate) async fn find_teaching_course_summary<'e, E>(
-    executor: E,
+pub(crate) async fn find_teaching_course_summary(
+    executor: impl PgExecutor<'_>,
     id: TeachingCourseId,
-) -> DbResult<Option<TeachingCourseSummary>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Option<TeachingCourseSummary>> {
     select_course_summaries!(" where teaching_courses.id = $1", id.as_uuid())
         .fetch_optional(executor)
         .await?
@@ -272,14 +254,11 @@ where
         .transpose()
 }
 
-pub(crate) async fn list_teaching_courses_for_teacher<'e, E>(
-    executor: E,
+pub(crate) async fn list_teaching_courses_for_teacher(
+    executor: impl PgExecutor<'_>,
     teacher: &User,
     page: PageRequest,
-) -> DbResult<Vec<TeachingCourseSummary>>
-where
-    E: PgExecutor<'e>,
-{
+) -> DbResult<Vec<TeachingCourseSummary>> {
     let sees_every_course = teacher.role().can_manage_all_teaching_courses();
 
     select_course_summaries!(

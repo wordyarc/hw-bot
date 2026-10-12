@@ -6,14 +6,17 @@ use hw_bot::bot::{app_error_message, callbacks, texts};
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, DeductedFrom, Submission, SubmissionId, SubmissionKind, SubmissionStatus,
+    USER_TEXT_MAX_LEN,
 };
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, method, path};
 
 use crate::harness::telegram::*;
-use crate::harness::telegram_scenario::TelegramScenario;
-use crate::harness::{TestApp, out_of, submission_id};
+use crate::harness::telegram_scenario::{
+    Button, TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
+};
+use crate::harness::{TestApp, insert_assignment, out_of, submission_id, wall_clock_assignment};
 
 async fn delayed_submission(
     app: &TestApp,
@@ -179,7 +182,10 @@ async fn the_history_shows_a_penalty_to_the_course_total_next_to_the_work_score(
         texts::submission_status(SubmissionStatus::Accepted),
         texts::grade_line(SubmissionKind::Regular, Some(grade)).as_deref(),
     );
-    assert!(sent[opened..].contains(&attempt), "{sent:#?}");
+    assert!(
+        sent[opened..].iter().any(|text| text.starts_with(&attempt)),
+        "{sent:#?}"
+    );
     assert_eq!(grade.deducted_from(), Some(DeductedFrom::CourseTotal));
     assert_eq!((grade.work_score(), grade.course_total_penalty()), (8, 4));
 }
@@ -330,5 +336,159 @@ async fn the_assignment_card_names_a_penalty_to_the_course_total() {
     assert!(
         card.contains(&format!("{} −4", texts::LATE_PENALTY_LABEL)),
         "{card}"
+    );
+}
+
+fn longer_than_one_telegram_message() -> String {
+    format!("{}{}", "📌".repeat(1000), "a".repeat(2100))
+}
+
+async fn open_submission_prompt(app: &TestApp, telegram: &TelegramScenario) -> Button {
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn a_body_longer_than_one_telegram_message_still_brings_the_card_buttons() {
+    let app = TestApp::start().await;
+    let assignment = wall_clock_assignment(&app.fixture.course, &app.fixture.teacher)
+        .title("Long body")
+        .body(longer_than_one_telegram_message())
+        .published()
+        .build();
+    insert_assignment(&app.pool, &assignment).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
+        )
+        .await;
+    telegram
+        .button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, assignment.id().as_uuid()),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn a_submission_longer_than_one_telegram_message_once_its_link_is_revealed_keeps_the_card_buttons()
+ {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram.message_with(
+        app.student(),
+        json!({
+            "text": longer_than_one_telegram_message(),
+            "entities": [{
+                "type": "text_link",
+                "offset": 2000,
+                "length": 10,
+                "url": "https://example.test/a-hidden-link"
+            }]
+        }),
+    );
+    telegram.flush(app.student()).await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    telegram
+        .button_with_text(app.student(), texts::BUTTON_HISTORY)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+}
+
+#[tokio::test]
+async fn a_submission_over_the_limit_once_its_link_is_revealed_is_refused_and_the_step_stays() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram.message_with(
+        app.student(),
+        text_over_the_limit_once_its_link_is_revealed(),
+    );
+    telegram.message(app.student(), "pull/1");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let refusal = texts::text_with_links_too_long(texts::FIELD_SUBMISSION, USER_TEXT_MAX_LEN);
+    assert!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .any(|message| message["text"] == refusal.as_str()),
+        "the refusal names the length"
+    );
+    let stored = db::submissions::latest_for_student(
+        &app.pool,
+        app.fixture.assignment.id(),
+        app.fixture.student.id(),
+    )
+    .await
+    .unwrap()
+    .expect("the shorter text is taken by the same step");
+    assert_eq!(stored.content().as_str(), "pull/1");
+}
+
+#[tokio::test]
+async fn a_second_submit_tap_that_fails_on_the_database_brings_the_menu_back() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    let submit = open_submission_prompt(&app, &telegram).await;
+    let prompt = texts::input_prompt(texts::SUBMISSION_PROMPT);
+    wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .messages(app.student())
+            .into_iter()
+            .find(|message| message["text"] == prompt.as_str())
+    })
+    .await
+    .expect("the submission prompt is sent");
+    let before = telegram.messages(app.student()).len();
+    app.pool.close().await;
+    telegram.click(app.student(), &submit);
+    let failure = app_error_message(ErrorCode::InternalError);
+    wait_for_some(Duration::from_secs(5), || async {
+        telegram
+            .messages(app.student())
+            .into_iter()
+            .find(|message| message["text"] == failure)
+    })
+    .await
+    .expect("the failure is reported");
+    stop_bot(cancellation, &mut task).await;
+
+    let replies = &telegram.messages(app.student())[before..];
+    assert!(
+        replies
+            .iter()
+            .any(|message| message["reply_markup"]["keyboard"].is_array()),
+        "{replies:#?}"
     );
 }

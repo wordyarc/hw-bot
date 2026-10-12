@@ -5,9 +5,8 @@ use sqlx::PgPool;
 
 use crate::app::access::{
     ManagedAssignment, load_managed_assignment_on, load_managed_versioned_assignment,
-    load_managing_teacher, load_student,
+    load_managing_teacher, load_managing_teacher_on, load_student,
 };
-use crate::app::users::load_actor;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
@@ -118,12 +117,13 @@ impl AssignmentService {
     pub async fn create(&self, command: CreateAssignment) -> AppResult<Assignment> {
         let mut tx = self.pool.begin().await?;
 
-        let author = load_actor(&mut *tx, command.actor, "teacher").await?;
-
-        let teaching_course =
-            db::academic::find_teaching_course_by_id(&mut *tx, command.teaching_course_id)
-                .await?
-                .required("teaching course")?;
+        let (author, teaching_course) = load_managing_teacher_on(
+            &mut tx,
+            command.actor,
+            command.teaching_course_id,
+            "create assignment",
+        )
+        .await?;
 
         let assignment = Assignment::new(
             AssignmentId::new(),
