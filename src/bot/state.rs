@@ -10,7 +10,7 @@ use super::form::InputMode;
 use super::makeup_form::{MakeupForm, MakeupStep};
 use super::views::MenuAction;
 use crate::domain::{
-    AssignmentId, Grading, InviteGeneration, LatePenalty, ReviewDecision, ReviewScore,
+    AssignmentId, Grading, InviteGeneration, LatePenalty, MaxScore, ReviewDecision, ReviewScore,
     StoredFileId, StudentGroupId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::invites::VerifiedInvite;
@@ -43,13 +43,17 @@ pub(super) enum ActiveForm<'a> {
 
 impl BotState {
     pub(super) fn is_restarted_by(&self, action: ReplayableAction) -> bool {
-        matches!(
-            (self, action),
+        match (self, action) {
             (
                 Self::Flow(FlowState::AwaitingAssignmentTitle { course_id }),
                 ReplayableAction::StartAssignmentCreation(started),
-            ) if *course_id == started
-        )
+            ) => *course_id == started,
+            (
+                Self::Flow(FlowState::AwaitingSubmission { assignment_id, .. }),
+                ReplayableAction::StartSubmission(started),
+            ) => *assignment_id == started,
+            _ => false,
+        }
     }
 
     pub(super) fn is_managing_assignment(
@@ -157,6 +161,29 @@ impl BotState {
                 message_id: current,
                 deletion,
             }) if *current == message_id => Some(*deletion),
+            _ => None,
+        }
+    }
+
+    pub(super) fn review_decision_target(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Option<ReviewTarget> {
+        match self {
+            Self::Flow(FlowState::AwaitingReviewDecision {
+                submission_id: current,
+                target,
+            }) if *current == submission_id => Some(*target),
+            Self::Flow(FlowState::AwaitingReviewScore {
+                submission_id: current,
+                max_score,
+                late,
+            }) if *current == submission_id => Some(ReviewTarget::Regular {
+                grading: Grading::Score {
+                    max_score: *max_score,
+                },
+                late: *late,
+            }),
             _ => None,
         }
     }
@@ -434,7 +461,7 @@ pub(super) enum FlowState {
     },
     AwaitingReviewScore {
         submission_id: SubmissionId,
-        max_score: u16,
+        max_score: MaxScore,
         late: Option<LatePenalty>,
     },
     AwaitingReviewComment {

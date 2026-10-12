@@ -34,6 +34,7 @@ pub(crate) async fn handle_max_attempts(
     let Some(max_attempts) = chosen_amount(choice) else {
         return screen.ask(&texts::attempts_prompt(MAX_ATTEMPTS)).await;
     };
+    detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
     ask_grading(
         screen.chat(),
         DraftAssignment::new(text, groups, max_attempts),
@@ -229,7 +230,7 @@ pub(crate) async fn submit_title(step: TextStep<'_>, course_id: TeachingCourseId
     if !ensure_text_limit(
         bot,
         chat_id,
-        text,
+        &text,
         ASSIGNMENT_TITLE_MAX_LEN,
         texts::FIELD_TITLE,
     )
@@ -240,7 +241,7 @@ pub(crate) async fn submit_title(step: TextStep<'_>, course_id: TeachingCourseId
     dialogue
         .update(BotState::Flow(FlowState::AwaitingAssignmentBody {
             course_id,
-            title: text.to_owned(),
+            title: text.into_owned(),
         }))
         .await?;
     step.chat().ask(texts::ASSIGNMENT_BODY_PROMPT).await?;
@@ -267,7 +268,7 @@ pub(crate) async fn submit_body(
     let text = AssignmentText {
         course_id,
         title,
-        body: text.to_owned(),
+        body: text.into_owned(),
     };
     let Some(screen) = step.resolve().await? else {
         return Ok(());
@@ -296,7 +297,7 @@ pub(crate) async fn submit_max_attempts(
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
-    let Some(max_attempts) = parse_positive_attempts(text) else {
+    let Some(max_attempts) = parse_positive_attempts(&text) else {
         bot.send_message(chat_id, texts::attempts_prompt(MAX_ATTEMPTS))
             .await?;
         return Ok(());
@@ -323,7 +324,7 @@ pub(crate) async fn submit_grading_text(
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
-    let Some(grading) = parse_max_score(text) else {
+    let Some(grading) = parse_max_score(&text) else {
         bot.send_message(chat_id, texts::max_score_prompt(MAX_SCORE))
             .await?;
         return Ok(());

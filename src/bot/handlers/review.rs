@@ -19,7 +19,7 @@ use crate::bot::views::{
     review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
 };
 use crate::domain::{
-    DomainError, Grade, Grading, LatePenalty, ReviewDecision, ReviewScore, SubmissionId,
+    DomainError, Grade, Grading, LatePenalty, MaxScore, ReviewDecision, ReviewScore, SubmissionId,
     SubmissionKind, SubmissionStatus, TeachingCourseId, TelegramUserId, UserId,
 };
 use crate::pagination::PageRequest;
@@ -238,9 +238,10 @@ async fn send_previous_attempts(
 pub(super) async fn submit_score_text(
     step: TextStep<'_>,
     submission_id: SubmissionId,
-    max_score: u16,
+    max_score: MaxScore,
     late: Option<LatePenalty>,
 ) -> HandlerResult {
+    let max_score = max_score.get();
     let bot = step.bot();
     let message = step.message();
     let chat_id = step.chat_id();
@@ -248,7 +249,7 @@ pub(super) async fn submit_score_text(
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
-    let Some(score) = parse_score(text, max_score) else {
+    let Some(score) = parse_score(&text, max_score) else {
         bot.send_message(chat_id, texts::score_prompt(max_score))
             .await?;
         return Ok(());
@@ -289,7 +290,7 @@ pub(super) async fn submit_comment(
             actor: screen.actor(),
             decision,
             score,
-            comment: text.to_owned(),
+            comment: text.into_owned(),
             reviewed_at: Utc::now(),
         })
         .await;
@@ -506,16 +507,10 @@ pub(super) async fn handle_decision(
     decision: ReviewDecision,
     state: BotState,
 ) -> HandlerResult {
-    let BotState::Flow(FlowState::AwaitingReviewDecision {
-        submission_id,
-        target,
-    }) = state
-    else {
+    let Some(target) = state.review_decision_target(callback_submission_id) else {
         return screen.stale().await;
     };
-    if submission_id != callback_submission_id {
-        return screen.stale().await;
-    }
+    let submission_id = callback_submission_id;
     let chat = screen.chat();
     match (decision, target) {
         (
@@ -524,7 +519,7 @@ pub(super) async fn handle_decision(
                 grading: Grading::Score { max_score },
                 late,
             },
-        ) => ask_review_score(chat, submission_id, max_score.get(), late).await,
+        ) => ask_review_score(chat, submission_id, max_score, late).await,
         (_, ReviewTarget::Regular { .. }) => {
             ask_review_comment(chat, submission_id, decision, SubmissionKind::Regular, None).await
         }
@@ -555,16 +550,17 @@ async fn restart_with(screen: Screen<'_>, item: ReviewQueueItem, reason: &str) -
 async fn ask_review_score(
     chat: Chat<'_>,
     submission_id: SubmissionId,
-    max_score: u16,
+    scale: MaxScore,
     late: Option<LatePenalty>,
 ) -> HandlerResult {
     chat.dialogue()
         .update(BotState::Flow(FlowState::AwaitingReviewScore {
             submission_id,
-            max_score,
+            max_score: scale,
             late,
         }))
         .await?;
+    let max_score = scale.get();
     let question = texts::review_score_question(max_score, late);
     if max_score <= SCORE_BUTTONS_LIMIT {
         chat.bot()
@@ -658,6 +654,7 @@ pub(super) async fn handle_review_score(
     if submission_id != callback_submission_id {
         return screen.stale().await;
     }
+    let max_score = max_score.get();
     let score = match choice {
         AmountChoice::Preset(score) if score <= max_score => score,
         AmountChoice::Preset(_) | AmountChoice::Manual => {

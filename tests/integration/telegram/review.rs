@@ -1118,6 +1118,35 @@ async fn changing_the_decision_after_a_score_saves_a_rejection_without_a_score()
 }
 
 #[tokio::test]
+async fn the_reject_button_of_the_card_still_works_on_the_score_step() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let submission = submitted(&app, &assignment).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    let reject = telegram
+        .button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_REJECT_PREFIX, submission),
+        )
+        .await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, submission),
+        )
+        .await;
+
+    telegram.click(app.teacher(), &reject);
+    telegram.message(app.teacher(), "Нужны тесты");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(reviewed, Some(("rejected".to_owned(), None, None)));
+}
+
+#[tokio::test]
 async fn the_help_menu_item_keeps_the_score_buttons_working() {
     let app = TestApp::start().await;
     let assignment = app.add_scored_assignment(5).await;

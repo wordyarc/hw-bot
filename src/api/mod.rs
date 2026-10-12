@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer};
 use tracing::Level;
 
 use crate::app::ErrorCode;
@@ -119,7 +119,11 @@ fn with_transport_layers(router: Router, request_timeout: Duration) -> Router {
         ))
         .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT))
         .layer(axum::middleware::map_response(normalize_transport_error))
-        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
+        )
 }
 
 async fn normalize_transport_error(response: Response) -> Response {

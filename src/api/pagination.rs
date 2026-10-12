@@ -14,11 +14,11 @@ impl<S: Send + Sync> FromRequestParts<S> for Pagination {
         Query::<PageRequest>::from_request_parts(parts, state)
             .await
             .map(|Query(page)| Self(page))
-            .map_err(|_| {
+            .map_err(|rejection| {
                 ApiError::new(
                     StatusCode::BAD_REQUEST,
                     "invalid_query",
-                    "page must be an unsigned 32-bit integer",
+                    rejection.body_text(),
                 )
             })
     }

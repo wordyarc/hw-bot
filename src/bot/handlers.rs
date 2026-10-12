@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{CallbackQuery, ChatId, Message, MessageId, User};
+use teloxide::types::{CallbackQuery, ChatId, Message, MessageId, MessageKind, User};
 use teloxide::utils::command::BotCommands;
 
 use super::Bot;
@@ -217,7 +217,9 @@ pub(super) async fn handle_message(
     let chat_id = message.chat.id;
     let result = async {
         tracing::Span::current().record("action", "input");
-        if !message.chat.is_private() {
+        if !message.chat.is_private()
+            || !matches!(message.kind, MessageKind::Common(_) | MessageKind::Dice(_))
+        {
             return Ok(());
         }
 
@@ -327,11 +329,11 @@ pub(super) async fn handle_message(
                 teacher::submit_makeup_text(step, form).await?;
             }
             BotState::Flow(FlowState::AwaitingAttemptAmount {
+                message_id,
                 assignment_id,
                 student_id,
-                ..
             }) => {
-                teacher::submit_attempt_amount(step, assignment_id, student_id).await?;
+                teacher::submit_attempt_amount(step, message_id, assignment_id, student_id).await?;
             }
             state => {
                 if let Some(hint) = button_hint(&state) {

@@ -14,6 +14,8 @@ pub enum CriticalTask {
     NotificationWorker,
 }
 
+type TaskResult = Result<(CriticalTask, anyhow::Result<()>), tokio::task::JoinError>;
+
 pub struct Supervisor {
     tasks: JoinSet<(CriticalTask, anyhow::Result<()>)>,
     cancellation: CancellationToken,
@@ -51,7 +53,7 @@ impl Supervisor {
         S: Future<Output = anyhow::Result<()>> + Send,
         C: Future<Output = anyhow::Result<()>> + Send,
     {
-        let failure = tokio::select! {
+        let mut failure = tokio::select! {
             biased;
             signal = shutdown_signal => {
                 signal?;
@@ -64,14 +66,18 @@ impl Supervisor {
         self.cancellation.cancel();
 
         let stopped = tokio::time::timeout(self.shutdown_grace, async {
-            while self.tasks.join_next().await.is_some() {}
+            while let Some(result) = self.tasks.join_next().await {
+                record_failure(&mut failure, result);
+            }
             cleanup.await
         })
         .await;
         if stopped.is_err() {
             tracing::warn!("critical tasks did not stop within shutdown grace");
             self.tasks.abort_all();
-            while self.tasks.join_next().await.is_some() {}
+            while let Some(result) = self.tasks.join_next().await {
+                record_failure(&mut failure, result);
+            }
         }
         if let Ok(result) = stopped {
             result?;
@@ -84,9 +90,19 @@ impl Supervisor {
     }
 }
 
-fn unexpected_exit(
-    result: Option<Result<(CriticalTask, anyhow::Result<()>), tokio::task::JoinError>>,
-) -> anyhow::Error {
+fn record_failure(failure: &mut Option<anyhow::Error>, result: TaskResult) {
+    let error = match result {
+        Ok((_, Ok(()))) => return,
+        Err(error) if error.is_cancelled() => return,
+        result => unexpected_exit(Some(result)),
+    };
+    match failure {
+        Some(_) => tracing::error!(error = ?error, "critical task failed during shutdown"),
+        None => *failure = Some(error),
+    }
+}
+
+fn unexpected_exit(result: Option<TaskResult>) -> anyhow::Error {
     match result {
         Some(Ok((task, Ok(())))) => anyhow!("critical task {task:?} stopped unexpectedly"),
         Some(Ok((task, Err(error)))) => error.context(format!("critical task {task:?} failed")),
@@ -118,6 +134,26 @@ mod tests {
             .await
             .unwrap();
         assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn a_task_failing_during_shutdown_fails_the_process() {
+        let cancellation = CancellationToken::new();
+        let mut supervisor = Supervisor::new(
+            cancellation.clone(),
+            HealthState::new(false, false),
+            Duration::from_secs(1),
+        );
+        supervisor.spawn(CriticalTask::TelegramBot, async move {
+            cancellation.cancelled().await;
+            Err(anyhow!("invalid credentials"))
+        });
+
+        let error = supervisor
+            .run_with_cleanup(async { Ok(()) }, async { Ok(()) })
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("invalid credentials"));
     }
 
     #[tokio::test]

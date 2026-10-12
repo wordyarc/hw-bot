@@ -120,11 +120,11 @@ pub(super) async fn submit_name(
         bot.send_message(chat_id, texts::NAME_REQUIRED).await?;
         return Ok(());
     }
-    if !ensure_text_limit(bot, chat_id, text, DISPLAY_NAME_MAX_LEN, texts::FIELD_NAME).await? {
+    if !ensure_text_limit(bot, chat_id, &text, DISPLAY_NAME_MAX_LEN, texts::FIELD_NAME).await? {
         return Ok(());
     }
 
-    services
+    let registered = services
         .users
         .register_student(RegisterStudent {
             telegram_user_id,
@@ -133,7 +133,16 @@ pub(super) async fn submit_name(
             student_group_id: Some(group_id),
             registered_at: Utc::now(),
         })
-        .await?;
+        .await;
+    if let Err(error) = &registered
+        && matches!(
+            error.code(),
+            ErrorCode::InviteInvalid | ErrorCode::AlreadyRegistered
+        )
+    {
+        reset_dialogue(dialogue).await?;
+    }
+    registered?;
     reset_dialogue(dialogue).await?;
     bot.send_message(chat_id, texts::REGISTRATION_COMPLETE)
         .await?;

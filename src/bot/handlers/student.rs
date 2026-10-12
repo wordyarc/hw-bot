@@ -372,17 +372,10 @@ fn available(makeup: Option<MakeupOffer>) -> Option<MakeupOffer> {
     makeup.filter(|makeup| makeup.balance.remaining() > 0)
 }
 
-pub(super) async fn start_submission(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
+fn submission_offer(
+    item: &StudentAssignment,
     shown_at: DateTime<Utc>,
-) -> HandlerResult {
-    let details = screen
-        .services()
-        .assignments
-        .find_for_student(screen.actor(), assignment_id)
-        .await?;
-    let item = &details.assignment;
+) -> Result<Option<MakeupOffer>, AppError> {
     let makeup = available(item.makeup);
     if makeup.is_none()
         && let Err(refused) = item
@@ -393,8 +386,44 @@ pub(super) async fn start_submission(
             .makeup
             .and_then(|offered| offered.balance.ensure_available().err())
             .unwrap_or(refused);
-        return Err(AppError::from(reason).into());
+        return Err(reason.into());
     }
+    Ok(makeup)
+}
+
+pub(super) async fn start_submission(
+    screen: Screen<'_>,
+    assignment_id: AssignmentId,
+    shown_at: DateTime<Utc>,
+) -> HandlerResult {
+    let admitted = screen
+        .services()
+        .assignments
+        .find_for_student(screen.actor(), assignment_id)
+        .await
+        .and_then(|details| {
+            submission_offer(&details.assignment, shown_at).map(|makeup| (details, makeup))
+        });
+    let (details, makeup) = match admitted {
+        Ok(admitted) => admitted,
+        Err(error)
+            if matches!(
+                error.code(),
+                ErrorCode::InternalError | ErrorCode::Overloaded
+            ) =>
+        {
+            return Err(error.into());
+        }
+        Err(error) => {
+            screen
+                .bot()
+                .send_message(screen.chat_id(), app_error_message(error.code()))
+                .reply_markup(student_keyboard())
+                .await?;
+            return Ok(());
+        }
+    };
+    let item = &details.assignment;
     screen
         .dialogue()
         .update(BotState::Flow(FlowState::AwaitingSubmission {
@@ -432,7 +461,7 @@ pub(super) async fn submit_homework_text(
         .submit_homework(SubmitHomework {
             assignment_id,
             actor: screen.actor(),
-            content: text.to_owned(),
+            content: text.into_owned(),
             submitted_at: step.message().date,
             allow_makeup: makeup,
         })

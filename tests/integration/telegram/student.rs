@@ -226,6 +226,42 @@ async fn an_old_submit_button_names_why_the_work_cannot_be_submitted_instead_of_
 }
 
 #[tokio::test]
+async fn a_second_submit_tap_refused_after_the_prompt_brings_the_menu_back() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/tasks");
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
+        )
+        .await;
+    let submit = telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    app.archive_assignment(app.assignment(), app.teacher())
+        .await
+        .ok();
+    let before = telegram.messages(app.student()).len();
+    telegram.click(app.student(), &submit);
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let replies = &telegram.messages(app.student())[before..];
+    assert!(
+        replies
+            .iter()
+            .any(|message| message["reply_markup"]["keyboard"].is_array()),
+        "{replies:#?}"
+    );
+}
+
+#[tokio::test]
 async fn a_submission_refused_after_the_prompt_brings_the_menu_back() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;

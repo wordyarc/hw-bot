@@ -115,7 +115,7 @@ pub(super) async fn submit_comment(
             actor: screen.actor(),
             decision,
             cutoff,
-            comment: text.to_owned(),
+            comment: text.into_owned(),
             reviewed_at: Utc::now(),
         })
         .await?;

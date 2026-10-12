@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
 use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
@@ -60,7 +62,7 @@ pub(super) async fn render_input_result<F: FormScreen>(
 pub(super) async fn take_text<'a, F: FormScreen>(
     step: TextStep<'a>,
     mut form: F,
-) -> HandlerResult<Option<(Screen<'a>, F, &'a str)>> {
+) -> HandlerResult<Option<(Screen<'a>, F, Cow<'a, str>)>> {
     let Some(text) = require_text(step.bot(), step.message()).await? else {
         return Ok(None);
     };

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Datelike, FixedOffset, Months, Utc};
 use hw_bot::bot::{callbacks, texts};
-use hw_bot::domain::{DeductedFrom, LATEST_TERM_YEAR, StudentGroup};
+use hw_bot::domain::{DeductedFrom, LATEST_TERM_YEAR, MAX_PENALTY_PER_PERIOD, StudentGroup};
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
@@ -1717,4 +1717,159 @@ async fn a_stream_assignment_names_its_groups_on_the_card_and_in_the_attempts_li
         sent.iter().all(|text| !text.contains("Skipped")),
         "students of a group the assignment is not issued to are not listed: {sent:#?}"
     );
+}
+
+async fn open_attempts(app: &TestApp, telegram: &TelegramScenario, assignment: uuid::Uuid) {
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::MANAGE_PREFIX, assignment))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::ATTEMPTS_PREFIX, assignment))
+        .await;
+}
+
+fn has_live_buttons(telegram: &TelegramScenario, user: i64, message_id: i32) -> bool {
+    telegram
+        .messages(user)
+        .into_iter()
+        .find(|message| message["message_id"] == message_id)
+        .expect("the question was sent")
+        .get("reply_markup")
+        .is_some()
+}
+
+#[tokio::test]
+async fn an_assignment_without_students_does_not_ask_to_choose_one() {
+    let app = TestApp::start().await;
+    let empty = app.add_group_to_course(&app.fixture.course).await;
+    let course = app.reload_course(&app.fixture.course).await;
+    let assignment = wall_clock_assignment(&course, &app.fixture.teacher)
+        .title("Nobody yet")
+        .groups([&empty])
+        .published()
+        .build();
+    insert_assignment(&app.pool, &assignment).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_attempts(&app, &telegram, assignment.id().as_uuid()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent: Vec<_> = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .map(|message| message["text"].clone())
+        .collect();
+    assert!(sent.contains(&json!(texts::NO_STUDENTS)), "{sent:#?}");
+    assert!(
+        !sent.contains(&json!(texts::CHOOSE_STUDENT_PROMPT)),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_chosen_attempt_limit_leaves_no_live_buttons() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/courses");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
+        .await;
+    telegram.message(app.teacher(), "Chosen limit");
+    telegram.message(app.teacher(), "Send a pull request.");
+
+    let attempts = telegram
+        .click_button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
+        .await;
+    telegram
+        .button(app.teacher(), &cb(callbacks::GRADING_PREFIX, 5))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(!has_live_buttons(
+        &telegram,
+        app.teacher(),
+        attempts.message_id
+    ));
+}
+
+#[tokio::test]
+async fn granted_attempts_leave_no_live_amount_buttons() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_attempts(&app, &telegram, app.assignment()).await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(
+                callbacks::STUDENT_PREFIX,
+                app.fixture.student.id().as_uuid(),
+            ),
+        )
+        .await;
+
+    let amount = telegram
+        .click_button(app.teacher(), &cb(callbacks::EXTRA_ATTEMPTS_PREFIX, 1))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(!has_live_buttons(
+        &telegram,
+        app.teacher(),
+        amount.message_id
+    ));
+}
+
+#[tokio::test]
+async fn typed_attempts_leave_no_live_amount_buttons() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_attempts(&app, &telegram, app.assignment()).await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(
+                callbacks::STUDENT_PREFIX,
+                app.fixture.student.id().as_uuid(),
+            ),
+        )
+        .await;
+    let amount = telegram
+        .button(app.teacher(), &cb(callbacks::EXTRA_ATTEMPTS_PREFIX, 1))
+        .await;
+
+    telegram.message(app.teacher(), "1");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(!has_live_buttons(
+        &telegram,
+        app.teacher(),
+        amount.message_id
+    ));
+}
+
+#[tokio::test]
+async fn a_negative_number_on_a_terms_step_is_answered_with_the_range() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_penalty_step(&app, &telegram, "Negative penalty").await;
+
+    telegram.message(app.teacher(), "-1");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let requests = recorded_requests(&telegram.server).await;
+    assert!(requests.contains(&texts::number_prompt(MAX_PENALTY_PER_PERIOD)));
 }

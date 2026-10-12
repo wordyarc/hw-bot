@@ -13,7 +13,7 @@ use crate::bot::callbacks::{
 };
 use crate::bot::context::{Screen, TextStep};
 use crate::bot::form::InputMode;
-use crate::bot::handlers::input::parse_number;
+use crate::bot::handlers::input::parse_step_number;
 use crate::bot::makeup_form::{MakeupForm, MakeupInputError, MakeupStep};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
@@ -165,12 +165,12 @@ pub(crate) async fn submit_text(step: TextStep<'_>, form: MakeupForm) -> Handler
         return Ok(());
     };
     if form.step == MakeupStep::Date {
-        return match screen.timezone().parse_deadline(text) {
+        return match screen.timezone().parse_deadline(&text) {
             Some(until) => apply_date(screen, form, until).await,
             None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
         };
     }
-    let Some(value) = parse_number(text) else {
+    let Some(value) = parse_step_number(&text) else {
         return render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await;
     };
     let scored_scale = form

@@ -706,6 +706,46 @@ async fn a_link_rotated_between_the_group_and_the_name_does_not_register() {
 }
 
 #[tokio::test]
+async fn a_link_rotated_before_the_name_ends_the_name_step() {
+    let app = TestApp::start().await;
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let prompt = texts::input_prompt(&texts::registration_prompt(
+        app.fixture.subject.name().as_str(),
+        app.fixture.group.code().as_str(),
+    ));
+    wait_for_text(&telegram, guest, &prompt).await;
+    hw_bot::db::course_invites::rotate(
+        &app.pool,
+        app.fixture.course.id(),
+        hw_bot::domain::InviteGeneration::FIRST,
+    )
+    .await
+    .unwrap();
+    telegram.message(guest, "Ivan");
+    wait_for_text(
+        &telegram,
+        guest,
+        app_error_message(ErrorCode::InviteInvalid),
+    )
+    .await;
+    let before = telegram.messages(guest).len();
+    telegram.message(guest, "Ivan");
+    let reply = wait_for_some(Duration::from_secs(5), || async {
+        telegram.messages(guest).get(before).cloned()
+    })
+    .await
+    .expect("the second name is answered");
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(reply["text"], texts::GUEST_NEEDS_INVITE);
+}
+
+#[tokio::test]
 async fn the_link_screen_names_the_subject_and_every_group_of_the_course() {
     let app = TestApp::start().await;
     let second = app.add_group_to_course(&app.fixture.course).await;

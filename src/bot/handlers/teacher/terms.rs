@@ -17,7 +17,7 @@ use crate::bot::callbacks::{
 use crate::bot::context::{Screen, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::form::InputMode;
-use crate::bot::handlers::input::parse_number;
+use crate::bot::handlers::input::parse_step_number;
 use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::timezone::BotTimezone;
@@ -235,12 +235,12 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, form: TermsForm) -> Handler
     };
     match form.step {
         TermsStep::Deadline | TermsStep::DurationDate => {
-            match screen.timezone().parse_deadline(text) {
+            match screen.timezone().parse_deadline(&text) {
                 Some(at) => apply_date(screen, form, at).await,
                 None => render(screen.chat(), form, Some(texts::DATE_FORMAT)).await,
             }
         }
-        TermsStep::Makeup => match parse_number(text) {
+        TermsStep::Makeup => match parse_step_number(&text) {
             Some(value) => {
                 let result = MakeupTerms::scored(value, form.terms.grading())
                     .map_err(TermsInputError::Domain)
@@ -249,7 +249,7 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, form: TermsForm) -> Handler
             }
             None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
         },
-        _ => match parse_number(text) {
+        _ => match parse_step_number(&text) {
             Some(value) => apply_number(screen, form, value).await,
             None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
         },

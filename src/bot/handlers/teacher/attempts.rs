@@ -1,6 +1,7 @@
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
+use super::form::detach;
 use super::gradebook::show_student_grades_page;
 use crate::app::GrantExtraAttempts;
 use crate::bot::HandlerResult;
@@ -39,6 +40,9 @@ pub(crate) async fn show_students_page(
 
     if students.items.is_empty() {
         bot.send_message(chat_id, texts::NO_STUDENTS).await?;
+        if students.page == 0 {
+            return Ok(());
+        }
     } else {
         let entries = students.items.iter().map(|student| {
             let history = student.history;
@@ -140,7 +144,7 @@ pub(crate) async fn handle_extra_attempts(
     let Some(amount) = chosen_amount(choice) else {
         return screen.ask(&texts::attempts_prompt(MAX_ATTEMPTS)).await;
     };
-    grant_attempts(screen, assignment_id, student_id, amount).await
+    grant_attempts(screen, message_id, assignment_id, student_id, amount).await
 }
 
 pub(super) fn chosen_amount(choice: AmountChoice) -> Option<u16> {
@@ -152,6 +156,7 @@ pub(super) fn chosen_amount(choice: AmountChoice) -> Option<u16> {
 
 pub(super) async fn grant_attempts(
     screen: Screen<'_>,
+    message_id: MessageId,
     assignment_id: AssignmentId,
     student_id: UserId,
     amount: u16,
@@ -167,6 +172,7 @@ pub(super) async fn grant_attempts(
         })
         .await?;
     reset_dialogue(screen.dialogue()).await?;
+    detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
     screen
         .bot()
         .send_message(
@@ -181,6 +187,7 @@ pub(super) async fn grant_attempts(
 
 pub(crate) async fn submit_attempt_amount(
     step: TextStep<'_>,
+    message_id: MessageId,
     assignment_id: AssignmentId,
     student_id: UserId,
 ) -> HandlerResult {
@@ -191,7 +198,7 @@ pub(crate) async fn submit_attempt_amount(
     let Some(text) = require_text(bot, message).await? else {
         return Ok(());
     };
-    let Some(amount) = parse_positive_attempts(text) else {
+    let Some(amount) = parse_positive_attempts(&text) else {
         bot.send_message(chat_id, texts::attempts_prompt(MAX_ATTEMPTS))
             .await?;
         return Ok(());
@@ -199,7 +206,7 @@ pub(crate) async fn submit_attempt_amount(
     let Some(screen) = step.resolve().await? else {
         return Ok(());
     };
-    grant_attempts(screen, assignment_id, student_id, amount).await?;
+    grant_attempts(screen, message_id, assignment_id, student_id, amount).await?;
 
     Ok(())
 }

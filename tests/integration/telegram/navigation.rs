@@ -329,6 +329,95 @@ async fn a_mistyped_command_is_not_taken_as_the_text_of_a_submission() {
 }
 
 #[tokio::test]
+async fn a_link_hidden_behind_the_text_of_a_submission_is_kept() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram.message_with(
+        app.student(),
+        json!({
+            "text": "Мой PR готов",
+            "entities": [{
+                "type": "text_link",
+                "offset": 4,
+                "length": 2,
+                "url": "https://github.com/org/repo/pull/7"
+            }]
+        }),
+    );
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let contents: Vec<String> = sqlx::query_scalar("select content from submissions")
+        .fetch_all(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        matches!(contents.as_slice(), [content] if content.contains("https://github.com/org/repo/pull/7")),
+        "{contents:?}"
+    );
+}
+
+#[tokio::test]
+async fn tapping_submit_again_on_the_prompt_restarts_without_a_cancel_notice() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    open_submission_prompt(&app, &telegram).await;
+    telegram
+        .click_button(
+            app.student(),
+            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.messages(app.student());
+    assert!(
+        !sent
+            .iter()
+            .any(|message| message["text"] == texts::ACTION_CANCELLED),
+        "{sent:#?}"
+    );
+    let prompts = sent
+        .iter()
+        .filter(|message| message["text"] == texts::input_prompt(texts::SUBMISSION_PROMPT))
+        .count();
+    assert_eq!(prompts, 2);
+}
+
+#[tokio::test]
+async fn a_service_message_gets_no_answer() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message_with(
+        app.teacher(),
+        json!({
+            "pinned_message": {
+                "message_id": 7,
+                "date": 1,
+                "chat": { "id": app.teacher(), "type": "private" },
+                "text": "pinned"
+            }
+        }),
+    );
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent: Vec<_> = telegram
+        .messages(app.teacher())
+        .into_iter()
+        .map(|message| message["text"].clone())
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:#?}");
+}
+
+#[tokio::test]
 async fn an_unknown_command_outside_a_flow_does_not_offer_to_cancel() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
@@ -338,10 +427,9 @@ async fn an_unknown_command_outside_a_flow_does_not_offer_to_cancel() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let reply = telegram.messages(app.teacher())[0]["text"].clone();
-    assert!(
-        reply.as_str().is_some_and(|text| !text.contains("/cancel")),
-        "{reply}"
+    assert_eq!(
+        telegram.messages(app.teacher())[0]["text"],
+        texts::UNKNOWN_COMMAND
     );
 }
 
@@ -357,10 +445,9 @@ async fn an_unknown_command_inside_a_flow_offers_to_cancel() {
     telegram.flush(app.student()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let reply = telegram.messages(app.student())[before]["text"].clone();
-    assert!(
-        reply.as_str().is_some_and(|text| text.contains("/cancel")),
-        "{reply}"
+    assert_eq!(
+        telegram.messages(app.student())[before]["text"],
+        texts::UNKNOWN_COMMAND_IN_FLOW
     );
 }
 

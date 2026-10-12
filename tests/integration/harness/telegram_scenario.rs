@@ -178,6 +178,16 @@ impl TelegramScenario {
             .push(message_update(id, user, id as i32, text));
     }
 
+    pub fn message_with(&self, user: i64, fields: Value) {
+        let mut state = self.state.lock().unwrap();
+        let id = state.updates.len() as u32 + 1;
+        let mut update = message_update(id, user, id as i32, "");
+        let message = update["message"].as_object_mut().unwrap();
+        message.remove("text");
+        message.extend(fields.as_object().unwrap().clone());
+        state.updates.push(update);
+    }
+
     pub fn document(&self, user: i64, file_id: &str, filename: &str, size: usize) {
         let mut state = self.state.lock().unwrap();
         let id = state.updates.len() as u32 + 1;

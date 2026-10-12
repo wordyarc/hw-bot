@@ -1,4 +1,6 @@
-use teloxide::types::{ChatId, Message};
+use std::borrow::Cow;
+
+use teloxide::types::{ChatId, Message, MessageEntity, MessageEntityKind, MessageEntityRef};
 
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
@@ -23,13 +25,41 @@ pub(super) async fn ensure_text_limit(
 pub(super) async fn require_text<'a>(
     bot: &Bot,
     message: &'a Message,
-) -> HandlerResult<Option<&'a str>> {
+) -> HandlerResult<Option<Cow<'a, str>>> {
     let Some(text) = message.text() else {
         bot.send_message(message.chat.id, texts::TEXT_REQUIRED)
             .await?;
         return Ok(None);
     };
-    Ok(Some(text))
+    Ok(Some(reveal_links(
+        text,
+        message.entities().unwrap_or_default(),
+    )))
+}
+
+fn reveal_links<'a>(text: &'a str, entities: &[MessageEntity]) -> Cow<'a, str> {
+    let mut revealed = String::new();
+    let mut copied = 0;
+    for entity in MessageEntityRef::parse(text, entities) {
+        let MessageEntityKind::TextLink { url } = entity.kind() else {
+            continue;
+        };
+        if entity.start() < copied
+            || entity.text().trim_end_matches('/') == url.as_str().trim_end_matches('/')
+        {
+            continue;
+        }
+        revealed.push_str(&text[copied..entity.end()]);
+        revealed.push_str(" (");
+        revealed.push_str(url.as_str());
+        revealed.push(')');
+        copied = entity.end();
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    revealed.push_str(&text[copied..]);
+    Cow::Owned(revealed)
 }
 
 pub(super) fn parse_max_score(text: &str) -> Option<Grading> {
@@ -38,6 +68,21 @@ pub(super) fn parse_max_score(text: &str) -> Option<Grading> {
 
 pub(super) fn parse_number(text: &str) -> Option<u16> {
     parse_u16(text.trim())
+}
+
+pub(super) fn parse_step_number(text: &str) -> Option<u16> {
+    let text = text.trim();
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, text),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    if negative {
+        return Some(0);
+    }
+    Some(digits.parse().unwrap_or(u16::MAX))
 }
 
 pub(crate) fn parse_u16(value: &str) -> Option<u16> {
@@ -69,6 +114,63 @@ pub(super) fn looks_like_command(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn link(url: &str, offset: usize, length: usize) -> MessageEntity {
+        MessageEntity::text_link(url.parse().unwrap(), offset, length)
+    }
+
+    #[test]
+    fn a_hidden_link_is_written_out_after_its_text() {
+        let entities = [link("https://github.com/org/repo/pull/7", 4, 2)];
+
+        assert_eq!(
+            reveal_links("Мой PR готов", &entities),
+            "Мой PR (https://github.com/org/repo/pull/7) готов"
+        );
+    }
+
+    #[test]
+    fn link_offsets_are_counted_in_utf16_units() {
+        let entities = [
+            link("https://example.test/a", 3, 1),
+            link("https://example.test/b", 7, 1),
+        ];
+
+        assert_eq!(
+            reveal_links("🙂 a и b", &entities),
+            "🙂 a (https://example.test/a) и b (https://example.test/b)"
+        );
+    }
+
+    #[test]
+    fn a_link_that_shows_its_own_address_is_not_repeated() {
+        let entities = [link("https://example.test", 0, 20)];
+
+        assert!(matches!(
+            reveal_links("https://example.test", &entities),
+            Cow::Borrowed("https://example.test")
+        ));
+    }
+
+    #[test]
+    fn text_without_hidden_links_is_kept_as_is() {
+        let entities = [MessageEntity::bold(0, 3)];
+
+        assert!(matches!(
+            reveal_links("Мой PR", &entities),
+            Cow::Borrowed("Мой PR")
+        ));
+    }
+
+    #[test]
+    fn an_integer_outside_u16_stays_outside_every_step_range() {
+        assert_eq!(parse_step_number(" 7 "), Some(7));
+        assert_eq!(parse_step_number("-1"), Some(0));
+        assert_eq!(parse_step_number("70000"), Some(u16::MAX));
+        for text in ["", "-", "+5", "1.5", "семь", "- 1"] {
+            assert_eq!(parse_step_number(text), None, "{text}");
+        }
+    }
 
     #[test]
     fn attempt_input_uses_strict_format_and_limits() {

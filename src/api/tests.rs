@@ -146,6 +146,22 @@ async fn malformed_typed_path_uses_the_error_envelope() {
 }
 
 #[tokio::test]
+async fn an_unknown_query_parameter_is_named_in_the_error() {
+    let router = Router::new().route(
+        "/",
+        get(|pagination::Pagination(_): pagination::Pagination| async {}),
+    );
+    let response = router
+        .oneshot(Request::get("/?pgae=1").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    let body = assert_error(response, StatusCode::BAD_REQUEST, "invalid_query").await;
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("pgae"), "{message}");
+}
+
+#[tokio::test]
 async fn invalid_pagination_uses_the_error_envelope() {
     let router = Router::new().route(
         "/",
@@ -276,31 +292,66 @@ async fn streamed_body_over_the_limit_keeps_the_transport_error_code() {
     .await;
 }
 
+#[derive(Clone, Default)]
+struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogBuffer {
+    fn capture(&self) -> tracing::subscriber::DefaultGuard {
+        let writer = self.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_env_filter("hw_bot=info,tower_http=info")
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    fn events(&self) -> Vec<Value> {
+        serde_json::Deserializer::from_slice(&self.0.lock().unwrap())
+            .into_iter::<Value>()
+            .map(Result::unwrap)
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn the_transport_layer_reports_a_server_error_as_a_warning() {
+    let buffer = LogBuffer::default();
+    let _logs = buffer.capture();
+    let router = with_transport_layers(
+        Router::new().route("/down", get(|| async { StatusCode::SERVICE_UNAVAILABLE })),
+        Duration::from_secs(1),
+    );
+
+    router
+        .oneshot(Request::get("/down").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    let levels: Vec<_> = buffer
+        .events()
+        .into_iter()
+        .filter(|event| event["fields"]["message"] == "response failed")
+        .map(|event| event["level"].clone())
+        .collect();
+    assert_eq!(levels, ["WARN"]);
+}
+
 #[tokio::test]
 async fn a_request_timeout_is_logged_with_its_endpoint() {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Clone)]
-    struct Writer(Arc<Mutex<Vec<u8>>>);
-    impl Write for Writer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let buffer = Writer(Arc::default());
-    let writer = buffer.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .without_time()
-        .with_env_filter("hw_bot=info,tower_http=info")
-        .with_writer(move || writer.clone())
-        .finish();
-    let _logs = tracing::subscriber::set_default(subscriber);
+    let buffer = LogBuffer::default();
+    let _logs = buffer.capture();
     let router = with_transport_layers(
         Router::new().route(
             "/slow",
@@ -315,10 +366,9 @@ async fn a_request_timeout_is_logged_with_its_endpoint() {
         .unwrap();
 
     assert_error(response, StatusCode::REQUEST_TIMEOUT, "request_timeout").await;
-    let bytes = buffer.0.lock().unwrap();
-    let event = serde_json::Deserializer::from_slice(&bytes)
-        .into_iter::<Value>()
-        .map(Result::unwrap)
+    let event = buffer
+        .events()
+        .into_iter()
         .find(|event| event["fields"]["kind"] == "request_timeout")
         .expect("the timeout is logged");
     assert_eq!(event["span"]["method"], "GET", "{event}");
