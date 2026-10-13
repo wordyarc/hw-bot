@@ -1,18 +1,19 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use hw_bot::bot::{TelegramBot, TelegramBotError, callbacks, texts};
+use hw_bot::bot::{Clock, TelegramBot, TelegramBotError, callbacks, texts};
 use hw_bot::domain::FilePresentation;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::supervision::{CriticalTask, Supervisor};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_partial_json, method, path};
-use wiremock::{Mock, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use hw_bot::app::{AddAssignmentFile, ErrorCode};
 use hw_bot::bot::app_error_message;
 
+use super::flows::{manage_assignment, open_assignment, open_course, open_submission_prompt};
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{Button, TelegramScenario};
@@ -52,29 +53,19 @@ fn offers_submission(telegram: &TelegramScenario, user: i64) -> bool {
     })
 }
 
-async fn open_assignment(app: &TestApp, telegram: &TelegramScenario) {
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-}
-
 #[tokio::test]
 async fn the_submit_button_returns_only_after_the_pending_work_is_rejected() {
     let app = TestApp::start().await;
     let pending = app.queued_submission(app.student(), "pull/first").await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_assignment(&app, &telegram).await;
+    open_assignment(&app, &telegram, app.assignment()).await;
     assert!(!offers_submission(&telegram, app.student()));
 
     app.review(pending, app.teacher(), "reject", "Retry")
         .await
         .ok();
-    open_assignment(&app, &telegram).await;
+    open_assignment(&app, &telegram, app.assignment()).await;
     telegram
         .click_button(
             app.student(),
@@ -96,13 +87,7 @@ async fn a_refused_submission_closes_the_input_step() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_assignment(&app, &telegram).await;
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await;
+    open_submission_prompt(&app, &telegram).await;
     // Шаг ввода уже открыт. Имитируем сдачу с другого устройства, чтобы следующая получила доменный отказ.
     app.queued_submission(app.student(), "pull/first").await;
     telegram.message(app.student(), "pull/retry");
@@ -122,13 +107,6 @@ async fn a_refused_submission_closes_the_input_step() {
         .await
         .unwrap();
     assert_eq!(stored, 1);
-}
-
-async fn open_course(app: &TestApp, telegram: &TelegramScenario) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
 }
 
 async fn fail_next(telegram: &TelegramScenario, endpoint: &str) {
@@ -196,13 +174,7 @@ async fn failed_terms_transition_keeps_grading_choice_retryable() {
 }
 
 async fn open_terms(app: &TestApp, telegram: &TelegramScenario) -> Button {
-    open_course(app, telegram).await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        )
-        .await;
+    manage_assignment(app, telegram, app.assignment()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -277,8 +249,10 @@ async fn unavailable_terms_screen_is_replaced_without_losing_input() {
 }
 
 fn preset_deadline(days: u64) -> DateTime<Utc> {
-    let timezone = bot_timezone();
-    timezone.end_of(timezone.in_days(days).unwrap()).unwrap()
+    let timezone = vladivostok();
+    timezone
+        .end_of(timezone.in_days(Utc::now(), days).unwrap())
+        .unwrap()
 }
 
 #[tokio::test]
@@ -360,6 +334,7 @@ async fn already_removed_markup_does_not_block_manual_deadline_input() {
             "ok": false, "error_code": 400,
             "description": teloxide::ApiError::MessageNotModified.to_string(),
         })))
+        .expect(1)
         .with_priority(1)
         .mount(&telegram.server)
         .await;
@@ -443,7 +418,7 @@ async fn failed_attachment_delivery_keeps_actions_and_can_be_retried() {
         .mount(&telegram.server)
         .await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_assignment(&app, &telegram).await;
+    open_assignment(&app, &telegram, app.assignment()).await;
     assert!(offers_submission(&telegram, app.student()));
     assert!(
         telegram
@@ -512,7 +487,7 @@ async fn attachment_timeout_keeps_submission_available() {
             settings.file_transfer_timeout = Duration::from_millis(250);
         }),
     );
-    open_assignment(&app, &telegram).await;
+    open_assignment(&app, &telegram, app.assignment()).await;
     assert!(offers_submission(&telegram, app.student()));
     assert!(
         telegram
@@ -536,39 +511,14 @@ async fn attachment_timeout_keeps_submission_available() {
     assert_eq!(count, 1);
 }
 
-#[tokio::test]
-async fn invalid_credentials_stop_the_bot_without_cancelling_the_other_components() {
-    let app = TestApp::start().await;
-    add_assignment_document(&app).await;
-    let telegram = telegram_server(vec![callback_update(
-        1,
-        app.student(),
-        &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        BOT_MESSAGE_ID,
-    )])
-    .await;
-    Mock::given(method("POST"))
-        .and(path("/bottest-token/SendDocument"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
-            "ok": false, "error_code": 401, "description": "Unauthorized",
-        })))
-        .mount(&telegram)
-        .await;
-    let (cancellation, task) = start_bot(&app, &telegram);
-
-    let result = tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert!(matches!(result, Err(TelegramBotError::InvalidCredentials)));
-    assert!(!cancellation.is_cancelled());
+struct RejectedDelivery {
+    cancellation: CancellationToken,
+    result: Result<(), TelegramBotError>,
+    telegram: MockServer,
 }
 
-#[tokio::test]
-async fn invalid_credentials_during_attachment_delivery_stop_the_bot() {
-    let app = TestApp::start().await;
-    add_assignment_document(&app).await;
+async fn deliver_an_attachment_with_rejected_credentials(app: &TestApp) -> RejectedDelivery {
+    add_assignment_document(app).await;
     let telegram = telegram_server(vec![callback_update(
         1,
         app.student(),
@@ -584,14 +534,43 @@ async fn invalid_credentials_during_attachment_delivery_stop_the_bot() {
         .expect(1)
         .mount(&telegram)
         .await;
-    let (_, task) = start_bot(&app, &telegram);
+    let (cancellation, task) = start_bot(app, &telegram);
     let result = tokio::time::timeout(Duration::from_secs(5), task)
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(result, Err(TelegramBotError::InvalidCredentials)));
+    RejectedDelivery {
+        cancellation,
+        result,
+        telegram,
+    }
+}
+
+#[tokio::test]
+async fn invalid_credentials_stop_the_bot_without_cancelling_the_other_components() {
+    let app = TestApp::start().await;
+
+    let delivery = deliver_an_attachment_with_rejected_credentials(&app).await;
+
+    assert!(matches!(
+        delivery.result,
+        Err(TelegramBotError::InvalidCredentials)
+    ));
+    assert!(!delivery.cancellation.is_cancelled());
+}
+
+#[tokio::test]
+async fn invalid_credentials_during_attachment_delivery_are_not_reported_as_a_failed_delivery() {
+    let app = TestApp::start().await;
+
+    let delivery = deliver_an_attachment_with_rejected_credentials(&app).await;
+
+    assert!(matches!(
+        delivery.result,
+        Err(TelegramBotError::InvalidCredentials)
+    ));
     assert!(
-        !recorded_requests(&telegram)
+        !recorded_requests(&delivery.telegram)
             .await
             .contains(texts::ASSIGNMENT_FILES_SEND_FAILED)
     );
@@ -641,13 +620,7 @@ async fn failed_confirmation_does_not_grant_attempts_twice() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_course(&app, &telegram).await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        )
-        .await;
+    manage_assignment(&app, &telegram, app.assignment()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -697,13 +670,7 @@ async fn an_acknowledgement_failure_does_not_discard_a_valid_action() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_course(&app, &telegram).await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        )
-        .await;
+    manage_assignment(&app, &telegram, app.assignment()).await;
     let archive = telegram
         .button(
             app.teacher(),
@@ -727,13 +694,7 @@ async fn reopening_a_screen_invalidates_the_actual_previous_message() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_course(&app, &telegram).await;
-    let manage = telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        )
-        .await;
+    let manage = manage_assignment(&app, &telegram, app.assignment()).await;
     let old = telegram
         .button(
             app.teacher(),
@@ -771,7 +732,8 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         "test-token",
         &telegram.server.uri(),
         bot_settings_with(|settings| settings.request_timeout = Duration::from_secs(30)),
-        bot_timezone(),
+        vladivostok(),
+        Clock::system(),
         crate::harness::invite_codec(),
     )
     .unwrap();
@@ -797,19 +759,7 @@ async fn forced_shutdown_stops_active_handlers_and_queued_mutations() {
         },
         async { Ok(()) },
     ));
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await;
+    open_submission_prompt(&app, &telegram).await;
     telegram.flush(app.student()).await;
     let before = sent_message_count(&telegram.server).await;
     let gate = gate_sent_messages(&telegram.server, 1).await;

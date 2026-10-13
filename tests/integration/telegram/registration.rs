@@ -2,10 +2,12 @@ use std::time::Duration;
 
 use hw_bot::app::ErrorCode;
 use hw_bot::bot::{app_error_message, callbacks, texts};
+use hw_bot::domain::DISPLAY_NAME_MAX_LEN;
 use serde_json::json;
 use wiremock::Mock;
-use wiremock::matchers::{body_json, body_partial_json, body_string_contains, method, path};
+use wiremock::matchers::{body_json, body_partial_json, method, path};
 
+use super::flows::open_course;
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
@@ -17,14 +19,15 @@ async fn telegram_rejects_oversized_input_before_registration() {
     let token = app.course_invite_token().await;
     let updates = vec![
         message_update(1, user_id, 1, &format!("/start {token}")),
-        message_update(2, user_id, 2, &"я".repeat(101)),
+        message_update(2, user_id, 2, &"я".repeat(DISPLAY_NAME_MAX_LEN + 1)),
     ];
     let telegram = telegram_server(updates).await;
     let rejected = Mock::given(method("POST"))
         .and(path("/bottest-token/SendMessage"))
-        // Проверяем предел 100 на вводе из 101 символа; текст пояснения может меняться.
-        .and(body_partial_json(json!({ "chat_id": user_id })))
-        .and(body_string_contains("100"))
+        .and(body_partial_json(json!({
+            "chat_id": user_id,
+            "text": texts::text_too_long(texts::FIELD_NAME, DISPLAY_NAME_MAX_LEN),
+        })))
         .respond_with(telegram_message_response())
         .expect(1)
         .with_priority(1)
@@ -354,6 +357,41 @@ async fn a_stale_confirm_button_does_not_rotate_twice() {
 }
 
 #[tokio::test]
+async fn a_confirmation_tapped_after_cancelling_the_rotation_is_stale() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_course(&app, &telegram).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::INVITE_PREFIX, app.course()))
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::INVITE_ROTATE)
+        .await;
+    let confirm = telegram
+        .button(app.teacher(), callbacks::INVITE_CONFIRM_ROTATE)
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::INVITE_CANCEL_ROTATE)
+        .await;
+
+    telegram.click(app.teacher(), &confirm);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::STALE_BUTTON.to_owned())
+    );
+    let generation: i64 = sqlx::query_scalar("select generation from teaching_course_invites")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(generation, 1);
+}
+
+#[tokio::test]
 async fn every_guest_entry_explains_access_and_removes_the_work_keyboard() {
     let app = TestApp::start().await;
     let guest = app.next_telegram_id();
@@ -595,17 +633,14 @@ async fn a_link_of_a_course_of_several_groups_asks_for_the_group_before_the_name
             &cb(callbacks::REGISTRATION_GROUP_PREFIX, second.id().as_uuid()),
         )
         .await;
-    let offered: Vec<String> = telegram
-        .messages(guest)
-        .into_iter()
-        .find(|message| message["message_id"] == choice.message_id)
-        .unwrap()["reply_markup"]["inline_keyboard"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|row| row.as_array().unwrap())
-        .map(|button| button["text"].as_str().unwrap().to_owned())
-        .collect();
+    let offered: Vec<String> =
+        telegram.message_by_id(guest, choice.message_id)["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row.as_array().unwrap())
+            .map(|button| button["text"].as_str().unwrap().to_owned())
+            .collect();
     telegram.click(guest, &choice);
     let prompt = texts::input_prompt(&texts::registration_prompt(
         app.fixture.subject.name().as_str(),
@@ -622,11 +657,7 @@ async fn a_link_of_a_course_of_several_groups_asks_for_the_group_before_the_name
     ];
     expected.sort_unstable();
     assert_eq!(offered, expected);
-    let choice_message = telegram
-        .messages(guest)
-        .into_iter()
-        .find(|message| message["message_id"] == choice.message_id)
-        .unwrap();
+    let choice_message = telegram.message_by_id(guest, choice.message_id);
     assert!(
         choice_message["reply_markup"].is_null(),
         "the group buttons are removed after the choice"
@@ -747,10 +778,7 @@ async fn the_link_screen_names_the_subject_and_every_group_of_the_course() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::INVITE_PREFIX, app.course()))
         .await;

@@ -1,11 +1,11 @@
 use std::future::Future;
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
+use chrono::{DateTime, TimeDelta, Utc};
 use hw_bot::app::ApplicationContainer;
-use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings, callbacks};
+use hw_bot::bot::{Clock, TelegramBot, TelegramBotSettings, callbacks};
 use hw_bot::health::{CriticalComponent, HealthState};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -16,6 +16,8 @@ use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::harness::{ResponseGate, TestApp};
+
+pub(crate) use hw_bot::test_support::{VLADIVOSTOK, vladivostok};
 
 const POLL_STEP: Duration = Duration::from_millis(10);
 
@@ -108,10 +110,38 @@ pub(crate) fn start_bot_with_settings(
     start_bot_with_application(telegram, app.application.clone(), settings)
 }
 
+pub(crate) fn start_bot_with_clock(
+    app: &TestApp,
+    telegram: &MockServer,
+    clock: Clock,
+) -> (
+    CancellationToken,
+    JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
+) {
+    start_bot_with(
+        telegram,
+        app.application.clone(),
+        bot_settings_with(|_| {}),
+        clock,
+    )
+}
+
 pub(crate) fn start_bot_with_application(
     telegram: &MockServer,
     application: ApplicationContainer,
     settings: TelegramBotSettings,
+) -> (
+    CancellationToken,
+    JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
+) {
+    start_bot_with(telegram, application, settings, Clock::system())
+}
+
+fn start_bot_with(
+    telegram: &MockServer,
+    application: ApplicationContainer,
+    settings: TelegramBotSettings,
+    clock: Clock,
 ) -> (
     CancellationToken,
     JoinHandle<Result<(), hw_bot::bot::TelegramBotError>>,
@@ -121,7 +151,8 @@ pub(crate) fn start_bot_with_application(
         "test-token",
         &telegram.uri(),
         settings,
-        bot_timezone(),
+        vladivostok(),
+        clock,
         crate::harness::invite_codec(),
     )
     .unwrap();
@@ -162,21 +193,31 @@ pub(crate) fn file_upload_updates(app: &TestApp, assignment: Uuid, file: Value) 
     ]
 }
 
-pub(crate) const TIMEZONE: Tz = Tz::Asia__Vladivostok;
+#[derive(Clone, Default)]
+pub(crate) struct TestClock {
+    shift: Arc<Mutex<TimeDelta>>,
+}
 
-pub(crate) fn bot_timezone() -> BotTimezone {
-    BotTimezone::new(TIMEZONE)
+impl TestClock {
+    pub(crate) fn clock(&self) -> Clock {
+        let shift = self.shift.clone();
+        Clock::new(move || Utc::now() + *shift.lock().unwrap())
+    }
+
+    pub(crate) fn move_to(&self, at: DateTime<Utc>) {
+        *self.shift.lock().unwrap() = at - Utc::now();
+    }
 }
 
 pub(crate) fn deadline_input(deadline: DateTime<Utc>) -> String {
     deadline
-        .with_timezone(&TIMEZONE)
+        .with_timezone(&VLADIVOSTOK)
         .format("%d.%m.%Y %H:%M")
         .to_string()
 }
 
 pub(crate) fn expected_deadline(input: &str) -> DateTime<Utc> {
-    bot_timezone()
+    vladivostok()
         .parse_deadline(input)
         .unwrap_or_else(|| panic!("{input} is a valid deadline"))
 }

@@ -111,16 +111,21 @@ async fn a_claimed_notification_names_the_scale_and_deduction_in_force_at_review
     app.review_with_score(submission, app.teacher(), "accept", out_of(8, 10), "Ок")
         .await
         .ok();
-    app.post_as(
-        &format!("/assignments/{}/grading", assignment.id().as_uuid()),
-        app.teacher(),
-        json!({
-            "max_score": 20, "late_period_days": 7, "late_penalty_per_period": 1, "late_max_periods": 4,
-            "late_deducted_from": "work_score",
-        }),
-    )
-    .await
-    .ok();
+    let changed = app
+        .post_as(
+            &format!("/assignments/{}/grading", assignment.id().as_uuid()),
+            app.teacher(),
+            json!({
+                "max_score": 20, "late_period_days": 7, "late_penalty_per_period": 1, "late_max_periods": 4,
+                "late_deducted_from": "work_score",
+            }),
+        )
+        .await
+        .ok();
+    assert_eq!(
+        (&changed["max_score"], &changed["late_deducted_from"]),
+        (&json!(20), &json!("work_score"))
+    );
     let now = Utc::now();
 
     let notification =

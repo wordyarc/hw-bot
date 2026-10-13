@@ -107,14 +107,8 @@ async fn the_queue_spans_every_course_of_the_same_teachers() {
 
     assert_eq!(alone[0].total, 1, "a foreign teacher reviews their own");
 
-    sqlx::query(
-        "insert into teaching_course_teachers (teaching_course_id, teacher_id) values ($1, $2)",
-    )
-    .bind(foreign.course.id().as_uuid())
-    .bind(app.fixture.teacher.id().as_uuid())
-    .execute(&app.pool)
-    .await
-    .expect("the fixture teacher joins the foreign course");
+    app.attach_course_teacher(&foreign.course, &app.fixture.teacher)
+        .await;
 
     let shared = app
         .application
@@ -183,11 +177,7 @@ async fn a_sandbox_submission_is_placed_among_sandbox_submissions_only() {
 #[tokio::test]
 async fn a_course_without_a_reviewer_reports_no_position() {
     let app = TestApp::start().await;
-    sqlx::query("delete from teaching_course_teachers where teaching_course_id = $1")
-        .bind(app.fixture.course.id().as_uuid())
-        .execute(&app.pool)
-        .await
-        .expect("detach every teacher");
+    app.remove_course_teacher(&app.fixture.teacher).await;
     submit(&app, &app.fixture.assignment, &app.fixture.student, 1).await;
 
     let places = app

@@ -1,16 +1,18 @@
 use std::time::Duration;
 
-use hw_bot::bot::{callbacks, texts};
+use hw_bot::app::ErrorCode;
+use hw_bot::bot::{app_error_message, callbacks, texts};
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_partial_json, method, path};
 
+use super::flows::{manage_assignment, open_course, open_submission_prompt};
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
 
 #[tokio::test]
-async fn help_command_resolves_the_registered_role_and_sends_its_commands() {
+async fn help_command_answers_with_the_help_of_the_registered_role() {
     let app = TestApp::start().await;
     let telegram = telegram_server(vec![message_update(1, app.teacher(), 1, "/help")]).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
@@ -24,12 +26,7 @@ async fn help_command_resolves_the_registered_role_and_sends_its_commands() {
     let body: serde_json::Value = sent.body_json().unwrap();
     let text = body["text"].as_str().unwrap();
     assert_eq!(body["chat_id"], app.teacher());
-    assert!(text.contains("/review"), "{text}");
-    assert!(!text.contains("/tasks"), "{text}");
-    assert!(
-        !text.contains("/start"),
-        "help must not silently fall back to guest: {text}"
-    );
+    assert!(text.starts_with(&texts::teacher_help()), "{text}");
 }
 
 #[tokio::test]
@@ -115,7 +112,7 @@ async fn the_first_start_in_a_fresh_chat_answers_with_the_menu() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_partial_json(json!({
             "chat_id": app.student(),
-            "text": texts::home_greeting("Student")
+            "text": texts::home_greeting(app.fixture.student.display_name().as_str())
         })))
         .and(|request: &wiremock::Request| has_reply_button(request, texts::BUTTON_ASSIGNMENTS))
         .respond_with(telegram_message_response())
@@ -138,10 +135,7 @@ async fn navigation_from_an_older_message_still_opens_the_screen() {
     let assignment = app.assignment();
     let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    let course = telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    let course = open_course(&app, &telegram).await;
     let manage = telegram
         .click_button(app.teacher(), &cb(callbacks::MANAGE_PREFIX, assignment))
         .await;
@@ -223,10 +217,7 @@ async fn the_roster_button_of_the_subject_screen_lists_the_students_of_every_gro
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
     let roster = telegram
         .button_with_text(app.teacher(), texts::BUTTON_ROSTER)
         .await;
@@ -240,11 +231,7 @@ async fn the_roster_button_of_the_subject_screen_lists_the_students_of_every_gro
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    let message = telegram
-        .messages(app.teacher())
-        .into_iter()
-        .find(|message| message["message_id"] == screen.message_id)
-        .expect("the roster screen was sent");
+    let message = telegram.message_by_id(app.teacher(), screen.message_id);
     let text = message["text"].as_str().unwrap();
     for student in [&app.fixture.student, &classmate] {
         assert!(text.contains(student.display_name().as_str()), "{text}");
@@ -264,22 +251,6 @@ async fn the_roster_button_of_the_subject_screen_lists_the_students_of_every_gro
             cb(callbacks::COURSE_PREFIX, app.course()),
         ]
     );
-}
-
-async fn open_submission_prompt(app: &TestApp, telegram: &TelegramScenario) {
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await;
 }
 
 fn menu_returned_after_the_prompt(telegram: &TelegramScenario, user: i64) -> bool {
@@ -478,16 +449,7 @@ async fn the_teacher_card_names_the_moment_of_publication_rather_than_a_deadline
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        )
-        .await;
+    manage_assignment(&app, &telegram, app.assignment()).await;
     stop_bot(cancellation, &mut task).await;
 
     let published_at = app
@@ -495,13 +457,86 @@ async fn the_teacher_card_names_the_moment_of_publication_rather_than_a_deadline
         .assignment
         .published_at()
         .expect("the fixture assignment is published");
-    let line = texts::published_line(&bot_timezone().format_moment(published_at));
+    let line = texts::published_line(&vladivostok().format_moment(published_at));
     let sent: Vec<String> = telegram
         .messages(app.teacher())
         .iter()
         .filter_map(|message| message["text"].as_str().map(str::to_owned))
         .collect();
     assert!(sent.iter().any(|text| text.contains(&line)), "{sent:#?}");
+}
+
+fn student_profile(app: &TestApp, telegram: &TelegramScenario) -> Option<String> {
+    let header = texts::profile_header(
+        app.fixture.student.display_name().as_str(),
+        texts::role_name(app.fixture.student.role()),
+    );
+    telegram
+        .texts(app.student())
+        .into_iter()
+        .find(|text| text.starts_with(&header))
+}
+
+#[tokio::test]
+async fn the_profile_command_names_the_group_and_counts_the_active_assignments() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/profile");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let profile = student_profile(&app, &telegram).expect("the profile is shown");
+    assert!(
+        profile.contains(&texts::profile_group(app.fixture.group.code().as_str())),
+        "{profile}"
+    );
+    assert!(
+        profile.contains(&texts::profile_active_assignments(1)),
+        "{profile}"
+    );
+}
+
+#[tokio::test]
+async fn the_profile_button_of_the_menu_opens_the_profile() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/queue");
+    telegram
+        .click_button(app.student(), callbacks::MENU_PROFILE)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        student_profile(&app, &telegram).is_some(),
+        "{:#?}",
+        telegram.texts(app.student())
+    );
+}
+
+#[tokio::test]
+async fn a_profile_whose_statistics_cannot_be_read_is_still_shown() {
+    let app = TestApp::start().await;
+    sqlx::query("alter table submissions rename to submissions_unavailable")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/profile");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.student());
+    assert!(student_profile(&app, &telegram).is_some(), "{sent:#?}");
+    assert!(
+        !sent.contains(&app_error_message(ErrorCode::InternalError).to_owned()),
+        "{sent:#?}"
+    );
 }
 
 fn group_message_update(update_id: u32, user_id: i64, text: &str) -> serde_json::Value {

@@ -336,7 +336,7 @@ async fn run_menu_action(
     let Some(target) = menu_target(action) else {
         return send_help(chat, telegram_user_id).await;
     };
-    replay(chat, telegram_user_id, target, Utc::now()).await
+    replay(chat, telegram_user_id, target, chat.now()).await
 }
 
 async fn replay(
@@ -927,7 +927,7 @@ mod tests {
             terms_keyboard(&terms, &terms.complete().unwrap(), &timezone),
             terms_exit_keyboard(),
             review_score_keyboard(SubmissionId::new(), 10),
-            deadline_options_keyboard(&timezone),
+            deadline_options_keyboard(&timezone, crate::test_support::t0()),
             calendar_keyboard(today, today),
             assignment_files_keyboard(&assignment, &[file], true, true),
             assignment_files_keyboard(&assignment, &[], true, false),

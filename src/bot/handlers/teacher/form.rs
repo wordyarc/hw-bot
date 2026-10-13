@@ -34,7 +34,7 @@ pub(super) async fn render<F: FormScreen>(
     mut form: F,
     error: Option<&str>,
 ) -> HandlerResult {
-    let Some((mut text, keyboard)) = form.view(chat.timezone(), Utc::now()) else {
+    let Some((mut text, keyboard)) = form.view(chat.timezone(), chat.now()) else {
         return discard(chat, form).await;
     };
     if let Some(error) = error {
@@ -122,7 +122,7 @@ pub(super) async fn handle_date<F: FormScreen>(
     action: DeadlineAction,
     calendar_from: NaiveDate,
 ) -> HandlerResult {
-    match choose_date(action, screen.timezone(), calendar_from) {
+    match choose_date(action, screen.timezone(), screen.now(), calendar_from) {
         DateChoice::Mode(mode) => {
             form.set_mode(mode);
             render(screen.chat(), form, None).await
@@ -137,7 +137,7 @@ pub(super) async fn apply_date<F: FormScreen>(
     mut form: F,
     at: DateTime<Utc>,
 ) -> HandlerResult {
-    let result = form.apply_date(at, Utc::now());
+    let result = form.apply_date(at, screen.now());
     render_input_result(screen, form, result).await
 }
 
@@ -159,7 +159,7 @@ pub(super) async fn cancel<F: FormScreen>(screen: Screen<'_>, form: F) -> Handle
     reset_dialogue(screen.dialogue()).await?;
     abandon(screen.bot(), screen.chat_id(), &form).await?;
     match form.cancelled_to() {
-        Some(action) => handle_replayable_action(screen, action, Utc::now()).await,
+        Some(action) => handle_replayable_action(screen, action, screen.now()).await,
         None => Ok(()),
     }
 }

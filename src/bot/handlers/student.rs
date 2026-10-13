@@ -63,7 +63,7 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
     let timezone = screen.timezone();
     let assignments = services.assignments.list_for_student(actor, page).await?;
 
-    let now = Utc::now();
+    let now = screen.now();
     show_assignment_list(
         screen.chat(),
         assignments,
@@ -191,7 +191,7 @@ pub(super) async fn show_assignment(
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
     let makeup = details.assignment.makeup;
-    let now = Utc::now();
+    let now = screen.now();
     let mut summary = texts::assignment_card(
         details.assignment.subject.name().as_str(),
         assignment.title().as_str(),

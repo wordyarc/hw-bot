@@ -1,4 +1,3 @@
-use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
@@ -135,7 +134,7 @@ pub(super) async fn submit_name(
             display_name: text.trim().to_owned(),
             invite,
             student_group_id: Some(group_id),
-            registered_at: Utc::now(),
+            registered_at: step.now(),
         })
         .await;
     if let Err(error) = &registered

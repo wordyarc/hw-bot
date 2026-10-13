@@ -302,7 +302,18 @@ async fn conflicting_existing_staff_aborts_without_partial_seed() -> anyhow::Res
 
     let error = db::run_bootstrap(&pool, &seed()).await.unwrap_err();
 
-    assert!(error.to_string().contains("bootstrap:"), "{error}");
+    assert!(
+        matches!(&error, db::BootstrapError::InvalidData(message) if message.contains("100000002")),
+        "{error}"
+    );
+    let users: Vec<i64> = sqlx::query_scalar("select telegram_user_id from users")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(
+        users,
+        vec![100_000_002],
+        "the admin seeded before the conflict is rolled back"
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "select count(*) from student_groups where code = 'b9122-02.03.21'"

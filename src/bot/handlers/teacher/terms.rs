@@ -297,7 +297,7 @@ pub(crate) async fn confirm_exit(
 }
 
 async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> HandlerResult {
-    if let Err(error) = form.validate_for_save(Utc::now()) {
+    if let Err(error) = form.validate_for_save(screen.now()) {
         let message = TermsForm::input_message(error);
         return render(screen.chat(), form, message.as_deref()).await;
     }
@@ -318,7 +318,7 @@ async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> H
                     grading: draft.grading,
                     late_policy: complete.late_policy,
                     makeup: terms.makeup,
-                    created_at: Utc::now(),
+                    created_at: screen.now(),
                     deadline_at: complete.deadline_at,
                 })
                 .await;

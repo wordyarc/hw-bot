@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::Context;
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{ApplicationContainer, FilePolicy};
-use hw_bot::bot::{BotTimezone, TelegramBot, TelegramBotSettings};
+use hw_bot::bot::{BotTimezone, Clock, TelegramBot, TelegramBotSettings};
 use hw_bot::config::{
     AppConfig, DatabaseConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig,
 };
@@ -194,6 +194,7 @@ fn build_telegram_bot(
             max_concurrent_file_transfers: files.max_concurrent_transfers,
         },
         BotTimezone::new(config.ui.timezone),
+        Clock::system(),
         invites,
     )?;
 

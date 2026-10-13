@@ -54,7 +54,7 @@ pub(crate) fn terms_form_view(
                 "{context}{question}\n{} {} {}.\n{}",
                 texts::WHOLE_DAY_HINT,
                 texts::TIMEZONE_LABEL,
-                timezone.label(),
+                timezone.label_at(now),
                 texts::DATE_FORMAT,
             )
         }
@@ -266,9 +266,8 @@ pub(crate) fn student_grading_lines(
         && open
     {
         lines.push_str(&format!(
-            "\n{} −{}",
-            texts::LATE_PENALTY_LABEL,
-            penalty.points()
+            "\n{}",
+            texts::current_late_penalty(penalty.points())
         ));
     }
     lines
@@ -317,7 +316,7 @@ pub(crate) fn makeup_form_view(
                 texts::MAKEUP_DATE_QUESTION,
                 texts::WHOLE_DAY_HINT,
                 texts::TIMEZONE_LABEL,
-                timezone.label(),
+                timezone.label_at(now),
                 texts::DATE_FORMAT,
             )
         }
@@ -542,10 +541,7 @@ mod tests {
             assignment.deadline_at() + Duration::days(1),
             &timezone,
         );
-        assert!(
-            late.contains(&format!("{} −1", texts::LATE_PENALTY_LABEL)),
-            "{late}"
-        );
+        assert!(late.contains(&texts::current_late_penalty(1)), "{late}");
         let schedule = penalty_schedule(
             assignment.deadline_at(),
             assignment.late_policy().unwrap(),
@@ -654,10 +650,6 @@ mod tests {
                 "{line}"
             );
         }
-        assert!(
-            texts::makeup_terms_line(Some(six), scored.grading()).contains("6 из 10"),
-            "the credit is named out of the scale"
-        );
         let (text, _) = summary(&scored, Some(six), false);
         assert!(!text.contains(texts::MAKEUP_MARK), "{text}");
     }

@@ -27,6 +27,16 @@ pub fn text_over_the_limit_once_its_link_is_revealed() -> Value {
     })
 }
 
+pub fn callbacks_of(message: &Value) -> Vec<String> {
+    message["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|row| row.as_array().unwrap().clone())
+        .filter_map(|button| button["callback_data"].as_str().map(str::to_owned))
+        .collect()
+}
+
 #[derive(Default)]
 struct State {
     updates: Vec<Value>,
@@ -73,6 +83,13 @@ impl TelegramScenario {
             .filter(|message| message["chat"]["id"] == user)
             .cloned()
             .collect()
+    }
+
+    pub fn message_by_id(&self, user: i64, id: i32) -> Value {
+        self.messages(user)
+            .into_iter()
+            .find(|message| message["message_id"] == id)
+            .unwrap_or_else(|| panic!("message {id} was not sent to {user}"))
     }
 
     pub fn texts(&self, user: i64) -> Vec<String> {

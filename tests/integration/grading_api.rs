@@ -2,7 +2,9 @@ use axum::http::StatusCode;
 use chrono::{Duration, Utc};
 use hw_bot::app::{GradebookScore, StudentGrades};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, DeductedFrom, Grading, MakeupTerms, StudentGroupId};
+use hw_bot::domain::{
+    Assignment, AssignmentId, DeductedFrom, Grading, MakeupTerms, StudentGroupId,
+};
 use hw_bot::pagination::PageRequest;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -165,9 +167,11 @@ async fn a_review_freezes_the_scale_after_the_assignment_becomes_pass_fail() {
         .await
         .ok();
 
-    app.change_grading(assignment.id().as_uuid(), app.teacher(), None)
+    let changed = app
+        .change_grading(assignment.id().as_uuid(), app.teacher(), None)
         .await
         .ok();
+    assert_eq!(changed["max_score"], json!(null));
 
     let details = app
         .student_assignment(assignment.id().as_uuid(), app.student())
@@ -225,12 +229,11 @@ async fn a_scale_change_advances_the_revision() {
         .await
         .ok();
 
-    let revision: i64 = sqlx::query_scalar("select revision from assignments where id = $1")
-        .bind(draft)
-        .fetch_one(&app.pool)
+    let stored = db::assignments::find_versioned_by_id(&app.pool, AssignmentId::from_uuid(draft))
         .await
-        .expect("read revision");
-    assert_eq!(revision, 1);
+        .expect("read the assignment")
+        .expect("the assignment exists");
+    assert_eq!(stored.revision, 1);
 }
 
 #[tokio::test]
@@ -663,6 +666,46 @@ async fn the_gradebook_contract_reports_penalties_to_the_total_and_null_before_r
 }
 
 #[tokio::test]
+async fn the_student_grades_contract_serves_one_student_by_course_then_student() {
+    let app = TestApp::start().await;
+    let to_total = app
+        .add_late_assignment("To total", 10, 4, DeductedFrom::CourseTotal)
+        .await;
+    reviewed(&app, &to_total, 8).await;
+    let student = app.fixture.student.id().as_uuid();
+
+    let body = app
+        .get_as(
+            &format!("/me/courses/{}/gradebook/{student}", app.course()),
+            app.teacher(),
+        )
+        .await
+        .ok();
+
+    assert_eq!(
+        body,
+        json!({
+            "student_id": student,
+            "display_name": app.fixture.student.display_name().as_str(),
+            "work_total": 8,
+            "penalty_total": 4,
+            "total": 4,
+            "max_total": 10,
+            "grades": [{
+                "assignment_id": to_total.id().as_uuid(),
+                "title": "To total",
+                "max_score": 10,
+                "work_score": 8,
+                "course_total_penalty": 4,
+                "makeup": false,
+            }],
+            "grade_page": 0,
+            "next_grade_page": null,
+        })
+    );
+}
+
+#[tokio::test]
 async fn the_gradebook_sums_only_reviewed_scores() {
     let app = TestApp::start().await;
     let first = app.add_scored_assignment(5).await;
@@ -710,9 +753,11 @@ async fn a_pass_fail_acceptance_stays_out_of_the_gradebook_after_the_scale_appea
         .await
         .ok();
 
-    app.change_grading(app.assignment(), app.teacher(), Some(10))
+    let changed = app
+        .change_grading(app.assignment(), app.teacher(), Some(10))
         .await
         .ok();
+    assert_eq!(changed["max_score"], json!(10));
 
     let body = gradebook(&app, app.teacher()).await.ok();
 

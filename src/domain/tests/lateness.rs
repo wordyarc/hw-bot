@@ -1,10 +1,10 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use super::{Fixture, fixture, out_of, reviewed_at, weekly_penalty_assignment};
+use super::{Fixture, fixture, reviewed_at, weekly_penalty_assignment};
 use crate::domain::{
     Assignment, DeductedFrom, DomainError, LatePenalty, LatePolicy, SubmissionStatus,
 };
-use crate::test_support::{ReviewShortcuts, assignment, student, submission, t0};
+use crate::test_support::{ReviewShortcuts, assignment, out_of, student, submission, t0};
 
 fn points_at(assignment: &Assignment, at: DateTime<Utc>) -> Option<u16> {
     assignment.late_penalty_at(at).map(LatePenalty::points)
@@ -154,7 +154,7 @@ fn a_review_freezes_the_lateness_of_the_submission_not_of_the_review() {
             &assignment,
             &course,
             &teacher,
-            out_of(5, 5),
+            Some(out_of(5, 5)),
             "Ок",
             deadline_at + Duration::days(30),
         )
@@ -189,7 +189,7 @@ fn a_penalty_larger_than_the_score_leaves_an_accepted_submission_with_zero() {
             &assignment,
             &course,
             &teacher,
-            out_of(4, 5),
+            Some(out_of(4, 5)),
             "Ок",
             deadline_at + Duration::days(29),
         )
@@ -227,7 +227,7 @@ fn an_effective_penalty_is_capped_at_the_global_score_limit() {
             &assignment,
             &course,
             &teacher,
-            out_of(100, 100),
+            Some(out_of(100, 100)),
             "Ок",
             deadline_at + Duration::days(3),
         )
@@ -262,7 +262,7 @@ fn a_deduction_change_after_a_review_applies_only_to_later_reviews() {
             &assignment,
             &course,
             &teacher,
-            out_of(5, 5),
+            Some(out_of(5, 5)),
             "Ок",
             reviewed_at(),
         )
@@ -282,7 +282,7 @@ fn a_deduction_change_after_a_review_applies_only_to_later_reviews() {
             &assignment,
             &course,
             &teacher,
-            out_of(5, 5),
+            Some(out_of(5, 5)),
             "Ок",
             reviewed_at(),
         )
@@ -314,7 +314,7 @@ fn an_on_time_submission_carries_no_deduction_whatever_the_policy() {
             &assignment,
             &course,
             &teacher,
-            out_of(5, 5),
+            Some(out_of(5, 5)),
             "Ок",
             reviewed_at(),
         )

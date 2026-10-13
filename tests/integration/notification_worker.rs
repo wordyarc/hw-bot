@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use hw_bot::bot::texts;
 use hw_bot::domain::SubmissionKind;
 use hw_bot::health::{CriticalComponent, HealthState};
@@ -11,6 +11,7 @@ use hw_bot::telegram::{
 use hw_bot::test_support::{ASSIGNMENT_TITLE, SUBJECT_NAME};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -49,14 +50,7 @@ async fn successful_telegram_delivery_completes_notification() {
         DeliveryOutcome::Delivered
     );
 
-    let delivered: bool = sqlx::query_scalar(
-        "select delivered_at is not null from review_notification_outbox where submission_id = $1",
-    )
-    .bind(submission)
-    .fetch_one(&app.pool)
-    .await
-    .expect("load delivery status");
-    assert!(delivered);
+    assert!(outbox_state(&app, submission).await.delivered_at.is_some());
 }
 
 #[tokio::test]
@@ -128,11 +122,9 @@ async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
     );
     drop(held);
     assert_eq!(delivery.await.unwrap().unwrap(), DeliveryOutcome::Delivered);
-    let confirmed: bool = sqlx::query_scalar(
-        "select delivered_at is not null and lease_token is null from review_notification_outbox where submission_id = $1",
-    ).bind(submission).fetch_one(&app.pool).await.unwrap();
+    let state = outbox_state(&app, submission).await;
     assert!(
-        confirmed,
+        state.delivered_at.is_some() && state.lease_token.is_none(),
         "delivery must persist its confirmation after the connection is released"
     );
     runtime.close().await;
@@ -156,7 +148,7 @@ async fn transient_telegram_error_reschedules_notification() {
         .expect(1)
         .mount(&telegram)
         .await;
-    let worker = worker(&app, &telegram, 3);
+    let worker = worker_after_server_error(&app, &telegram, 3);
     let now = Utc::now();
 
     assert_eq!(
@@ -167,17 +159,7 @@ async fn transient_telegram_error_reschedules_notification() {
         DeliveryOutcome::Rescheduled
     );
 
-    let state = sqlx::query!(
-        r#"
-        select attempt_count, delivered_at, failed_at, last_error
-        from review_notification_outbox
-        where submission_id = $1
-        "#,
-        submission,
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("load retry state");
+    let state = outbox_state(&app, submission).await;
     assert_eq!(state.attempt_count, 1);
     assert!(state.delivered_at.is_none());
     assert!(state.failed_at.is_none());
@@ -214,14 +196,7 @@ async fn permanent_telegram_error_fails_notification() {
         DeliveryOutcome::Failed
     );
 
-    let failed: bool = sqlx::query_scalar(
-        "select failed_at is not null from review_notification_outbox where submission_id = $1",
-    )
-    .bind(submission)
-    .fetch_one(&app.pool)
-    .await
-    .expect("load failure status");
-    assert!(failed);
+    assert!(outbox_state(&app, submission).await.failed_at.is_some());
 }
 
 #[tokio::test]
@@ -298,10 +273,13 @@ async fn cancellation_interrupts_the_flood_control_cooldown() {
         cancellation.clone(),
         HealthState::new(false, true).component(CriticalComponent::NotificationWorker),
     ));
-    assert!(crate::harness::telegram::wait_until(Duration::from_secs(3), || async {
-        sqlx::query_scalar::<_, bool>("select lease_token is null and last_error is not null from review_notification_outbox where submission_id = $1")
-            .bind(id).fetch_one(&app.pool).await.unwrap()
-    }).await);
+    assert!(
+        crate::harness::telegram::wait_until(Duration::from_secs(3), || async {
+            let state = outbox_state(&app, id).await;
+            state.lease_token.is_none() && state.last_error.is_some()
+        })
+        .await
+    );
     cancellation.cancel();
     tokio::time::timeout(Duration::from_millis(500), task)
         .await
@@ -323,15 +301,14 @@ async fn exhausting_delivery_attempts_marks_the_notification_failed() {
         .mount(&telegram)
         .await;
     assert_eq!(
-        worker(&app, &telegram, 1)
+        worker_after_server_error(&app, &telegram, 1)
             .deliver_one(Utc::now())
             .await
             .unwrap(),
         DeliveryOutcome::Failed
     );
-    let failed: bool = sqlx::query_scalar("select failed_at is not null and lease_token is null from review_notification_outbox where submission_id = $1")
-        .bind(id).fetch_one(&app.pool).await.unwrap();
-    assert!(failed);
+    let state = outbox_state(&app, id).await;
+    assert!(state.failed_at.is_some() && state.lease_token.is_none());
 }
 
 #[tokio::test]
@@ -359,17 +336,7 @@ async fn invalid_credentials_preserve_the_notification_for_a_fixed_deployment() 
         Err(NotificationWorkerError::InvalidCredentials)
     ));
 
-    let state = sqlx::query!(
-        r#"
-        select attempt_count, lease_token, lease_expires_at, delivered_at, failed_at
-        from review_notification_outbox
-        where submission_id = $1
-        "#,
-        submission,
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("load preserved notification");
+    let state = outbox_state(&app, submission).await;
     assert_eq!(state.attempt_count, 0);
     assert!(state.lease_token.is_none());
     assert!(state.lease_expires_at.is_none());
@@ -442,10 +409,8 @@ async fn flood_control_without_retry_after_keeps_the_cooldown_after_attempts_are
             retry_after: Duration::from_secs(1)
         }
     );
-    let failed: bool = sqlx::query_scalar(
-        "select failed_at is not null and lease_token is null from review_notification_outbox where submission_id = $1"
-    ).bind(submission).fetch_one(&app.pool).await.unwrap();
-    assert!(failed);
+    let state = outbox_state(&app, submission).await;
+    assert!(state.failed_at.is_some() && state.lease_token.is_none());
 }
 
 #[tokio::test]
@@ -470,14 +435,10 @@ async fn malformed_delivery_response_is_retried_without_storing_its_raw_body() {
             .unwrap(),
         DeliveryOutcome::Rescheduled
     );
-    let error: String = sqlx::query_scalar(
-        "select last_error from review_notification_outbox where submission_id = $1",
-    )
-    .bind(submission)
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert_eq!(error, "telegram_invalid_response");
+    assert_eq!(
+        outbox_state(&app, submission).await.last_error.as_deref(),
+        Some("telegram_invalid_response")
+    );
 }
 
 #[tokio::test]
@@ -518,8 +479,55 @@ async fn wait_for_worker_readiness(health: &HealthState) {
     .expect("worker became ready");
 }
 
+struct OutboxState {
+    attempt_count: i32,
+    lease_token: Option<Uuid>,
+    lease_expires_at: Option<DateTime<Utc>>,
+    delivered_at: Option<DateTime<Utc>>,
+    failed_at: Option<DateTime<Utc>>,
+    last_error: Option<String>,
+}
+
+async fn outbox_state(app: &TestApp, submission: Uuid) -> OutboxState {
+    sqlx::query_as!(
+        OutboxState,
+        r#"
+        select attempt_count, lease_token, lease_expires_at, delivered_at, failed_at, last_error
+        from review_notification_outbox
+        where submission_id = $1
+        "#,
+        submission,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("load the notification state")
+}
+
 fn worker(app: &TestApp, telegram: &MockServer, max_attempts: u32) -> NotificationWorker {
-    worker_with_settings(app, telegram, max_attempts, Duration::from_millis(10))
+    worker_with(
+        app,
+        telegram,
+        NotificationWorkerSettings {
+            max_attempts,
+            ..settings()
+        },
+    )
+}
+
+fn worker_after_server_error(
+    app: &TestApp,
+    telegram: &MockServer,
+    max_attempts: u32,
+) -> NotificationWorker {
+    worker_with(
+        app,
+        telegram,
+        NotificationWorkerSettings {
+            max_attempts,
+            request_timeout: Duration::from_millis(200),
+            ..settings()
+        },
+    )
 }
 
 fn worker_with_poll_interval(
@@ -527,28 +535,34 @@ fn worker_with_poll_interval(
     telegram: &MockServer,
     poll_interval: Duration,
 ) -> NotificationWorker {
-    worker_with_settings(app, telegram, 3, poll_interval)
-}
-
-fn worker_with_settings(
-    app: &TestApp,
-    telegram: &MockServer,
-    max_attempts: u32,
-    poll_interval: Duration,
-) -> NotificationWorker {
-    let telegram = new_bot("test-token", &telegram.uri(), Duration::from_secs(1))
-        .expect("create Telegram client");
-
-    NotificationWorker::new(
-        app.pool.clone(),
+    worker_with(
+        app,
         telegram,
         NotificationWorkerSettings {
-            request_timeout: Duration::from_secs(1),
             poll_interval,
-            lease_duration: Duration::from_secs(2),
-            max_attempts,
-            retry_initial: Duration::from_secs(1),
-            retry_max: Duration::from_secs(10),
+            ..settings()
         },
     )
+}
+
+fn settings() -> NotificationWorkerSettings {
+    NotificationWorkerSettings {
+        request_timeout: Duration::from_secs(1),
+        poll_interval: Duration::from_millis(10),
+        lease_duration: Duration::from_secs(2),
+        max_attempts: 3,
+        retry_initial: Duration::from_secs(1),
+        retry_max: Duration::from_secs(10),
+    }
+}
+
+fn worker_with(
+    app: &TestApp,
+    telegram: &MockServer,
+    settings: NotificationWorkerSettings,
+) -> NotificationWorker {
+    let telegram = new_bot("test-token", &telegram.uri(), settings.request_timeout)
+        .expect("create Telegram client");
+
+    NotificationWorker::new(app.pool.clone(), telegram, settings)
 }

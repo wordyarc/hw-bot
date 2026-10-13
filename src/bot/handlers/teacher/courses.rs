@@ -1,4 +1,3 @@
-use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
@@ -127,7 +126,7 @@ pub(crate) async fn show_assignment(
         assignment.title().as_str(),
         texts::assignment_status(assignment.status()),
         groups.as_deref(),
-        &grading_lines(&assignment, Utc::now(), timezone),
+        &grading_lines(&assignment, screen.now(), timezone),
         assignment.max_attempts(),
         published.as_deref(),
         assignment.body().as_str(),
@@ -158,7 +157,7 @@ pub(crate) async fn publish_assignment(
     screen
         .services()
         .assignments
-        .publish(assignment_id, screen.actor(), Utc::now())
+        .publish(assignment_id, screen.actor(), screen.now())
         .await?;
     screen
         .bot()

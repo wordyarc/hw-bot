@@ -3,16 +3,18 @@ use std::time::Duration;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use hw_bot::bot::{callbacks, texts};
 use hw_bot::domain::{
-    AssignmentStatus, DeductedFrom, LATEST_TERM_YEAR, MAX_PENALTY_PER_PERIOD, StudentGroup,
-    USER_TEXT_MAX_LEN,
+    AssignmentStatus, DeductedFrom, LATEST_TERM_YEAR, MAX_LATE_PERIODS, MAX_PENALTY_PER_PERIOD,
+    StudentGroup, USER_TEXT_MAX_LEN,
 };
+use hw_bot::test_support::ASSIGNMENT_BODY;
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 
+use super::flows::{manage_assignment, open_course, open_creation, open_scored_creation};
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{
-    TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
+    TelegramScenario, callbacks_of, text_over_the_limit_once_its_link_is_revealed,
 };
 use crate::harness::{TestApp, insert_assignment, wall_clock_assignment};
 
@@ -179,11 +181,11 @@ async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
         callback_update(10, app.teacher(), callbacks::TERMS_SAVE, BOT_MESSAGE_ID),
     ];
     let telegram = telegram_server(updates).await;
-    let first_day = bot_timezone().today();
+    let first_day = vladivostok().local_date(Utc::now());
     let (cancellation, mut task) = start_bot(&app, &telegram);
 
     let created = wait_for_created_assignment(&app.pool, "Deadline in a week").await;
-    let last_day = bot_timezone().today();
+    let last_day = vladivostok().local_date(Utc::now());
     stop_bot(cancellation, &mut task).await;
     let requests = recorded_requests(&telegram).await;
     telegram.verify().await;
@@ -204,7 +206,7 @@ async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
         "attempts came from a button, not from text"
     );
     assert_eq!(created.max_score, None, "the skipped scale means pass/fail");
-    let local = deadline.with_timezone(&TIMEZONE);
+    let local = deadline.with_timezone(&VLADIVOSTOK);
     assert_eq!(
         local.time(),
         chrono::NaiveTime::MIN,
@@ -220,7 +222,7 @@ async fn teacher_picks_a_deadline_with_buttons_instead_of_typing_a_date() {
 #[tokio::test]
 async fn teacher_picks_a_deadline_from_the_calendar() {
     let app = TestApp::start().await;
-    let picked = bot_timezone().local_date(Utc::now() + chrono::Duration::days(3));
+    let picked = vladivostok().local_date(Utc::now() + chrono::Duration::days(3));
     let updates = vec![
         message_update(1, app.teacher(), 1, "/menu"),
         callback_update(2, app.teacher(), callbacks::MENU_COURSES, BOT_MESSAGE_ID),
@@ -279,7 +281,7 @@ async fn teacher_picks_a_deadline_from_the_calendar() {
     let deadline = created
         .unwrap_or_else(|| panic!("draft was not created; requests:\n{requests}"))
         .deadline_at;
-    let local = deadline.with_timezone(&TIMEZONE);
+    let local = deadline.with_timezone(&VLADIVOSTOK);
     assert_eq!(local.time(), chrono::NaiveTime::MIN);
     assert_eq!(
         local.date_naive().pred_opt().unwrap(),
@@ -294,13 +296,7 @@ async fn teacher_picks_a_deadline_from_the_calendar() {
 
 async fn open_deadline_calendar(app: &TestApp, telegram: &TelegramScenario) {
     let teacher = app.teacher();
-    telegram.message(teacher, "/courses");
-    telegram
-        .click_button(teacher, &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(teacher, &cb(callbacks::MANAGE_PREFIX, app.assignment()))
-        .await;
+    manage_assignment(app, telegram, app.assignment()).await;
     telegram
         .click_button(teacher, &cb(callbacks::DEADLINE_PREFIX, app.assignment()))
         .await;
@@ -334,11 +330,20 @@ async fn calendar_month_navigation_keeps_deadline_selection_active() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     open_deadline_calendar(&app, &telegram).await;
-    let forward = telegram
+    let calendar = telegram
         .button_matching(app.teacher(), |data| calendar_month(data).is_some())
         .await;
-    let next_month = calendar_month(forward.data()).unwrap();
-    let month = telegram.click_button(app.teacher(), forward.data()).await;
+    let next_month = callbacks_of(&telegram.message_by_id(app.teacher(), calendar.message_id))
+        .iter()
+        .filter_map(|data| calendar_month(data))
+        .max()
+        .expect("the calendar turns to the next month");
+    let month = telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::CALENDAR_MONTH_PREFIX, next_month.format("%Y-%m")),
+        )
+        .await;
     let pick = telegram
         .click_button(
             app.teacher(),
@@ -388,13 +393,12 @@ async fn manual_deadline_input_invalidates_the_previous_inline_keyboard() {
         .click_button(app.teacher(), callbacks::DEADLINE_MANUAL)
         .await;
     let route = format!("/me/assignments/{}", app.assignment());
-    let before = app.get_as(&route, app.student()).await.ok();
     telegram.click(app.teacher(), &preset);
     telegram.flush(app.teacher()).await;
-    let after = app.get_as(&route, app.student()).await.ok();
-    assert_eq!(
-        before["assignment"]["deadline_at"],
-        after["assignment"]["deadline_at"]
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::STALE_BUTTON.to_owned())
     );
 
     let input = deadline_input(Utc::now() + chrono::Duration::days(40));
@@ -466,7 +470,7 @@ async fn teacher_picks_a_late_policy_preset_during_creation() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Late policy draft").await;
+    open_scored_creation(&app, &telegram, "Late policy draft", 5).await;
     let deadline = deadline_input(Utc::now() + chrono::Duration::days(7));
     telegram
         .click_button(
@@ -514,7 +518,7 @@ async fn a_draft_with_a_penalty_to_the_course_total_keeps_its_deduction() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Course total draft").await;
+    open_scored_creation(&app, &telegram, "Course total draft", 5).await;
     telegram
         .click_button(
             app.teacher(),
@@ -609,30 +613,12 @@ async fn the_terms_edit_names_the_deduction_and_changes_only_the_deduction() {
     assert_eq!(saved.deadline_at(), original.deadline_at());
 }
 
-async fn open_scored_creation(app: &TestApp, telegram: &TelegramScenario, title: &str) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
-        .await;
-    telegram.message(app.teacher(), title);
-    telegram.message(app.teacher(), "Send a pull request.");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::GRADING_PREFIX, 5))
-        .await;
-}
-
 #[tokio::test]
 async fn invalid_period_count_keeps_the_draft_and_rejects_the_previous_deadline_keyboard() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Retry closing").await;
+    open_scored_creation(&app, &telegram, "Retry closing", 5).await;
     telegram
         .click_button(
             app.teacher(),
@@ -646,11 +632,19 @@ async fn invalid_period_count_keeps_the_draft_and_rejects_the_previous_deadline_
         .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 2))
         .await;
     telegram.click(app.teacher(), &old_date);
+    telegram.flush(app.teacher()).await;
+    let before = telegram.texts(app.teacher()).len();
     telegram.message(app.teacher(), "101");
     telegram.flush(app.teacher()).await;
-    let requests = recorded_requests(&telegram.server).await;
-    assert!(requests.contains(texts::STALE_BUTTON));
-    assert!(requests.contains(&texts::periods_question(7)));
+    let sent = telegram.texts(app.teacher());
+    assert!(sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
+    assert!(
+        sent[before..].iter().any(|text| {
+            text.starts_with(&texts::number_prompt(MAX_LATE_PERIODS))
+                && text.contains(&texts::periods_question(7))
+        }),
+        "{sent:#?}"
+    );
     telegram.message(app.teacher(), "3");
     telegram
         .click_button(app.teacher(), callbacks::TERMS_SAVE)
@@ -677,7 +671,7 @@ async fn a_custom_penalty_period_and_amount_are_entered_separately() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Custom penalty").await;
+    open_scored_creation(&app, &telegram, "Custom penalty", 5).await;
     telegram
         .click_button(
             app.teacher(),
@@ -716,6 +710,104 @@ async fn a_custom_penalty_period_and_amount_are_entered_separately() {
     assert_eq!((policy.period_days(), policy.penalty_per_period()), (14, 3));
 }
 
+async fn saved_policy(app: &TestApp, title: &str) -> hw_bot::domain::LatePolicy {
+    let created = wait_for_created_assignment(&app.pool, title)
+        .await
+        .expect("the draft is saved");
+    stored_assignment(app, created.id)
+        .await
+        .late_policy()
+        .expect("the draft allows late submissions")
+}
+
+#[tokio::test]
+async fn a_penalty_edited_from_the_summary_is_saved_with_the_other_terms() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_periods_step(&app, &telegram, "Edited penalty").await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 4))
+        .await;
+
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_PENALTY)
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 2))
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_SAVE)
+        .await;
+    let policy = saved_policy(&app, "Edited penalty").await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        (
+            policy.period_days(),
+            policy.penalty_per_period(),
+            policy.max_periods()
+        ),
+        (7, 2, 4)
+    );
+}
+
+#[tokio::test]
+async fn a_period_edited_from_the_summary_is_saved_with_the_other_terms() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_periods_step(&app, &telegram, "Edited period").await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 4))
+        .await;
+
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_PERIOD)
+        .await;
+    telegram.message(app.teacher(), "14");
+    telegram.flush(app.teacher()).await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_SAVE)
+        .await;
+    let policy = saved_policy(&app, "Edited period").await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        (
+            policy.period_days(),
+            policy.penalty_per_period(),
+            policy.max_periods()
+        ),
+        (14, 1, 4)
+    );
+}
+
+#[tokio::test]
+async fn a_duration_preset_sets_the_number_of_periods_it_names() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_periods_step(&app, &telegram, "Preset duration").await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_DURATION_DATE)
+        .await;
+
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::TERMS_DURATION_PERIODS_PREFIX, 2),
+        )
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_SAVE)
+        .await;
+    let policy = saved_policy(&app, "Preset duration").await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!((policy.period_days(), policy.max_periods()), (7, 2));
+}
+
 async fn stored_assignment(app: &TestApp, id: uuid::Uuid) -> hw_bot::domain::Assignment {
     hw_bot::db::assignments::find_by_id(&app.pool, hw_bot::domain::AssignmentId::from_uuid(id))
         .await
@@ -740,7 +832,7 @@ async fn draft_count(app: &TestApp, title: &str) -> usize {
 }
 
 async fn open_penalty_step(app: &TestApp, telegram: &TelegramScenario, title: &str) {
-    open_scored_creation(app, telegram, title).await;
+    open_scored_creation(app, telegram, title, 5).await;
     telegram
         .click_button(
             app.teacher(),
@@ -761,11 +853,7 @@ async fn open_periods_step(app: &TestApp, telegram: &TelegramScenario, title: &s
 
 async fn summary_text(app: &TestApp, telegram: &TelegramScenario) -> String {
     let save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
-    telegram
-        .messages(app.teacher())
-        .into_iter()
-        .find(|message| message["message_id"] == save.message_id)
-        .unwrap()["text"]
+    telegram.message_by_id(app.teacher(), save.message_id)["text"]
         .as_str()
         .unwrap()
         .to_owned()
@@ -776,7 +864,7 @@ async fn all_button_steps_reuse_one_message_and_wait_for_explicit_save() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "One screen").await;
+    open_scored_creation(&app, &telegram, "One screen", 5).await;
     let mode = telegram
         .click_button(
             app.teacher(),
@@ -819,7 +907,7 @@ async fn choosing_a_duration_date_requires_confirmation_of_rounded_periods() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Rounded duration").await;
+    open_scored_creation(&app, &telegram, "Rounded duration", 5).await;
     telegram
         .click_button(
             app.teacher(),
@@ -838,9 +926,8 @@ async fn choosing_a_duration_date_requires_confirmation_of_rounded_periods() {
         .click_button(app.teacher(), callbacks::DEADLINE_CALENDAR)
         .await;
     let wanted = expected_deadline(&deadline) + chrono::Duration::days(10);
-    let local = bot_timezone().local_date(wanted);
-    let calendar_start =
-        bot_timezone().local_date(expected_deadline(&deadline) + chrono::Duration::days(1));
+    let local = vladivostok().local_date(wanted);
+    let calendar_start = vladivostok().local_date(expected_deadline(&deadline));
     if local.with_day(1) != calendar_start.with_day(1) {
         telegram
             .click_button(
@@ -880,15 +967,7 @@ async fn typed_answers_leave_no_live_buttons_on_the_creation_questions() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     let teacher = app.teacher();
-    telegram.message(teacher, "/courses");
-    telegram
-        .click_button(teacher, &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(teacher, &cb(callbacks::CREATE_PREFIX, app.course()))
-        .await;
-    telegram.message(teacher, "Typed answers");
-    telegram.message(teacher, "Send a pull request.");
+    open_creation(&app, &telegram, "Typed answers").await;
     let attempts = telegram
         .button(teacher, &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
         .await;
@@ -903,11 +982,7 @@ async fn typed_answers_leave_no_live_buttons_on_the_creation_questions() {
     stop_bot(cancellation, &mut task).await;
 
     for question in [attempts.message_id, scale.message_id] {
-        let message = telegram
-            .messages(teacher)
-            .into_iter()
-            .find(|message| message["message_id"] == question)
-            .unwrap();
+        let message = telegram.message_by_id(teacher, question);
         assert!(message.get("reply_markup").is_none(), "{message:#?}");
     }
 }
@@ -921,11 +996,7 @@ async fn manual_input_removes_the_old_buttons_and_cancel_preserves_the_draft() {
     let old = telegram
         .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, "manual"))
         .await;
-    let previous = telegram
-        .messages(app.teacher())
-        .into_iter()
-        .find(|message| message["message_id"] == old.message_id)
-        .unwrap();
+    let previous = telegram.message_by_id(app.teacher(), old.message_id);
     assert!(previous.get("reply_markup").is_none());
     telegram.message(app.teacher(), "/cancel");
     telegram.flush(app.teacher()).await;
@@ -939,7 +1010,7 @@ async fn manual_input_removes_the_old_buttons_and_cancel_preserves_the_draft() {
     let created = wait_for_created_assignment(&app.pool, "Keep my input")
         .await
         .unwrap();
-    assert_eq!(created.body, "Send a pull request.");
+    assert_eq!(created.body, ASSIGNMENT_BODY);
     assert_eq!(created.max_attempts, 2);
     assert_eq!(created.max_score, Some(5));
     stop_bot(cancellation, &mut task).await;
@@ -950,10 +1021,7 @@ async fn tapping_create_again_on_the_title_step_restarts_without_a_discard_notic
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
     let create = cb(callbacks::CREATE_PREFIX, app.course());
 
     telegram.click_button(app.teacher(), &create).await;
@@ -979,7 +1047,7 @@ async fn cancelling_the_first_terms_step_exits_with_a_message_and_menu() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_scored_creation(&app, &telegram, "Discard first step").await;
+    open_scored_creation(&app, &telegram, "Discard first step", 5).await;
     telegram.message(app.teacher(), "/cancel");
     telegram.flush(app.teacher()).await;
     assert!(
@@ -1120,11 +1188,7 @@ async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_
         .await;
 
     let policy_step = telegram.button(app.teacher(), &strict).await;
-    let refusal = telegram
-        .messages(app.teacher())
-        .into_iter()
-        .find(|message| message["message_id"] == policy_step.message_id)
-        .unwrap()["text"]
+    let refusal = telegram.message_by_id(app.teacher(), policy_step.message_id)["text"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -1140,13 +1204,7 @@ async fn a_penalty_restored_over_a_deadline_it_cannot_follow_is_refused_and_the_
 }
 
 async fn open_edit(app: &TestApp, telegram: &TelegramScenario, id: uuid::Uuid, prefix: &str) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::MANAGE_PREFIX, id))
-        .await;
+    manage_assignment(app, telegram, id).await;
     telegram.flush(app.teacher()).await;
     telegram.click_button(app.teacher(), &cb(prefix, id)).await;
 }
@@ -1394,16 +1452,7 @@ async fn teacher_publishes_an_archived_assignment_again_from_its_card() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        )
-        .await;
+    manage_assignment(&app, &telegram, app.assignment()).await;
     let archive = telegram
         .click_button(
             app.teacher(),
@@ -1450,18 +1499,6 @@ async fn teacher_grants_a_typed_number_of_extra_attempts() {
     assert!(wait_for_extra_attempts(&app.pool, app.assignment(), student, 2).await);
 }
 
-async fn open_groups_step(app: &TestApp, telegram: &TelegramScenario, title: &str) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
-        .await;
-    telegram.message(app.teacher(), title);
-    telegram.message(app.teacher(), "Send a pull request.");
-}
-
 fn group_toggle(group: &StudentGroup) -> String {
     cb(callbacks::ASSIGNMENT_GROUP_PREFIX, group.id().as_uuid())
 }
@@ -1472,11 +1509,7 @@ fn group_button_text(
     message_id: i32,
     data: &str,
 ) -> String {
-    telegram
-        .messages(user)
-        .into_iter()
-        .find(|message| message["message_id"] == message_id)
-        .unwrap()["reply_markup"]["inline_keyboard"]
+    telegram.message_by_id(user, message_id)["reply_markup"]["inline_keyboard"]
         .as_array()
         .unwrap()
         .iter()
@@ -1494,7 +1527,7 @@ async fn a_course_of_several_groups_issues_the_assignment_to_the_chosen_groups()
     let second = app.add_group_to_course(&app.fixture.course).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_groups_step(&app, &telegram, "Stream lab").await;
+    open_creation(&app, &telegram, "Stream lab").await;
 
     let first = group_toggle(&app.fixture.group);
     let shown = telegram.button(app.teacher(), &first).await;
@@ -1562,7 +1595,7 @@ async fn continuing_without_a_group_keeps_the_group_step() {
     let second = app.add_group_to_course(&app.fixture.course).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_groups_step(&app, &telegram, "Nobody").await;
+    open_creation(&app, &telegram, "Nobody").await;
 
     telegram
         .click_button(app.teacher(), &group_toggle(&app.fixture.group))
@@ -1597,7 +1630,7 @@ async fn a_course_of_one_group_skips_the_group_step() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_groups_step(&app, &telegram, "Single group").await;
+    open_creation(&app, &telegram, "Single group").await;
 
     telegram
         .button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
@@ -1629,22 +1662,7 @@ async fn a_stream_assignment_names_its_groups_on_the_card_and_in_the_attempts_li
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::MANAGE_PREFIX, assignment.id().as_uuid()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::ATTEMPTS_PREFIX, assignment.id().as_uuid()),
-        )
-        .await;
+    open_attempts(&app, &telegram, assignment.id().as_uuid()).await;
     let labelled = telegram
         .button_with_text(
             app.teacher(),
@@ -1677,13 +1695,7 @@ async fn a_stream_assignment_names_its_groups_on_the_card_and_in_the_attempts_li
 }
 
 async fn open_attempts(app: &TestApp, telegram: &TelegramScenario, assignment: uuid::Uuid) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::MANAGE_PREFIX, assignment))
-        .await;
+    manage_assignment(app, telegram, assignment).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::ATTEMPTS_PREFIX, assignment))
         .await;
@@ -1691,10 +1703,7 @@ async fn open_attempts(app: &TestApp, telegram: &TelegramScenario, assignment: u
 
 fn has_live_buttons(telegram: &TelegramScenario, user: i64, message_id: i32) -> bool {
     telegram
-        .messages(user)
-        .into_iter()
-        .find(|message| message["message_id"] == message_id)
-        .expect("the question was sent")
+        .message_by_id(user, message_id)
         .get("reply_markup")
         .is_some()
 }
@@ -1733,15 +1742,7 @@ async fn a_chosen_attempt_limit_leaves_no_live_buttons() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
-        .await;
-    telegram.message(app.teacher(), "Chosen limit");
-    telegram.message(app.teacher(), "Send a pull request.");
+    open_creation(&app, &telegram, "Chosen limit").await;
 
     let attempts = telegram
         .click_button(app.teacher(), &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
@@ -1838,10 +1839,7 @@ async fn an_assignment_body_over_the_limit_once_its_link_is_revealed_is_refused_
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
         .await;

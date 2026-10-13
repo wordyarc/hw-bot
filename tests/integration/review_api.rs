@@ -1,7 +1,10 @@
 use axum::http::StatusCode;
 use chrono::Utc;
 use hw_bot::app::{ChangeTerms, ErrorCode, ReviewSubmission};
-use hw_bot::domain::{Assignment, MakeupTerms, ReviewDecision, SubmissionId};
+use hw_bot::db;
+use hw_bot::domain::{
+    Assignment, MakeupTerms, ReviewDecision, Submission, SubmissionId, SubmissionStatus,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -307,12 +310,10 @@ async fn outbox_failure_rolls_back_the_review() {
         .await
         .expect(StatusCode::INTERNAL_SERVER_ERROR);
 
-    let status: String = sqlx::query_scalar("select status from submissions where id = $1")
-        .bind(submission)
-        .fetch_one(&app.pool)
-        .await
-        .expect("load submission status");
-    assert_eq!(status, "pending_review");
+    assert_eq!(
+        stored(&app, submission).await.status(),
+        SubmissionStatus::PendingReview
+    );
 }
 
 #[tokio::test]
@@ -344,15 +345,13 @@ async fn a_review_that_loses_the_race_writes_neither_its_decision_nor_a_notifica
     );
 
     loser.error(StatusCode::CONFLICT, "submission_already_reviewed");
-    let (status, comment): (String, String) =
-        sqlx::query_as("select status, review_comment from submissions where id = $1")
-            .bind(submission)
-            .fetch_one(&app.pool)
-            .await
-            .expect("read the review result");
+    let saved = stored(&app, submission).await;
     assert_eq!(
-        (status.as_str(), comment.as_str()),
-        ("rejected", "Победитель")
+        (
+            saved.status(),
+            saved.review_comment().map(|comment| comment.as_str())
+        ),
+        (SubmissionStatus::Rejected, Some("Победитель"))
     );
     let notifications: i64 = sqlx::query_scalar(
         "select count(*) from review_notification_outbox where submission_id = $1",
@@ -395,6 +394,13 @@ async fn accepted_submission_cannot_be_redone_while_attempts_remain() {
     app.submit(app.assignment(), app.student(), "pull/2")
         .await
         .error(StatusCode::CONFLICT, "submission_already_accepted");
+}
+
+async fn stored(app: &TestApp, submission: Uuid) -> Submission {
+    db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
+        .await
+        .expect("read submission")
+        .expect("submission exists")
 }
 
 async fn pending_makeup(app: &TestApp) -> (Assignment, Uuid) {
@@ -458,12 +464,10 @@ async fn a_makeup_review_reads_the_terms_in_force_when_it_is_saved() {
         .unwrap_err();
 
     assert_eq!(error.code(), ErrorCode::InvalidInput);
-    let status: String = sqlx::query_scalar("select status from submissions where id = $1")
-        .bind(makeup)
-        .fetch_one(&app.pool)
-        .await
-        .expect("read the makeup status");
-    assert_eq!(status, "pending_review");
+    assert_eq!(
+        stored(&app, makeup).await.status(),
+        SubmissionStatus::PendingReview
+    );
 }
 
 #[tokio::test]

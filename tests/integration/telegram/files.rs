@@ -3,13 +3,16 @@ use std::time::Duration;
 use chrono::Utc;
 use hw_bot::app::{ApplicationContainer, ErrorCode};
 use hw_bot::bot::{app_error_message, callbacks, texts};
+use hw_bot::domain::AssignmentId;
+use hw_bot::test_support::ASSIGNMENT_BODY;
 use serde_json::{Value, json};
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+use super::flows::manage_assignment;
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::TelegramScenario;
-use crate::harness::{TestApp, test_file_policy};
+use crate::harness::{TestApp, insert_assignment, test_file_policy, wall_clock_assignment};
 
 #[tokio::test]
 async fn teacher_adds_and_opens_a_real_document_during_draft_creation() {
@@ -342,15 +345,7 @@ async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
         .unwrap();
     let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    for data in [
-        cb(callbacks::COURSE_PREFIX, app.course()),
-        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
-        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
-        cb(callbacks::FILE_DELETE_PREFIX, 0),
-    ] {
-        telegram.click_button(app.teacher(), &data).await;
-    }
+    ask_to_delete_the_first_file(&app, &telegram).await;
     let confirm = telegram
         .button(app.teacher(), callbacks::FILE_CONFIRM_DELETE)
         .await;
@@ -378,15 +373,7 @@ async fn a_concurrent_change_during_upload_brings_the_menu_back() {
     )
     .await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    for data in [
-        cb(callbacks::COURSE_PREFIX, app.course()),
-        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
-        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
-        callbacks::FILE_ADD.to_owned(),
-    ] {
-        telegram.click_button(app.teacher(), &data).await;
-    }
+    ask_to_upload_a_file(&app, &telegram).await;
     let card = app
         .application
         .files
@@ -428,15 +415,18 @@ async fn a_concurrent_change_during_upload_brings_the_menu_back() {
 #[tokio::test]
 async fn stale_file_callback_does_not_delete_the_attachment() {
     let app = TestApp::start().await;
-    let assignment = app.fixture.assignment.id();
-    add_document(&app, None).await;
+    let draft = wall_clock_assignment(&app.fixture.course, &app.fixture.teacher)
+        .title("Draft with a file")
+        .build();
+    insert_assignment(&app.pool, &draft).await;
+    add_document(&app, draft.id(), None).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_files(&app, &telegram, 0).await;
+    open_files(&app, &telegram, draft.id(), 0).await;
     let delete = telegram
         .button(app.teacher(), &cb(callbacks::FILE_DELETE_PREFIX, 0))
         .await;
-    open_files(&app, &telegram, delete.message_id).await;
+    open_files(&app, &telegram, draft.id(), delete.message_id).await;
 
     telegram.click(app.teacher(), &delete);
     telegram.flush(app.teacher()).await;
@@ -448,15 +438,71 @@ async fn stale_file_callback_does_not_delete_the_attachment() {
             .iter()
             .any(|message| message["text"] == texts::STALE_BUTTON)
     );
+    assert_eq!(stored_file_count(&app.pool, draft.id().as_uuid()).await, 1);
+}
+
+#[tokio::test]
+async fn a_confirmation_tapped_after_cancelling_the_deletion_is_stale() {
+    let app = TestApp::start().await;
+    let assignment = app.fixture.assignment.id();
+    add_document(&app, assignment, None).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    ask_to_delete_the_first_file(&app, &telegram).await;
+    let confirm = telegram
+        .button(app.teacher(), callbacks::FILE_CONFIRM_DELETE)
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::FILE_CANCEL_DELETE)
+        .await;
+
+    telegram.click(app.teacher(), &confirm);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::STALE_BUTTON.to_owned())
+    );
     assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 1);
 }
 
-async fn open_files(app: &TestApp, telegram: &TelegramScenario, after: i32) {
+async fn open_file_card(app: &TestApp, telegram: &TelegramScenario) {
+    manage_assignment(app, telegram, app.assignment()).await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::FILES_PREFIX, app.assignment()),
+        )
+        .await;
+}
+
+async fn ask_to_delete_the_first_file(app: &TestApp, telegram: &TelegramScenario) {
+    open_file_card(app, telegram).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::FILE_DELETE_PREFIX, 0))
+        .await;
+}
+
+async fn ask_to_upload_a_file(app: &TestApp, telegram: &TelegramScenario) {
+    open_file_card(app, telegram).await;
+    telegram
+        .click_button(app.teacher(), callbacks::FILE_ADD)
+        .await;
+}
+
+async fn open_files(
+    app: &TestApp,
+    telegram: &TelegramScenario,
+    assignment: AssignmentId,
+    after: i32,
+) {
     telegram.message(app.teacher(), "/courses");
     for data in [
         cb(callbacks::COURSE_PREFIX, app.course()),
-        cb(callbacks::MANAGE_PREFIX, app.assignment()),
-        cb(callbacks::FILES_PREFIX, app.assignment()),
+        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
+        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
     ] {
         let button = telegram.button_after(app.teacher(), &data, after).await;
         telegram.click(app.teacher(), &button);
@@ -548,7 +594,7 @@ async fn student_receives_assignment_attachments_after_the_text() {
                     .body_json::<Value>()
                     .ok()
                     .and_then(|body| body["text"].as_str().map(str::to_owned))
-                    == Some("Send a pull request link.".to_owned())
+                    == Some(ASSIGNMENT_BODY.to_owned())
         })
         .expect("assignment body message");
     let document = requests
@@ -579,7 +625,7 @@ async fn student_receives_assignment_attachments_after_the_text() {
 #[tokio::test]
 async fn an_uploaded_attachment_is_resent_by_its_telegram_file_id() {
     let app = TestApp::start().await;
-    add_document(&app, None).await;
+    add_document(&app, app.fixture.assignment.id(), None).await;
     let open = cb(callbacks::ASSIGNMENT_PREFIX, app.assignment());
     let telegram = telegram_server(vec![
         callback_update(1, app.student(), &open, BOT_MESSAGE_ID),
@@ -606,7 +652,7 @@ async fn an_uploaded_attachment_is_resent_by_its_telegram_file_id() {
 #[tokio::test]
 async fn a_rejected_telegram_file_id_falls_back_to_the_stored_bytes() {
     let app = TestApp::start().await;
-    add_document(&app, Some("foreign-file")).await;
+    add_document(&app, app.fixture.assignment.id(), Some("foreign-file")).await;
     let telegram = telegram_server(vec![callback_update(
         1,
         app.student(),
@@ -648,7 +694,7 @@ async fn a_rejected_telegram_file_id_falls_back_to_the_stored_bytes() {
 #[tokio::test]
 async fn a_resend_is_not_repeated_as_an_upload_unless_the_file_id_was_rejected() {
     let app = TestApp::start().await;
-    add_document(&app, Some("limited-file")).await;
+    add_document(&app, app.fixture.assignment.id(), Some("limited-file")).await;
     let telegram = telegram_server(vec![callback_update(
         1,
         app.student(),
@@ -690,7 +736,7 @@ async fn a_resend_is_not_repeated_as_an_upload_unless_the_file_id_was_rejected()
 #[tokio::test]
 async fn a_file_the_teacher_opens_without_success_is_reported() {
     let app = TestApp::start().await;
-    add_document(&app, Some("limited-file")).await;
+    add_document(&app, app.fixture.assignment.id(), Some("limited-file")).await;
     let mut updates = file_upload_updates(&app, app.assignment(), json!(null));
     updates.truncate(5);
     updates.push(callback_update(
@@ -729,11 +775,10 @@ async fn a_file_the_teacher_opens_without_success_is_reported() {
     stop_bot(cancellation, &mut task).await;
 }
 
-async fn add_document(app: &TestApp, telegram_file_id: Option<&str>) {
+async fn add_document(app: &TestApp, assignment: AssignmentId, telegram_file_id: Option<&str>) {
     use hw_bot::app::AddAssignmentFile;
     use hw_bot::domain::FilePresentation;
 
-    let assignment = app.fixture.assignment.id();
     let card = app
         .application
         .files
@@ -814,15 +859,7 @@ async fn an_added_attachment_whose_card_cannot_be_read_again_shows_the_card_with
     )
     .await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    for data in [
-        cb(callbacks::COURSE_PREFIX, app.course()),
-        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
-        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
-        callbacks::FILE_ADD.to_owned(),
-    ] {
-        telegram.click_button(app.teacher(), &data).await;
-    }
+    ask_to_upload_a_file(&app, &telegram).await;
     app.rename_table_after_writing("stored_files", "assignment_groups")
         .await;
 
@@ -843,18 +880,10 @@ async fn an_added_attachment_whose_card_cannot_be_read_again_shows_the_card_with
 async fn a_deleted_attachment_whose_card_cannot_be_read_again_shows_the_card_without_a_failure() {
     let app = TestApp::start().await;
     let assignment = app.fixture.assignment.id();
-    add_document(&app, None).await;
+    add_document(&app, assignment, None).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    for data in [
-        cb(callbacks::COURSE_PREFIX, app.course()),
-        cb(callbacks::MANAGE_PREFIX, assignment.as_uuid()),
-        cb(callbacks::FILES_PREFIX, assignment.as_uuid()),
-        cb(callbacks::FILE_DELETE_PREFIX, 0),
-    ] {
-        telegram.click_button(app.teacher(), &data).await;
-    }
+    ask_to_delete_the_first_file(&app, &telegram).await;
     let confirm = telegram
         .button(app.teacher(), callbacks::FILE_CONFIRM_DELETE)
         .await;

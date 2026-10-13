@@ -17,6 +17,7 @@ use uuid::Uuid;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+use super::flows::{open_course, open_fixture_student_grades, student_card_header};
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{
     TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
@@ -460,22 +461,7 @@ async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::GRADES_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(
-                callbacks::STUDENT_PREFIX,
-                app.fixture.student.id().as_uuid(),
-            ),
-        )
-        .await;
+    open_fixture_student_grades(&app, &telegram).await;
     stop_bot(cancellation, &mut task).await;
 
     let header = texts::grades_header(app.fixture.student.display_name().as_str(), 4, 0, 4, 5);
@@ -516,22 +502,7 @@ async fn the_student_card_shows_penalties_to_the_course_total() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::GRADES_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(
-                callbacks::STUDENT_PREFIX,
-                app.fixture.student.id().as_uuid(),
-            ),
-        )
-        .await;
+    open_fixture_student_grades(&app, &telegram).await;
     stop_bot(cancellation, &mut task).await;
 
     let header = texts::grades_header(app.fixture.student.display_name().as_str(), 14, 4, 10, 20);
@@ -584,11 +555,16 @@ async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
         .position(|text| text == "pull/second")
         .expect("the pending attempt is shown");
     assert!(previous < current);
+    let summary = texts::review_summary(
+        app.fixture.subject.name().as_str(),
+        app.fixture.assignment.title().as_str(),
+        app.fixture.student.display_name().as_str(),
+        app.fixture.group.code().as_str(),
+        2,
+    );
     assert!(
-        messages[..current]
-            .iter()
-            .any(|text| text.contains(app.fixture.subject.name().as_str()) && text.contains('2')),
-        "the summary names the subject and the attempt number"
+        messages[..current].contains(&summary),
+        "the summary names the subject and the attempt number: {messages:#?}"
     );
 }
 
@@ -981,6 +957,7 @@ async fn a_failed_bulk_confirmation_does_not_repeat_the_decision() {
             "ok": false, "error_code": 400, "description": "Bad Request: injected failure",
         })))
         .up_to_n_times(1)
+        .expect(1)
         .with_priority(1)
         .mount(&telegram.server)
         .await;
@@ -1004,6 +981,7 @@ async fn a_failed_bulk_confirmation_does_not_repeat_the_decision() {
     telegram.message(app.teacher(), "Учебная сдача");
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
+    telegram.server.verify().await;
 
     assert!(is_pending(&app, late.id().as_uuid()).await);
 }
@@ -1017,12 +995,10 @@ async fn submitted(app: &TestApp, assignment: &Assignment) -> Uuid {
 }
 
 fn message_text(telegram: &TelegramScenario, user: i64, message_id: i32) -> String {
-    telegram
-        .messages(user)
-        .into_iter()
-        .find(|message| message["message_id"] == message_id)
-        .and_then(|message| message["text"].as_str().map(str::to_owned))
-        .expect("the message was sent")
+    telegram.message_by_id(user, message_id)["text"]
+        .as_str()
+        .expect("the message has a text")
+        .to_owned()
 }
 
 #[tokio::test]
@@ -1416,10 +1392,7 @@ async fn a_gradebook_of_several_groups_starts_with_the_choice_of_the_group() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::GRADES_PREFIX, app.course()))
         .await;
@@ -1444,18 +1417,14 @@ async fn a_gradebook_of_several_groups_starts_with_the_choice_of_the_group() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    let chooser = telegram
-        .messages(app.teacher())
-        .into_iter()
-        .find(|message| message["message_id"] == second_group.message_id)
-        .unwrap();
+    let chooser = telegram.message_by_id(app.teacher(), second_group.message_id);
     assert_eq!(chooser["text"], texts::GRADEBOOK_CHOOSE_GROUP);
     assert_eq!(first_group.message_id, second_group.message_id);
     assert_ne!(first_group.data(), second_group.data());
     let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
-            .any(|text| text.starts_with(&format!("👤 {}", student.display_name().as_str()))),
+            .any(|text| text.starts_with(&student_card_header(student.display_name().as_str()))),
         "{sent:#?}"
     );
     assert_eq!(

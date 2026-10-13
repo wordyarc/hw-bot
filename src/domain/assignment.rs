@@ -766,7 +766,8 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        assignment, course_for, student, student_group, subject, t0, teacher, teaching_course,
+        assignment, course_for, out_of, student, student_group, subject, t0, teacher,
+        teaching_course,
     };
 
     fn restore(
@@ -962,10 +963,6 @@ mod tests {
         );
     }
 
-    fn out_of(value: u16, max_score: u16) -> Option<ReviewScore> {
-        Some(ReviewScore { value, max_score })
-    }
-
     #[test]
     fn a_scored_assignment_requires_a_score_within_its_scale() {
         let teacher = teacher(1);
@@ -974,12 +971,12 @@ mod tests {
 
         for value in [0, 5] {
             assert_eq!(
-                scored.regular_grade(out_of(value, 5), t0()),
+                scored.regular_grade(Some(out_of(value, 5)), t0()),
                 Ok(Some(Grade::new(value, 5, None)))
             );
         }
         assert_eq!(
-            scored.regular_grade(out_of(6, 5), t0()),
+            scored.regular_grade(Some(out_of(6, 5)), t0()),
             Err(DomainError::ScoreOutOfRange { value: 6, max: 5 })
         );
         assert_eq!(
@@ -996,7 +993,7 @@ mod tests {
 
         for given_max in [5, 20] {
             assert_eq!(
-                scored.regular_grade(out_of(4, given_max), t0()),
+                scored.regular_grade(Some(out_of(4, given_max)), t0()),
                 Err(DomainError::ScoreScaleMismatch { given_max, max: 10 })
             );
         }
@@ -1008,7 +1005,7 @@ mod tests {
 
         assert_eq!(pass_fail.regular_grade(None, t0()), Ok(None));
         assert_eq!(
-            pass_fail.regular_grade(out_of(1, 1), t0()),
+            pass_fail.regular_grade(Some(out_of(1, 1)), t0()),
             Err(DomainError::ScoreNotAllowed)
         );
     }
@@ -1123,6 +1120,28 @@ mod tests {
         prop_oneof![prop::sample::select(edges.to_vec()), range]
     }
 
+    fn periods_around_the_cap(policy: LatePolicy, cap: u16) -> impl Strategy<Value = (u32, u32)> {
+        let capped_at = u32::from(cap).div_ceil(u32::from(policy.penalty_per_period()));
+        let periods = prop_oneof![9 => 0..=capped_at + 1, 1 => Just(u32::MAX)];
+        (periods.clone(), periods)
+            .prop_map(|(first, second)| (first.min(second), first.max(second)))
+    }
+
+    fn policy_and_lateness() -> impl Strategy<Value = (LatePolicy, (u32, u32))> {
+        late_policy()
+            .prop_flat_map(|policy| (Just(policy), periods_around_the_cap(policy, MAX_SCORE)))
+    }
+
+    fn scale_policy_and_lateness() -> impl Strategy<Value = (MaxScore, LatePolicy, (u32, u32))> {
+        (1..=MAX_SCORE, late_policy()).prop_flat_map(|(max_score, policy)| {
+            (
+                Just(MaxScore::new(max_score).unwrap()),
+                Just(policy),
+                periods_around_the_cap(policy, max_score),
+            )
+        })
+    }
+
     fn nanoseconds_into(period: Duration, share: f64) -> Duration {
         let nanoseconds = period.num_nanoseconds().unwrap();
         Duration::nanoseconds(((nanoseconds as f64 * share) as i64).clamp(0, nanoseconds - 1))
@@ -1185,14 +1204,15 @@ mod tests {
 
         #[test]
         fn a_penalty_grows_with_lateness_within_the_scale_and_can_be_restored(
-            policy in late_policy(),
-            fewer in count(&[0, 1, 99, 100, 101], 0..=1_000),
-            more in count(&[0, 1, 99, 100, 101], 0..=1_000),
+            (policy, (fewer, more)) in policy_and_lateness(),
         ) {
-            let (fewer, more) = (fewer.min(more), fewer.max(more));
+            let (smaller, larger) = (policy.penalty_for(fewer), policy.penalty_for(more));
 
-            prop_assert!(policy.penalty_for(fewer) <= policy.penalty_for(more));
-            prop_assert!(policy.penalty_for(more) <= MAX_SCORE);
+            prop_assert!(smaller <= larger);
+            if fewer < more && smaller < MAX_SCORE {
+                prop_assert!(smaller < larger);
+            }
+            prop_assert!(larger <= MAX_SCORE);
             prop_assert_eq!(policy.late_penalty(0), None);
             if let Some(late) = policy.late_penalty(more) {
                 prop_assert_eq!(
@@ -1204,14 +1224,8 @@ mod tests {
 
         #[test]
         fn the_best_possible_score_does_not_grow_with_lateness(
-            policy in late_policy(),
-            max_score in 1..=MAX_SCORE,
-            fewer in count(&[0, 1, 99, 100, 101], 0..=1_000),
-            more in count(&[0, 1, 99, 100, 101], 0..=1_000),
+            (max_score, policy, (fewer, more)) in scale_policy_and_lateness(),
         ) {
-            let max_score = MaxScore::new(max_score).unwrap();
-            let (fewer, more) = (fewer.min(more), fewer.max(more));
-
             prop_assert_eq!(policy.possible_score(max_score, 0), max_score.get());
             prop_assert!(
                 policy.possible_score(max_score, more) <= policy.possible_score(max_score, fewer)

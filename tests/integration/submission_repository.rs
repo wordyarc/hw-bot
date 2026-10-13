@@ -1,3 +1,5 @@
+use std::time::Duration as StdDuration;
+
 use chrono::{DateTime, Duration, Utc};
 use hw_bot::db::submissions::{self, ReviewStream};
 use hw_bot::db::{DbError, DbResult};
@@ -139,13 +141,17 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
     .expect("the queue is not empty");
 
     let mut second_tx = app.pool.begin().await?;
-    let next = submissions::lock_next_for_reviewer(
-        &mut second_tx,
-        &app.fixture.teacher,
-        ReviewStream::Main,
+    let next = tokio::time::timeout(
+        StdDuration::from_secs(5),
+        submissions::lock_next_for_reviewer(
+            &mut second_tx,
+            &app.fixture.teacher,
+            ReviewStream::Main,
+        ),
     )
-    .await?
-    .expect("the locked head must be skipped, not waited for");
+    .await
+    .expect("the locked head is skipped, not waited for")?
+    .expect("the queue holds another submission");
 
     assert_ne!(
         head.id(),

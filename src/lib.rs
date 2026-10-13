@@ -13,5 +13,6 @@ pub mod telegram;
 mod read_models;
 mod string_enum;
 
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod test_support;

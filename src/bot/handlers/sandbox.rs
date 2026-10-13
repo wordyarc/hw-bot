@@ -17,7 +17,7 @@ use crate::domain::{ReviewDecision, USER_TEXT_MAX_LEN};
 use crate::pagination::PageRequest;
 
 pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
-    let shown_at = Utc::now();
+    let shown_at = screen.now();
     let actor = screen.actor();
     let bot = screen.bot();
     let chat_id = screen.chat_id();
@@ -122,7 +122,7 @@ pub(super) async fn submit_comment(
             decision,
             cutoff,
             comment: text.into_owned(),
-            reviewed_at: Utc::now(),
+            reviewed_at: step.now(),
         })
         .await?;
 

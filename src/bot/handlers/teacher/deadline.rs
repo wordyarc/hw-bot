@@ -19,6 +19,7 @@ pub(super) enum DateChoice {
 pub(super) fn choose_date(
     action: DeadlineAction,
     timezone: &BotTimezone,
+    now: DateTime<Utc>,
     calendar_from: NaiveDate,
 ) -> DateChoice {
     let date = match action {
@@ -26,8 +27,8 @@ pub(super) fn choose_date(
         DeadlineAction::Options => return DateChoice::Mode(InputMode::Buttons),
         DeadlineAction::Calendar => return DateChoice::Mode(InputMode::Calendar(calendar_from)),
         DeadlineAction::Month(month) => return DateChoice::Mode(InputMode::Calendar(month)),
-        DeadlineAction::Days(days) => timezone.in_days(u64::from(days)),
-        DeadlineAction::Months(months) => timezone.in_months(months),
+        DeadlineAction::Days(days) => timezone.in_days(now, u64::from(days)),
+        DeadlineAction::Months(months) => timezone.in_months(now, months),
         DeadlineAction::Pick(date) => Some(date),
     };
     DateChoice::At(date.and_then(|date| timezone.end_of(date)))
@@ -42,7 +43,7 @@ pub(crate) async fn handle_deadline(
     if state.active_makeup().is_some() {
         return match state.makeup_form(message_id, MakeupStep::Date) {
             Some(form) => {
-                let today = screen.timezone().today();
+                let today = screen.timezone().local_date(screen.now());
                 handle_date(screen, form, action, today).await
             }
             None => screen.stale().await,
@@ -60,7 +61,7 @@ pub(crate) async fn handle_deadline(
     let timezone = screen.timezone();
     let calendar_from = match (step, form.terms.deadline_at) {
         (TermsStep::DurationDate, Some(deadline)) => timezone.first_date_ending_after(deadline),
-        _ => timezone.today(),
+        _ => timezone.local_date(screen.now()),
     };
     handle_date(screen, form, action, calendar_from).await
 }

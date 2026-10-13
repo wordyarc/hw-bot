@@ -296,15 +296,13 @@ impl Form for MakeupForm {
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, NaiveDate};
-    use chrono_tz::Tz;
     use proptest::prelude::*;
 
     use super::*;
     use crate::bot::callbacks::MakeupChoice;
-    use crate::bot::timezone::BotTimezone;
     use crate::bot::views::makeup_form_view;
     use crate::domain::{MAX_MAKEUP_ATTEMPTS, UserId};
-    use crate::test_support::t0;
+    use crate::test_support::{t0, vladivostok};
 
     fn undecided(title: &str, grading: Grading) -> UndecidedAssignment {
         UndecidedAssignment {
@@ -620,7 +618,9 @@ mod tests {
                     command.now,
                 ) {
                     Ok(_) => {}
-                    Err(DomainError::MakeupUntilOutOfRange { .. }) if self.now > t0() => {
+                    Err(DomainError::MakeupUntilOutOfRange { .. })
+                        if settings.until <= self.now =>
+                    {
                         return Ok(true);
                     }
                     Err(error) => {
@@ -724,7 +724,7 @@ mod tests {
             undecided in undecided_assignments(),
             moves in moves(),
         ) {
-            let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+            let timezone = vladivostok();
             let mut session = Session {
                 form: MakeupForm::new(TeachingCourseId::new(), saved, undecided, t0()),
                 now: t0(),

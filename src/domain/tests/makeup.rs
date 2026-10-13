@@ -1,12 +1,12 @@
 use chrono::{DateTime, Duration, Utc};
 
-use super::{Fixture, fixture, out_of, reviewed_at};
+use super::{Fixture, fixture, reviewed_at};
 use crate::domain::{
     Acceptance, Assignment, CourseMakeup, DeductedFrom, DomainError, Grade, Grading, LatePolicy,
     MAX_ATTEMPTS, MakeupOffer, MakeupRequest, MakeupTerms, SubmissionHistory, SubmissionKind,
     SubmissionStatus, TeachingCourse, User,
 };
-use crate::test_support::{ReviewShortcuts, assignment, history, submission, t0, teacher};
+use crate::test_support::{ReviewShortcuts, assignment, history, out_of, submission, t0, teacher};
 
 fn makeup_window() -> CourseMakeup {
     CourseMakeup::open(t0() + Duration::days(60), 3, t0()).unwrap()
@@ -509,7 +509,14 @@ fn a_makeup_is_credited_by_the_terms_at_review_without_a_penalty() {
         .build();
 
     assert_eq!(
-        makeup.accept(&work, &course, &teacher, out_of(6, 10), "Ок", reviewed_at()),
+        makeup.accept(
+            &work,
+            &course,
+            &teacher,
+            Some(out_of(6, 10)),
+            "Ок",
+            reviewed_at()
+        ),
         Err(DomainError::ScoreNotAllowed)
     );
     assert!(makeup.is_pending_review());

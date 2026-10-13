@@ -487,7 +487,10 @@ fn date_input_rows() -> [Row; 2] {
     ]
 }
 
-pub(crate) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
+pub(crate) fn deadline_options_keyboard(
+    timezone: &BotTimezone,
+    now: DateTime<Utc>,
+) -> InlineKeyboardMarkup {
     let preset = |label: &str, date: Option<NaiveDate>, action: DeadlineAction| {
         date.map(|date| {
             row(
@@ -499,17 +502,17 @@ pub(crate) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboar
     let mut rows: Vec<Row> = [
         preset(
             texts::PRESET_WEEK,
-            timezone.in_days(7),
+            timezone.in_days(now, 7),
             DeadlineAction::Days(7),
         ),
         preset(
             texts::PRESET_TWO_WEEKS,
-            timezone.in_days(14),
+            timezone.in_days(now, 14),
             DeadlineAction::Days(14),
         ),
         preset(
             texts::PRESET_MONTH,
-            timezone.in_months(1),
+            timezone.in_months(now, 1),
             DeadlineAction::Months(1),
         ),
     ]
@@ -875,7 +878,7 @@ pub(super) fn makeup_form_keyboard(
             InputMode::Calendar(month) => {
                 calendar_keyboard(month, timezone.first_date_ending_after(now))
             }
-            InputMode::Buttons | InputMode::Manual => deadline_options_keyboard(timezone),
+            InputMode::Buttons | InputMode::Manual => deadline_options_keyboard(timezone, now),
         },
         MakeupStep::Attempts => makeup_attempts_keyboard(),
         MakeupStep::Scale(_) => makeup_answer_keyboard(form.current_scale()?.grading, None),
@@ -912,7 +915,7 @@ pub(super) fn terms_form_keyboard(
                 calendar(month, *created_at)
             }
             (InputMode::Calendar(month), TermsTarget::Create(_)) => calendar(month, now),
-            _ => deadline_options_keyboard(timezone),
+            _ => deadline_options_keyboard(timezone, now),
         },
         TermsStep::DurationDate => {
             let deadline = terms.deadline_at?;

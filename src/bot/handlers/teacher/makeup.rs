@@ -59,7 +59,7 @@ pub(crate) async fn open(screen: Screen<'_>, course_id: TeachingCourseId) -> Han
         .courses
         .makeup_state(screen.actor(), course_id)
         .await?;
-    let form = MakeupForm::new(course_id, state.saved, state.undecided, Utc::now());
+    let form = MakeupForm::new(course_id, state.saved, state.undecided, screen.now());
     render(screen.chat(), form, None).await
 }
 
@@ -150,7 +150,7 @@ pub(crate) async fn submit_text(step: TextStep<'_>, form: MakeupForm) -> Handler
 }
 
 async fn save(screen: Screen<'_>, mut form: MakeupForm) -> HandlerResult {
-    let now = Utc::now();
+    let now = screen.now();
     if form.notice_end(now) {
         return render(screen.chat(), form, Some(texts::MAKEUP_ENDED_BEFORE_SAVE)).await;
     }

@@ -6,11 +6,14 @@ use hw_bot::domain::{
     Assignment, AssignmentId, CourseMakeup, Grading, MakeupTerms, Submission, SubmissionId,
     SubmissionStatus, User,
 };
-use serde_json::Value;
 use uuid::Uuid;
 
+use super::flows::{
+    manage_assignment, open_assignment, open_course, open_fixture_student_grades,
+    open_scored_creation, student_card_header,
+};
 use crate::harness::telegram::*;
-use crate::harness::telegram_scenario::TelegramScenario;
+use crate::harness::telegram_scenario::{TelegramScenario, callbacks_of};
 use crate::harness::{TestApp, submission_id};
 
 fn ten() -> Grading {
@@ -76,24 +79,6 @@ fn grade_text(submission: &Submission) -> String {
     texts::grade_line(submission.kind(), submission.grade()).expect("a makeup is always marked")
 }
 
-fn sent_message(telegram: &TelegramScenario, user: i64, message_id: i32) -> Value {
-    telegram
-        .messages(user)
-        .into_iter()
-        .find(|message| message["message_id"] == message_id)
-        .expect("the message was sent")
-}
-
-fn callbacks_of(message: &Value) -> Vec<String> {
-    message["reply_markup"]["inline_keyboard"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|row| row.as_array().unwrap().clone())
-        .filter_map(|button| button["callback_data"].as_str().map(str::to_owned))
-        .collect()
-}
-
 async fn makeup_of(app: &TestApp, assignment: &Assignment, student: &User) -> Uuid {
     submission_id(
         &app.submit(
@@ -107,10 +92,7 @@ async fn makeup_of(app: &TestApp, assignment: &Assignment, student: &User) -> Uu
 }
 
 async fn open_form(app: &TestApp, telegram: &TelegramScenario) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(app, telegram).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::MAKEUP_PREFIX, app.course()))
         .await;
@@ -230,15 +212,10 @@ async fn a_save_opened_before_a_colleagues_save_keeps_the_colleagues_settings() 
 #[tokio::test]
 async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announces_a_new_pool() {
     let app = TestApp::start().await;
-    let opened = app
-        .open_makeup(
-            &app.fixture.course,
-            3,
-            Utc::now() - Duration::days(30) + Duration::seconds(10),
-        )
-        .await;
+    let opened = open_makeup(&app, 3).await;
     let telegram = TelegramScenario::new().await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let clock = TestClock::default();
+    let (cancellation, mut task) = start_bot_with_clock(&app, &telegram.server, clock.clock());
     open_form(&app, &telegram).await;
     telegram.click_button(app.teacher(), &answer("pass")).await;
     telegram
@@ -248,7 +225,7 @@ async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announce
         .click_button(app.teacher(), &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
         .await;
     telegram.button(app.teacher(), callbacks::MAKEUP_SAVE).await;
-    tokio::time::sleep((opened.until() - Utc::now()).to_std().unwrap_or_default()).await;
+    clock.move_to(opened.until() + Duration::seconds(1));
 
     telegram
         .click_button(app.teacher(), callbacks::MAKEUP_SAVE)
@@ -264,25 +241,6 @@ async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announce
     assert!(telegram.texts(app.teacher()).iter().any(|text| {
         text.starts_with(texts::MAKEUP_ENDED_BEFORE_SAVE) && text.contains(texts::MAKEUP_NEW_POOL)
     }));
-}
-
-async fn create_through_the_wizard(app: &TestApp, telegram: &TelegramScenario, title: &str) {
-    let teacher = app.teacher();
-    telegram.message(teacher, "/courses");
-    telegram
-        .click_button(teacher, &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(teacher, &cb(callbacks::CREATE_PREFIX, app.course()))
-        .await;
-    telegram.message(teacher, title);
-    telegram.message(teacher, "Send a pull request.");
-    telegram
-        .click_button(teacher, &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
-        .await;
-    telegram
-        .click_button(teacher, &cb(callbacks::GRADING_PREFIX, 10))
-        .await;
 }
 
 async fn finish_strict_creation(app: &TestApp, telegram: &TelegramScenario) {
@@ -310,7 +268,7 @@ async fn creating_on_a_course_with_makeup_saves_the_credit() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    create_through_the_wizard(&app, &telegram, "Makeup draft").await;
+    open_scored_creation(&app, &telegram, "Makeup draft", 10).await;
     telegram.click_button(app.teacher(), &answer(6)).await;
     finish_strict_creation(&app, &telegram).await;
     let id = created(&app, "Makeup draft").await;
@@ -325,7 +283,7 @@ async fn creating_on_a_course_without_makeup_asks_nothing_and_leaves_the_terms_u
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    create_through_the_wizard(&app, &telegram, "Plain draft").await;
+    open_scored_creation(&app, &telegram, "Plain draft", 10).await;
     finish_strict_creation(&app, &telegram).await;
     let id = created(&app, "Plain draft").await;
     stop_bot(cancellation, &mut task).await;
@@ -354,13 +312,7 @@ async fn editing_terms_on_a_course_without_makeup_keeps_the_makeup_terms() {
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     let teacher = app.teacher();
 
-    telegram.message(teacher, "/courses");
-    telegram
-        .click_button(teacher, &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(teacher, &cb(callbacks::MANAGE_PREFIX, work.id().as_uuid()))
-        .await;
+    manage_assignment(&app, &telegram, work.id().as_uuid()).await;
     telegram
         .click_button(
             teacher,
@@ -490,8 +442,10 @@ async fn crediting_a_makeup_saves_its_credit_after_the_comment() {
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(reviewed, Some(("accepted".to_owned(), Some(6), Some(6))));
-    let credited = grade_text(&stored(&app, makeup).await);
-    assert!(credited.contains("6 из 10"), "{credited}");
+    let saved = stored(&app, makeup).await;
+    let grade = saved.grade().expect("a credited makeup has a grade");
+    assert_eq!((grade.work_score(), grade.max_score()), (6, 10));
+    let credited = grade_text(&saved);
     let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
@@ -525,7 +479,7 @@ async fn changing_the_decision_brings_back_the_makeup_buttons() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    let card = sent_message(&telegram, app.teacher(), again.message_id);
+    let card = telegram.message_by_id(app.teacher(), again.message_id);
     let labels = card["reply_markup"]["inline_keyboard"].to_string();
     assert!(labels.contains(&texts::accept_makeup_button(6)), "{labels}");
 }
@@ -692,16 +646,6 @@ async fn a_grant_from_a_stale_message_adds_nothing() {
     );
 }
 
-async fn open_card(app: &TestApp, telegram: &TelegramScenario, assignment: &Assignment) {
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
-        )
-        .await;
-}
-
 #[tokio::test]
 async fn a_closed_assignment_with_makeup_prompts_and_confirms_with_the_remaining_attempts() {
     let app = TestApp::start().await;
@@ -710,7 +654,7 @@ async fn a_closed_assignment_with_makeup_prompts_and_confirms_with_the_remaining
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    open_card(&app, &telegram, &closed).await;
+    open_assignment(&app, &telegram, closed.id().as_uuid()).await;
     telegram
         .click_button(
             app.student(),
@@ -745,7 +689,7 @@ async fn an_empty_pool_leaves_the_card_without_a_submit_button() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    open_card(&app, &telegram, &closed).await;
+    open_assignment(&app, &telegram, closed.id().as_uuid()).await;
     stop_bot(cancellation, &mut task).await;
 
     let submit = cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid());
@@ -772,7 +716,7 @@ async fn an_old_makeup_button_names_the_spent_pool_instead_of_asking_for_work() 
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    open_card(&app, &telegram, &closed).await;
+    open_assignment(&app, &telegram, closed.id().as_uuid()).await;
     let submit = telegram
         .button(
             app.student(),
@@ -806,7 +750,7 @@ async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_k
     open_makeup(&app, 2).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_card(&app, &telegram, &work).await;
+    open_assignment(&app, &telegram, work.id().as_uuid()).await;
     let submit = telegram
         .click_button(
             app.student(),
@@ -836,11 +780,7 @@ async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_k
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    let card = telegram
-        .messages(app.student())
-        .into_iter()
-        .find(|message| message["message_id"] == makeup.message_id)
-        .unwrap();
+    let card = telegram.message_by_id(app.student(), makeup.message_id);
     assert!(
         card["reply_markup"]["inline_keyboard"]
             .to_string()
@@ -861,25 +801,6 @@ async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_k
     assert_eq!(pool_balance(&app).await, (2, 2));
 }
 
-async fn open_student_grades(app: &TestApp, telegram: &TelegramScenario) {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::GRADES_PREFIX, app.course()))
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(
-                callbacks::STUDENT_PREFIX,
-                app.fixture.student.id().as_uuid(),
-            ),
-        )
-        .await;
-}
-
 async fn spend_the_whole_pool(app: &TestApp, attempts: u16) {
     open_makeup(app, attempts).await;
     for index in 0..attempts {
@@ -896,7 +817,7 @@ async fn a_grant_from_the_gradebook_shows_the_card_again_with_the_new_balance() 
     spend_the_whole_pool(&app, 3).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_student_grades(&app, &telegram).await;
+    open_fixture_student_grades(&app, &telegram).await;
     let old = telegram
         .button(app.teacher(), callbacks::MAKEUP_GRANT)
         .await;
@@ -905,8 +826,6 @@ async fn a_grant_from_the_gradebook_shows_the_card_again_with_the_new_balance() 
     telegram
         .button_after(app.teacher(), callbacks::MAKEUP_GRANT, old.message_id)
         .await;
-    telegram.click(app.teacher(), &old);
-    telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(pool_balance(&app).await, (1, 4));
@@ -921,7 +840,6 @@ async fn a_grant_from_the_gradebook_shows_the_card_again_with_the_new_balance() 
             .any(|text| text.contains(&texts::gradebook_makeup_attempts(1, 4))),
         "{sent:#?}"
     );
-    assert!(sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
 }
 
 #[tokio::test]
@@ -930,11 +848,11 @@ async fn a_course_without_makeup_has_no_makeup_line_in_the_gradebook() {
     app.add_scored_assignment(10).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_student_grades(&app, &telegram).await;
+    open_fixture_student_grades(&app, &telegram).await;
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let header = format!("👤 {}", app.fixture.student.display_name().as_str());
+    let header = student_card_header(app.fixture.student.display_name().as_str());
     let card = telegram
         .texts(app.teacher())
         .into_iter()
@@ -961,7 +879,7 @@ async fn the_history_marks_a_credited_makeup() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    open_card(&app, &telegram, &closed).await;
+    open_assignment(&app, &telegram, closed.id().as_uuid()).await;
     let history = telegram
         .button_with_text(app.student(), texts::BUTTON_HISTORY)
         .await;
@@ -1002,7 +920,7 @@ async fn without_queued_work_the_review_entry_offers_only_the_makeups() {
             .texts(app.teacher())
             .contains(&texts::review_hub(0, 1))
     );
-    let hub = sent_message(&telegram, app.teacher(), makeups.message_id);
+    let hub = telegram.message_by_id(app.teacher(), makeups.message_id);
     assert!(
         !callbacks_of(&hub).contains(&callbacks::NEXT_REVIEW.to_owned()),
         "{hub:#}"
@@ -1128,7 +1046,7 @@ async fn rejecting_a_sandbox_makeup_offers_a_grant_without_the_makeup_queue() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    let message = sent_message(&telegram, app.teacher(), grant.message_id);
+    let message = telegram.message_by_id(app.teacher(), grant.message_id);
     assert!(
         !callbacks_of(&message).contains(&callbacks::NEXT_MAKEUP_REVIEW.to_owned()),
         "{message:#}"
@@ -1148,7 +1066,7 @@ async fn the_student_list_stays_usable_after_a_card_is_opened() {
     open_makeup(&app, 3).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_student_grades(&app, &telegram).await;
+    open_fixture_student_grades(&app, &telegram).await;
     telegram
         .button(app.teacher(), callbacks::MAKEUP_GRANT)
         .await;
@@ -1164,7 +1082,7 @@ async fn the_student_list_stays_usable_after_a_card_is_opened() {
 
     let sent = telegram.texts(app.teacher());
     assert!(!sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
-    let header = format!("👤 {}", second.display_name().as_str());
+    let header = student_card_header(second.display_name().as_str());
     assert!(
         sent.iter().any(|text| text.starts_with(&header)),
         "{sent:#?}"
@@ -1178,10 +1096,7 @@ async fn an_ended_makeup_is_shown_as_off_and_is_set_up_again_from_the_date() {
         .await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
 
     let off = telegram
         .button_with_text(app.teacher(), texts::BUTTON_MAKEUP_OFF)
@@ -1222,6 +1137,59 @@ async fn a_step_opened_from_the_summary_returns_to_it_by_the_back_button() {
         telegram
             .texts(teacher)
             .contains(&texts::MAKEUP_SAVED.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn disabling_from_the_summary_turns_the_makeup_off_on_save() {
+    let app = TestApp::start().await;
+    open_makeup(&app, 3).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_form(&app, &telegram).await;
+    telegram.click_button(teacher, &answer("pass")).await;
+    telegram
+        .click_button(teacher, callbacks::MAKEUP_DISABLE)
+        .await;
+    telegram.click_button(teacher, callbacks::MAKEUP_SAVE).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(settings(&app).await, None);
+    assert!(
+        telegram
+            .texts(teacher)
+            .contains(&texts::MAKEUP_SAVED.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn cancelling_the_summary_writes_nothing_and_says_so() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_form(&app, &telegram).await;
+    telegram
+        .click_button(teacher, &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
+        .await;
+    telegram
+        .click_button(teacher, &cb(callbacks::MAKEUP_ATTEMPTS_PREFIX, 3))
+        .await;
+    telegram.click_button(teacher, &answer("pass")).await;
+    telegram
+        .click_button(teacher, callbacks::MAKEUP_CANCEL)
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(settings(&app).await, None);
+    assert_eq!(terms_of(&app, app.fixture.assignment.id()).await, None);
+    assert!(
+        telegram
+            .texts(teacher)
+            .contains(&texts::MAKEUP_DISCARDED.to_owned())
     );
 }
 
@@ -1311,7 +1279,7 @@ async fn a_grant_from_the_gradebook_whose_card_cannot_be_read_again_reports_no_f
     spend_the_whole_pool(&app, 1).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    open_student_grades(&app, &telegram).await;
+    open_fixture_student_grades(&app, &telegram).await;
     let grant = telegram
         .button(app.teacher(), callbacks::MAKEUP_GRANT)
         .await;

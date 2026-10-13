@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use crate::domain::{Assignment, DeductedFrom, ReviewScore, StudentGroup, TeachingCourse, User};
+use crate::domain::{Assignment, DeductedFrom, StudentGroup, TeachingCourse, User};
 use crate::test_support::{
     GROUP_CODE, assignment, course_for, student, student_group, t0, teacher,
 };
@@ -37,10 +37,6 @@ fn fixture() -> Fixture {
 
 fn reviewed_at() -> DateTime<Utc> {
     t0() + Duration::hours(2)
-}
-
-fn out_of(value: u16, max_score: u16) -> Option<ReviewScore> {
-    Some(ReviewScore { value, max_score })
 }
 
 fn weekly_penalty_assignment(

@@ -38,7 +38,7 @@ pub use fixture::{CourseFixture, Fixture, insert_assignment, wall_clock_assignme
 pub use response::TestResponse;
 pub use response_gate::ResponseGate;
 
-pub use hw_bot::test_support::invite_codec;
+pub use hw_bot::test_support::{invite_codec, out_of};
 
 use fixture::{insert_course, insert_group, insert_user};
 
@@ -443,25 +443,29 @@ impl TestApp {
     /// Поэтому тестовая связка создаётся напрямую в БД.
     pub async fn add_course_teacher(&self, display_name: &str) -> User {
         let teacher = self.add_outsider_teacher(display_name).await;
-
-        sqlx::query(
-            "insert into teaching_course_teachers (teaching_course_id, teacher_id) values ($1, $2)",
-        )
-        .bind(self.fixture.course.id().as_uuid())
-        .bind(teacher.id().as_uuid())
-        .execute(&self.pool)
-        .await
-        .expect("attach teacher to the course");
+        self.attach_course_teacher(&self.fixture.course, &teacher)
+            .await;
 
         teacher
     }
 
-    pub async fn remove_course_teacher(&self, teacher: &User) {
-        sqlx::query(
-            "delete from teaching_course_teachers where teaching_course_id = $1 and teacher_id = $2",
+    pub async fn attach_course_teacher(&self, course: &TeachingCourse, teacher: &User) {
+        sqlx::query!(
+            "insert into teaching_course_teachers (teaching_course_id, teacher_id) values ($1, $2)",
+            course.id().as_uuid(),
+            teacher.id().as_uuid(),
         )
-        .bind(self.fixture.course.id().as_uuid())
-        .bind(teacher.id().as_uuid())
+        .execute(&self.pool)
+        .await
+        .expect("attach teacher to the course");
+    }
+
+    pub async fn remove_course_teacher(&self, teacher: &User) {
+        sqlx::query!(
+            "delete from teaching_course_teachers where teaching_course_id = $1 and teacher_id = $2",
+            self.fixture.course.id().as_uuid(),
+            teacher.id().as_uuid(),
+        )
         .execute(&self.pool)
         .await
         .expect("detach teacher from the course");
@@ -773,10 +777,6 @@ fn json_request(builder: Builder, body: Value) -> Request<Body> {
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).expect("valid json")))
         .expect("valid request")
-}
-
-pub fn out_of(value: u16, max_score: u16) -> ReviewScore {
-    ReviewScore { value, max_score }
 }
 
 #[track_caller]

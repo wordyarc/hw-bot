@@ -664,6 +664,24 @@ mod tests {
     }
 
     #[test]
+    fn the_production_example_satisfies_every_limit_relation() {
+        let config: AppConfig = config_builder()
+            .add_source(::config::File::with_name("dist/examples/production"))
+            .set_override("group_invites.invite_signing_secret", INVITE_SIGNING_SECRET)
+            .unwrap()
+            .set_override("telegram.bot_token", "123:secret")
+            .unwrap()
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        config
+            .validate()
+            .unwrap_or_else(|error| panic!("the production example must be coherent: {error}"));
+    }
+
+    #[test]
     fn validation_rejects_a_request_timeout_shorter_than_one_database_round_trip() {
         let mut config = app_config();
         config.database.statement_timeout_ms = NonZeroU64::new(10_000).unwrap();

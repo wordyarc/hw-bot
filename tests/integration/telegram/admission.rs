@@ -50,9 +50,10 @@ async fn updates_from_one_chat_are_processed_sequentially() {
     let updates = vec![
         message_update(1, app.teacher(), 1, "/help"),
         message_update(2, app.teacher(), 2, "/help"),
+        message_update(3, app.student(), 1, "/help"),
     ];
     let telegram = telegram_server(updates).await;
-    let gate = gate_sent_messages(&telegram, 2).await;
+    let gate = gate_sent_messages(&telegram, 3).await;
     let (cancellation, mut task) = start_bot_with_settings(
         &app,
         &telegram,
@@ -60,15 +61,36 @@ async fn updates_from_one_chat_are_processed_sequentially() {
     );
 
     gate.wait_started().await;
-    assert!(
-        wait_for_poll_offset(&telegram, 3).await,
-        "both updates were admitted to the dispatcher"
-    );
-    assert_eq!(sent_message_count(&telegram).await, 1);
+    gate.wait_started().await;
+    let mut in_flight = sent_message_chats(&telegram).await;
+    gate.release();
     gate.release();
     gate.wait_started().await;
     gate.release();
     stop_bot(cancellation, &mut task).await;
+
+    in_flight.sort_unstable();
+    let mut expected = vec![app.teacher(), app.student()];
+    expected.sort_unstable();
+    assert_eq!(
+        in_flight, expected,
+        "the other chat answers while the second update of the first chat waits"
+    );
+}
+
+async fn sent_message_chats(telegram: &MockServer) -> Vec<i64> {
+    telegram
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/bottest-token/SendMessage")
+        .map(|request| {
+            request.body_json::<serde_json::Value>().unwrap()["chat_id"]
+                .as_i64()
+                .unwrap()
+        })
+        .collect()
 }
 
 #[tokio::test]

@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
-use super::{Fixture, fixture, out_of, reviewed_at};
+use super::{Fixture, fixture, reviewed_at};
 use crate::domain::{
     DomainError, Review, ReviewDecision, SubmissionStatus, TeachingCourse, USER_TEXT_MAX_LEN,
 };
-use crate::test_support::{ReviewShortcuts, admin, assignment, submission, teacher};
+use crate::test_support::{ReviewShortcuts, admin, assignment, out_of, submission, teacher};
 
 #[test]
 fn a_second_course_teacher_can_review_assignment() {
@@ -184,7 +184,7 @@ fn teacher_can_review_pending_submission_once() {
 fn rejection_with_a_score() -> Review {
     Review {
         decision: ReviewDecision::Reject,
-        score: out_of(4, 5),
+        score: Some(out_of(4, 5)),
         comment: "Нет тестов".to_owned(),
         reviewed_at: reviewed_at(),
     }
@@ -281,7 +281,7 @@ fn accepted_scored_submission_keeps_the_score_of_the_reviewer() {
             &assignment,
             &course,
             &teacher,
-            out_of(4, 5),
+            Some(out_of(4, 5)),
             "Ок",
             reviewed_at(),
         )

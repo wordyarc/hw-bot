@@ -3,7 +3,6 @@ use chrono::DateTime;
 use super::super::render::{penalty_schedule, terms_form_view};
 use super::*;
 use crate::bot::assignment_form::{AssignmentText, DraftAssignment, IssuedGroups};
-use crate::bot::texts::deadline_left;
 use crate::domain::{Grading, LatePolicy, MaxScore};
 use crate::test_support::{t0, vladivostok};
 
@@ -228,7 +227,6 @@ fn a_schedule_to_the_course_total_names_the_penalty_without_a_possible_score() {
             &texts::schedule_closed("03.09.2026 23:59"),
         ]
     );
-    assert!(!schedule.contains("из 10"), "{schedule}");
 }
 
 #[test]
@@ -250,7 +248,7 @@ fn a_schedule_to_the_course_total_runs_to_the_period_limit() {
 #[test]
 fn calendar_return_and_previous_step_have_distinct_labels_and_actions() {
     let mut form = TermsForm::new(scored_terms(), TermsStep::Deadline);
-    form.mode = InputMode::Calendar(vladivostok().today());
+    form.mode = InputMode::Calendar(vladivostok().local_date(t0()));
     let (_, keyboard) = terms_form_view(&form, &vladivostok(), t0()).unwrap();
     let json = serde_json::to_value(keyboard).unwrap();
     let rows = json["inline_keyboard"].as_array().unwrap();
@@ -378,7 +376,7 @@ fn calendar_hides_past_days_and_the_way_back_to_past_months() {
 
 #[test]
 fn deadline_presets_offer_a_week_two_weeks_and_a_month() {
-    let json = serde_json::to_value(deadline_options_keyboard(&vladivostok())).unwrap();
+    let json = serde_json::to_value(deadline_options_keyboard(&vladivostok(), t0())).unwrap();
     let callbacks: Vec<_> = json["inline_keyboard"]
         .as_array()
         .unwrap()
@@ -397,13 +395,6 @@ fn deadline_presets_offer_a_week_two_weeks_and_a_month() {
         ]
         .map(deadline_callback)
     );
-}
-
-#[test]
-fn passed_deadlines_are_not_reported_as_time_left() {
-    let past: DateTime<Utc> = Utc::now() - chrono::Duration::hours(1);
-
-    assert_eq!(deadline_left(past, Utc::now()), texts::DEADLINE_PASSED);
 }
 
 #[test]

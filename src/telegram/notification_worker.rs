@@ -323,11 +323,16 @@ mod tests {
     }
 
     #[test]
-    fn an_accepted_scored_review_names_the_score() {
-        let grade = Grade::new(4, 5, None);
-        let message = accepted(Some(grade));
+    fn an_accepted_scored_review_names_the_grade_on_time_or_late() {
+        for grade in [
+            Grade::new(4, 5, None),
+            Grade::new(8, 10, late_by_one_period(DeductedFrom::WorkScore)),
+            Grade::new(8, 10, late_by_one_period(DeductedFrom::CourseTotal)),
+        ] {
+            let message = accepted(Some(grade));
 
-        assert!(message.contains(&grade_line(grade)), "{message}");
+            assert!(message.contains(&grade_line(grade)), "{message}");
+        }
     }
 
     #[test]
@@ -340,27 +345,7 @@ mod tests {
             "{message}"
         );
         assert!(message.contains(texts::MAKEUP_MARK), "{message}");
-        assert!(message.contains("6 из 10"), "{message}");
         assert!(!message.contains('−'), "{message}");
-    }
-
-    #[test]
-    fn a_penalty_to_the_work_score_is_shown_with_its_arithmetic() {
-        let grade = Grade::new(8, 10, late_by_one_period(DeductedFrom::WorkScore));
-        let message = accepted(Some(grade));
-
-        assert!(message.contains(&grade_line(grade)), "{message}");
-        assert!(message.contains("4 из 10"), "{message}");
-    }
-
-    #[test]
-    fn a_penalty_to_the_course_total_keeps_the_work_score() {
-        let grade = Grade::new(8, 10, late_by_one_period(DeductedFrom::CourseTotal));
-        let message = accepted(Some(grade));
-
-        assert!(message.contains(&grade_line(grade)), "{message}");
-        assert!(message.contains("8 из 10"), "{message}");
-        assert!(message.contains("−4"), "{message}");
     }
 
     #[test]

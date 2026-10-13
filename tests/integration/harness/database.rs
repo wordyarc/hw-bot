@@ -8,6 +8,7 @@ use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt, ReuseDirective};
 use tokio::sync::OnceCell;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 const POSTGRES_PORT: u16 = 5432;
@@ -19,6 +20,10 @@ const MIGRATED_TEMPLATE: &str = "template_hw_bot";
 const EMPTY_TEMPLATE: &str = "template1";
 const DATABASE_LIFECYCLE_LOCK: i64 = 0x6877_626f_745f_6462;
 const CLEANUP_CONNECTIONS: usize = 8;
+const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(50);
+const FIRST_CONNECTION_POLL: Duration = Duration::from_millis(5);
+const WARM_CONNECTIONS: u32 = 2;
 
 /// Контейнер один на весь тестовый бинарник, база - на каждый тест.
 static POSTGRES: OnceCell<Postgres> = OnceCell::const_new();
@@ -111,7 +116,7 @@ async fn drop_stale_databases(postgres: &Postgres, admin: &mut PgConnection) {
     join_all((0..CLEANUP_CONNECTIONS).map(|worker| {
         let names = stale.iter().skip(worker).step_by(CLEANUP_CONNECTIONS);
         async move {
-            let Ok(mut connection) = PgConnection::connect(&postgres.url("postgres")).await else {
+            let Ok(mut connection) = connect(&postgres.url("postgres")).await else {
                 return;
             };
             for name in names {
@@ -164,9 +169,8 @@ async fn ensure_migrated_template(postgres: &Postgres, admin: &mut PgConnection)
 }
 
 async fn connect_template(postgres: &Postgres) -> PgPool {
-    PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&postgres.url(MIGRATED_TEMPLATE))
+    let url = postgres.url(MIGRATED_TEMPLATE);
+    retry_transient(|| PgPoolOptions::new().max_connections(1).connect(&url))
         .await
         .expect("connect to the migrated template")
 }
@@ -233,7 +237,7 @@ async fn connect_fresh(options: PgPoolOptions, template: &str) -> PgPool {
     // runtime, а сокеты пула привязаны к реактору того теста, который его создал, и умирают
     // вместе с ним. Поэтому коннект одноразовый и открывается на текущем runtime.
     // Имя базы нельзя передать bind-параметром, но оно только что сгенерировано из uuid.
-    let mut admin = PgConnection::connect(&postgres.url("postgres"))
+    let mut admin = connect(&postgres.url("postgres"))
         .await
         .expect("connect to the maintenance database");
     share_database_lifecycle(&mut admin).await;
@@ -247,13 +251,15 @@ async fn connect_fresh(options: PgPoolOptions, template: &str) -> PgPool {
 
     // Lock держим до первого подключения: другой прогон уже не сможет удалить только что
     // созданную базу в зазоре между `create database` и коннектом.
-    let pool = options
-        .min_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_lazy(&postgres.url(&name))
-        .expect("valid test database url");
-    wait_for_first_connection(&pool).await;
+    let warm = options.get_max_connections().min(WARM_CONNECTIONS);
+    let pool = open_warm(
+        options
+            .min_connections(warm)
+            .idle_timeout(None)
+            .max_lifetime(None),
+        &postgres.url(&name),
+    )
+    .await;
     admin
         .close()
         .await
@@ -262,14 +268,62 @@ async fn connect_fresh(options: PgPoolOptions, template: &str) -> PgPool {
     pool
 }
 
-async fn wait_for_first_connection(pool: &PgPool) {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while pool.num_idle() == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+async fn open_warm(options: PgPoolOptions, url: &str) -> PgPool {
+    let warm = options.get_min_connections();
+    let open = || {
+        options
+            .clone()
+            .connect_lazy(url)
+            .expect("valid test database url")
+    };
+    let deadline = Instant::now() + CONNECT_DEADLINE;
+    let mut pool = open();
+    while Instant::now() < deadline {
+        tokio::time::sleep(FIRST_CONNECTION_POLL).await;
+        if pool.num_idle() >= warm as usize {
+            return pool;
         }
-    })
-    .await
-    .expect("the pool opens its first connection to the test database");
+        if pool.size() < warm && pool.num_idle() == pool.size() as usize {
+            tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+            pool = open();
+        }
+    }
+
+    let cause = match tokio::time::timeout(CONNECT_DEADLINE, PgConnection::connect(url)).await {
+        Ok(Ok(connection)) => {
+            let _ = connection.close().await;
+            "the server accepts connections but the pool did not open them".to_owned()
+        }
+        Ok(Err(error)) => format!("{error:?}"),
+        Err(_) => "a direct connection does not open either".to_owned(),
+    };
+    panic!("the pool opens its warm connections to the test database: {cause}");
+}
+
+async fn connect(url: &str) -> Result<PgConnection, sqlx::Error> {
+    retry_transient(|| PgConnection::connect(url)).await
+}
+
+async fn retry_transient<T, F>(mut attempt: impl FnMut() -> F) -> Result<T, sqlx::Error>
+where
+    F: Future<Output = Result<T, sqlx::Error>>,
+{
+    let deadline = Instant::now() + CONNECT_DEADLINE;
+    loop {
+        match tokio::time::timeout_at(deadline, attempt()).await {
+            Ok(Err(error))
+                if is_transient(&error) && Instant::now() + CONNECT_RETRY_DELAY < deadline =>
+            {
+                tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+            }
+            Ok(result) => return result,
+            Err(elapsed) => return Err(sqlx::Error::Io(elapsed.into())),
+        }
+    }
+}
+
+fn is_transient(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Io(_) | sqlx::Error::Protocol(_))
 }
 
 pub async fn migrated_database() -> PgPool {

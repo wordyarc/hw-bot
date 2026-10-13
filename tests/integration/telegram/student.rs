@@ -8,13 +8,15 @@ use hw_bot::domain::{
     Assignment, DeductedFrom, Submission, SubmissionId, SubmissionKind, SubmissionStatus,
     USER_TEXT_MAX_LEN,
 };
+use hw_bot::test_support::ASSIGNMENT_BODY;
 use serde_json::json;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+use super::flows::{open_assignment, open_submission_prompt};
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{
-    Button, TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
+    TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
 };
 use crate::harness::{TestApp, insert_assignment, out_of, submission_id, wall_clock_assignment};
 
@@ -77,7 +79,7 @@ async fn student_opens_a_previously_published_assignment_from_the_archive() {
         .and(path("/bottest-token/SendMessage"))
         .and(body_json(json!({
             "chat_id": app.student(),
-            "text": "Send a pull request link."
+            "text": ASSIGNMENT_BODY
         })))
         .respond_with(telegram_message_response())
         .expect(1)
@@ -126,13 +128,7 @@ async fn the_history_shows_a_penalty_to_the_course_total_next_to_the_work_score(
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
-        )
-        .await;
+    open_assignment(&app, &telegram, assignment.id().as_uuid()).await;
     let history = telegram
         .button_with_text(app.student(), texts::BUTTON_HISTORY)
         .await;
@@ -172,19 +168,7 @@ async fn an_old_submit_button_names_why_the_work_cannot_be_submitted_instead_of_
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-    let submit = telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await;
+    let submit = open_submission_prompt(&app, &telegram).await;
     telegram.message(app.student(), "pull/1");
     telegram.flush(app.student()).await;
     telegram.click(app.student(), &submit);
@@ -213,19 +197,7 @@ async fn a_second_submit_tap_refused_after_the_prompt_brings_the_menu_back() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-    let submit = telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await;
+    let submit = open_submission_prompt(&app, &telegram).await;
     app.archive_assignment(app.assignment(), app.teacher())
         .await
         .ok();
@@ -249,19 +221,7 @@ async fn a_submission_refused_after_the_prompt_brings_the_menu_back() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await;
+    open_submission_prompt(&app, &telegram).await;
     app.archive_assignment(app.assignment(), app.teacher())
         .await
         .ok();
@@ -289,13 +249,7 @@ async fn the_assignment_card_names_a_penalty_to_the_course_total() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
-        )
-        .await;
+    open_assignment(&app, &telegram, assignment.id().as_uuid()).await;
     stop_bot(cancellation, &mut task).await;
 
     let deducted_from = texts::deducted_from_line(DeductedFrom::CourseTotal);
@@ -309,30 +263,44 @@ async fn the_assignment_card_names_a_penalty_to_the_course_total() {
         .find(|text| text.contains(&deducted_from))
         .unwrap_or_else(|| panic!("the card does not name the deducted_from: {sent:#?}"));
     assert!(card.contains(assignment.title().as_str()), "{card}");
+    assert!(card.contains(&texts::current_late_penalty(4)), "{card}");
+}
+
+#[tokio::test]
+async fn the_queue_lists_a_pending_work_with_the_works_ahead_of_it() {
+    let app = TestApp::start().await;
+    let classmate = app.add_student("Classmate").await;
+    app.queued_submission(classmate.telegram_user_id().as_i64(), "pull/first")
+        .await;
+    let pending = app.queued_submission(app.student(), "pull/second").await;
+    let submitted_at = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(pending))
+        .await
+        .unwrap()
+        .unwrap()
+        .submitted_at();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/queue");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let entry = texts::queue_entry(
+        app.fixture.subject.name().as_str(),
+        app.fixture.assignment.title().as_str(),
+        &vladivostok().format_short(submitted_at),
+        &texts::queue_ahead(2),
+    );
+    let sent = telegram.texts(app.student());
     assert!(
-        card.contains(&format!("{} −4", texts::LATE_PENALTY_LABEL)),
-        "{card}"
+        sent.iter()
+            .any(|text| text.starts_with(texts::STUDENT_QUEUE_HEADER) && text.contains(&entry)),
+        "{sent:#?}"
     );
 }
 
 fn longer_than_one_telegram_message() -> String {
     format!("{}{}", "📌".repeat(1000), "a".repeat(2100))
-}
-
-async fn open_submission_prompt(app: &TestApp, telegram: &TelegramScenario) -> Button {
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
-        )
-        .await
 }
 
 #[tokio::test]
@@ -392,13 +360,7 @@ async fn a_body_longer_than_one_telegram_message_still_brings_the_card_buttons()
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.student(), "/tasks");
-    telegram
-        .click_button(
-            app.student(),
-            &cb(callbacks::ASSIGNMENT_PREFIX, assignment.id().as_uuid()),
-        )
-        .await;
+    open_assignment(&app, &telegram, assignment.id().as_uuid()).await;
     telegram
         .button(
             app.student(),
@@ -533,12 +495,14 @@ async fn a_second_submit_tap_whose_prompt_fails_to_send_does_not_announce_a_canc
         })))
         .with_priority(1)
         .up_to_n_times(1)
+        .expect(1)
         .mount(&telegram.server)
         .await;
     let before = telegram.messages(app.student()).len();
     telegram.click(app.student(), &submit);
     telegram.flush(app.student()).await;
     stop_bot(cancellation, &mut task).await;
+    telegram.server.verify().await;
 
     let replies = &telegram.messages(app.student())[before..];
     assert!(

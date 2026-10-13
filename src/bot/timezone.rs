@@ -22,11 +22,7 @@ impl BotTimezone {
         Self { tz }
     }
 
-    pub fn label(&self) -> String {
-        self.label_at(Utc::now())
-    }
-
-    fn label_at(&self, instant: DateTime<Utc>) -> String {
+    pub fn label_at(&self, instant: DateTime<Utc>) -> String {
         let city = self
             .tz
             .name()
@@ -49,10 +45,6 @@ impl BotTimezone {
         } else {
             format!("{city} (UTC{sign}{hours}:{minutes:02})")
         }
-    }
-
-    pub fn today(&self) -> NaiveDate {
-        self.local_date(Utc::now())
     }
 
     pub fn local_date(&self, instant: DateTime<Utc>) -> NaiveDate {
@@ -132,12 +124,12 @@ impl BotTimezone {
         self.instant(local.date(), local.time())
     }
 
-    pub fn in_days(&self, days: u64) -> Option<NaiveDate> {
-        self.today().checked_add_days(Days::new(days))
+    pub fn in_days(&self, now: DateTime<Utc>, days: u64) -> Option<NaiveDate> {
+        self.local_date(now).checked_add_days(Days::new(days))
     }
 
-    pub fn in_months(&self, months: u32) -> Option<NaiveDate> {
-        self.today().checked_add_months(Months::new(months))
+    pub fn in_months(&self, now: DateTime<Utc>, months: u32) -> Option<NaiveDate> {
+        self.local_date(now).checked_add_months(Months::new(months))
     }
 
     pub fn parse_deadline(&self, text: &str) -> Option<DateTime<Utc>> {

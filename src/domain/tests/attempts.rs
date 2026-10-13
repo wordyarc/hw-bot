@@ -1,5 +1,11 @@
+use chrono::Duration;
+use proptest::prelude::*;
+
 use super::{Fixture, fixture};
-use crate::domain::{DomainError, MAX_ATTEMPTS, StudentAssignmentProgress, SubmissionStatus};
+use crate::domain::{
+    AssignmentStatus, DeductedFrom, DomainError, MAX_ATTEMPTS, StudentAssignmentProgress,
+    SubmissionHistory, SubmissionStatus,
+};
 use crate::test_support::{admin, assignment, course_for, history, submission, t0, teacher};
 
 #[test]
@@ -133,49 +139,84 @@ fn remaining_attempts_stop_at_zero() {
     assert_eq!(history.remaining_attempts_for(&assignment), 0);
 }
 
-#[test]
-fn a_new_attempt_is_offered_only_where_submit_would_succeed() {
-    let Fixture {
-        teacher, course, ..
-    } = fixture();
-    let draft = assignment(&course, &teacher).max_attempts(2).build();
-    let assignment = assignment(&course, &teacher)
-        .max_attempts(2)
-        .published()
-        .build();
-    let at = t0();
+fn histories() -> impl Strategy<Value = SubmissionHistory> {
+    let rarely = || prop::bool::weighted(0.15);
+    (0..=3u16, 0..=2u16, 0..=2u16, rarely(), rarely(), rarely()).prop_map(
+        |(used, makeups, extra, accepted, accepted_makeup, pending)| {
+            let mut history = history()
+                .used(used)
+                .submissions(used + makeups)
+                .extra(extra);
+            if accepted {
+                history = history.accepted();
+            }
+            if accepted_makeup {
+                history = history.accepted_makeup();
+            }
+            if pending {
+                history = history.pending();
+            }
+            history.build()
+        },
+    )
+}
 
-    assert!(!history().build().accepts_new_attempt_for(&draft, at));
-    assert!(history().build().accepts_new_attempt_for(&assignment, at));
-    assert!(
-        history()
-            .used(1)
-            .build()
-            .accepts_new_attempt_for(&assignment, at)
-    );
-    assert!(
-        !history()
-            .used(2)
-            .build()
-            .accepts_new_attempt_for(&assignment, at)
-    );
-    assert!(
-        !history()
-            .pending()
-            .build()
-            .accepts_new_attempt_for(&assignment, at)
-    );
-    assert!(
-        !history()
-            .accepted()
-            .build()
-            .accepts_new_attempt_for(&assignment, at)
-    );
-    assert!(
-        !history()
-            .build()
-            .accepts_new_attempt_for(&assignment, assignment.closes_at())
-    );
+fn statuses() -> impl Strategy<Value = AssignmentStatus> {
+    prop_oneof![
+        3 => Just(AssignmentStatus::Published),
+        1 => Just(AssignmentStatus::Draft),
+        1 => Just(AssignmentStatus::Archived),
+    ]
+}
+
+fn around_closing() -> impl Strategy<Value = Duration> {
+    prop_oneof![
+        4 => (-10 * 24 * 60..=4 * 24 * 60i64).prop_map(Duration::minutes),
+        1 => Just(-Duration::nanoseconds(1)),
+        1 => Just(Duration::zero()),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn a_new_attempt_is_offered_exactly_when_a_regular_submission_is_admitted(
+        status in statuses(),
+        max_attempts in 1..=3u16,
+        late in any::<bool>(),
+        history in histories(),
+        offset in around_closing(),
+    ) {
+        let Fixture { teacher, course, student, .. } = fixture();
+        let mut work = assignment(&course, &teacher).max_attempts(max_attempts);
+        if late {
+            work = work.scored(10).late_policy(7, 1, 2, DeductedFrom::WorkScore);
+        }
+        if status != AssignmentStatus::Draft {
+            work = work.published();
+        }
+        let mut work = work.build();
+        if status == AssignmentStatus::Archived {
+            work.archive(&course, &teacher).unwrap();
+        }
+        let at = work.closes_at() + offset;
+
+        let submitted = submission(&work, &student)
+            .history(history)
+            .submitted_at(at)
+            .try_build();
+
+        prop_assert_eq!(
+            history.accepts_new_attempt_for(&work, at),
+            submitted.is_ok(),
+            "{:?}",
+            submitted
+        );
+    }
 }
 
 #[test]

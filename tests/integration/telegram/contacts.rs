@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+use super::flows::{open_course, open_student_grades};
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{Button, TelegramScenario};
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{ResponseGate, TestApp, submission_id};
 
 async fn mount_contact(
     telegram: &TelegramScenario,
@@ -42,13 +43,13 @@ async fn refresh_after_username_change(updated: Option<&str>) -> Value {
         app.fixture.student.id(),
     )
     .await;
-    let original = message(&telegram, app.teacher(), button.message_id);
+    let original = telegram.message_by_id(app.teacher(), button.message_id);
     telegram.click(app.teacher(), &button);
     telegram.flush(app.teacher()).await;
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let old = message(&telegram, app.teacher(), refresh.message_id);
+    let old = telegram.message_by_id(app.teacher(), refresh.message_id);
     assert_eq!(urls(&old), ["https://t.me/old_username"]);
 
     Mock::given(path("/bottest-token/GetChat"))
@@ -65,16 +66,19 @@ async fn refresh_after_username_change(updated: Option<&str>) -> Value {
     let refreshed = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refreshed.message_id);
+    let card = telegram.message_by_id(app.teacher(), refreshed.message_id);
     stop_bot(cancellation, &mut task).await;
 
     assert!(refreshed.message_id > refresh.message_id);
     assert_eq!(requests(&telegram, "GetChat").await.len(), 2);
     assert_eq!(
-        message(&telegram, app.teacher(), button.message_id),
+        telegram.message_by_id(app.teacher(), button.message_id),
         original
     );
-    assert_eq!(message(&telegram, app.teacher(), refresh.message_id), old);
+    assert_eq!(
+        telegram.message_by_id(app.teacher(), refresh.message_id),
+        old
+    );
     card
 }
 
@@ -109,14 +113,6 @@ async fn requests(telegram: &TelegramScenario, endpoint: &str) -> Vec<Value> {
         .filter(|request| request.url.path() == format!("/bottest-token/{endpoint}"))
         .map(|request| request.body_json().unwrap())
         .collect()
-}
-
-fn message(telegram: &TelegramScenario, user: i64, id: i32) -> Value {
-    telegram
-        .messages(user)
-        .into_iter()
-        .find(|message| message["message_id"] == id)
-        .unwrap()
 }
 
 fn urls(message: &Value) -> Vec<&str> {
@@ -189,19 +185,22 @@ async fn lookup_timeout_can_be_retried_without_losing_the_review_score() {
     );
     let telegram = TelegramScenario::new().await;
     mount_contact(&telegram, app.student(), Some("recovered_name"), false).await;
+    let unanswered = ResponseGate::new(json!({
+        "ok": true, "result": private_chat_info(app.student(), Some("late_response"), false)
+    }))
+    .await;
     Mock::given(path("/bottest-token/GetChat"))
-        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)).set_body_json(json!({
-            "ok": true, "result": private_chat_info(app.student(), Some("late_response"), false)
-        })))
+        .respond_with(unanswered.response())
         .with_priority(1)
         .up_to_n_times(1)
         .expect(1)
-        .mount(&telegram.server).await;
+        .mount(&telegram.server)
+        .await;
     let (cancellation, mut task) = start_bot_with_settings(
         &app,
         &telegram.server,
         bot_settings_with(|s| {
-            s.request_timeout = Duration::from_millis(300);
+            s.request_timeout = Duration::from_secs(1);
         }),
     );
     let button = review_comment(&app, &telegram, submission, Some(4)).await;
@@ -210,7 +209,7 @@ async fn lookup_timeout_can_be_retried_without_losing_the_review_score() {
     let retry = telegram
         .button_with_text(app.teacher(), texts::BUTTON_RETRY_CONTACT)
         .await;
-    let failed = message(&telegram, app.teacher(), retry.message_id);
+    let failed = telegram.message_by_id(app.teacher(), retry.message_id);
     assert!(
         failed["text"]
             .as_str()
@@ -224,7 +223,7 @@ async fn lookup_timeout_can_be_retried_without_losing_the_review_score() {
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
     assert_eq!(
-        urls(&message(&telegram, app.teacher(), refresh.message_id)),
+        urls(&telegram.message_by_id(app.teacher(), refresh.message_id)),
         ["https://t.me/recovered_name"]
     );
     assert_eq!(requests(&telegram, "GetChat").await.len(), 2);
@@ -264,7 +263,7 @@ async fn unavailable_account_is_explained_without_claiming_privacy() {
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refresh.message_id);
+    let card = telegram.message_by_id(app.teacher(), refresh.message_id);
     stop_bot(cancellation, &mut task).await;
     assert!(
         card["text"]
@@ -299,7 +298,7 @@ async fn private_forwards_without_username_shows_explanation_and_refresh() {
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refresh.message_id);
+    let card = telegram.message_by_id(app.teacher(), refresh.message_id);
     stop_bot(cancellation, &mut task).await;
     assert!(
         card["text"]
@@ -332,7 +331,7 @@ async fn rejected_id_link_falls_back_once_and_keeps_the_review_comment_step() {
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refresh.message_id);
+    let card = telegram.message_by_id(app.teacher(), refresh.message_id);
     assert!(
         card["text"]
             .as_str()
@@ -369,15 +368,16 @@ async fn uncertain_card_send_is_not_retried_and_the_review_continues() {
         &app,
         &telegram.server,
         bot_settings_with(|s| {
-            s.request_timeout = Duration::from_millis(300);
+            s.request_timeout = Duration::from_secs(1);
         }),
     );
     let button = review_comment(&app, &telegram, submission, None).await;
+    let unanswered = ResponseGate::new(telegram_message_body()).await;
     Mock::given(path("/bottest-token/SendMessage"))
         .and(body_partial_json(
             json!({"reply_parameters": {"message_id": button.message_id}}),
         ))
-        .respond_with(telegram_message_response().set_delay(Duration::from_secs(2)))
+        .respond_with(unanswered.response())
         .with_priority(1)
         .up_to_n_times(1)
         .expect(1)
@@ -498,7 +498,7 @@ async fn contact_preserves_review_b_when_opened_from_old_student_a_button() {
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refresh.message_id);
+    let card = telegram.message_by_id(app.teacher(), refresh.message_id);
     assert!(
         card["text"]
             .as_str()
@@ -526,10 +526,7 @@ async fn contact_preserves_entered_terms_and_their_active_keyboard() {
     mount_contact(&telegram, app.student(), Some("student_name"), false).await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     let contact = review_contact(&app, &telegram).await;
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(app.teacher(), &cb(callbacks::COURSE_PREFIX, app.course()))
-        .await;
+    open_course(&app, &telegram).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::CREATE_PREFIX, app.course()))
         .await;
@@ -555,7 +552,7 @@ async fn contact_preserves_entered_terms_and_their_active_keyboard() {
     let periods = telegram
         .button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 4))
         .await;
-    let original = message(&telegram, app.teacher(), periods.message_id);
+    let original = telegram.message_by_id(app.teacher(), periods.message_id);
 
     telegram.click(app.teacher(), &contact);
     telegram.flush(app.teacher()).await;
@@ -563,7 +560,7 @@ async fn contact_preserves_entered_terms_and_their_active_keyboard() {
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
     assert_eq!(
-        message(&telegram, app.teacher(), periods.message_id),
+        telegram.message_by_id(app.teacher(), periods.message_id),
         original
     );
     assert!(!telegram.messages(app.teacher()).iter().any(|message| {
@@ -631,7 +628,7 @@ async fn old_contact_works_after_restart_without_restoring_the_comment_step() {
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
     assert_eq!(
-        urls(&message(&telegram, app.teacher(), refresh.message_id)),
+        urls(&telegram.message_by_id(app.teacher(), refresh.message_id)),
         ["https://t.me/student_name"]
     );
     telegram.message(app.teacher(), "This must not complete the old review");
@@ -764,7 +761,7 @@ async fn contact_is_available_on_each_grade_page_and_keeps_pagination_working() 
         app.fixture.student.id(),
     )
     .await;
-    let original = message(&telegram, app.teacher(), first.message_id);
+    let original = telegram.message_by_id(app.teacher(), first.message_id);
     telegram.click(app.teacher(), &first);
     telegram.flush(app.teacher()).await;
     let next = telegram
@@ -776,7 +773,7 @@ async fn contact_is_available_on_each_grade_page_and_keeps_pagination_working() 
         .button_with_text(app.teacher(), texts::BUTTON_STUDENT_CONTACT)
         .await;
     assert!(second.message_id > first.message_id);
-    let page = message(&telegram, app.teacher(), second.message_id);
+    let page = telegram.message_by_id(app.teacher(), second.message_id);
     assert_eq!(
         original["reply_markup"]["inline_keyboard"][0][0],
         page["reply_markup"]["inline_keyboard"][0][0]
@@ -787,7 +784,10 @@ async fn contact_is_available_on_each_grade_page_and_keeps_pagination_working() 
     telegram.click(app.teacher(), &second);
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
-    assert_eq!(message(&telegram, app.teacher(), second.message_id), page);
+    assert_eq!(
+        telegram.message_by_id(app.teacher(), second.message_id),
+        page
+    );
     assert_eq!(requests(&telegram, "GetChat").await.len(), 2);
 }
 
@@ -797,25 +797,7 @@ async fn gradebook_contact(
     course: TeachingCourseId,
     student: UserId,
 ) -> Button {
-    telegram.message(app.teacher(), "/courses");
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::COURSE_PREFIX, course.as_uuid()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::GRADES_PREFIX, course.as_uuid()),
-        )
-        .await;
-    telegram
-        .click_button(
-            app.teacher(),
-            &cb(callbacks::STUDENT_PREFIX, student.as_uuid()),
-        )
-        .await;
+    open_student_grades(app, telegram, course.as_uuid(), student.as_uuid()).await;
     telegram
         .button_with_text(app.teacher(), texts::BUTTON_STUDENT_CONTACT)
         .await
@@ -833,13 +815,13 @@ async fn open_review_contact(app: &TestApp, telegram: &TelegramScenario) -> Open
 }
 
 async fn open_contact(app: &TestApp, telegram: &TelegramScenario, button: Button) -> OpenedContact {
-    let original = message(telegram, app.teacher(), button.message_id);
+    let original = telegram.message_by_id(app.teacher(), button.message_id);
     telegram.click(app.teacher(), &button);
     telegram.flush(app.teacher()).await;
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(telegram, app.teacher(), refresh.message_id);
+    let card = telegram.message_by_id(app.teacher(), refresh.message_id);
     OpenedContact {
         button,
         original,
@@ -880,8 +862,8 @@ async fn the_review_card_puts_the_contact_under_the_decisions() {
     let button = review_contact(&app, &telegram).await;
     stop_bot(cancellation, &mut task).await;
 
-    let keyboard =
-        &message(&telegram, app.teacher(), button.message_id)["reply_markup"]["inline_keyboard"];
+    let card = telegram.message_by_id(app.teacher(), button.message_id);
+    let keyboard = &card["reply_markup"]["inline_keyboard"];
     assert_eq!(keyboard[0].as_array().unwrap().len(), 2);
     assert_eq!(keyboard[1][0]["text"], texts::BUTTON_STUDENT_CONTACT);
 }
@@ -915,7 +897,7 @@ async fn the_contact_card_is_an_optional_reply_that_leaves_the_review_as_it_was(
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(
-        message(&telegram, app.teacher(), opened.button.message_id),
+        telegram.message_by_id(app.teacher(), opened.button.message_id),
         opened.original
     );
     assert!(telegram.messages(app.student()).is_empty());
@@ -943,7 +925,7 @@ async fn gradebook_offers_contact_without_submissions_or_graded_assignments() {
     mount_contact(&telegram, app.student(), None, false).await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     let button = gradebook_contact(&app, &telegram, course.id(), app.fixture.student.id()).await;
-    let original = message(&telegram, app.teacher(), button.message_id);
+    let original = telegram.message_by_id(app.teacher(), button.message_id);
     assert!(
         original["text"]
             .as_str()
@@ -956,10 +938,10 @@ async fn gradebook_offers_contact_without_submissions_or_graded_assignments() {
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refresh.message_id);
+    let card = telegram.message_by_id(app.teacher(), refresh.message_id);
     assert_eq!(urls(&card), [format!("tg://user?id={}", app.student())]);
     assert_eq!(
-        message(&telegram, app.teacher(), button.message_id),
+        telegram.message_by_id(app.teacher(), button.message_id),
         original
     );
 

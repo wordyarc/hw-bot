@@ -1,4 +1,3 @@
-use chrono::Utc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
 
@@ -286,7 +285,7 @@ pub(super) async fn submit_comment(
             decision,
             score,
             comment: text.into_owned(),
-            reviewed_at: Utc::now(),
+            reviewed_at: step.now(),
         })
         .await;
 

@@ -165,35 +165,3 @@ pub(crate) async fn send_student_grades(
         .await?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::bot::texts;
-
-    #[test]
-    fn the_card_shows_sums_and_penalties_only_when_some_go_to_the_total() {
-        let with_penalties = texts::grades_header("Student", 14, 4, 10, 20);
-        let without_penalties = texts::grades_header("Student", 14, 0, 14, 20);
-
-        assert!(with_penalties.contains("14"), "{with_penalties}");
-        assert!(with_penalties.contains("−4"), "{with_penalties}");
-        assert!(with_penalties.contains("10 из 20"), "{with_penalties}");
-        assert!(
-            without_penalties.contains("14 из 20"),
-            "{without_penalties}"
-        );
-        assert!(!without_penalties.contains('−'), "{without_penalties}");
-        assert!(without_penalties.lines().count() < with_penalties.lines().count());
-    }
-
-    #[test]
-    fn an_assignment_line_names_only_a_penalty_to_the_total() {
-        let to_total = texts::grade_entry("Ownership", "8", 10, 4, false);
-        let to_work = texts::grade_entry("Traits", "4", 10, 0, false);
-
-        assert!(to_total.contains("8 из 10"), "{to_total}");
-        assert!(to_total.contains("−4"), "{to_total}");
-        assert!(to_work.contains("4 из 10"), "{to_work}");
-        assert!(!to_work.contains('−'), "{to_work}");
-    }
-}

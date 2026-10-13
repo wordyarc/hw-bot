@@ -28,6 +28,7 @@ pub const MAX_CONCURRENT_UPDATES: usize = 1024;
 mod assignment_files;
 mod assignment_form;
 pub mod callbacks;
+mod clock;
 mod context;
 mod errors;
 mod files;
@@ -42,6 +43,7 @@ mod views;
 
 use crate::telegram::network::Bot;
 use crate::telegram::{is_invalid_token, new_bot};
+pub use clock::Clock;
 pub use errors::app_error_message;
 use files::FileTransfers;
 use handlers::home::default_commands;
@@ -62,6 +64,7 @@ pub struct TelegramBot {
     application: ApplicationContainer,
     settings: TelegramBotSettings,
     timezone: BotTimezone,
+    clock: Clock,
     admission: Arc<UpdateAdmission>,
     file_transfers: FileTransfers,
     codec: CourseInviteCodec,
@@ -114,6 +117,7 @@ impl TelegramBot {
         api_base_url: &str,
         settings: TelegramBotSettings,
         timezone: BotTimezone,
+        clock: Clock,
         codec: CourseInviteCodec,
     ) -> anyhow::Result<Self> {
         let quota = Quota::with_period(settings.rate_limit_replenish)
@@ -141,6 +145,7 @@ impl TelegramBot {
             application,
             settings,
             timezone,
+            clock,
             admission,
             file_transfers: FileTransfers::new(
                 transfer_bot,
@@ -202,6 +207,7 @@ impl TelegramBot {
                 BotContext {
                     services: self.application,
                     timezone: self.timezone,
+                    clock: self.clock,
                     invites,
                     transfers: self.file_transfers,
                 },

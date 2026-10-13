@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::domain::{
     AssignmentStatus, DeductedFrom, Grade, Grading, LatePenalty, MAX_LATE_PERIOD_DAYS,
@@ -66,6 +66,11 @@ pub const DEDUCTED_FROM_HINT: &str = "За опоздание назначает
     • в итоге по предмету: балл работы отражает только качество, а штрафы копятся отдельно и вычитаются из суммы баллов по предмету.";
 pub const SUBMISSIONS_CLOSE_LABEL: &str = "Приём работ:";
 pub const LATE_PENALTY_LABEL: &str = "Штраф, если сдать сейчас:";
+
+pub fn current_late_penalty(points: u16) -> String {
+    format!("{LATE_PENALTY_LABEL} −{points}")
+}
+
 pub const DEADLINE_QUESTION: &str =
     "До какого числа принимать работы? После этого срока сдать уже нельзя.";
 pub const NO_PENALTY_QUESTION: &str = "До какого числа можно сдать без штрафа?";
@@ -643,10 +648,12 @@ pub fn sandbox_button(student: &str, title: &str) -> String {
     format!("👤 {student} · {title}")
 }
 
+pub const BULK_ACCEPT_SCORES: &str = "Оценочные задания получат максимальный балл с учётом штрафа за опоздание, а досдачи — засчитываемый балл досдачи, а не максимум.";
+
 pub fn bulk_review_prompt(decision: ReviewDecision, count: u32) -> String {
     let question = match decision {
         ReviewDecision::Accept => format!(
-            "Принять все работы в песочнице, отправленные до открытия этого списка: {count}? Оценочные задания получат максимальный балл с учётом штрафа за опоздание, а досдачи — засчитываемый балл досдачи, а не максимум. Принятую обычную работу студент пересдать не сможет."
+            "Принять все работы в песочнице, отправленные до открытия этого списка: {count}? {BULK_ACCEPT_SCORES} Принятую обычную работу студент пересдать не сможет."
         ),
         ReviewDecision::Reject => format!(
             "Отклонить все работы в песочнице, отправленные до открытия этого списка: {count}? Каждое отклонение тратит одну попытку студента."
@@ -1205,7 +1212,7 @@ fn regular_grade_line(grade: Grade) -> String {
 
 pub fn deadline_left(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let left = deadline - now;
-    if left.num_seconds() <= 0 {
+    if left <= TimeDelta::zero() {
         return DEADLINE_PASSED.to_owned();
     }
     let days = left.num_days();
@@ -1220,19 +1227,38 @@ pub fn deadline_left(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
 }
 
 pub fn format_file_size(size_bytes: u64) -> String {
+    let kibibytes = size_bytes as f64 / 1024.0;
     if size_bytes < 1024 {
         format!("{size_bytes} Б")
-    } else if size_bytes < 1024 * 1024 {
-        format!("{:.1} КиБ", size_bytes as f64 / 1024.0)
+    } else if kibibytes < 1023.95 {
+        format!("{kibibytes:.1} КиБ")
     } else {
-        format!("{:.1} МиБ", size_bytes as f64 / (1024.0 * 1024.0))
+        format!("{:.1} МиБ", kibibytes / 1024.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Display;
+
     use super::*;
     use crate::domain::{LatePenalty, LatePolicy};
+    use crate::test_support::t0;
+
+    fn out_of(score: impl Display, max_score: impl Display) -> String {
+        format!("{score} из {max_score}")
+    }
+
+    fn penalty(points: impl Display) -> String {
+        format!("−{points}")
+    }
+
+    fn numbers(text: &str) -> Vec<u32> {
+        text.split(|character: char| !character.is_ascii_digit())
+            .filter(|number| !number.is_empty())
+            .map(|number| number.parse().unwrap())
+            .collect()
+    }
 
     fn late_by_one_period(deducted_from: DeductedFrom) -> Option<LatePenalty> {
         LatePolicy::new(7, 4, 4, deducted_from)
@@ -1251,28 +1277,32 @@ mod tests {
             .unwrap()
     }
 
+    fn left(duration: TimeDelta) -> String {
+        deadline_left(t0() + duration, t0())
+    }
+
     #[test]
     fn a_late_card_shows_the_maximum_left_after_a_penalty_to_the_work_score() {
         let line = late_submission_line(late(4, 1, DeductedFrom::WorkScore), 10);
 
-        assert!(line.contains("−4"), "{line}");
-        assert!(line.contains("6 из 10"), "{line}");
+        assert!(line.contains(&penalty(4)), "{line}");
+        assert!(line.contains(&out_of(6, 10)), "{line}");
     }
 
     #[test]
     fn a_penalty_above_the_scale_leaves_a_maximum_of_zero() {
         let line = late_submission_line(late(6, 2, DeductedFrom::WorkScore), 10);
 
-        assert!(line.contains("−12"), "{line}");
-        assert!(line.contains("0 из 10"), "{line}");
+        assert!(line.contains(&penalty(12)), "{line}");
+        assert!(line.contains(&out_of(0, 10)), "{line}");
     }
 
     #[test]
     fn a_late_card_with_a_penalty_to_the_course_total_does_not_cap_the_score() {
         let line = late_submission_line(late(4, 1, DeductedFrom::CourseTotal), 10);
 
-        assert!(line.contains("−4"), "{line}");
-        assert!(!line.contains("из 10"), "{line}");
+        assert!(line.contains(&penalty(4)), "{line}");
+        assert_eq!(numbers(&line), [4], "{line}");
         assert_ne!(
             line,
             late_submission_line(late(4, 1, DeductedFrom::WorkScore), 10)
@@ -1288,7 +1318,7 @@ mod tests {
         assert!(!on_time.contains('−'), "{on_time}");
         for question in [&to_work, &to_total] {
             assert!(question.starts_with(&on_time), "{question}");
-            assert!(question.contains("−4"), "{question}");
+            assert!(question.contains(&penalty(4)), "{question}");
         }
         assert_ne!(to_work, to_total);
     }
@@ -1315,7 +1345,8 @@ mod tests {
     fn an_on_time_grade_names_only_the_work_score_and_the_scale() {
         let line = regular(Grade::new(8, 10, None));
 
-        assert!(line.contains("8 из 10"), "{line}");
+        assert!(line.contains(&out_of(8, 10)), "{line}");
+        assert_eq!(numbers(&line), [8, 10], "{line}");
         assert!(!line.contains('−'), "{line}");
     }
 
@@ -1327,10 +1358,9 @@ mod tests {
             late_by_one_period(DeductedFrom::WorkScore),
         ));
 
-        assert!(line.contains('8'), "{line}");
-        assert!(line.contains("− 4"), "{line}");
-        assert!(line.contains("4 из 10"), "{line}");
-        assert!(!line.contains("8 из 10"), "{line}");
+        assert_eq!(numbers(&line), [8, 4, 4, 10], "{line}");
+        assert!(line.contains('−'), "{line}");
+        assert!(line.contains(&out_of(4, 10)), "{line}");
     }
 
     #[test]
@@ -1346,8 +1376,8 @@ mod tests {
             late_by_one_period(DeductedFrom::WorkScore),
         ));
 
-        assert!(line.contains("8 из 10"), "{line}");
-        assert!(line.contains("−4"), "{line}");
+        assert!(line.contains(&out_of(8, 10)), "{line}");
+        assert!(line.contains(&penalty(4)), "{line}");
         assert_ne!(line, to_work);
     }
 
@@ -1356,8 +1386,18 @@ mod tests {
         let line = grade_line(SubmissionKind::Makeup, Some(Grade::new(6, 10, None))).unwrap();
 
         assert!(line.starts_with(MAKEUP_MARK), "{line}");
-        assert!(line.contains("6 из 10"), "{line}");
+        assert!(line.contains(&out_of(6, 10)), "{line}");
         assert!(!line.contains('−'), "{line}");
+    }
+
+    #[test]
+    fn makeup_terms_name_the_credit_out_of_the_scale() {
+        let ten = Grading::scored(10).unwrap();
+        let six = MakeupTerms::scored(6, ten).unwrap();
+
+        let line = makeup_terms_line(Some(six), ten);
+
+        assert!(line.contains(&out_of(6, 10)), "{line}");
     }
 
     #[test]
@@ -1371,13 +1411,40 @@ mod tests {
     }
 
     #[test]
+    fn the_grades_card_shows_sums_and_penalties_only_when_some_go_to_the_total() {
+        let with_penalties = grades_header("Student", 14, 4, 10, 20);
+        let without_penalties = grades_header("Student", 14, 0, 14, 20);
+
+        assert!(numbers(&with_penalties).contains(&14), "{with_penalties}");
+        assert!(with_penalties.contains(&penalty(4)), "{with_penalties}");
+        assert!(with_penalties.contains(&out_of(10, 20)), "{with_penalties}");
+        assert!(
+            without_penalties.contains(&out_of(14, 20)),
+            "{without_penalties}"
+        );
+        assert!(!without_penalties.contains('−'), "{without_penalties}");
+        assert!(without_penalties.lines().count() < with_penalties.lines().count());
+    }
+
+    #[test]
+    fn a_grades_card_line_names_only_a_penalty_to_the_total() {
+        let to_total = grade_entry("Ownership", "8", 10, 4, false);
+        let to_work = grade_entry("Traits", "4", 10, 0, false);
+
+        assert!(to_total.contains(&out_of(8, 10)), "{to_total}");
+        assert!(to_total.contains(&penalty(4)), "{to_total}");
+        assert!(to_work.contains(&out_of(4, 10)), "{to_work}");
+        assert!(!to_work.contains('−'), "{to_work}");
+    }
+
+    #[test]
     fn a_roster_line_shows_progress_only_when_the_group_has_assignments() {
         let with_progress = roster_student(7, "Анна", 2, 5);
         let without_progress = roster_student(7, "Анна", 0, 0);
 
         assert!(with_progress.starts_with('7'), "{with_progress}");
         assert!(with_progress.contains("Анна"), "{with_progress}");
-        assert!(with_progress.contains("2 из 5"), "{with_progress}");
+        assert!(with_progress.contains(&out_of(2, 5)), "{with_progress}");
         let rest = without_progress
             .replacen('7', "", 1)
             .replacen("Анна", "", 1);
@@ -1388,21 +1455,97 @@ mod tests {
     }
 
     #[test]
-    fn the_teacher_help_names_the_way_to_the_roster() {
+    fn the_teacher_help_leads_to_the_roster_from_the_courses_button() {
         let help = teacher_help();
+        let paragraph = help
+            .split("\n\n")
+            .find(|paragraph| paragraph.contains(BUTTON_ROSTER))
+            .unwrap_or_else(|| panic!("{help}"));
 
+        let courses = paragraph.find(BUTTON_COURSES);
         assert!(
-            help.contains(&format!("{BUTTON_COURSES} → Предмет → {BUTTON_ROSTER}")),
-            "{help}"
+            courses.is_some_and(|courses| courses < paragraph.find(BUTTON_ROSTER).unwrap()),
+            "{paragraph}"
         );
     }
 
     #[test]
-    fn the_accept_all_prompt_tells_makeups_apart_from_the_maximum() {
-        let prompt = bulk_review_prompt(ReviewDecision::Accept, 3);
+    fn only_the_accept_all_prompt_explains_the_scores_it_gives() {
+        assert!(bulk_review_prompt(ReviewDecision::Accept, 3).contains(BULK_ACCEPT_SCORES));
+        assert!(!bulk_review_prompt(ReviewDecision::Reject, 3).contains(BULK_ACCEPT_SCORES));
+    }
 
-        assert!(prompt.contains("досдачи"), "{prompt}");
-        assert!(prompt.contains("засчитываемый балл"), "{prompt}");
-        assert!(!bulk_review_prompt(ReviewDecision::Reject, 3).contains("досдач"));
+    #[test]
+    fn the_time_left_is_named_in_days_and_hours_from_a_whole_day() {
+        let two_days = TimeDelta::days(2) + TimeDelta::hours(5) + TimeDelta::minutes(30);
+
+        assert_eq!(numbers(&left(two_days)), [2, 5]);
+        assert_eq!(numbers(&left(TimeDelta::days(1))), [1, 0]);
+    }
+
+    #[test]
+    fn the_time_left_is_named_in_whole_hours_below_a_day() {
+        let almost_a_day = TimeDelta::days(1) - TimeDelta::nanoseconds(1);
+
+        assert_eq!(numbers(&left(almost_a_day)), [23]);
+        assert_eq!(numbers(&left(TimeDelta::hours(1))), [1]);
+        assert_ne!(left(TimeDelta::hours(1)), left(TimeDelta::minutes(1)));
+    }
+
+    #[test]
+    fn the_time_left_is_named_in_whole_minutes_below_an_hour() {
+        let almost_an_hour = TimeDelta::hours(1) - TimeDelta::nanoseconds(1);
+
+        assert_eq!(numbers(&left(almost_an_hour)), [59]);
+        assert_ne!(left(TimeDelta::minutes(5)), left(TimeDelta::hours(5)));
+    }
+
+    #[test]
+    fn less_than_a_minute_left_is_still_a_minute_left() {
+        for rest in [
+            TimeDelta::seconds(59),
+            TimeDelta::seconds(1),
+            TimeDelta::milliseconds(500),
+            TimeDelta::nanoseconds(1),
+        ] {
+            assert_eq!(left(rest), left(TimeDelta::minutes(1)), "{rest}");
+        }
+        assert_ne!(left(TimeDelta::minutes(1)), DEADLINE_PASSED);
+    }
+
+    #[test]
+    fn the_deadline_has_passed_from_its_very_moment() {
+        for passed in [
+            TimeDelta::zero(),
+            -TimeDelta::nanoseconds(1),
+            -TimeDelta::hours(1),
+        ] {
+            assert_eq!(left(passed), DEADLINE_PASSED, "{passed}");
+        }
+    }
+
+    #[test]
+    fn a_file_size_is_shown_in_the_largest_unit_it_reaches() {
+        for (size, shown) in [
+            (0, "0 Б"),
+            (1023, "1023 Б"),
+            (1024, "1.0 КиБ"),
+            (1_048_524, "1023.9 КиБ"),
+            (1_048_576, "1.0 МиБ"),
+            (5_242_880, "5.0 МиБ"),
+        ] {
+            assert_eq!(format_file_size(size), shown, "{size}");
+        }
+    }
+
+    #[test]
+    fn a_size_that_rounds_to_a_whole_mebibyte_is_shown_in_mebibytes() {
+        for size in [1_048_525, 1_048_575] {
+            assert_eq!(
+                format_file_size(size),
+                format_file_size(1_048_576),
+                "{size}"
+            );
+        }
     }
 }

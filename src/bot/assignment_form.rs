@@ -583,7 +583,6 @@ impl Form for TermsForm {
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, NaiveDate, TimeZone};
-    use chrono_tz::Tz;
     use proptest::prelude::*;
 
     use super::*;
@@ -593,7 +592,7 @@ mod tests {
     use crate::domain::{
         AssignmentParts, AssignmentStatus, LATEST_TERM_YEAR, NewAssignment, TeachingCourse, User,
     };
-    use crate::test_support::t0;
+    use crate::test_support::{t0, vladivostok};
 
     fn last_supported_day() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(LATEST_TERM_YEAR, 12, 31, 0, 0, 0)
@@ -1556,7 +1555,7 @@ mod tests {
             let session = Session::open(start);
             prop_assume!(session.is_some());
             let mut session = session.unwrap();
-            let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+            let timezone = vladivostok();
             let now = t0();
 
             prop_assert!(session.view(&timezone, now), "the first screen has no view");

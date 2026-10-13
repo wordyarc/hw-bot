@@ -1,7 +1,9 @@
+use chrono::{DateTime, Utc};
 use teloxide::types::{ChatId, Message};
 
 use super::Bot;
 use super::HandlerResult;
+use super::clock::Clock;
 use super::files::FileTransfers;
 use super::invites::BotInvites;
 use super::state::BotDialogue;
@@ -13,6 +15,7 @@ use crate::domain::TelegramUserId;
 pub(super) struct BotContext {
     pub services: ApplicationContainer,
     pub timezone: BotTimezone,
+    pub clock: Clock,
     pub invites: BotInvites,
     pub transfers: FileTransfers,
 }
@@ -53,6 +56,10 @@ impl<'a> Chat<'a> {
 
     pub fn timezone(&self) -> &'a BotTimezone {
         &self.deps.context.timezone
+    }
+
+    pub fn now(&self) -> DateTime<Utc> {
+        self.deps.context.clock.now()
     }
 
     pub fn invites(&self) -> &'a BotInvites {
@@ -125,6 +132,10 @@ impl<'a> Screen<'a> {
         self.chat.timezone()
     }
 
+    pub fn now(&self) -> DateTime<Utc> {
+        self.chat.now()
+    }
+
     pub fn invites(&self) -> &'a BotInvites {
         self.chat.invites()
     }
@@ -191,6 +202,10 @@ impl<'a> TextStep<'a> {
 
     pub fn services(&self) -> &'a ApplicationContainer {
         &self.deps.context.services
+    }
+
+    pub fn now(&self) -> DateTime<Utc> {
+        self.deps.context.clock.now()
     }
 
     pub fn transfers(&self) -> &'a FileTransfers {

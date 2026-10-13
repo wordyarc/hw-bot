@@ -92,7 +92,7 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
     let text = format!(
         "{}\n\n{}\n\n{}",
         help_for(role),
-        texts::timezone_note(&timezone.label()),
+        texts::timezone_note(&timezone.label_at(chat.now())),
         help_commands(role),
     );
     send_message_chunks(bot, chat_id, text, None).await
@@ -206,7 +206,11 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
     if let Some(group) = &registered.student_group {
         lines.push(texts::profile_group(group.code().as_str()));
     }
-    lines.push(format!("{} {}", texts::TIMEZONE_LABEL, timezone.label()));
+    lines.push(format!(
+        "{} {}",
+        texts::TIMEZONE_LABEL,
+        timezone.label_at(screen.now())
+    ));
     match role {
         Role::Student { .. } => {
             if let Some(stats) =

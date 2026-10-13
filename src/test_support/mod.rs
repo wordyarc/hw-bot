@@ -83,6 +83,10 @@ impl ReviewShortcuts for Submission {
     }
 }
 
+pub fn out_of(value: u16, max_score: u16) -> ReviewScore {
+    ReviewScore { value, max_score }
+}
+
 #[cfg(test)]
 pub(crate) async fn closed_pool() -> sqlx::PgPool {
     let pool = sqlx::PgPool::connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
@@ -133,8 +137,10 @@ pub fn invite_codec() -> CourseInviteCodec {
     )
 }
 
+pub const VLADIVOSTOK: Tz = Tz::Asia__Vladivostok;
+
 pub fn vladivostok() -> BotTimezone {
-    BotTimezone::new(Tz::Asia__Vladivostok)
+    BotTimezone::new(VLADIVOSTOK)
 }
 
 pub fn student_group(code: &str) -> StudentGroup {

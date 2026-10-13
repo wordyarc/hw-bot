@@ -7,6 +7,9 @@ edition = "2024"
 name = "hw_bot"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
@@ -33,6 +36,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.24.0", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
+hw-bot = { path = ".", features = ["test-support"] }
 tokio = { version = "1.53.1", features = ["test-util"] }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 testcontainers = { version = "0.28.0", features = ["reusable-containers"] }
