@@ -540,6 +540,74 @@ async fn a_granted_attempt_lets_a_student_with_an_empty_pool_send_another_makeup
     );
 }
 
+async fn disable_makeup(app: &TestApp, enabled: CourseMakeup) {
+    let saved = configure(app, app.teacher_actor(), Some(enabled), None, Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(saved, None);
+}
+
+async fn makeup_sent_before_disabling(app: &TestApp) -> SubmissionId {
+    let work = app.add_closed_assignment("Closed", 10, 6).await;
+    let enabled = app.enable_makeup(3).await;
+    let makeup = submit(app, &work, true).await.unwrap().submission.id();
+    disable_makeup(app, enabled).await;
+
+    makeup
+}
+
+#[tokio::test]
+async fn a_disabled_makeup_refuses_a_new_makeup() {
+    let app = TestApp::start().await;
+    let refused = app.add_closed_assignment("Refused", 10, 6).await;
+    makeup_sent_before_disabling(&app).await;
+
+    let error = submit(&app, &refused, true).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::DeadlineExceeded);
+    assert_eq!(count_submissions(&app, &refused).await, 0);
+}
+
+#[tokio::test]
+async fn a_makeup_sent_before_disabling_stays_in_the_makeup_queue() {
+    let app = TestApp::start().await;
+    let makeup = makeup_sent_before_disabling(&app).await;
+
+    let next = app
+        .application
+        .reviews
+        .take_next_makeup(app.teacher_actor())
+        .await
+        .unwrap()
+        .expect("the makeup is still waiting");
+
+    assert_eq!(next.submission.id(), makeup);
+}
+
+#[tokio::test]
+async fn a_makeup_sent_before_disabling_is_credited_by_its_terms() {
+    let app = TestApp::start().await;
+    let makeup = makeup_sent_before_disabling(&app).await;
+
+    let reviewed = app
+        .application
+        .reviews
+        .review_submission(ReviewSubmission {
+            submission_id: makeup,
+            actor: app.teacher_actor(),
+            decision: ReviewDecision::Accept,
+            score: None,
+            comment: "Досдано".to_owned(),
+            reviewed_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let grade = reviewed.submission.grade().expect("the makeup is credited");
+    assert_eq!((grade.work_score(), grade.max_score()), (6, 10));
+}
+
 fn offered(
     items: &[hw_bot::app::StudentAssignment],
     assignment: &Assignment,
@@ -552,33 +620,9 @@ fn offered(
 }
 
 #[tokio::test]
-async fn the_student_list_and_card_offer_a_makeup_only_where_it_can_be_sent() {
+async fn the_student_list_offers_a_makeup_with_its_end_credit_and_balance() {
     let app = TestApp::start().await;
     let open = app.add_closed_assignment("Open makeup", 10, 6).await;
-    let spent = app.add_closed_assignment("Spent", 10, 6).await;
-    let minimum = app
-        .add_makeup_assignment(
-            "At minimum",
-            ten(),
-            credit(6),
-            Utc::now() + Duration::hours(1),
-        )
-        .await;
-    let accepted = submission_id(
-        &app.submit(minimum.id().as_uuid(), app.student(), "pull/minimum")
-            .await
-            .created(),
-    );
-    app.review_with_score(accepted, app.teacher(), "accept", out_of(6, 10), "Минимум")
-        .await
-        .ok();
-    app.change_deadline(
-        minimum.id().as_uuid(),
-        app.teacher(),
-        Utc::now() - Duration::minutes(30),
-    )
-    .await
-    .ok();
     let makeup = app.enable_makeup(1).await;
 
     let listed = app
@@ -588,28 +632,30 @@ async fn the_student_list_and_card_offer_a_makeup_only_where_it_can_be_sent() {
         .await
         .unwrap()
         .items;
+
     let offer = offered(&listed, &open).expect("a makeup is offered");
     assert_eq!(offer.until, makeup.until());
     assert_eq!(offer.credit.map(|credit| credit.get()), Some(6));
     assert_eq!(offer.balance.remaining(), 1);
-    assert_eq!(offered(&listed, &minimum), None);
+}
 
+#[tokio::test]
+async fn the_student_card_counts_the_pool_spent_on_another_assignment() {
+    let app = TestApp::start().await;
+    let open = app.add_closed_assignment("Open makeup", 10, 6).await;
+    let spent = app.add_closed_assignment("Spent", 10, 6).await;
+    app.enable_makeup(1).await;
     submit(&app, &spent, true).await.unwrap();
+
     let card = app
         .application
         .assignments
         .find_for_student(app.student_actor(), open.id())
         .await
         .unwrap();
+
     let exhausted = card.assignment.makeup.expect("the empty pool is shown");
     assert_eq!(exhausted.balance.remaining(), 0);
-    let spent_card = app
-        .application
-        .assignments
-        .find_for_student(app.student_actor(), spent.id())
-        .await
-        .unwrap();
-    assert_eq!(spent_card.assignment.makeup, None);
 }
 
 async fn makeup_of(app: &TestApp, assignment: &Assignment, student: &User) -> Uuid {

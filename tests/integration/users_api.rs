@@ -1,8 +1,6 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use hw_bot::domain::{InviteGeneration, TeachingCourseId};
-
 use crate::harness::TestApp;
 
 #[tokio::test]
@@ -38,15 +36,6 @@ async fn one_invite_registers_several_students() {
 
     app.register_student(2101, "Ivan", &token).await.created();
     app.register_student(2102, "Petr", &token).await.created();
-}
-
-#[tokio::test]
-async fn registration_without_an_invite_is_rejected() {
-    let app = TestApp::start().await;
-
-    app.register_student(2002, "Petr", "")
-        .await
-        .error(StatusCode::FORBIDDEN, "invite_invalid");
 }
 
 #[tokio::test]
@@ -86,18 +75,6 @@ async fn a_course_of_several_groups_needs_the_chosen_group() {
         .await
         .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
     app.get_as("/me", 2001).await.not_found();
-}
-
-#[tokio::test]
-async fn a_signed_invite_for_an_unknown_course_is_rejected() {
-    let app = TestApp::start().await;
-    let token = app
-        .invites
-        .encode(TeachingCourseId::new(), InviteGeneration::FIRST);
-
-    app.register_student(2002, "Petr", &token)
-        .await
-        .error(StatusCode::FORBIDDEN, "invite_invalid");
 }
 
 #[tokio::test]

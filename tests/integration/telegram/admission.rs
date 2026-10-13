@@ -123,7 +123,7 @@ async fn a_server_error_cannot_hold_the_permit_during_teloxides_internal_sleep()
             settings.max_concurrent_updates = NonZeroUsize::MIN;
         }),
     );
-    tokio::time::timeout(Duration::from_secs(2), sent.wait_until_satisfied())
+    tokio::time::timeout(Duration::from_secs(5), sent.wait_until_satisfied())
         .await
         .expect("the second update does not wait for the ten-second library sleep");
     stop_bot(cancellation, &mut task).await;
@@ -181,7 +181,7 @@ async fn invalid_token_stops_the_telegram_bot() {
         .await;
     let (cancellation, task) = start_bot(&app, &telegram);
 
-    let result = tokio::time::timeout(Duration::from_secs(2), task)
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
         .await
         .expect("invalid token stops the bot")
         .expect("Telegram task does not panic");

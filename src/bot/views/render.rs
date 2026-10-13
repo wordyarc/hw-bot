@@ -418,20 +418,19 @@ pub(crate) fn button_label(label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
-    use chrono_tz::Tz;
 
     use super::*;
     use crate::app::MakeupQuestion;
     use crate::bot::assignment_form::AssignmentTerms;
     use crate::bot::callbacks::TermsAction;
     use crate::domain::DeductedFrom;
-    use crate::test_support::{assignment, course_for, student_group, t0, teacher};
+    use crate::test_support::{assignment, course_for, student_group, t0, teacher, vladivostok};
 
     #[test]
     fn summary_warns_at_a_past_deadline_according_to_the_selected_policy() {
         let teacher = teacher(1);
         let course = course_for(&student_group("test"), &teacher);
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         for allow_late in [false, true] {
             let mut builder = assignment(&course, &teacher).scored(5);
             if allow_late {
@@ -474,7 +473,7 @@ mod tests {
             .scored(5)
             .late_policy(7, 2, 4, DeductedFrom::WorkScore)
             .build();
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         let mut form = TermsForm::new(
             AssignmentTerms::editing(&assignment, 0, MakeupQuestion::default()),
             TermsStep::Summary,
@@ -498,7 +497,7 @@ mod tests {
     {
         let teacher = teacher(1);
         let course = course_for(&student_group("test"), &teacher);
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         for (deducted_from, button) in [
             (DeductedFrom::WorkScore, texts::BUTTON_POLICY_WORK_SCORE),
             (DeductedFrom::CourseTotal, texts::BUTTON_POLICY_COURSE_TOTAL),
@@ -537,7 +536,7 @@ mod tests {
             .scored(5)
             .late_policy(7, 1, 4, DeductedFrom::WorkScore)
             .build();
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         let late = grading_lines(
             &assignment,
             assignment.deadline_at() + Duration::days(1),
@@ -571,7 +570,7 @@ mod tests {
             .published()
             .build();
         assignment.archive(&course, &teacher).unwrap();
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         let schedule = penalty_schedule(
             assignment.deadline_at(),
             assignment.late_policy().unwrap(),
@@ -597,7 +596,7 @@ mod tests {
         use crate::bot::makeup_form::MakeupForm;
         use crate::domain::{CourseMakeup, TeachingCourseId};
 
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         let ended = CourseMakeup::open(t0() + Duration::days(30), 3, t0()).unwrap();
         let now = ended.until() + Duration::days(1);
         let mut form = MakeupForm::new(TeachingCourseId::new(), Some(ended), Vec::new(), now);
@@ -619,7 +618,7 @@ mod tests {
 
         let teacher = teacher(1);
         let course = course_for(&student_group("test"), &teacher);
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         let scored = assignment(&course, &teacher).scored(10).build();
         let pass_fail = assignment(&course, &teacher).build();
         let six = MakeupTerms::scored(6, Grading::scored(10).unwrap()).unwrap();
@@ -669,7 +668,7 @@ mod tests {
 
         let teacher = teacher(1);
         let course = course_for(&student_group("test"), &teacher);
-        let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+        let timezone = vladivostok();
         let work = assignment(&course, &teacher)
             .scored(10)
             .makeup_credit(6)

@@ -75,13 +75,6 @@ mod tests {
     }
 
     #[test]
-    fn typed_ids_can_be_restored_from_uuid() {
-        let uuid = Uuid::now_v7();
-
-        assert_eq!(AssignmentId::from_uuid(uuid).as_uuid(), uuid);
-    }
-
-    #[test]
     fn telegram_user_id_must_be_positive() {
         assert_eq!(
             TelegramUserId::new(0).unwrap_err(),

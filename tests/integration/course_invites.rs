@@ -3,7 +3,7 @@ use std::time::Duration;
 use chrono::Utc;
 use hw_bot::app::{Actor, ErrorCode, RegisterStudent};
 use hw_bot::db;
-use hw_bot::domain::{InviteGeneration, StudentGroupId, TelegramUserId};
+use hw_bot::domain::{InviteGeneration, StudentGroupId, TeachingCourseId, TelegramUserId};
 use hw_bot::invites::VerifiedInvite;
 
 use crate::harness::{TestApp, wait_for_blocked_connection};
@@ -61,25 +61,6 @@ async fn generation_stays_inside_the_u32_range() {
             Some("teaching_course_invites_generation_check")
         );
     }
-}
-
-#[tokio::test]
-async fn only_one_of_two_concurrent_rotations_wins() {
-    let app = TestApp::start().await;
-    let course_id = app.fixture.course.id();
-
-    let (first, second) = tokio::join!(
-        db::course_invites::rotate(&app.pool, course_id, InviteGeneration::FIRST),
-        db::course_invites::rotate(&app.pool, course_id, InviteGeneration::FIRST),
-    );
-
-    assert_eq!(first.is_ok(), second.is_err(), "exactly one must win");
-    assert_eq!(
-        db::course_invites::find_generation(&app.pool, course_id)
-            .await
-            .unwrap(),
-        Some(InviteGeneration::new(2).unwrap())
-    );
 }
 
 /// Ротация не отзывает инвайт у регистрации, которая уже получила `for share`:
@@ -148,14 +129,28 @@ async fn a_rotated_invite_stops_resolving_the_course() {
 #[tokio::test]
 async fn a_link_issued_before_rotation_no_longer_registers() {
     let app = TestApp::start().await;
-    let token = app.course_invite_token().await;
     db::course_invites::rotate(&app.pool, app.fixture.course.id(), InviteGeneration::FIRST)
         .await
         .unwrap();
 
-    app.register_student(app.next_telegram_id(), "Late", &token)
-        .await
-        .error(axum::http::StatusCode::FORBIDDEN, "invite_invalid");
+    assert_eq!(register(&app, None).await, Err(ErrorCode::InviteInvalid));
+}
+
+#[tokio::test]
+async fn a_signed_invite_for_an_unknown_course_does_not_register() {
+    let app = TestApp::start().await;
+    let invite = app
+        .invites
+        .decode(
+            &app.invites
+                .encode(TeachingCourseId::new(), InviteGeneration::FIRST),
+        )
+        .unwrap();
+
+    assert_eq!(
+        register_with(&app, invite, None).await,
+        Err(ErrorCode::InviteInvalid)
+    );
 }
 
 #[tokio::test]
@@ -287,16 +282,13 @@ async fn a_stale_expected_generation_is_a_concurrent_modification() {
 #[tokio::test]
 async fn a_course_without_an_invite_row_never_falls_back_to_open_registration() {
     let app = TestApp::start().await;
-    let token = app.course_invite_token().await;
     sqlx::query("delete from teaching_course_invites where teaching_course_id = $1")
         .bind(app.fixture.course.id().as_uuid())
         .execute(&app.pool)
         .await
         .unwrap();
 
-    app.register_student(app.next_telegram_id(), "Ivan", &token)
-        .await
-        .error(axum::http::StatusCode::FORBIDDEN, "invite_invalid");
+    assert_eq!(register(&app, None).await, Err(ErrorCode::InviteInvalid));
 }
 
 fn invite(app: &TestApp) -> VerifiedInvite {
@@ -310,12 +302,20 @@ async fn register(
     app: &TestApp,
     student_group_id: Option<StudentGroupId>,
 ) -> Result<StudentGroupId, ErrorCode> {
+    register_with(app, invite(app), student_group_id).await
+}
+
+async fn register_with(
+    app: &TestApp,
+    invite: VerifiedInvite,
+    student_group_id: Option<StudentGroupId>,
+) -> Result<StudentGroupId, ErrorCode> {
     app.application
         .users
         .register_student(RegisterStudent {
             telegram_user_id: TelegramUserId::new(app.next_telegram_id()).unwrap(),
             display_name: "Ivan".to_owned(),
-            invite: invite(app),
+            invite,
             student_group_id,
             registered_at: Utc::now(),
         })

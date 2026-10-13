@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use sqlx::ConnectOptions;
+use hw_bot::db::DbError;
+use sqlx::{ConnectOptions, PgPool};
 
 use crate::harness::TestApp;
 
@@ -49,7 +50,7 @@ async fn runtime_pool_bounds_connection_waiting() {
     let pool = hw_bot::db::connect_runtime(
         &database_url,
         1,
-        Duration::from_millis(250),
+        Duration::from_secs(1),
         Duration::from_secs(1),
     )
     .await
@@ -61,19 +62,24 @@ async fn runtime_pool_bounds_connection_waiting() {
     assert!(matches!(error, sqlx::Error::PoolTimedOut));
 }
 
-#[tokio::test]
-async fn runtime_pool_applies_statement_timeout() {
+async fn statement_timeout_pool() -> PgPool {
     let setup_pool = crate::harness::fresh_database().await;
     let database_url = setup_pool.connect_options().to_url_lossy().to_string();
     setup_pool.close().await;
-    let pool = hw_bot::db::connect_runtime(
+
+    hw_bot::db::connect_runtime(
         &database_url,
         1,
         Duration::from_secs(1),
         Duration::from_millis(50),
     )
     .await
-    .unwrap();
+    .unwrap()
+}
+
+#[tokio::test]
+async fn runtime_pool_applies_statement_timeout() {
+    let pool = statement_timeout_pool().await;
 
     let error = sqlx::query("select pg_sleep(1)")
         .execute(&pool)
@@ -91,4 +97,16 @@ async fn runtime_pool_applies_statement_timeout() {
             .unwrap(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_statement_timeout_counts_as_database_overload() {
+    let pool = statement_timeout_pool().await;
+
+    let error = sqlx::query("select pg_sleep(1)")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(DbError::from(error), DbError::Overloaded));
 }

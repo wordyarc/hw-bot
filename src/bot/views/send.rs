@@ -78,43 +78,131 @@ pub(crate) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResu
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+    use crate::domain::USER_TEXT_MAX_LEN;
+
+    fn chunks(source: &str) -> Vec<&str> {
+        message_chunks(source).collect()
+    }
+
+    fn units(text: &str) -> usize {
+        text.encode_utf16().count()
+    }
 
     #[test]
-    fn long_messages_are_split_by_telegram_length_without_losing_content() {
-        let roster = "12. Иванова Анна — сдано 7 из 12\n".repeat(400);
-        let long_line = "b".repeat(MESSAGE_LIMIT + 5);
-        let after_header = format!("Список\n{long_line}");
-        for (source, expected_chunks) in [
-            (String::new(), 0),
-            ("я".repeat(MESSAGE_LIMIT), 1),
-            ("я🦀a".repeat(MESSAGE_LIMIT), 4),
-            ("🦀".repeat(MESSAGE_LIMIT), 2),
-            (format!("🕘{}", "a".repeat(MESSAGE_LIMIT - 1)), 2),
-            (roster.clone(), 4),
-            (after_header.clone(), 3),
-            (format!("\n{long_line}"), 2),
-            (format!(" \n\n{long_line}"), 2),
-        ] {
-            let chunks: Vec<_> = message_chunks(&source).collect();
-            assert_eq!(chunks.len(), expected_chunks);
-            assert!(
-                chunks
-                    .iter()
-                    .all(|chunk| chunk.encode_utf16().count() <= MESSAGE_LIMIT)
-            );
-            assert!(chunks.iter().all(|chunk| !chunk.trim().is_empty()));
-            assert_eq!(chunks.concat(), source);
-        }
+    fn an_empty_text_has_no_chunks() {
+        assert!(chunks("").is_empty());
+    }
 
-        let lines: Vec<_> = message_chunks(&roster).collect();
+    #[test]
+    fn a_text_within_the_limit_is_one_chunk() {
+        let source = "я".repeat(MESSAGE_LIMIT);
+
+        assert_eq!(chunks(&source), [source.as_str()]);
+    }
+
+    #[test]
+    fn the_limit_is_counted_in_utf16_units() {
+        for (pattern, expected) in [("🦀", 2), ("я🦀a", 4)] {
+            let source = pattern.repeat(MESSAGE_LIMIT);
+
+            let chunks = chunks(&source);
+
+            assert_eq!(chunks.len(), expected, "{pattern}");
+            assert!(
+                chunks.iter().all(|chunk| units(chunk) <= MESSAGE_LIMIT),
+                "{pattern}"
+            );
+            assert_eq!(chunks.concat(), source, "{pattern}");
+        }
+    }
+
+    #[test]
+    fn a_surrogate_pair_at_the_limit_moves_to_the_next_chunk_whole() {
+        let source = format!("🕘{}", "a".repeat(MESSAGE_LIMIT - 1));
+
+        let chunks = chunks(&source);
+
+        assert_eq!(units(chunks[0]), MESSAGE_LIMIT);
+        assert_eq!(chunks[1], "a");
+    }
+
+    #[test]
+    fn a_multiline_text_is_split_at_the_ends_of_lines() {
+        let roster = "12. Иванова Анна — сдано 7 из 12\n".repeat(400);
+
+        let chunks = chunks(&roster);
+
+        assert_eq!(chunks.len(), 4);
         assert!(
-            lines[..lines.len() - 1]
+            chunks[..chunks.len() - 1]
                 .iter()
                 .all(|chunk| chunk.ends_with('\n'))
         );
-        let cut: Vec<_> = message_chunks(&after_header).collect();
-        assert_eq!(cut[0], "Список\n");
-        assert_eq!(cut[1].encode_utf16().count(), MESSAGE_LIMIT);
+        assert_eq!(chunks.concat(), roster);
+    }
+
+    #[test]
+    fn a_line_longer_than_the_limit_is_cut_at_the_limit() {
+        let long_line = "b".repeat(MESSAGE_LIMIT + 5);
+        let source = format!("Список\n{long_line}");
+
+        let chunks = chunks(&source);
+
+        assert_eq!(chunks, ["Список\n", &long_line[..MESSAGE_LIMIT], "bbbbb"]);
+    }
+
+    #[test]
+    fn a_blank_head_stays_with_the_text_after_it() {
+        let long_line = "b".repeat(MESSAGE_LIMIT + 5);
+        for head in ["\n", " \n\n"] {
+            let source = format!("{head}{long_line}");
+
+            let chunks = chunks(&source);
+
+            assert_eq!(chunks.len(), 2, "{head:?}");
+            assert!(chunks[0].starts_with(head), "{head:?}");
+            assert_eq!(chunks.concat(), source, "{head:?}");
+        }
+    }
+
+    fn user_text() -> impl Strategy<Value = String> {
+        let run = (
+            prop::sample::select(vec!['a', 'я', '🦀', ' ', '\n', '\t']),
+            1..=MESSAGE_LIMIT,
+        );
+        prop::collection::vec(run, 1..6).prop_filter_map("a blank user text", |runs| {
+            let text: String = runs
+                .into_iter()
+                .flat_map(|(character, count)| std::iter::repeat_n(character, count))
+                .take(USER_TEXT_MAX_LEN)
+                .collect();
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_owned())
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            failure_persistence: None,
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn chunks_of_a_screen_with_user_texts_keep_the_text_fit_the_limit_and_are_never_blank(
+            parts in prop::collection::vec(user_text(), 1..4),
+        ) {
+            let source = parts.join("\n");
+
+            let chunks = chunks(&source);
+
+            prop_assert_eq!(chunks.concat(), source.as_str());
+            for chunk in chunks {
+                prop_assert!(units(chunk) <= MESSAGE_LIMIT);
+                prop_assert!(!chunk.trim().is_empty());
+            }
+        }
     }
 }

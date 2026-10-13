@@ -90,26 +90,6 @@ async fn an_assignment_created_for_one_group_is_issued_only_to_it() {
 }
 
 #[tokio::test]
-async fn a_group_outside_the_course_is_rejected_without_creating_the_assignment() {
-    let app = TestApp::start().await;
-    let foreign = app.add_foreign_course().await;
-
-    app.create_assignment_raw(
-        app.course(),
-        app.teacher(),
-        assignment_with_groups(json!([foreign.group.id().as_uuid()])),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-
-    let listed = app
-        .course_assignments(app.course(), app.teacher())
-        .await
-        .ok();
-    assert_eq!(listed.as_array().unwrap().len(), 1, "{listed:#}");
-}
-
-#[tokio::test]
 async fn a_repeated_group_is_rejected() {
     let app = TestApp::start().await;
     let group = app.fixture.group.id().as_uuid();

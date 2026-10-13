@@ -76,14 +76,6 @@ fn grade_text(submission: &Submission) -> String {
     texts::grade_line(submission.kind(), submission.grade()).expect("a makeup is always marked")
 }
 
-fn texts_sent(telegram: &TelegramScenario, user: i64) -> Vec<String> {
-    telegram
-        .messages(user)
-        .iter()
-        .filter_map(|message| message["text"].as_str().map(str::to_owned))
-        .collect()
-}
-
 fn sent_message(telegram: &TelegramScenario, user: i64, message_id: i32) -> Value {
     telegram
         .messages(user)
@@ -155,7 +147,7 @@ async fn enabling_with_a_date_a_pool_and_two_scales_writes_only_on_save() {
         terms_of(&app, app.fixture.assignment.id()).await,
         Some(MakeupTerms::PassFail)
     );
-    let sent = texts_sent(&telegram, teacher);
+    let sent = telegram.texts(teacher);
     assert!(sent.contains(&texts::MAKEUP_SAVED.to_owned()), "{sent:#?}");
     assert!(
         sent.iter()
@@ -182,7 +174,7 @@ async fn a_menu_item_during_the_form_writes_nothing_and_says_so() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.contains(&texts::MAKEUP_DISCARDED.to_owned()),
         "{sent:#?}"
@@ -228,7 +220,11 @@ async fn a_save_opened_before_a_colleagues_save_keeps_the_colleagues_settings() 
 
     assert_eq!(settings(&app).await.map(CourseMakeup::attempts), Some(5));
     assert_eq!(terms_of(&app, app.fixture.assignment.id()).await, None);
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::MAKEUP_CONFLICT.to_owned()));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::MAKEUP_CONFLICT.to_owned())
+    );
 }
 
 #[tokio::test]
@@ -265,7 +261,7 @@ async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announce
             .unwrap(),
         Some(opened)
     );
-    assert!(texts_sent(&telegram, app.teacher()).iter().any(|text| {
+    assert!(telegram.texts(app.teacher()).iter().any(|text| {
         text.starts_with(texts::MAKEUP_ENDED_BEFORE_SAVE) && text.contains(texts::MAKEUP_NEW_POOL)
     }));
 }
@@ -412,7 +408,11 @@ async fn the_review_entry_offers_the_queue_and_the_makeups_when_makeups_wait() {
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(makeups.message_id, queue.message_id);
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::review_hub(1, 1)));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::review_hub(1, 1))
+    );
 }
 
 #[tokio::test]
@@ -428,10 +428,10 @@ async fn without_makeups_the_review_entry_opens_the_next_work() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
+    let offered = sent_callbacks(&telegram.server).await;
     assert!(
-        texts_sent(&telegram, app.teacher())
-            .iter()
-            .all(|text| !text.starts_with("✅ Проверка работ"))
+        !offered.contains(&callbacks::NEXT_MAKEUP_REVIEW.to_owned()),
+        "{offered:#?}"
     );
 }
 
@@ -453,7 +453,8 @@ async fn the_home_screen_counts_makeups_apart_from_the_queue() {
     stop_bot(cancellation, &mut task).await;
 
     let greeting = texts::home_greeting(app.fixture.teacher.display_name().as_str());
-    let home = texts_sent(&telegram, app.teacher())
+    let home = telegram
+        .texts(app.teacher())
         .into_iter()
         .find(|text| text.starts_with(&greeting))
         .expect("the home screen is shown");
@@ -491,7 +492,7 @@ async fn crediting_a_makeup_saves_its_credit_after_the_comment() {
     assert_eq!(reviewed, Some(("accepted".to_owned(), Some(6), Some(6))));
     let credited = grade_text(&stored(&app, makeup).await);
     assert!(credited.contains("6 из 10"), "{credited}");
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| text.starts_with(texts::REVIEW_SAVED) && text.contains(&credited)),
@@ -560,7 +561,9 @@ async fn withdrawn_terms_before_saving_leave_only_the_rejection() {
     stop_bot(cancellation, &mut task).await;
 
     assert!(
-        texts_sent(&telegram, app.teacher()).contains(&texts::REVIEW_MAKEUP_WITHDRAWN.to_owned())
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::REVIEW_MAKEUP_WITHDRAWN.to_owned())
     );
     let card = telegram
         .messages(app.teacher())
@@ -607,7 +610,11 @@ async fn the_next_makeup_button_opens_the_following_makeup() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::makeups_left(1)));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::makeups_left(1))
+    );
 }
 
 async fn reject_the_only_makeup(app: &TestApp, telegram: &TelegramScenario, makeup: Uuid) {
@@ -639,7 +646,7 @@ async fn a_grant_after_a_rejection_gives_the_student_an_attempt() {
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(pool_balance(&app).await, (1, 2));
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| text.contains(&texts::review_makeup_attempts(0, 1))),
@@ -678,7 +685,11 @@ async fn a_grant_from_a_stale_message_adds_nothing() {
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(pool_balance(&app).await, (1, 2));
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::STALE_BUTTON.to_owned()));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::STALE_BUTTON.to_owned())
+    );
 }
 
 async fn open_card(app: &TestApp, telegram: &TelegramScenario, assignment: &Assignment) {
@@ -711,7 +722,7 @@ async fn a_closed_assignment_with_makeup_prompts_and_confirms_with_the_remaining
     stop_bot(cancellation, &mut task).await;
 
     let terms = texts::makeup_credit_text(Some((6, 10)));
-    let sent = texts_sent(&telegram, app.student());
+    let sent = telegram.texts(app.student());
     assert!(
         sent.iter()
             .any(|text| text.contains(&texts::card_makeup_attempts(2, 2))),
@@ -745,7 +756,8 @@ async fn an_empty_pool_leaves_the_card_without_a_submit_button() {
             .all(|message| !callbacks_of(message).contains(&submit))
     );
     assert!(
-        texts_sent(&telegram, app.student())
+        telegram
+            .texts(app.student())
             .iter()
             .any(|text| text.contains(texts::MAKEUP_ATTEMPTS_EXHAUSTED))
     );
@@ -772,7 +784,7 @@ async fn an_old_makeup_button_names_the_spent_pool_instead_of_asking_for_work() 
     telegram.flush(app.student()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.student());
+    let sent = telegram.texts(app.student());
     assert!(
         sent.contains(&app_error_message(ErrorCode::MakeupAttemptsExhausted).to_owned()),
         "{sent:#?}"
@@ -835,7 +847,8 @@ async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_k
             .contains(texts::BUTTON_SUBMIT_MAKEUP)
     );
     assert!(
-        texts_sent(&telegram, app.student())
+        telegram
+            .texts(app.student())
             .contains(&app_error_message(ErrorCode::DeadlineExceeded).to_owned())
     );
     let submitted: i64 =
@@ -897,7 +910,7 @@ async fn a_grant_from_the_gradebook_shows_the_card_again_with_the_new_balance() 
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(pool_balance(&app).await, (1, 4));
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| text.contains(&texts::gradebook_makeup_attempts(0, 3))),
@@ -922,7 +935,8 @@ async fn a_course_without_makeup_has_no_makeup_line_in_the_gradebook() {
     stop_bot(cancellation, &mut task).await;
 
     let header = format!("👤 {}", app.fixture.student.display_name().as_str());
-    let card = texts_sent(&telegram, app.teacher())
+    let card = telegram
+        .texts(app.teacher())
         .into_iter()
         .find(|text| text.starts_with(&header))
         .expect("the student card is shown");
@@ -961,7 +975,8 @@ async fn the_history_marks_a_credited_makeup() {
         Some(&grade_text(&stored(&app, makeup).await)),
     );
     assert!(
-        texts_sent(&telegram, app.student())
+        telegram
+            .texts(app.student())
             .iter()
             .any(|text| text.starts_with(&attempt))
     );
@@ -982,7 +997,11 @@ async fn without_queued_work_the_review_entry_offers_only_the_makeups() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::review_hub(0, 1)));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::review_hub(0, 1))
+    );
     let hub = sent_message(&telegram, app.teacher(), makeups.message_id);
     assert!(
         !callbacks_of(&hub).contains(&callbacks::NEXT_REVIEW.to_owned()),
@@ -1014,7 +1033,7 @@ async fn an_emptied_queue_names_the_makeups_still_waiting() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| text.starts_with(texts::REVIEW_QUEUE_EMPTY)
@@ -1057,7 +1076,7 @@ async fn a_credit_lowered_after_the_card_was_shown_is_previewed_at_its_new_value
 
     assert_eq!(reviewed, Some(("accepted".to_owned(), Some(5), Some(5))));
     let credited = grade_text(&stored(&app, makeup).await);
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| !text.starts_with(texts::REVIEW_SAVED) && text.contains(&credited)),
@@ -1143,7 +1162,7 @@ async fn the_student_list_stays_usable_after_a_card_is_opened() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(!sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
     let header = format!("👤 {}", second.display_name().as_str());
     assert!(
@@ -1174,7 +1193,8 @@ async fn an_ended_makeup_is_shown_as_off_and_is_set_up_again_from_the_date() {
     stop_bot(cancellation, &mut task).await;
 
     assert!(
-        texts_sent(&telegram, app.teacher())
+        telegram
+            .texts(app.teacher())
             .iter()
             .any(|text| text.contains(texts::MAKEUP_DATE_QUESTION))
     );
@@ -1198,7 +1218,11 @@ async fn a_step_opened_from_the_summary_returns_to_it_by_the_back_button() {
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(settings(&app).await.map(CourseMakeup::attempts), Some(3));
-    assert!(texts_sent(&telegram, teacher).contains(&texts::MAKEUP_SAVED.to_owned()));
+    assert!(
+        telegram
+            .texts(teacher)
+            .contains(&texts::MAKEUP_SAVED.to_owned())
+    );
 }
 
 #[tokio::test]
@@ -1269,7 +1293,7 @@ async fn a_followup_that_fails_after_a_saved_makeup_review_reports_no_failure() 
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| text.starts_with(texts::REVIEW_SAVED)),
@@ -1299,7 +1323,7 @@ async fn a_grant_from_the_gradebook_whose_card_cannot_be_read_again_reports_no_f
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(pool_balance(&app).await, (1, 2));
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.contains(&texts::MAKEUP_ATTEMPT_GRANTED.to_owned()),
         "{sent:#?}"

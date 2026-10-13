@@ -173,10 +173,7 @@ impl BotTimezone {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn vladivostok() -> BotTimezone {
-        BotTimezone::new(Tz::Asia__Vladivostok)
-    }
+    use crate::test_support::vladivostok;
 
     fn at(rfc3339: &str) -> DateTime<Utc> {
         rfc3339.parse().unwrap()

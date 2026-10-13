@@ -295,9 +295,14 @@ impl Form for MakeupForm {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Duration;
+    use chrono::{Duration, NaiveDate};
+    use chrono_tz::Tz;
+    use proptest::prelude::*;
 
     use super::*;
+    use crate::bot::callbacks::MakeupChoice;
+    use crate::bot::timezone::BotTimezone;
+    use crate::bot::views::makeup_form_view;
     use crate::domain::{MAX_MAKEUP_ATTEMPTS, UserId};
     use crate::test_support::t0;
 
@@ -506,5 +511,238 @@ mod tests {
         assert_eq!(form.step, MakeupStep::Scale(0));
         form.answer(MakeupTerms::NotOffered).unwrap();
         assert_eq!(form.step, MakeupStep::Scale(1));
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Input {
+        Date(DateTime<Utc>),
+        Calendar(NaiveDate),
+        Options,
+        Manual,
+        Attempts(u16),
+        Answer(MakeupChoice),
+        Edit(MakeupFormAction),
+        Save,
+        Back,
+        Cancel,
+        Wait(Duration),
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Move {
+        choice: u8,
+        until: Duration,
+        month: NaiveDate,
+        number: u16,
+        answer: MakeupChoice,
+        edit: MakeupFormAction,
+        wait: Duration,
+    }
+
+    impl Move {
+        fn input(self, step: MakeupStep, now: DateTime<Utc>) -> Input {
+            match self.choice {
+                0..12 => return Input::Cancel,
+                12..36 => return Input::Back,
+                36..48 => return Input::Wait(self.wait),
+                _ => {}
+            }
+            let inputs: &[Input] = match step {
+                MakeupStep::Date => &[
+                    Input::Date(now + self.until),
+                    Input::Date(now + self.until),
+                    Input::Calendar(self.month),
+                    Input::Options,
+                    Input::Manual,
+                ],
+                MakeupStep::Attempts => &[Input::Attempts(self.number), Input::Manual],
+                MakeupStep::Scale(_) => &[Input::Answer(self.answer)],
+                MakeupStep::Summary => &[Input::Edit(self.edit), Input::Save],
+            };
+            inputs[usize::from(self.choice) % inputs.len()]
+        }
+    }
+
+    struct Session {
+        form: MakeupForm,
+        now: DateTime<Utc>,
+    }
+
+    impl Session {
+        fn handle(&mut self, input: Input) -> Result<bool, String> {
+            let form = &mut self.form;
+            match input {
+                Input::Date(until) => {
+                    let _ = form.apply_date(until, self.now);
+                }
+                Input::Calendar(month) => form.set_mode(InputMode::Calendar(month)),
+                Input::Options => form.set_mode(InputMode::Buttons),
+                Input::Manual => form.set_mode(InputMode::Manual),
+                Input::Attempts(attempts) => {
+                    let _ = form.apply_attempts(attempts);
+                }
+                Input::Answer(choice) => {
+                    let grading = form.current_scale().map(|scale| scale.grading).unwrap();
+                    match choice.terms(grading) {
+                        None => form.set_mode(InputMode::Manual),
+                        Some(Ok(terms)) => {
+                            let _ = form.answer(terms);
+                        }
+                        Some(Err(_)) => {}
+                    }
+                }
+                Input::Edit(action) => {
+                    form.edit(action);
+                }
+                Input::Save => return self.save(),
+                Input::Back => {
+                    form.step_back();
+                }
+                Input::Cancel => return Ok(form.back()),
+                Input::Wait(duration) => self.now += duration,
+            }
+            Ok(true)
+        }
+
+        fn save(&mut self) -> Result<bool, String> {
+            if self.form.notice_end(self.now) {
+                return Ok(true);
+            }
+            let command = self
+                .form
+                .command(Actor::new(UserId::new()), self.now)
+                .ok_or("a summary has nothing to save")?;
+            if let Some(settings) = command.settings {
+                match CourseMakeup::save(
+                    command.expected,
+                    settings.until,
+                    settings.attempts,
+                    command.now,
+                ) {
+                    Ok(_) => {}
+                    Err(DomainError::MakeupUntilOutOfRange { .. }) if self.now > t0() => {
+                        return Ok(true);
+                    }
+                    Err(error) => {
+                        return Err(format!("the domain refused the settings: {error:?}"));
+                    }
+                }
+            }
+            for decision in command.decisions {
+                decision
+                    .terms
+                    .ensure_fits(decision.grading)
+                    .map_err(|error| format!("the domain refused a decision: {error:?}"))?;
+            }
+            Ok(false)
+        }
+    }
+
+    fn start() -> impl Strategy<Value = Option<CourseMakeup>> {
+        prop::option::of((
+            1..=366 * 24 * 60i64,
+            1..=MAX_MAKEUP_ATTEMPTS,
+            0..=400 * 24 * 60i64,
+        ))
+        .prop_map(|saved| {
+            saved.map(|(length, attempts, ago)| {
+                let opened_at = t0() - Duration::minutes(ago);
+                CourseMakeup::open(opened_at + Duration::minutes(length), attempts, opened_at)
+                    .unwrap()
+            })
+        })
+    }
+
+    fn undecided_assignments() -> impl Strategy<Value = Vec<UndecidedAssignment>> {
+        let grading = prop::sample::select(vec![
+            Grading::PassFail,
+            Grading::scored(1).unwrap(),
+            Grading::scored(10).unwrap(),
+        ]);
+        prop::collection::vec(grading, 0..5).prop_map(|gradings| {
+            gradings
+                .into_iter()
+                .map(|grading| undecided("Lab", grading))
+                .collect()
+        })
+    }
+
+    fn moves() -> impl Strategy<Value = Vec<Move>> {
+        let until = prop_oneof![
+            3 => (1..=366 * 24 * 60i64).prop_map(Duration::minutes),
+            1 => prop::sample::select(vec![
+                -Duration::days(1),
+                Duration::zero(),
+                Duration::nanoseconds(1),
+                Duration::days(366),
+                Duration::days(366) + Duration::nanoseconds(1),
+            ]),
+        ];
+        let month = prop::sample::select(vec![NaiveDate::MIN, t0().date_naive(), NaiveDate::MAX]);
+        let number = prop_oneof![
+            3 => 1..=8u16,
+            1 => prop::sample::select(vec![0, 99, 100, 101, u16::MAX]),
+        ];
+        let answer = prop_oneof![
+            Just(MakeupChoice::NotOffered),
+            Just(MakeupChoice::PassFail),
+            Just(MakeupChoice::Manual),
+            (0..=11u16).prop_map(MakeupChoice::Credit),
+        ];
+        let edit = prop::sample::select(vec![
+            MakeupFormAction::Date,
+            MakeupFormAction::Attempts,
+            MakeupFormAction::Disable,
+        ]);
+        let wait = prop_oneof![
+            (0..=40 * 24 * 60i64).prop_map(Duration::minutes),
+            Just(Duration::days(400)),
+        ];
+        let one = (any::<u8>(), until, month, number, answer, edit, wait).prop_map(
+            |(choice, until, month, number, answer, edit, wait)| Move {
+                choice,
+                until,
+                month,
+                number,
+                answer,
+                edit,
+                wait,
+            },
+        );
+        prop::collection::vec(one, 0..40)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            failure_persistence: None,
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn any_input_sequence_keeps_a_screen_and_saves_only_what_the_domain_accepts(
+            saved in start(),
+            undecided in undecided_assignments(),
+            moves in moves(),
+        ) {
+            let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+            let mut session = Session {
+                form: MakeupForm::new(TeachingCourseId::new(), saved, undecided, t0()),
+                now: t0(),
+            };
+
+            prop_assert!(makeup_form_view(&session.form, &timezone, session.now).is_some());
+            for (index, next) in moves.into_iter().enumerate() {
+                let input = next.input(session.form.step, session.now);
+                if !session.handle(input).map_err(TestCaseError::fail)? {
+                    break;
+                }
+                prop_assert!(
+                    makeup_form_view(&session.form, &timezone, session.now).is_some(),
+                    "move {} ({:?}) left no screen",
+                    index,
+                    input
+                );
+            }
+        }
     }
 }

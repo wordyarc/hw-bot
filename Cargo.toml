@@ -34,6 +34,7 @@ uuid = { version = "1.24.0", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["test-util"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 testcontainers = { version = "0.28.0", features = ["reusable-containers"] }
 tower = { version = "0.5.2", features = ["util"] }
 wiremock = "0.6.5"

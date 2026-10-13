@@ -314,7 +314,7 @@ async fn assignment_file_count_limit_is_application_configuration() {
 }
 
 #[tokio::test]
-async fn concurrent_additions_with_one_revision_have_one_winner() {
+async fn a_second_addition_from_the_same_card_is_refused() {
     let app = TestApp::start().await;
     let application = application(&app);
     let initial = card(&app, &application).await;
@@ -328,22 +328,19 @@ async fn concurrent_additions_with_one_revision_have_one_winner() {
         telegram_file_id: None,
         content: DOCUMENT.to_vec(),
     };
+    application
+        .files
+        .add_assignment_file(command("one.txt"))
+        .await
+        .unwrap();
 
-    let (first, second) = tokio::join!(
-        application.files.add_assignment_file(command("one.txt")),
-        application.files.add_assignment_file(command("two.txt")),
-    );
+    let error = application
+        .files
+        .add_assignment_file(command("two.txt"))
+        .await
+        .unwrap_err();
 
-    let results = [first, second];
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-    assert_eq!(
-        results
-            .iter()
-            .find_map(|result| result.as_ref().err())
-            .unwrap()
-            .code(),
-        ErrorCode::ConcurrentModification
-    );
+    assert_eq!(error.code(), ErrorCode::ConcurrentModification);
     assert_eq!(card(&app, &application).await.files.len(), 1);
 }
 

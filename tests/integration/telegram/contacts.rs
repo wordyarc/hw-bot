@@ -821,60 +821,113 @@ async fn gradebook_contact(
         .await
 }
 
-#[tokio::test]
-async fn review_opens_registered_contact_only_on_click_as_an_optional_reply() {
-    let app = TestApp::start().await;
-    app.queued_submission(app.student(), "pull/contact").await;
-    let telegram = TelegramScenario::new().await;
-    mount_contact(&telegram, app.student(), Some("student_name"), true).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+struct OpenedContact {
+    button: Button,
+    original: Value,
+    card: Value,
+}
 
-    let button = review_contact(&app, &telegram).await;
-    let original = message(&telegram, app.teacher(), button.message_id);
-    assert!(requests(&telegram, "GetChat").await.is_empty());
-    assert_eq!(
-        original["reply_markup"]["inline_keyboard"][0]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    assert_eq!(
-        original["reply_markup"]["inline_keyboard"][1][0]["text"],
-        texts::BUTTON_STUDENT_CONTACT
-    );
+async fn open_review_contact(app: &TestApp, telegram: &TelegramScenario) -> OpenedContact {
+    let button = review_contact(app, telegram).await;
+    open_contact(app, telegram, button).await
+}
+
+async fn open_contact(app: &TestApp, telegram: &TelegramScenario, button: Button) -> OpenedContact {
+    let original = message(telegram, app.teacher(), button.message_id);
     telegram.click(app.teacher(), &button);
     telegram.flush(app.teacher()).await;
     let refresh = telegram
         .button_with_text(app.teacher(), texts::BUTTON_REFRESH_CONTACT)
         .await;
-    let card = message(&telegram, app.teacher(), refresh.message_id);
+    let card = message(telegram, app.teacher(), refresh.message_id);
+    OpenedContact {
+        button,
+        original,
+        card,
+    }
+}
+
+async fn review_with_contact(username: &str) -> (TestApp, TelegramScenario) {
+    let app = TestApp::start().await;
+    app.queued_submission(app.student(), "pull/contact").await;
+    let telegram = TelegramScenario::new().await;
+    mount_contact(&telegram, app.student(), Some(username), true).await;
+    (app, telegram)
+}
+
+#[tokio::test]
+async fn the_review_card_reads_the_contact_only_when_it_is_clicked() {
+    let (app, telegram) = review_with_contact("student_name").await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    let button = review_contact(&app, &telegram).await;
+    let before = requests(&telegram, "GetChat").await;
+    open_contact(&app, &telegram, button).await;
     stop_bot(cancellation, &mut task).await;
 
+    assert!(before.is_empty());
     assert_eq!(
         requests(&telegram, "GetChat").await,
         vec![json!({"chat_id": app.student()})]
     );
-    let text = card["text"].as_str().unwrap();
+}
+
+#[tokio::test]
+async fn the_review_card_puts_the_contact_under_the_decisions() {
+    let (app, telegram) = review_with_contact("student_name").await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    let button = review_contact(&app, &telegram).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let keyboard =
+        &message(&telegram, app.teacher(), button.message_id)["reply_markup"]["inline_keyboard"];
+    assert_eq!(keyboard[0].as_array().unwrap().len(), 2);
+    assert_eq!(keyboard[1][0]["text"], texts::BUTTON_STUDENT_CONTACT);
+}
+
+#[tokio::test]
+async fn the_contact_card_names_the_student_and_links_their_username() {
+    let (app, telegram) = review_with_contact("student_name").await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    let opened = open_review_contact(&app, &telegram).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let text = opened.card["text"].as_str().unwrap();
+    let account_name = private_chat_info(app.student(), None, false)["first_name"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(text.contains(app.fixture.student.display_name().as_str()));
     assert!(text.contains(app.fixture.group.code().as_str()));
-    assert!(!text.contains("Telegram account name"));
+    assert!(!text.contains(&account_name));
     assert!(text.contains(texts::CONTACT_PERSONAL_ACCOUNT));
-    assert_eq!(urls(&card), ["https://t.me/student_name"]);
+    assert_eq!(urls(&opened.card), ["https://t.me/student_name"]);
+}
+
+#[tokio::test]
+async fn the_contact_card_is_an_optional_reply_that_leaves_the_review_as_it_was() {
+    let (app, telegram) = review_with_contact("student_name").await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    let opened = open_review_contact(&app, &telegram).await;
+    stop_bot(cancellation, &mut task).await;
+
     assert_eq!(
-        message(&telegram, app.teacher(), button.message_id),
-        original
+        message(&telegram, app.teacher(), opened.button.message_id),
+        opened.original
     );
     assert!(telegram.messages(app.student()).is_empty());
     let sent = requests(&telegram, "SendMessage").await;
     let card_request = sent
         .iter()
-        .find(|body| body["text"] == card["text"])
+        .find(|body| body["text"] == opened.card["text"])
         .unwrap();
     assert_eq!(
         card_request["reply_parameters"],
         json!({
-            "message_id": button.message_id, "allow_sending_without_reply": true
+            "message_id": opened.button.message_id, "allow_sending_without_reply": true
         })
     );
     assert!(card_request["parse_mode"].is_null());

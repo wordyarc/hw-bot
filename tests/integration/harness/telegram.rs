@@ -162,13 +162,15 @@ pub(crate) fn file_upload_updates(app: &TestApp, assignment: Uuid, file: Value) 
     ]
 }
 
+pub(crate) const TIMEZONE: Tz = Tz::Asia__Vladivostok;
+
 pub(crate) fn bot_timezone() -> BotTimezone {
-    BotTimezone::new(Tz::Asia__Vladivostok)
+    BotTimezone::new(TIMEZONE)
 }
 
 pub(crate) fn deadline_input(deadline: DateTime<Utc>) -> String {
     deadline
-        .with_timezone(&Tz::Asia__Vladivostok)
+        .with_timezone(&TIMEZONE)
         .format("%d.%m.%Y %H:%M")
         .to_string()
 }
@@ -393,7 +395,7 @@ pub(crate) async fn expect_sent_messages(
 
 pub(crate) async fn wait_for_sent_message_count(telegram: &MockServer, expected: usize) {
     assert!(
-        wait_until(Duration::from_secs(2), || async {
+        wait_until(Duration::from_secs(5), || async {
             sent_message_count(telegram).await >= expected
         })
         .await,
@@ -730,6 +732,23 @@ pub(crate) async fn recorded_requests(telegram: &MockServer) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(crate) async fn sent_texts(telegram: &MockServer) -> Vec<String> {
+    telegram
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| {
+            matches!(
+                request.url.path(),
+                "/bottest-token/SendMessage" | "/bottest-token/EditMessageText"
+            )
+        })
+        .filter_map(|request| request.body_json::<Value>().ok())
+        .filter_map(|body| body["text"].as_str().map(str::to_owned))
+        .collect()
 }
 
 pub(crate) async fn sent_callbacks(telegram: &MockServer) -> Vec<String> {

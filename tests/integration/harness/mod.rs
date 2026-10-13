@@ -14,7 +14,7 @@ use hw_bot::domain::{
     StudentGroup, StudentGroupId, Subject, TeachingCourse, TeachingCourseId, User,
 };
 use hw_bot::health::HealthState;
-use hw_bot::invites::{CourseInviteCodec, InviteSigningSecret};
+use hw_bot::invites::CourseInviteCodec;
 use hw_bot::test_support::{
     assignment as assignment_of, named_admin, named_student, named_teacher, student_group_in,
     subject, teaching_course,
@@ -38,13 +38,9 @@ pub use fixture::{CourseFixture, Fixture, insert_assignment, wall_clock_assignme
 pub use response::TestResponse;
 pub use response_gate::ResponseGate;
 
+pub use hw_bot::test_support::invite_codec;
+
 use fixture::{insert_course, insert_group, insert_user};
-
-const INVITE_SIGNING_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-
-pub fn invite_codec() -> CourseInviteCodec {
-    CourseInviteCodec::new(InviteSigningSecret::from_base64url(INVITE_SIGNING_SECRET).unwrap())
-}
 
 pub struct TestApp {
     pub pool: PgPool,

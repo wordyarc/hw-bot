@@ -833,6 +833,8 @@ fn parse_month(value: &str) -> Option<NaiveDate> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -940,13 +942,16 @@ mod tests {
         }};
     }
 
-    #[test]
-    fn every_action_is_parsed_back_from_its_own_callback() {
-        let course = TeachingCourseId::new();
-        let assignment = AssignmentId::new();
-        let submission = SubmissionId::new();
-        let student = UserId::new();
-        let group = StudentGroupId::new();
+    fn one_sample_of_each_action() -> Vec<CallbackAction> {
+        let course =
+            TeachingCourseId::from_uuid(Uuid::from_u128(0x0192_6f3a_7b1c_7d2e_8f40_51a2_b3c4_d5e6));
+        let assignment =
+            AssignmentId::from_uuid(Uuid::from_u128(0x0192_6f3a_7b1c_7d2e_9a41_62b3_c4d5_e6f7));
+        let submission =
+            SubmissionId::from_uuid(Uuid::from_u128(0x0192_6f3a_7b1c_7d2e_ab52_73c4_d5e6_f708));
+        let student = UserId::from_uuid(Uuid::from_u128(0x0192_6f3a_7b1c_7d2e_bc63_84d5_e6f7_0819));
+        let group =
+            StudentGroupId::from_uuid(Uuid::from_u128(0x3f2a_1b0c_9d8e_4f70_a162_5344_2635_1708));
         let day = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
         let month = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
         let last = u32::MAX;
@@ -965,7 +970,7 @@ mod tests {
             })
         };
 
-        let samples = one_of_each![
+        one_of_each![
             Replayable(ReplayableAction::Page(PageTarget::Assignments, 0)) =>
                 page(PageTarget::Assignments, 0),
             Replayable(ReplayableAction::Page(PageTarget::Assignments, 1..=u32::MAX)) =>
@@ -1157,12 +1162,79 @@ mod tests {
                     student_id: student,
                 }),
             CallbackAction::Noop => CallbackAction::Noop,
-        ];
+        ]
+    }
 
-        for action in samples {
+    #[test]
+    fn every_action_is_parsed_back_from_its_own_callback() {
+        for action in one_sample_of_each_action() {
             let data = action.callback();
             assert!(data.len() <= 64, "{data}");
             assert_eq!(parse(&data), Some(action), "{data}");
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum Edit {
+        Cut(usize),
+        Replace(usize, char),
+        Insert(usize, String),
+    }
+
+    fn edit() -> impl Strategy<Value = Edit> {
+        let character = prop_oneof![
+            prop::sample::select(vec![
+                ':', '-', '_', '=', '+', '/', ' ', '0', '9', 'a', 'Z', 'я', '🦀'
+            ]),
+            any::<char>(),
+        ];
+        prop_oneof![
+            any::<usize>().prop_map(Edit::Cut),
+            (any::<usize>(), character.clone())
+                .prop_map(|(at, character)| Edit::Replace(at, character)),
+            (any::<usize>(), prop::collection::vec(character, 1..12))
+                .prop_map(|(at, text)| Edit::Insert(at, text.into_iter().collect())),
+        ]
+    }
+
+    fn apply(data: &str, edits: Vec<Edit>) -> String {
+        let mut characters: Vec<char> = data.chars().collect();
+        for edit in edits {
+            let position = |at: usize| at % (characters.len() + 1);
+            match edit {
+                Edit::Cut(at) => characters.truncate(position(at)),
+                Edit::Replace(at, character) => {
+                    if !characters.is_empty() {
+                        let index = at % characters.len();
+                        characters[index] = character;
+                    }
+                }
+                Edit::Insert(at, text) => {
+                    let index = position(at);
+                    characters.splice(index..index, text.chars());
+                }
+            }
+        }
+        characters.into_iter().collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 1024,
+            failure_persistence: None,
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn edited_callback_data_never_panics_and_parses_only_into_an_action_it_can_encode(
+            seed in prop::sample::select(one_sample_of_each_action()),
+            edits in prop::collection::vec(edit(), 1..4),
+        ) {
+            let data = apply(&seed.callback(), edits);
+
+            if let Some(action) = parse(&data) {
+                prop_assert_eq!(parse(&action.callback()), Some(action), "{}", data);
+            }
         }
     }
 
@@ -1269,17 +1341,6 @@ mod tests {
         ] {
             assert_eq!(action.callback(), data);
             assert_eq!(parse(data), Some(action), "{data}");
-        }
-    }
-
-    #[test]
-    fn a_late_policy_choice_names_its_deduction() {
-        assert_eq!(LatePolicyChoice::Strict.deducted_from(), None);
-        for deducted_from in [DeductedFrom::WorkScore, DeductedFrom::CourseTotal] {
-            assert_eq!(
-                LatePolicyChoice::Penalty(deducted_from).deducted_from(),
-                Some(deducted_from)
-            );
         }
     }
 

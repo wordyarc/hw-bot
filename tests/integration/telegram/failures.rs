@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use hw_bot::bot::{TelegramBot, TelegramBotError, callbacks, texts};
 use hw_bot::domain::FilePresentation;
 use hw_bot::health::{CriticalComponent, HealthState};
@@ -238,8 +238,7 @@ async fn unavailable_terms_screen_is_replaced_without_losing_input() {
         ("Bad Request: message can't be edited", 14),
     ] {
         let old = open_terms(&app, &telegram).await;
-        let timezone = bot_timezone();
-        let deadline = timezone.end_of(timezone.in_days(days).unwrap()).unwrap();
+        let first = preset_deadline(days);
         telegram
             .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, days))
             .await;
@@ -269,9 +268,17 @@ async fn unavailable_terms_screen_is_replaced_without_losing_input() {
             .find_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
             .await
             .unwrap();
-        assert_eq!(assignment.deadline_at(), deadline);
+        assert!(
+            [first, preset_deadline(days)].contains(&assignment.deadline_at()),
+            "{days} days"
+        );
     }
     stop_bot(cancellation, &mut task).await;
+}
+
+fn preset_deadline(days: u64) -> DateTime<Utc> {
+    let timezone = bot_timezone();
+    timezone.end_of(timezone.in_days(days).unwrap()).unwrap()
 }
 
 #[tokio::test]

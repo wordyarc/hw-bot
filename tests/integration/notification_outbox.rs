@@ -1,3 +1,5 @@
+use std::time::Duration as StdDuration;
+
 use chrono::{Duration, Utc};
 use hw_bot::db;
 use hw_bot::domain::{DeductedFrom, SubmissionKind};
@@ -57,7 +59,7 @@ async fn expired_notification_lease_can_be_reclaimed() {
 }
 
 #[tokio::test]
-async fn concurrent_workers_claim_different_notifications() {
+async fn a_worker_skips_a_notification_locked_by_another_worker() {
     let app = TestApp::start().await;
     let second_student = app.add_student("Second student").await;
     let first_submission = app.queued_submission(app.student(), "pull/1").await;
@@ -70,16 +72,29 @@ async fn concurrent_workers_claim_different_notifications() {
     app.review(second_submission, app.teacher(), "reject", "fix it")
         .await
         .ok();
+    let mut other_worker = app.pool.begin().await.expect("begin another worker");
+    let locked: Uuid = sqlx::query_scalar(
+        "select id from review_notification_outbox
+         order by available_at, created_at, id
+         limit 1
+         for update",
+    )
+    .fetch_one(&mut *other_worker)
+    .await
+    .expect("lock the head of the outbox");
     let now = Utc::now();
 
-    let (first, second) = tokio::join!(
-        db::notifications::claim_next(&app.pool, now, Uuid::new_v4(), now + Duration::seconds(10),),
-        db::notifications::claim_next(&app.pool, now, Uuid::new_v4(), now + Duration::seconds(10),),
-    );
+    let claimed = tokio::time::timeout(
+        StdDuration::from_secs(5),
+        db::notifications::claim_next(&app.pool, now, Uuid::new_v4(), now + Duration::seconds(10)),
+    )
+    .await
+    .expect("a locked notification is skipped, not waited for")
+    .expect("claim notification")
+    .expect("the unlocked notification is claimed");
 
-    let first = first.expect("first claim").expect("first notification");
-    let second = second.expect("second claim").expect("second notification");
-    assert_ne!(first.id, second.id);
+    assert_ne!(claimed.id, locked);
+    other_worker.rollback().await.expect("release the lock");
 }
 
 #[tokio::test]

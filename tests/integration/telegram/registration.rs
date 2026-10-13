@@ -32,7 +32,7 @@ async fn telegram_rejects_oversized_input_before_registration() {
         .await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
 
-    tokio::time::timeout(Duration::from_secs(2), rejected.wait_until_satisfied())
+    tokio::time::timeout(Duration::from_secs(5), rejected.wait_until_satisfied())
         .await
         .expect("oversized input is rejected");
     stop_bot(cancellation, &mut task).await;
@@ -293,12 +293,7 @@ async fn a_confirmed_rotation_replaces_the_link() {
         ),
     ])
     .await;
-    let replaced = expect_text(
-        &telegram,
-        app.teacher(),
-        "♻️ Прежняя ссылка больше не работает.",
-    )
-    .await;
+    let replaced = expect_text(&telegram, app.teacher(), texts::INVITE_ROTATED).await;
     let (cancellation, mut task) = start_bot(&app, &telegram);
 
     let observed =

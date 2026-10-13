@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
+use chrono_tz::Tz;
 
 #[cfg(test)]
 pub(crate) mod logs;
 pub mod telegram;
 
+use crate::bot::BotTimezone;
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainResult, EducationLevel, Grading, LatePolicy,
     MakeupRequest, MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role,
@@ -13,6 +15,7 @@ use crate::domain::{
     SubmissionHistoryParts, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User,
     UserId,
 };
+use crate::invites::{CourseInviteCodec, InviteSigningSecret};
 
 pub trait ReviewShortcuts {
     fn accept(
@@ -118,9 +121,20 @@ pub const SUBJECT_NAME: &str = "Backend development";
 pub const ASSIGNMENT_TITLE: &str = "Rust ownership";
 pub const ASSIGNMENT_BODY: &str = "Send a pull request link.";
 pub const PULL_REQUEST_URL: &str = "https://github.com/course/hw/pull/1";
+pub const INVITE_SIGNING_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
 pub fn t0() -> DateTime<Utc> {
     DateTime::from_timestamp(1_767_225_600, 0).expect("2026-01-01T00:00:00Z is a valid timestamp")
+}
+
+pub fn invite_codec() -> CourseInviteCodec {
+    CourseInviteCodec::new(
+        InviteSigningSecret::from_base64url(INVITE_SIGNING_SECRET).expect("valid invite secret"),
+    )
+}
+
+pub fn vladivostok() -> BotTimezone {
+    BotTimezone::new(Tz::Asia__Vladivostok)
 }
 
 pub fn student_group(code: &str) -> StudentGroup {

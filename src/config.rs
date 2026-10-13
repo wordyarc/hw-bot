@@ -365,6 +365,7 @@ fn invalid(message: impl Into<String>) -> ConfigValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::INVITE_SIGNING_SECRET;
 
     #[test]
     fn deserializes_app_config() {
@@ -581,7 +582,7 @@ mod tests {
             let error = config_builder()
                 .set_override("ui.timezone", timezone)
                 .unwrap()
-                .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+                .set_override("group_invites.invite_signing_secret", INVITE_SIGNING_SECRET)
                 .unwrap()
                 .build()
                 .unwrap()
@@ -630,7 +631,7 @@ mod tests {
             "notification_worker.shutdown_grace_ms",
         ] {
             let error = config_builder()
-                .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+                .set_override("group_invites.invite_signing_secret", INVITE_SIGNING_SECRET)
                 .unwrap()
                 .set_override(field, 0)
                 .unwrap()
@@ -761,15 +762,13 @@ mod tests {
         assert!(error.to_string().contains("unknown field"));
     }
 
-    const TEST_SECRET: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-
     fn config_builder() -> ::config::ConfigBuilder<::config::builder::DefaultState> {
         ::config::Config::builder().add_source(::config::File::with_name("config/default"))
     }
 
     fn app_config() -> AppConfig {
         config_builder()
-            .set_override("group_invites.invite_signing_secret", TEST_SECRET)
+            .set_override("group_invites.invite_signing_secret", INVITE_SIGNING_SECRET)
             .unwrap()
             .build()
             .unwrap()

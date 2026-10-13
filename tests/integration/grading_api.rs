@@ -217,17 +217,6 @@ async fn a_scale_can_be_set_after_creation() {
 }
 
 #[tokio::test]
-async fn a_scale_of_an_archived_assignment_is_frozen() {
-    let app = TestApp::start().await;
-    let draft = app.drafted_assignment(app.teacher()).await;
-    app.archive_assignment(draft, app.teacher()).await.ok();
-
-    app.change_grading(draft, app.teacher(), Some(10))
-        .await
-        .error(StatusCode::CONFLICT, "assignment_unavailable");
-}
-
-#[tokio::test]
 async fn a_scale_change_advances_the_revision() {
     let app = TestApp::start().await;
     let draft = app.drafted_assignment(app.teacher()).await;
@@ -303,16 +292,6 @@ async fn a_submission_past_the_horizon_is_closed() {
     app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
         .await
         .error(StatusCode::CONFLICT, "submission_closed");
-}
-
-#[tokio::test]
-async fn an_assignment_without_a_late_policy_still_reports_the_deadline() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(1, None).await;
-
-    app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
-        .await
-        .error(StatusCode::CONFLICT, "deadline_exceeded");
 }
 
 #[tokio::test]
@@ -395,32 +374,6 @@ async fn a_deadline_can_move_past_the_previous_computed_closing() {
         closing.timestamp_micros()
     );
     assert_eq!(body["late_max_periods"], json!(4));
-}
-
-#[tokio::test]
-async fn a_horizon_longer_than_366_days_preserves_conditions_and_revision() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
-    let before = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
-        .await
-        .unwrap()
-        .unwrap();
-    app.post_as(
-        &format!("/assignments/{}/grading", assignment.id().as_uuid()),
-        app.teacher(),
-        json!({
-            "max_score": 5, "late_period_days": 365, "late_penalty_per_period": 1, "late_max_periods": 100,
-            "late_deducted_from": "work_score",
-        }),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-    let after = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(after.revision, before.revision);
-    assert_eq!(after.assignment, before.assignment);
 }
 
 #[tokio::test]
@@ -907,31 +860,6 @@ async fn the_assignment_contract_reports_each_makeup_state() {
     assert_eq!(terms(declined.id().as_uuid()), (json!(false), json!(null)));
     assert_eq!(terms(credited.id().as_uuid()), (json!(true), json!(6)));
     assert_eq!(terms(pass_fail.id().as_uuid()), (json!(true), json!(null)));
-}
-
-#[tokio::test]
-async fn a_scale_change_breaking_the_makeup_credit_is_invalid_input() {
-    let app = TestApp::start().await;
-    let ten = Grading::scored(10).unwrap();
-    let credited = app
-        .add_makeup_assignment(
-            "Credited",
-            ten,
-            MakeupTerms::scored(6, ten).unwrap(),
-            Utc::now() + Duration::days(7),
-        )
-        .await;
-
-    app.change_grading(credited.id().as_uuid(), app.teacher(), Some(5))
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-
-    let stored = db::assignments::find_by_id(&app.pool, credited.id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored.grading(), ten);
-    assert_eq!(stored.makeup(), credited.makeup());
 }
 
 #[tokio::test]

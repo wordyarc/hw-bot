@@ -31,15 +31,11 @@ impl BotInvites {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::invites::InviteSigningSecret;
+    use crate::test_support::invite_codec;
 
     #[test]
     fn the_invite_link_carries_the_bot_username_from_get_me() {
-        let codec = CourseInviteCodec::new(
-            InviteSigningSecret::from_base64url("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
-                .unwrap(),
-        );
-        let invites = BotInvites::new(codec, "hw_test_bot".to_owned());
+        let invites = BotInvites::new(invite_codec(), "hw_test_bot".to_owned());
         let course = TeachingCourseId::new();
         let link = invites.link(course, InviteGeneration::FIRST);
 

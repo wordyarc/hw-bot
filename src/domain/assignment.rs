@@ -762,6 +762,7 @@ impl Assignment {
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
+    use proptest::prelude::*;
 
     use super::*;
     use crate::test_support::{
@@ -1083,5 +1084,138 @@ mod tests {
             restore(AssignmentStatus::Draft, 1, Some(t0())).unwrap_err(),
             DomainError::InvalidAssignmentPublishedState
         );
+    }
+
+    const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+
+    fn late_policy() -> impl Strategy<Value = LatePolicy> {
+        (
+            1..=MAX_LATE_PERIOD_DAYS,
+            1..=MAX_PENALTY_PER_PERIOD,
+            1..=MAX_LATE_PERIODS,
+            prop_oneof![
+                Just(DeductedFrom::WorkScore),
+                Just(DeductedFrom::CourseTotal)
+            ],
+        )
+            .prop_map(
+                |(period_days, penalty_per_period, max_periods, deducted_from)| {
+                    LatePolicy::new(period_days, penalty_per_period, max_periods, deducted_from)
+                        .unwrap()
+                },
+            )
+    }
+
+    fn deadline() -> impl Strategy<Value = DateTime<Utc>> {
+        (-50 * 365 * NANOS_PER_DAY..=50 * 365 * NANOS_PER_DAY)
+            .prop_map(|offset| t0() + Duration::nanoseconds(offset))
+    }
+
+    fn period(policy: LatePolicy) -> Duration {
+        Duration::days(i64::from(policy.period_days()))
+    }
+
+    fn within_period() -> impl Strategy<Value = f64> {
+        prop_oneof![Just(0.0), Just(1.0), 0.0..1.0]
+    }
+
+    fn count(edges: &[u32], range: std::ops::RangeInclusive<u32>) -> impl Strategy<Value = u32> {
+        prop_oneof![prop::sample::select(edges.to_vec()), range]
+    }
+
+    fn nanoseconds_into(period: Duration, share: f64) -> Duration {
+        let nanoseconds = period.num_nanoseconds().unwrap();
+        Duration::nanoseconds(((nanoseconds as f64 * share) as i64).clamp(0, nanoseconds - 1))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            failure_persistence: None,
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn a_moment_inside_the_kth_period_after_the_deadline_counts_k_plus_one_periods(
+            policy in late_policy(),
+            deadline in deadline(),
+            k in count(&[0, 1], 0..=400),
+            share in within_period(),
+        ) {
+            let start = deadline + period(policy) * k as i32;
+            let at = start + nanoseconds_into(period(policy), share);
+
+            prop_assert_eq!(policy.periods_until(deadline, at), k + 1);
+        }
+
+        #[test]
+        fn a_moment_before_the_deadline_counts_no_periods(
+            policy in late_policy(),
+            deadline in deadline(),
+            early in 1..=400 * NANOS_PER_DAY,
+        ) {
+            prop_assert_eq!(policy.periods_until(deadline, deadline - Duration::nanoseconds(early)), 0);
+        }
+
+        #[test]
+        fn a_closing_date_inside_the_nth_period_rounds_up_to_n_periods(
+            policy in late_policy(),
+            deadline in deadline(),
+            n in count(&[1, u32::from(MAX_LATE_PERIODS)], 1..=u32::from(MAX_LATE_PERIODS)),
+            share in within_period(),
+        ) {
+            let end = policy.period_end(deadline, u16::try_from(n).unwrap()).unwrap();
+            let closes_at = end - nanoseconds_into(period(policy), share);
+
+            prop_assert_eq!(end, deadline + period(policy) * n as i32);
+            prop_assert_eq!(policy.periods_to_close_at(deadline, closes_at), n);
+        }
+
+        #[test]
+        fn the_last_moment_before_closing_falls_into_the_last_allowed_period(
+            policy in late_policy(),
+            deadline in deadline(),
+        ) {
+            let closes_at = policy.closes_at(deadline).unwrap();
+
+            prop_assert_eq!(
+                policy.periods_until(deadline, closes_at - Duration::nanoseconds(1)),
+                u32::from(policy.max_periods())
+            );
+        }
+
+        #[test]
+        fn a_penalty_grows_with_lateness_within_the_scale_and_can_be_restored(
+            policy in late_policy(),
+            fewer in count(&[0, 1, 99, 100, 101], 0..=1_000),
+            more in count(&[0, 1, 99, 100, 101], 0..=1_000),
+        ) {
+            let (fewer, more) = (fewer.min(more), fewer.max(more));
+
+            prop_assert!(policy.penalty_for(fewer) <= policy.penalty_for(more));
+            prop_assert!(policy.penalty_for(more) <= MAX_SCORE);
+            prop_assert_eq!(policy.late_penalty(0), None);
+            if let Some(late) = policy.late_penalty(more) {
+                prop_assert_eq!(
+                    LatePenalty::restore(late.periods(), late.points(), late.deducted_from()),
+                    Some(late)
+                );
+            }
+        }
+
+        #[test]
+        fn the_best_possible_score_does_not_grow_with_lateness(
+            policy in late_policy(),
+            max_score in 1..=MAX_SCORE,
+            fewer in count(&[0, 1, 99, 100, 101], 0..=1_000),
+            more in count(&[0, 1, 99, 100, 101], 0..=1_000),
+        ) {
+            let max_score = MaxScore::new(max_score).unwrap();
+            let (fewer, more) = (fewer.min(more), fewer.max(more));
+
+            prop_assert_eq!(policy.possible_score(max_score, 0), max_score.get());
+            prop_assert!(
+                policy.possible_score(max_score, more) <= policy.possible_score(max_score, fewer)
+            );
+        }
     }
 }

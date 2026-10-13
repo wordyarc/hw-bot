@@ -50,8 +50,7 @@ async fn postgres() -> &'static Postgres {
                 // переживает прогон намеренно.
                 .with_container_name(CONTAINER_NAME)
                 .with_reuse(ReuseDirective::Always)
-                // База одноразовая, долговечность не нужна. Без этого `create database` на
-                // каждый тест гонит копию шаблона через WAL с fsync.
+                // База одноразовая: ни долговечность, ни автовакуум ей не нужны.
                 .with_cmd([
                     "postgres",
                     "-c",
@@ -60,6 +59,8 @@ async fn postgres() -> &'static Postgres {
                     "full_page_writes=off",
                     "-c",
                     "synchronous_commit=off",
+                    "-c",
+                    "autovacuum=off",
                     "-c",
                     "max_connections=200",
                 ])
@@ -217,6 +218,7 @@ pub async fn saturated_database() -> PgPool {
     connect_fresh(
         PgPoolOptions::new()
             .max_connections(1)
+            .test_before_acquire(false)
             .acquire_timeout(Duration::from_millis(250)),
         MIGRATED_TEMPLATE,
     )
@@ -237,7 +239,7 @@ async fn connect_fresh(options: PgPoolOptions, template: &str) -> PgPool {
     share_database_lifecycle(&mut admin).await;
 
     sqlx::query(AssertSqlSafe(format!(
-        r#"create database "{name}" template "{template}""#
+        r#"create database "{name}" template "{template}" strategy file_copy"#
     )))
     .execute(&mut admin)
     .await
@@ -246,15 +248,28 @@ async fn connect_fresh(options: PgPoolOptions, template: &str) -> PgPool {
     // Lock держим до первого подключения: другой прогон уже не сможет удалить только что
     // созданную базу в зазоре между `create database` и коннектом.
     let pool = options
-        .connect(&postgres.url(&name))
-        .await
-        .expect("connect to the test database");
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_lazy(&postgres.url(&name))
+        .expect("valid test database url");
+    wait_for_first_connection(&pool).await;
     admin
         .close()
         .await
         .expect("close the maintenance connection");
 
     pool
+}
+
+async fn wait_for_first_connection(pool: &PgPool) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while pool.num_idle() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the pool opens its first connection to the test database");
 }
 
 pub async fn migrated_database() -> PgPool {

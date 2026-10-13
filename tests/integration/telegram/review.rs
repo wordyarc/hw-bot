@@ -1,5 +1,4 @@
 use std::ops::RangeInclusive;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
@@ -81,7 +80,7 @@ async fn assert_previous_attempts_on_the_card(
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     let rejected = texts::submission_status(SubmissionStatus::Rejected);
     for number in 1..=previous {
         let attempt =
@@ -133,111 +132,104 @@ async fn assert_review_recovers_from_grading_change(
             .await
             .created(),
     );
-    let accept = format!("{}{submission}", callbacks::REVIEW_ACCEPT_PREFIX);
-    let mut initial = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
-        callback_update(3, app.teacher(), &accept, BOT_MESSAGE_ID),
-    ];
+    let accept = cb(callbacks::REVIEW_ACCEPT_PREFIX, submission);
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    let first_card = telegram.click_button(app.teacher(), &accept).await;
     if initial_max.is_some() {
-        initial.push(callback_update(
-            4,
-            app.teacher(),
-            &format!("{}{submission}:4", callbacks::REVIEW_SCORE_PREFIX),
-            BOT_MESSAGE_ID,
-        ));
+        telegram
+            .click_button(app.teacher(), &score_callback(submission, 4))
+            .await;
     }
-    let updates = Arc::new(Mutex::new(initial));
-    let polled_updates = updates.clone();
-    let telegram = telegram_server(Vec::new()).await;
-    Mock::given(method("POST"))
-        .and(path("/bottest-token/GetUpdates"))
-        .respond_with(move |request: &wiremock::Request| {
-            let body: Value = request.body_json().unwrap();
-            let offset = body["offset"].as_i64().unwrap_or(0);
-            let result: Vec<_> = polled_updates
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|update| update["update_id"].as_i64().unwrap() >= offset)
-                .cloned()
-                .collect();
-            let empty = result.is_empty();
-            let response =
-                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": result}));
-            if empty && body["timeout"].as_u64().unwrap_or(0) > 0 {
-                response.set_delay(Duration::from_millis(20))
-            } else {
-                response
-            }
-        })
-        .with_priority(1)
-        .mount(&telegram)
-        .await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
-    assert!(
-        wait_until(Duration::from_secs(5), || async {
-            telegram
-                .received_requests()
-                .await
-                .unwrap()
-                .iter()
-                .any(|request| {
-                    request.body_json::<Value>().ok().is_some_and(|body| {
-                        body["text"] == texts::input_prompt(texts::REVIEW_COMMENT_PROMPT)
-                    })
-                })
-        })
-        .await,
-        "the review did not reach the comment step"
-    );
 
     app.change_grading(assignment, app.teacher(), new_max)
         .await
         .ok();
-    let mut remaining = vec![
-        message_update(5, app.teacher(), 2, "Старый комментарий"),
-        callback_update(6, app.teacher(), &accept, BOT_MESSAGE_ID),
-    ];
+    telegram.message(app.teacher(), "Старый комментарий");
+    let new_card = telegram
+        .button_after(app.teacher(), &accept, first_card.message_id)
+        .await;
+    telegram.click(app.teacher(), &new_card);
+    telegram.flush(app.teacher()).await;
     let new_score = new_max.map(|max| max.min(4));
     if let Some(score) = new_score {
-        remaining.push(callback_update(
-            7,
-            app.teacher(),
-            &format!("{}{submission}:{score}", callbacks::REVIEW_SCORE_PREFIX),
-            BOT_MESSAGE_ID,
-        ));
+        let chosen = telegram
+            .button_after(
+                app.teacher(),
+                &score_callback(submission, score),
+                new_card.message_id,
+            )
+            .await;
+        telegram.click(app.teacher(), &chosen);
+        telegram.flush(app.teacher()).await;
     }
-    remaining.push(message_update(
-        8,
-        app.teacher(),
-        3,
-        "Обновлённый комментарий",
-    ));
-    updates.lock().unwrap().extend(remaining);
+    telegram.message(app.teacher(), "Обновлённый комментарий");
 
     let result = wait_for_review_result(&app.pool, submission).await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
+    let sent = telegram.texts(app.teacher());
     let (status, raw_score, _) =
-        result.unwrap_or_else(|| panic!("review did not recover; requests:\n{requests}"));
+        result.unwrap_or_else(|| panic!("review did not recover: {sent:#?}"));
     assert_eq!(status, "accepted");
     assert_eq!(raw_score, new_score.map(i16::try_from).transpose().unwrap());
     assert!(
-        requests.contains(texts::REVIEW_GRADING_CHANGED),
-        "{requests}"
+        sent.contains(&texts::REVIEW_GRADING_CHANGED.to_owned()),
+        "{sent:#?}"
     );
-    let saved = hw_bot::db::submissions::find_by_id(
-        &app.pool,
-        hw_bot::domain::SubmissionId::from_uuid(submission),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let saved = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         saved.review_comment().unwrap().as_str(),
         "Обновлённый комментарий"
     );
+}
+
+#[tokio::test]
+async fn a_score_button_chosen_before_the_scale_changed_is_stale_after_the_restart() {
+    let app = TestApp::start().await;
+    let assignment = app.add_scored_assignment(5).await;
+    let submission = submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), "pull/recovery")
+            .await
+            .created(),
+    );
+    let accept = cb(callbacks::REVIEW_ACCEPT_PREFIX, submission);
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    let first_card = telegram.click_button(app.teacher(), &accept).await;
+    let old_score = telegram
+        .click_button(app.teacher(), &score_callback(submission, 4))
+        .await;
+    app.change_grading(assignment.id().as_uuid(), app.teacher(), Some(3))
+        .await
+        .ok();
+    telegram.message(app.teacher(), "Старый комментарий");
+    telegram
+        .button_after(app.teacher(), &accept, first_card.message_id)
+        .await;
+
+    telegram.click(app.teacher(), &old_score);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.teacher());
+    assert_eq!(
+        sent.iter()
+            .filter(|text| *text == &texts::input_prompt(texts::REVIEW_COMMENT_PROMPT))
+            .count(),
+        1,
+        "{sent:#?}"
+    );
+    assert!(sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
+    assert!(is_pending(&app, submission).await);
+}
+
+fn score_callback(submission: Uuid, score: u16) -> String {
+    format!("{}{submission}:{score}", callbacks::REVIEW_SCORE_PREFIX)
 }
 
 #[tokio::test]
@@ -336,7 +328,7 @@ async fn score_button_from_another_submission_is_stale() {
     assert_eq!(status, "accepted");
     assert_eq!(raw_score, Some(4));
     assert_eq!(work_score, Some(4));
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
 }
 
@@ -487,7 +479,7 @@ async fn teacher_opens_the_gradebook_and_drills_into_a_student() {
     stop_bot(cancellation, &mut task).await;
 
     let header = texts::grades_header(app.fixture.student.display_name().as_str(), 4, 0, 4, 5);
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     let card = sent
         .iter()
         .find(|text| text.starts_with(&header))
@@ -543,7 +535,7 @@ async fn the_student_card_shows_penalties_to_the_course_total() {
     stop_bot(cancellation, &mut task).await;
 
     let header = texts::grades_header(app.fixture.student.display_name().as_str(), 14, 4, 10, 20);
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     let card = sent
         .iter()
         .find(|text| text.starts_with(&header))
@@ -680,14 +672,6 @@ async fn submit_trial(app: &TestApp, trial: &Assignment, student: i64) -> Uuid {
     )
 }
 
-fn texts_sent(telegram: &TelegramScenario, user: i64) -> Vec<String> {
-    telegram
-        .messages(user)
-        .iter()
-        .filter_map(|message| message["text"].as_str().map(str::to_owned))
-        .collect()
-}
-
 async fn is_pending(app: &TestApp, submission: Uuid) -> bool {
     db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
         .await
@@ -720,7 +704,8 @@ async fn the_sandbox_menu_item_lists_sandbox_submissions_with_bulk_buttons() {
     stop_bot(cancellation, &mut task).await;
 
     assert!(
-        texts_sent(&telegram, app.teacher())
+        telegram
+            .texts(app.teacher())
             .iter()
             .any(|text| text.starts_with(&texts::sandbox_header(Some(1))))
     );
@@ -737,7 +722,11 @@ async fn an_empty_sandbox_is_reported_without_bulk_buttons() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::SANDBOX_EMPTY.to_owned()));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::SANDBOX_EMPTY.to_owned())
+    );
     assert!(
         !sent_callbacks(&telegram.server)
             .await
@@ -811,7 +800,7 @@ async fn a_reviewed_sandbox_submission_does_not_open_again() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&app_error_message(ErrorCode::SubmissionAlreadyReviewed).to_owned()));
     assert!(!sent.contains(&texts::SUBMISSION_HEADER.to_owned()));
 }
@@ -833,7 +822,8 @@ async fn the_home_screen_counts_the_sandbox_apart_from_the_queue() {
     stop_bot(cancellation, &mut task).await;
 
     let greeting = texts::home_greeting(app.fixture.teacher.display_name().as_str());
-    let home = texts_sent(&telegram, app.teacher())
+    let home = telegram
+        .texts(app.teacher())
         .into_iter()
         .find(|text| text.starts_with(&greeting))
         .expect("the home screen is shown");
@@ -861,7 +851,7 @@ async fn a_bulk_button_from_an_old_sandbox_screen_is_stale() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&texts::STALE_BUTTON.to_owned()));
     assert!(
         !sent.contains(&texts::input_prompt(&texts::bulk_review_prompt(
@@ -891,7 +881,7 @@ async fn a_bulk_button_with_nothing_left_skips_the_comment_step() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&texts::SANDBOX_NOTHING_TO_DECIDE.to_owned()));
     assert!(
         !sent.contains(&texts::input_prompt(&texts::bulk_review_prompt(
@@ -915,11 +905,9 @@ async fn the_accept_all_prompt_warns_before_asking_for_the_comment() {
         .await;
     stop_bot(cancellation, &mut task).await;
 
-    assert!(
-        texts_sent(&telegram, app.teacher()).contains(&texts::input_prompt(
-            &texts::bulk_review_prompt(ReviewDecision::Accept, 1)
-        ))
-    );
+    assert!(telegram.texts(app.teacher()).contains(&texts::input_prompt(
+        &texts::bulk_review_prompt(ReviewDecision::Accept, 1)
+    )));
 }
 
 #[tokio::test]
@@ -970,7 +958,11 @@ async fn cancelling_the_bulk_comment_changes_nothing() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    assert!(texts_sent(&telegram, app.teacher()).contains(&texts::ACTION_CANCELLED.to_owned()));
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::ACTION_CANCELLED.to_owned())
+    );
     assert!(is_pending(&app, submission).await);
 }
 
@@ -1053,7 +1045,7 @@ async fn a_late_card_shows_the_maximum_left_after_a_penalty_to_the_work_score() 
         .late_penalty(1)
         .expect("the submission is one period late");
     let line = texts::late_submission_line(late, 10);
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter().any(|text| text.contains(&line)),
         "the card does not show the maximum: {sent:#?}"
@@ -1103,7 +1095,7 @@ async fn changing_the_decision_after_a_score_saves_a_rejection_without_a_score()
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(reviewed, Some(("rejected".to_owned(), None, None)));
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&texts::CHOOSE_REVIEW_DECISION.to_owned()));
     let reset = telegram
         .messages(app.teacher())
@@ -1179,7 +1171,7 @@ async fn the_help_menu_item_keeps_the_score_buttons_working() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(!sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
     assert!(
         sent.contains(&texts::input_prompt(texts::REVIEW_COMMENT_PROMPT)),
@@ -1247,7 +1239,7 @@ async fn a_change_button_after_the_review_is_saved_is_stale() {
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
     assert!(!sent.contains(&texts::REVIEW_DECISION_RESET.to_owned()));
     let saved = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
@@ -1290,7 +1282,7 @@ async fn a_change_after_another_teacher_reviewed_the_submission_ends_the_review(
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.contains(&app_error_message(ErrorCode::SubmissionAlreadyReviewed).to_owned()),
         "{sent:#?}"
@@ -1365,7 +1357,7 @@ async fn the_confirmation_shows_the_deduction_saved_after_a_policy_change() {
     assert_eq!(saved.work_score(), 4);
     let line = regular_grade(saved);
     assert!(!preview.contains(&line), "{preview}");
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     let confirmation = sent
         .iter()
         .find(|text| text.starts_with(texts::REVIEW_SAVED))
@@ -1412,7 +1404,7 @@ async fn the_review_card_names_the_group_of_the_author() {
         second.code().as_str(),
         1,
     );
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&summary), "{sent:#?}");
 }
 
@@ -1460,7 +1452,7 @@ async fn a_gradebook_of_several_groups_starts_with_the_choice_of_the_group() {
     assert_eq!(chooser["text"], texts::GRADEBOOK_CHOOSE_GROUP);
     assert_eq!(first_group.message_id, second_group.message_id);
     assert_ne!(first_group.data(), second_group.data());
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(
         sent.iter()
             .any(|text| text.starts_with(&format!("👤 {}", student.display_name().as_str()))),
@@ -1497,7 +1489,7 @@ async fn a_review_comment_over_the_limit_once_its_link_is_revealed_is_refused_an
     stop_bot(cancellation, &mut task).await;
 
     let refusal = texts::text_with_links_too_long(texts::FIELD_COMMENT, USER_TEXT_MAX_LEN);
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&refusal), "{sent:#?}");
     assert_eq!(
         reviewed.map(|(status, _, _)| status).as_deref(),
@@ -1527,7 +1519,7 @@ async fn a_bulk_comment_over_the_limit_once_its_link_is_revealed_is_refused_and_
     stop_bot(cancellation, &mut task).await;
 
     let refusal = texts::text_with_links_too_long(texts::FIELD_COMMENT, USER_TEXT_MAX_LEN);
-    let sent = texts_sent(&telegram, app.teacher());
+    let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&refusal), "{sent:#?}");
     assert_eq!(
         reviewed.map(|(status, _, _)| status).as_deref(),

@@ -75,6 +75,13 @@ impl TelegramScenario {
             .collect()
     }
 
+    pub fn texts(&self, user: i64) -> Vec<String> {
+        self.messages(user)
+            .iter()
+            .filter_map(|message| message["text"].as_str().map(str::to_owned))
+            .collect()
+    }
+
     pub async fn new() -> Self {
         let server = MockServer::start().await;
         let state = Arc::new(Mutex::new(State {
@@ -238,6 +245,23 @@ impl TelegramScenario {
     }
 
     pub async fn button_after(&self, user: i64, data: &str, previous: i32) -> Button {
+        self.wait_for_button(user, previous, |callback| callback == data)
+            .await
+            .unwrap_or_else(|| panic!("button {data} was not sent to {user}"))
+    }
+
+    pub async fn button_matching(&self, user: i64, matches: impl Fn(&str) -> bool) -> Button {
+        self.wait_for_button(user, 0, matches)
+            .await
+            .unwrap_or_else(|| panic!("no matching button was sent to {user}"))
+    }
+
+    async fn wait_for_button(
+        &self,
+        user: i64,
+        previous: i32,
+        matches: impl Fn(&str) -> bool,
+    ) -> Option<Button> {
         wait_for_some(Duration::from_secs(5), || async {
             let state = self.state.lock().unwrap();
             state.messages.iter().rev().find_map(|message| {
@@ -248,17 +272,16 @@ impl TelegramScenario {
                 let rows = message["reply_markup"]["inline_keyboard"].as_array()?;
                 rows.iter()
                     .flat_map(|row| row.as_array().unwrap())
-                    .find_map(|button| {
-                        (button["callback_data"] == data).then(|| Button {
-                            message_id: id,
-                            data: data.to_owned(),
-                            message: message.clone(),
-                        })
+                    .filter_map(|button| button["callback_data"].as_str())
+                    .find(|callback| matches(callback))
+                    .map(|callback| Button {
+                        message_id: id,
+                        data: callback.to_owned(),
+                        message: message.clone(),
                     })
             })
         })
         .await
-        .unwrap_or_else(|| panic!("button {data} was not sent to {user}"))
     }
 
     pub fn click(&self, user: i64, button: &Button) {
@@ -279,6 +302,10 @@ impl TelegramScenario {
 
     pub async fn flush(&self, user: i64) {
         self.message(user, "/help");
+        let help_titles: Vec<String> = [texts::student_help(), texts::teacher_help()]
+            .iter()
+            .filter_map(|help| help.lines().next().map(str::to_owned))
+            .collect();
         wait_for_some(Duration::from_secs(5), || async {
             let state = self.state.lock().unwrap();
             let requested = state
@@ -295,9 +322,11 @@ impl TelegramScenario {
                 .iter()
                 .filter(|message| {
                     message["chat"]["id"] == user
-                        && message["text"]
-                            .as_str()
-                            .is_some_and(|text| text.starts_with('❓'))
+                        && message["text"].as_str().is_some_and(|text| {
+                            help_titles
+                                .iter()
+                                .any(|title| text.starts_with(title.as_str()))
+                        })
                 })
                 .count();
             (answered >= requested).then_some(())

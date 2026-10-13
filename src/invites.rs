@@ -238,10 +238,16 @@ mod tests {
         let codec = codec(SECRET);
         let payload = codec.encode(course(), InviteGeneration::FIRST);
 
-        for mutate in [0usize, COURSE_LEN + GENERATION_LEN - 1, BODY_LEN - 1] {
-            let tampered = resign(&payload, |body| body[mutate] ^= 1);
+        for byte in 0..BODY_LEN {
+            for bit in 0..u8::BITS {
+                let tampered = resign(&payload, |body| body[byte] ^= 1 << bit);
 
-            assert_eq!(codec.decode(&tampered), Err(InviteDecodeError), "{mutate}");
+                assert_eq!(
+                    codec.decode(&tampered),
+                    Err(InviteDecodeError),
+                    "byte {byte}, bit {bit}"
+                );
+            }
         }
     }
 

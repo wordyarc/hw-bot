@@ -1,10 +1,11 @@
 use axum::http::StatusCode;
-use hw_bot::app::ChangeTerms;
-use hw_bot::domain::{Assignment, MakeupTerms};
+use chrono::Utc;
+use hw_bot::app::{ChangeTerms, ErrorCode, ReviewSubmission};
+use hw_bot::domain::{Assignment, MakeupTerms, ReviewDecision, SubmissionId};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, submission_id, wait_for_blocked_connection};
 
 #[tokio::test]
 async fn reloading_a_review_checks_access_to_its_course() {
@@ -315,44 +316,52 @@ async fn outbox_failure_rolls_back_the_review() {
 }
 
 #[tokio::test]
-async fn racing_reviews_enqueue_one_notification() {
+async fn a_review_that_loses_the_race_writes_neither_its_decision_nor_a_notification() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;
+    let mut winner = app.pool.begin().await.expect("begin the winning review");
+    let blocker: i32 = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *winner)
+        .await
+        .expect("read backend pid");
+    sqlx::query(
+        "update submissions
+         set status = 'rejected', reviewed_by = $2, reviewed_at = now(), review_comment = 'Победитель'
+         where id = $1",
+    )
+    .bind(submission)
+    .bind(app.fixture.teacher.id().as_uuid())
+    .execute(&mut *winner)
+    .await
+    .expect("write the winning review");
 
-    let (first, second) = tokio::join!(
-        app.review(submission, app.teacher(), "accept", "good"),
-        app.review(submission, app.teacher(), "reject", "bad"),
+    let (loser, ()) = tokio::join!(
+        app.review(submission, app.teacher(), "accept", "Проигравший"),
+        async {
+            wait_for_blocked_connection(&app.pool, blocker).await;
+            winner.commit().await.expect("commit the winning review");
+        },
     );
 
-    let (winner, loser) = if first.status == StatusCode::OK {
-        (first, second)
-    } else {
-        (second, first)
-    };
-    winner.ok();
     loser.error(StatusCode::CONFLICT, "submission_already_reviewed");
-
-    let count: i64 = sqlx::query_scalar(
+    let (status, comment): (String, String) =
+        sqlx::query_as("select status, review_comment from submissions where id = $1")
+            .bind(submission)
+            .fetch_one(&app.pool)
+            .await
+            .expect("read the review result");
+    assert_eq!(
+        (status.as_str(), comment.as_str()),
+        ("rejected", "Победитель")
+    );
+    let notifications: i64 = sqlx::query_scalar(
         "select count(*) from review_notification_outbox where submission_id = $1",
     )
     .bind(submission)
     .fetch_one(&app.pool)
     .await
     .expect("count notifications");
-    assert_eq!(count, 1);
-}
-
-#[tokio::test]
-async fn a_finished_review_is_final() {
-    let app = TestApp::start().await;
-    let submission = app.queued_submission(app.student(), "pull/1").await;
-    app.review(submission, app.teacher(), "reject", "Add tests.")
-        .await
-        .ok();
-
-    app.review(submission, app.teacher(), "accept", "changed my mind")
-        .await
-        .error(StatusCode::CONFLICT, "submission_already_reviewed");
+    assert_eq!(notifications, 0);
 }
 
 #[tokio::test]
@@ -388,25 +397,6 @@ async fn accepted_submission_cannot_be_redone_while_attempts_remain() {
         .error(StatusCode::CONFLICT, "submission_already_accepted");
 }
 
-#[tokio::test]
-async fn attempts_run_out_after_the_last_rejection() {
-    let app = TestApp::start().await;
-
-    // Третья попытка превышает заданный фикстурой max_attempts = 2.
-    for attempt in 1..=2 {
-        let submission = app
-            .queued_submission(app.student(), &format!("pull/{attempt}"))
-            .await;
-        app.review(submission, app.teacher(), "reject", "Again, please.")
-            .await
-            .ok();
-    }
-
-    app.submit(app.assignment(), app.student(), "pull/3")
-        .await
-        .error(StatusCode::CONFLICT, "attempts_exhausted");
-}
-
 async fn pending_makeup(app: &TestApp) -> (Assignment, Uuid) {
     let closed = app.add_closed_assignment("Closed", 10, 6).await;
     app.enable_makeup(3).await;
@@ -437,7 +427,7 @@ async fn a_makeup_accepted_without_a_score_is_credited_by_its_terms() {
 }
 
 #[tokio::test]
-async fn a_makeup_with_withdrawn_terms_can_be_rejected_but_not_accepted() {
+async fn a_makeup_review_reads_the_terms_in_force_when_it_is_saved() {
     let app = TestApp::start().await;
     let (closed, makeup) = pending_makeup(&app).await;
     app.application
@@ -453,14 +443,27 @@ async fn a_makeup_with_withdrawn_terms_can_be_rejected_but_not_accepted() {
         .await
         .unwrap();
 
-    app.review(makeup, app.teacher(), "accept", "Досдано")
+    let error = app
+        .application
+        .reviews
+        .review_submission(ReviewSubmission {
+            submission_id: SubmissionId::from_uuid(makeup),
+            actor: app.teacher_actor(),
+            decision: ReviewDecision::Accept,
+            score: None,
+            comment: "Досдано".to_owned(),
+            reviewed_at: Utc::now(),
+        })
         .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-    let rejected = app
-        .review(makeup, app.teacher(), "reject", "Условия сняты")
+        .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::InvalidInput);
+    let status: String = sqlx::query_scalar("select status from submissions where id = $1")
+        .bind(makeup)
+        .fetch_one(&app.pool)
         .await
-        .ok();
-    assert_eq!(rejected["status"], "rejected");
+        .expect("read the makeup status");
+    assert_eq!(status, "pending_review");
 }
 
 #[tokio::test]

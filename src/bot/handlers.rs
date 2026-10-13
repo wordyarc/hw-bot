@@ -690,19 +690,13 @@ fn sender_id(user: &User) -> HandlerResult<TelegramUserId> {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use chrono_tz::Tz;
 
     use super::*;
-    use crate::bot::BotTimezone;
     use crate::bot::callbacks::AmountChoice;
     use crate::bot::views::{
         assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
     };
     use crate::domain::{SubmissionId, TeachingCourseId, UserId};
-
-    fn timezone() -> BotTimezone {
-        BotTimezone::new(Tz::Asia__Vladivostok)
-    }
 
     #[test]
     fn command_names_match_the_declared_bot_commands() {
@@ -785,7 +779,7 @@ mod tests {
         };
         use crate::test_support::{
             assignment, course_for, history, student, student_group, subject, teacher,
-            teaching_course,
+            teaching_course, vladivostok,
         };
 
         let teacher = teacher(1);
@@ -834,7 +828,7 @@ mod tests {
         })
         .unwrap();
         let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
-        let timezone = timezone();
+        let timezone = vladivostok();
         let student_id = UserId::new();
         let contact = InformationalAction::StudentContact {
             course_id: course.id(),

@@ -57,30 +57,6 @@ async fn a_delayed_on_time_submission_uses_the_original_message_date() {
 }
 
 #[tokio::test]
-async fn a_delayed_submission_does_not_get_a_penalty_for_processing_time() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(0, Some((1, 1, 4))).await;
-    let sent_at = DateTime::from_timestamp(assignment.deadline_at().timestamp() - 1, 0).unwrap();
-
-    let submission = delayed_submission(&app, &assignment, sent_at).await;
-    app.review_with_score(
-        submission.id().as_uuid(),
-        app.teacher(),
-        "accept",
-        out_of(5, 5),
-        "Принято",
-    )
-    .await
-    .ok();
-    let reviewed = db::submissions::find_by_id(&app.pool, submission.id())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(reviewed.grade().unwrap().penalty(), 0);
-}
-
-#[tokio::test]
 async fn student_opens_a_previously_published_assignment_from_the_archive() {
     let app = TestApp::start().await;
     app.archive_assignment(app.assignment(), app.teacher())
@@ -357,6 +333,51 @@ async fn open_submission_prompt(app: &TestApp, telegram: &TelegramScenario) -> B
             &cb(callbacks::SUBMIT_PREFIX, app.assignment()),
         )
         .await
+}
+
+#[tokio::test]
+async fn a_file_on_the_submission_step_is_refused_and_the_step_waits_for_text() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_submission_prompt(&app, &telegram).await;
+
+    telegram.document(
+        app.student(),
+        "work-file",
+        "work.txt",
+        DOCUMENT_FIXTURE.len(),
+    );
+    let refused = wait_until(Duration::from_secs(5), || async {
+        telegram
+            .texts(app.student())
+            .contains(&texts::TEXT_REQUIRED.to_owned())
+    })
+    .await;
+    let after_file = latest_submission(&app).await;
+    telegram.message(app.student(), "pull/after-file");
+    let after_text = wait_for_some(Duration::from_secs(5), || latest_submission(&app)).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(refused, "{:#?}", telegram.texts(app.student()));
+    assert!(after_file.is_none());
+    assert_eq!(
+        after_text
+            .expect("the text after the file is submitted")
+            .content()
+            .as_str(),
+        "pull/after-file"
+    );
+}
+
+async fn latest_submission(app: &TestApp) -> Option<Submission> {
+    db::submissions::latest_for_student(
+        &app.pool,
+        app.fixture.assignment.id(),
+        app.fixture.student.id(),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]

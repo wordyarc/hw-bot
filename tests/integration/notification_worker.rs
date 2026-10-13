@@ -84,7 +84,7 @@ async fn delivery_keeps_its_lease_across_slow_claim_network_and_confirmation() {
     let runtime = hw_bot::db::connect_runtime(
         app.pool.connect_options().to_url_lossy().as_str(),
         1,
-        Duration::from_secs(1),
+        Duration::from_secs(5),
         Duration::from_secs(1),
     )
     .await

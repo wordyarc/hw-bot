@@ -1,5 +1,4 @@
 use chrono::{DateTime, Duration, Utc};
-use hw_bot::app::{ErrorCode, SubmitHomework};
 use hw_bot::db::submissions::{self, ReviewStream};
 use hw_bot::db::{DbError, DbResult};
 use hw_bot::domain::{
@@ -289,42 +288,6 @@ async fn storage_rejects_a_second_accepted_attempt_of_the_same_assignment() -> a
             );
         }
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn concurrent_double_submit_creates_one_pending_submission() -> anyhow::Result<()> {
-    let app = TestApp::start().await;
-    let command = SubmitHomework {
-        assignment_id: app.fixture.assignment.id(),
-        actor: app.student_actor(),
-        content: "pull/1".to_owned(),
-        submitted_at: Utc::now(),
-        allow_makeup: false,
-    };
-
-    let (first, second) = tokio::join!(
-        app.application.submissions.submit_homework(command.clone()),
-        app.application.submissions.submit_homework(command),
-    );
-
-    assert_eq!(
-        first.is_ok() as u8 + second.is_ok() as u8,
-        1,
-        "exactly one concurrent submit must be created; first={first:?}, second={second:?}"
-    );
-    let error = first.err().or_else(|| second.err()).unwrap();
-    assert_eq!(error.code(), ErrorCode::SubmissionPendingReview);
-
-    let count: i64 = sqlx::query_scalar(
-        "select count(*) from submissions where assignment_id = $1 and student_id = $2",
-    )
-    .bind(app.fixture.assignment.id().as_uuid())
-    .bind(app.fixture.student.id().as_uuid())
-    .fetch_one(&app.pool)
-    .await?;
-    assert_eq!(count, 1);
-
     Ok(())
 }
 

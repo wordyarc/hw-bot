@@ -582,10 +582,17 @@ impl Form for TermsForm {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, TimeZone};
+    use chrono::{Duration, NaiveDate, TimeZone};
+    use chrono_tz::Tz;
+    use proptest::prelude::*;
 
     use super::*;
-    use crate::domain::LATEST_TERM_YEAR;
+    use crate::bot::callbacks::MakeupChoice;
+    use crate::bot::timezone::BotTimezone;
+    use crate::bot::views::terms_form_view;
+    use crate::domain::{
+        AssignmentParts, AssignmentStatus, LATEST_TERM_YEAR, NewAssignment, TeachingCourse, User,
+    };
     use crate::test_support::t0;
 
     fn last_supported_day() -> DateTime<Utc> {
@@ -976,6 +983,25 @@ mod tests {
     }
 
     #[test]
+    fn a_policy_switched_back_on_over_a_deadline_it_cannot_follow_is_refused() {
+        let mut form = complete_form();
+        assert!(form.edit_summary(TermsAction::Policy));
+        form.choose_policy(None).unwrap();
+        assert!(form.edit_summary(TermsAction::Deadline));
+        form.apply_date(last_supported_day(), t0()).unwrap();
+        assert!(form.edit_summary(TermsAction::Policy));
+
+        assert_eq!(
+            form.choose_policy(Some(DeductedFrom::WorkScore)),
+            Err(TermsInputError::Domain(
+                DomainError::AssignmentClosingOutOfRange
+            ))
+        );
+        assert_eq!(form.terms.deducted_from, None);
+        assert!(!form.terms.cannot_be_summarised());
+    }
+
+    #[test]
     fn a_stored_horizon_beyond_the_input_limit_can_still_be_summarised() {
         let mut terms = scored_terms();
         terms.deadline_at = Some(t0());
@@ -1133,5 +1159,414 @@ mod tests {
             TermsStep::Summary,
         );
         assert!(!without.edit_summary(TermsAction::Makeup));
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Input {
+        Makeup(MakeupChoice),
+        Policy(Option<DeductedFrom>),
+        Number(u16),
+        DurationPeriods(u16),
+        Period,
+        Date(DateTime<Utc>),
+        Calendar(NaiveDate),
+        Options,
+        Manual,
+        Back,
+        Cancel,
+        DurationDate,
+        DurationApply,
+        Edit(TermsAction),
+        Save,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Move {
+        choice: u8,
+        number: u16,
+        moment: DateTime<Utc>,
+        lateness: Duration,
+        month: NaiveDate,
+        makeup: MakeupChoice,
+        deduction: Option<DeductedFrom>,
+        edit: TermsAction,
+    }
+
+    impl Move {
+        fn input(self, terms: &AssignmentTerms, step: TermsStep) -> Input {
+            let late = terms
+                .deadline_at
+                .and_then(|deadline| deadline.checked_add_signed(self.lateness))
+                .unwrap_or(self.moment);
+            match self.choice {
+                0..16 => return Input::Cancel,
+                16..40 => return Input::Back,
+                _ => {}
+            }
+            let inputs: &[Input] = match step {
+                TermsStep::Makeup => &[Input::Makeup(self.makeup), Input::Manual],
+                TermsStep::Policy => &[Input::Policy(self.deduction)],
+                TermsStep::Deadline => &[
+                    Input::Date(self.moment),
+                    Input::Date(self.moment),
+                    Input::Calendar(self.month),
+                    Input::Options,
+                    Input::Manual,
+                ],
+                TermsStep::Penalty => &[Input::Number(self.number), Input::Period, Input::Manual],
+                TermsStep::Period => &[Input::Number(self.number)],
+                TermsStep::Periods => &[
+                    Input::Number(self.number),
+                    Input::DurationDate,
+                    Input::Manual,
+                ],
+                TermsStep::DurationDate => &[
+                    Input::Date(late),
+                    Input::Date(self.moment),
+                    Input::DurationPeriods(self.number),
+                    Input::Calendar(self.month),
+                    Input::Options,
+                    Input::Manual,
+                ],
+                TermsStep::DurationConfirm { .. } => &[Input::DurationApply],
+                TermsStep::Summary => &[
+                    Input::Edit(self.edit),
+                    Input::Edit(self.edit),
+                    Input::Edit(self.edit),
+                    Input::Save,
+                ],
+            };
+            inputs[usize::from(self.choice) % inputs.len()]
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct Start {
+        grading: Grading,
+        question: MakeupQuestion,
+        edited: Option<(DateTime<Utc>, Option<LatePolicy>, Option<MakeupTerms>)>,
+    }
+
+    struct Session {
+        teacher: User,
+        course: TeachingCourse,
+        edited: Option<Assignment>,
+        form: TermsForm,
+    }
+
+    impl Session {
+        fn open(start: Start) -> Option<Self> {
+            let teacher = crate::test_support::teacher(1);
+            let group = crate::test_support::student_group("generated");
+            let course = crate::test_support::course_for(&group, &teacher);
+            let Some((deadline_at, late_policy, makeup)) = start.edited else {
+                let mut draft = DraftAssignment::new(
+                    AssignmentText {
+                        course_id: course.id(),
+                        title: "Title".into(),
+                        body: "Body".into(),
+                    },
+                    IssuedGroups::Single(group.id()),
+                    1,
+                );
+                draft.grading = start.grading;
+                let terms = AssignmentTerms::creating(draft, start.question);
+                let step = terms.first_step();
+                return Some(Self {
+                    teacher,
+                    course,
+                    edited: None,
+                    form: TermsForm::new(terms, step),
+                });
+            };
+            let assignment = Assignment::restore(AssignmentParts {
+                id: AssignmentId::new(),
+                teaching_course_id: course.id(),
+                subject_id: course.subject_id(),
+                groups: course.group_ids().clone(),
+                title: "Title".into(),
+                body: "Body".into(),
+                max_attempts: 1,
+                grading: start.grading,
+                late_policy: late_policy.filter(|_| start.grading.is_scored()),
+                makeup: makeup.filter(|makeup| makeup.ensure_fits(start.grading).is_ok()),
+                status: AssignmentStatus::Draft,
+                created_by: teacher.id(),
+                created_at: t0(),
+                deadline_at,
+                published_at: None,
+            })
+            .ok()?;
+            let terms = AssignmentTerms::editing(&assignment, 0, start.question);
+            Some(Self {
+                teacher,
+                course,
+                edited: Some(assignment),
+                form: TermsForm::new(terms, TermsStep::Summary),
+            })
+        }
+
+        fn handle(&mut self, input: Input, now: DateTime<Utc>) -> Result<bool, String> {
+            let form = &mut self.form;
+            match input {
+                Input::Makeup(choice) => match choice.terms(form.terms.grading()) {
+                    None => form.set_mode(InputMode::Manual),
+                    Some(Ok(makeup)) => {
+                        let _ = form.choose_makeup(makeup);
+                    }
+                    Some(Err(_)) => {}
+                },
+                Input::Policy(deducted_from) => {
+                    let _ = form.choose_policy(deducted_from);
+                }
+                Input::Number(value) => {
+                    let _ = form.apply_number(value);
+                }
+                Input::DurationPeriods(periods) => {
+                    let _ = form.apply_duration_periods(periods);
+                }
+                Input::Period => form.go(TermsStep::Period),
+                Input::Date(at) => {
+                    let _ = form.apply_date(at, now);
+                }
+                Input::Calendar(month) => form.set_mode(InputMode::Calendar(month)),
+                Input::Options => form.set_mode(InputMode::Buttons),
+                Input::Manual => form.set_mode(InputMode::Manual),
+                Input::Back => {
+                    form.step_back();
+                }
+                Input::Cancel => return Ok(form.back()),
+                Input::DurationDate => form.go(TermsStep::DurationDate),
+                Input::DurationApply => {
+                    form.confirm_duration();
+                }
+                Input::Edit(action) => {
+                    form.edit_summary(action);
+                }
+                Input::Save => {
+                    let Some(complete) = form.terms.complete() else {
+                        return Ok(true);
+                    };
+                    if form.validate_for_save(now).is_err() {
+                        return Ok(true);
+                    }
+                    self.save(complete, now)?;
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+
+        fn save(&self, complete: CompleteTerms, now: DateTime<Utc>) -> Result<(), String> {
+            let terms = &self.form.terms;
+            let saved = match (&terms.target, &self.edited) {
+                (TermsTarget::Create(draft), _) => Assignment::new(
+                    AssignmentId::new(),
+                    &self.course,
+                    &self.teacher,
+                    NewAssignment {
+                        title: draft.text.title.clone(),
+                        body: draft.text.body.clone(),
+                        groups: Some(draft.groups.ids()),
+                        max_attempts: draft.max_attempts,
+                        grading: draft.grading,
+                        late_policy: complete.late_policy,
+                        makeup: terms.makeup,
+                        created_at: now,
+                        deadline_at: complete.deadline_at,
+                    },
+                )
+                .map(drop),
+                (TermsTarget::Edit { .. }, Some(assignment)) => assignment.clone().change_terms(
+                    &self.course,
+                    &self.teacher,
+                    complete.deadline_at,
+                    complete.late_policy,
+                    terms.makeup,
+                ),
+                (TermsTarget::Edit { .. }, None) => unreachable!("an edit form has an assignment"),
+            };
+            saved.map_err(|error| format!("the domain refused saved terms: {error:?}"))
+        }
+
+        fn view(&mut self, timezone: &BotTimezone, now: DateTime<Utc>) -> bool {
+            if self.form.step == TermsStep::Summary {
+                self.form.go(TermsStep::Summary);
+            }
+            terms_form_view(&self.form, timezone, now).is_some()
+        }
+    }
+
+    fn last_moment_of_supported_years() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(LATEST_TERM_YEAR + 1, 1, 1, 0, 0, 0)
+            .unwrap()
+            - Duration::nanoseconds(1)
+    }
+
+    fn moment() -> impl Strategy<Value = DateTime<Utc>> {
+        let edges = vec![
+            DateTime::<Utc>::MIN_UTC,
+            t0() - Duration::days(1),
+            t0(),
+            t0() + Duration::nanoseconds(1),
+            last_supported_day() - Duration::days(366),
+            last_supported_day(),
+            last_moment_of_supported_years(),
+            last_moment_of_supported_years() + Duration::nanoseconds(1),
+            DateTime::<Utc>::MAX_UTC,
+        ];
+        prop_oneof![
+            2 => (1..=800 * 24 * 60i64).prop_map(|minutes| t0() + Duration::minutes(minutes)),
+            1 => (0..=400 * 24 * 60i64).prop_map(|minutes| {
+                last_moment_of_supported_years() - Duration::minutes(minutes)
+            }),
+            1 => (prop::sample::select(edges), -400 * 86_400..=400 * 86_400i64).prop_filter_map(
+                "a representable moment",
+                |(edge, seconds)| edge.checked_add_signed(Duration::seconds(seconds))
+            ),
+        ]
+    }
+
+    fn number() -> impl Strategy<Value = u16> {
+        prop_oneof![
+            3 => 1..=8u16,
+            1 => prop::sample::select(vec![0, 52, 53, 99, 100, 101, 365, 366, u16::MAX]),
+            1 => any::<u16>(),
+        ]
+    }
+
+    fn grading() -> impl Strategy<Value = Grading> {
+        prop::sample::select(vec![
+            Grading::PassFail,
+            Grading::scored(1).unwrap(),
+            Grading::scored(5).unwrap(),
+            Grading::scored(100).unwrap(),
+        ])
+    }
+
+    fn deduction() -> impl Strategy<Value = DeductedFrom> {
+        prop_oneof![
+            Just(DeductedFrom::WorkScore),
+            Just(DeductedFrom::CourseTotal)
+        ]
+    }
+
+    fn stored_policy() -> impl Strategy<Value = Option<LatePolicy>> {
+        prop::option::of(
+            (
+                1..=MAX_LATE_PERIOD_DAYS,
+                1..=MAX_PENALTY_PER_PERIOD,
+                1..=MAX_LATE_PERIODS,
+                deduction(),
+            )
+                .prop_map(|(days, penalty, periods, deducted_from)| {
+                    LatePolicy::new(days, penalty, periods, deducted_from).unwrap()
+                }),
+        )
+    }
+
+    fn start() -> impl Strategy<Value = Start> {
+        let question = (any::<bool>(), prop::option::of(number()))
+            .prop_map(|(enabled, hint)| MakeupQuestion { enabled, hint });
+        let stored_makeup = prop::option::of(prop_oneof![
+            Just(MakeupTerms::NotOffered),
+            Just(MakeupTerms::PassFail),
+            (1..=100u16).prop_map(|credit| MakeupTerms::scored(
+                credit,
+                Grading::scored(100).unwrap()
+            )
+            .unwrap()),
+        ]);
+        let edited = prop::option::of((moment(), stored_policy(), stored_makeup));
+        (grading(), question, edited).prop_map(|(grading, question, edited)| Start {
+            grading,
+            question,
+            edited,
+        })
+    }
+
+    fn moves() -> impl Strategy<Value = Vec<Move>> {
+        let month = prop::sample::select(vec![
+            NaiveDate::MIN,
+            t0().date_naive(),
+            NaiveDate::from_ymd_opt(LATEST_TERM_YEAR, 12, 1).unwrap(),
+            NaiveDate::MAX,
+        ]);
+        let makeup = prop_oneof![
+            Just(MakeupChoice::NotOffered),
+            Just(MakeupChoice::PassFail),
+            Just(MakeupChoice::Manual),
+            number().prop_map(MakeupChoice::Credit),
+        ];
+        let edit = prop::sample::select(vec![
+            TermsAction::Deadline,
+            TermsAction::Policy,
+            TermsAction::Penalty,
+            TermsAction::Period,
+            TermsAction::Periods,
+            TermsAction::Makeup,
+        ]);
+        let lateness = prop_oneof![
+            3 => (1..=400 * 24 * 60i64).prop_map(Duration::minutes),
+            1 => prop::sample::select(vec![
+                Duration::zero(),
+                Duration::nanoseconds(1),
+                Duration::days(7),
+                Duration::days(366),
+                Duration::days(367),
+                -Duration::nanoseconds(1),
+            ]),
+        ];
+        let one = (
+            any::<u8>(),
+            number(),
+            moment(),
+            lateness,
+            month,
+            makeup,
+            prop::option::of(deduction()),
+            edit,
+        )
+            .prop_map(
+                |(choice, number, moment, lateness, month, makeup, deduction, edit)| Move {
+                    choice,
+                    number,
+                    moment,
+                    lateness,
+                    month,
+                    makeup,
+                    deduction,
+                    edit,
+                },
+            );
+        prop::collection::vec(one, 0..40)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            failure_persistence: None,
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn any_input_sequence_keeps_a_screen_and_saves_only_terms_the_domain_accepts(
+            start in start(),
+            moves in moves(),
+        ) {
+            let session = Session::open(start);
+            prop_assume!(session.is_some());
+            let mut session = session.unwrap();
+            let timezone = BotTimezone::new(Tz::Asia__Vladivostok);
+            let now = t0();
+
+            prop_assert!(session.view(&timezone, now), "the first screen has no view");
+            for (index, next) in moves.into_iter().enumerate() {
+                let input = next.input(&session.form.terms, session.form.step);
+                if !session.handle(input, now).map_err(TestCaseError::fail)? {
+                    break;
+                }
+                prop_assert!(session.view(&timezone, now), "move {} ({:?}) left no screen", index, input);
+            }
+        }
     }
 }
