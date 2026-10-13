@@ -299,6 +299,7 @@ fn init_logging(config: &LoggingConfig) -> anyhow::Result<Option<WorkerGuard>> {
             })
             .filename_prefix(&config.file_prefix)
             .filename_suffix(&config.file_suffix)
+            .max_log_files(config.max_files.get())
             .build(&config.file_dir)
             .with_context(|| format!("failed to initialize log appender in {}", config.file_dir))?;
         let (file_writer, guard) = tracing_appender::non_blocking(file_appender);

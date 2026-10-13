@@ -5,15 +5,15 @@ umask 077
 image=${1:?usage: sh tools/actions/smoke.sh IMAGE}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/hw-bot-smoke.XXXXXX")
 diagnostics=${2:-"$tmp/diagnostics"}
+installation="$tmp/installation"
 export COMPOSE_PROJECT_NAME="hw-bot-smoke-$$"
-export HW_BOT_ENV_FILE="$tmp/.env.production" HW_BOT_CONFIG_DIR="$tmp"
-export HW_BOT_IMAGE="$image" POSTGRES_PASSWORD=smoke
 compose() {
-    docker compose --env-file "$HW_BOT_ENV_FILE" -f tools/deploy/compose.yml "$@"
+    sh "$installation/bin/compose.sh" "$@"
 }
 cleanup() {
     status=$?
     set +e
+    export HW_BOT_IMAGE="$image"
     if [ "$status" -ne 0 ]; then
         mkdir -p "$diagnostics"
         compose ps --all > "$diagnostics/compose-ps.log" 2>&1 || true
@@ -31,34 +31,36 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 
+sh tools/actions/package.sh HEAD "$tmp/deploy.tar.gz"
+mkdir -p "$installation/etc" "$installation/logs"
+tar -xzf "$tmp/deploy.tar.gz" -C "$installation" --strip-components=1
 sed '/^\[server\]$/,/^\[/ {
     s/^host = .*/host = "::1"/
     s/^port = .*/port = 3001/
-}' tools/deploy/production.example.toml > "$tmp/production.toml"
-grep -qx 'host = "::1"' "$tmp/production.toml"
-grep -qx 'port = 3001' "$tmp/production.toml"
-cp tools/deploy/bootstrap.example.json "$tmp/bootstrap.production.json"
-chmod 0640 "$tmp/production.toml" "$tmp/bootstrap.production.json"
-cat > "$HW_BOT_ENV_FILE" <<EOF
-HW_BOT_IMAGE=$image
-HW_BOT_CONFIG_GID=$(id -g)
+}' "$installation/examples/production.toml" > "$installation/etc/production.toml"
+grep -qx 'host = "::1"' "$installation/etc/production.toml"
+grep -qx 'port = 3001' "$installation/etc/production.toml"
+cp "$installation/examples/bootstrap.json" "$installation/etc/bootstrap.json"
+chmod 0770 "$installation/logs"
+sudo chgrp 10001 "$installation/etc/production.toml" "$installation/etc/bootstrap.json" "$installation/logs"
+cat > "$installation/etc/hw-bot.env" <<EOF
 POSTGRES_PASSWORD=smoke
-APP__DATABASE__URL=postgres://hw_bot:smoke@database:5432/hw_bot
 APP__TELEGRAM__ENABLED=false
 APP__NOTIFICATION_WORKER__ENABLED=false
 APP__GROUP_INVITES__INVITE_SIGNING_SECRET=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
 EOF
-compose -f tools/deploy/compose.bootstrap.yml up -d --wait --wait-timeout 120
-compose -f tools/deploy/compose.bootstrap.yml restart app
-compose -f tools/deploy/compose.bootstrap.yml up -d --wait --wait-timeout 120
-compose up -d --no-deps --force-recreate --wait --wait-timeout 120 app
+jq -n --arg image "$image" '{version: "0.0.0", commit: "smoke", image: $image, deployed_at: "smoke"}' \
+    > "$installation/current-release.json"
 
-backup=$(BACKUP_DIR="$tmp/backups" sh tools/ops/backup.sh)
-[ "$(cat "$tmp/backups/.last-success")" = "$backup" ]
-(cd "$tmp/backups" && sha256sum --check "${backup##*/}.sha256")
-compose exec -T database createdb --username=hw_bot restore_check
-compose exec -T database pg_restore --username=hw_bot --dbname=restore_check \
-    --no-owner --exit-on-error < "$backup"
+make -C "$installation" bootstrap
+make -C "$installation" bootstrap
+ls "$installation"/logs/hw-bot.*.log > /dev/null
+
+make -C "$installation" backup
+backup=$(cat "$installation/backups/.last-success")
+make -C "$installation" restore DUMP="$backup" CONFIRM=yes
+make -C "$installation" status
+make -C "$installation" queues
 
 for config in missing directory unreadable; do
     case "$config" in

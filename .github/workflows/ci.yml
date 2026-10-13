@@ -42,7 +42,7 @@ jobs:
           args: -color
 
       - name: Shell lint
-        run: shellcheck tools/actions/*.sh tools/ops/*.sh tools/docker/*.sh
+        run: shellcheck tools/actions/*.sh dist/bin/*.sh tools/docker/*.sh
 
       - name: Backup failure handling
         run: bash tools/actions/test-backup.sh

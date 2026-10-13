@@ -2,8 +2,8 @@
 set -euo pipefail
 umask 077
 
-root=${1:?usage: bash tools/ops/deploy.sh ROOT RELEASE_DIRECTORY}
-release_dir=${2:?usage: bash tools/ops/deploy.sh ROOT RELEASE_DIRECTORY}
+root=${1:?usage: bash bin/deploy.sh ROOT RELEASE_DIRECTORY}
+release_dir=${2:?usage: bash bin/deploy.sh ROOT RELEASE_DIRECTORY}
 root=$(cd "$root" && pwd)
 release_dir=$(cd "$release_dir" && pwd)
 cd "$root"
@@ -11,25 +11,22 @@ cd "$root"
 exec 9> "$root/.deploy.lock"
 flock -n 9 || { printf '%s\n' 'Another deployment is running' >&2; exit 1; }
 
-export HW_BOT_ENV_FILE="$root/tools/deploy/.env.production"
-export HW_BOT_CONFIG_DIR="$root/tools/deploy"
-export BACKUP_DIR="$root/backups"
 image=$(jq -er '.image' "$release_dir/release.json")
 [[ "$image" =~ ^[a-zA-Z0-9][^[:space:]]*@sha256:[0-9a-f]{64}$ ]] || {
     printf '%s\n' 'Release image must be pinned to a SHA-256 digest' >&2
     exit 1
 }
-for file in "$HW_BOT_ENV_FILE" "$HW_BOT_CONFIG_DIR/production.toml"; do
-    [[ -f "$file" && -r "$file" ]] || { printf 'Missing or unreadable file: %s\n' "$file" >&2; exit 1; }
+for file in etc/hw-bot.env etc/production.toml; do
+    [[ -f "$file" && -r "$file" ]] || { printf 'Missing or unreadable file: %s\n' "$root/$file" >&2; exit 1; }
 done
-files=(tools/deploy/compose.yml tools/deploy/compose.bootstrap.yml
-    tools/ops/backup.sh tools/ops/deploy.sh)
-for file in "${files[@]}"; do
+[[ -d logs ]] || { printf 'Missing log directory: %s\n' "$root/logs" >&2; exit 1; }
+for file in deploy.tar.gz bin/compose.sh bin/backup.sh; do
     [[ -f "$release_dir/$file" ]] || { printf 'Missing release file: %s\n' "$file" >&2; exit 1; }
 done
 
+export HW_BOT_ROOT="$root" HW_BOT_IMAGE="$image" BACKUP_DIR="$root/backups"
 compose() {
-    docker compose --env-file "$HW_BOT_ENV_FILE" -f tools/deploy/compose.yml "$@"
+    sh "$release_dir/bin/compose.sh" "$@"
 }
 resume_old=false
 stage=
@@ -59,32 +56,26 @@ trap 'exit 1' HUP INT TERM
 container=$(compose ps --all -q app)
 [[ -n "$container" ]] || { printf '%s\n' 'Bootstrap the installation before deploying' >&2; exit 1; }
 previous_image=$(docker inspect --format '{{.Config.Image}}' "$container")
-HW_BOT_IMAGE="$image" docker compose --env-file "$HW_BOT_ENV_FILE" \
-    -f "$release_dir/tools/deploy/compose.yml" config --quiet
+compose config --quiet
 docker pull "$image"
 
 stage=$(mktemp -d "$root/.deploy.XXXXXX")
+tar -xzf "$release_dir/deploy.tar.gz" -C "$stage" --strip-components=1
+mapfile -t files < <(cd "$stage" && find . -type f -printf '%P\n' | LC_ALL=C sort)
 for file in "${files[@]}"; do
-    install -D -m 0644 "$release_dir/$file" "$stage/$file"
+    mkdir -p "$root/$(dirname "$file")"
 done
-awk -v image="$image" '
-    /^HW_BOT_IMAGE=/ { if (!written) print "HW_BOT_IMAGE=" image; written = 1; next }
-    { print }
-    END { if (!written) print "HW_BOT_IMAGE=" image }
-' "$HW_BOT_ENV_FILE" > "$stage/.env.production"
 
 phase=stop
 resume_old=true
 compose stop app
 phase=backup
-backup=$(sh "$release_dir/tools/ops/backup.sh")
+backup=$(sh "$release_dir/bin/backup.sh")
 
 phase=replace
 for file in "${files[@]}"; do
     mv "$stage/$file" "$root/$file"
 done
-mv "$stage/.env.production" "$HW_BOT_ENV_FILE"
-export HW_BOT_IMAGE="$image"
 phase=start
 resume_old=false
 compose up -d --no-deps --force-recreate --wait --wait-timeout 120 app

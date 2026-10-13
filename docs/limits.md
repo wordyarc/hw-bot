@@ -65,9 +65,9 @@
 | память и CPU PostgreSQL        | 448 МиБ, 1 CPU                                            | `compose.yml`                  |
 | `max_connections` PostgreSQL   | 20                                                        | `compose.yml`                  |
 | health check                   | раз в 10 с, `curl --max-time 5`, unhealthy после 3 неудач | `Dockerfile`                   |
-| ожидание блокировки при backup | 10 с                                                      | `tools/ops/backup.sh`          |
+| ожидание блокировки при backup | 10 с                                                      | `dist/bin/backup.sh`           |
 | `pg_dump`                      | 5 мин + 10 с до SIGKILL                                   | `BACKUP_TIMEOUT_SECONDS`       |
-| готовность после deploy        | 2 мин                                                     | `tools/ops/deploy.sh`          |
+| готовность после deploy        | 2 мин                                                     | `dist/bin/deploy.sh`           |
 | серверный deploy, SSH-шаг, job | 15 мин + 30 с, 17 мин, 20 мин                             | `.github/workflows/deploy.yml` |
 
 ## bulkhead

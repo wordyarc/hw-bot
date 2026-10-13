@@ -16,12 +16,13 @@ bootstrap_file = "/run/bootstrap/data.json"
 
 [logging]
 level = "hw_bot=info,tower_http=info,sqlx=warn"
-format = "json"
-file_enabled = false
-file_dir = "logs/hw-bot"
+format = "compact"
+file_enabled = true
+file_dir = "logs"
 file_prefix = "hw-bot"
 file_suffix = "log"
 rotation = "daily"
+max_files = 14
 also_stdout = true
 
 [files]

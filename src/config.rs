@@ -77,6 +77,7 @@ pub struct LoggingConfig {
     pub file_prefix: String,
     pub file_suffix: String,
     pub rotation: LogRotation,
+    pub max_files: NonZeroUsize,
     pub also_stdout: bool,
 }
 
@@ -395,6 +396,7 @@ mod tests {
                 file_prefix = "hw-bot"
                 file_suffix = "log"
                 rotation = "daily"
+                max_files = 14
                 also_stdout = true
 
                 [files]
@@ -463,6 +465,7 @@ mod tests {
         assert_eq!(config.logging.file_prefix, "hw-bot");
         assert_eq!(config.logging.file_suffix, "log");
         assert!(matches!(config.logging.rotation, LogRotation::Daily));
+        assert_eq!(config.logging.max_files.get(), 14);
         assert!(config.logging.also_stdout);
         assert_eq!(config.files.max_file_size_bytes.get(), 5_242_880);
         assert_eq!(config.files.max_files_per_assignment.get(), 5);

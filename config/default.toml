@@ -23,6 +23,7 @@ file_dir = "logs/hw-bot"
 file_prefix = "hw-bot"
 file_suffix = "log"
 rotation = "daily"
+max_files = 14
 also_stdout = true
 
 [files]

@@ -11,24 +11,30 @@ cleanup() {
 trap cleanup EXIT
 
 export DEPLOY_TEST_ROOT="$tmp/installation" DEPLOY_TEST_LOG="$tmp/calls.log"
-export DEPLOY_TEST_INSTALL DEPLOY_TEST_MV
-DEPLOY_TEST_INSTALL=$(command -v install)
+export DEPLOY_TEST_TAR DEPLOY_TEST_MV
+DEPLOY_TEST_TAR=$(command -v tar)
 DEPLOY_TEST_MV=$(command -v mv)
-mkdir -p "$tmp/bin" "$tmp/release/tools/deploy" "$tmp/release/tools/ops"
-image="example/hw-bot@sha256:$(printf '%064d' 1)"
-jq -n --arg image "$image" '{image: $image}' > "$tmp/release/release.json"
-files=(tools/deploy/compose.yml tools/deploy/compose.bootstrap.yml tools/ops/backup.sh tools/ops/deploy.sh)
-for file in "${files[@]}"; do printf 'new file\n' > "$tmp/release/$file"; done
-cat > "$tmp/release/tools/ops/backup.sh" <<'EOF'
+mkdir -p "$tmp/bin" "$tmp/package/dist/bin" "$tmp/release"
+files=(Makefile bin/backup.sh bin/compose.sh bin/deploy.sh compose.yml)
+for file in "${files[@]}"; do printf 'new file\n' > "$tmp/package/dist/$file"; done
+cp "$root/dist/bin/compose.sh" "$tmp/package/dist/bin/compose.sh"
+cat > "$tmp/package/dist/bin/backup.sh" <<'EOF'
 #!/bin/sh
 printf 'backup\n' >> "$DEPLOY_TEST_LOG"
 [ "$DEPLOY_TEST_MODE" != backup_failure ] || exit 42
 printf '/backups/before-deploy.dump\n'
 EOF
+tar -czf "$tmp/release/deploy.tar.gz" -C "$tmp/package" dist
+tar -xzf "$tmp/release/deploy.tar.gz" -C "$tmp/release" --strip-components=1
+image="example/hw-bot@sha256:$(printf '%064d' 1)"
+jq -n --arg image "$image" '{image: $image}' > "$tmp/release/release.json"
 cat > "$tmp/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == compose ]]; then shift 5; fi
+if [[ "$1" == compose ]]; then
+    shift
+    while [[ "$1" == -* ]]; do shift 2; done
+fi
 printf '%s\n' "$*" >> "$DEPLOY_TEST_LOG"
 case "$1" in
     ps) [[ "$*" != 'ps --all -q app' ]] || printf 'old-container\n' ;;
@@ -60,23 +66,22 @@ case "$1" in
     *) exit 99 ;;
 esac
 EOF
-cat > "$tmp/bin/install" <<'EOF'
+cat > "$tmp/bin/tar" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$DEPLOY_TEST_MODE" == write_failure && "$5" == */compose.yml ]]; then
-    mkdir -p "$(dirname "$5")"
-    : > "$5"
+if [[ "$DEPLOY_TEST_MODE" == write_failure ]]; then
+    while [[ "$1" != -C ]]; do shift; done
+    printf 'partial\n' > "$2/compose.yml"
     exit 44
 fi
-exec "$DEPLOY_TEST_INSTALL" "$@"
+exec "$DEPLOY_TEST_TAR" "$@"
 EOF
 cat > "$tmp/bin/mv" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$DEPLOY_TEST_MODE:$2" in
-    "rename_failure:$DEPLOY_TEST_ROOT/tools/deploy/compose.yml"|\
-    "late_rename_failure:$DEPLOY_TEST_ROOT/tools/ops/deploy.sh"|\
-    "env_rename_failure:$DEPLOY_TEST_ROOT/tools/deploy/.env.production"|\
+    "rename_failure:$DEPLOY_TEST_ROOT/Makefile"|\
+    "late_rename_failure:$DEPLOY_TEST_ROOT/compose.yml"|\
     "record_failure:$DEPLOY_TEST_ROOT/current-release.json") exit 45 ;;
 esac
 exec "$DEPLOY_TEST_MV" "$@"
@@ -84,14 +89,16 @@ EOF
 chmod +x "$tmp/bin/"*
 export PATH="$tmp/bin:$PATH"
 
-for mode in write_failure backup_failure rename_failure late_rename_failure env_rename_failure \
+for mode in missing_logs write_failure backup_failure rename_failure late_rename_failure \
     hup_stop term_stop timeout_stop startup_failure term_start timeout_start record_failure success; do
     printf 'Deployment handles %s\n' "$mode"
     export DEPLOY_TEST_MODE="$mode"
-    mkdir -p "$DEPLOY_TEST_ROOT/tools/deploy" "$DEPLOY_TEST_ROOT/tools/ops"
+    rm -rf "$DEPLOY_TEST_ROOT" "$tmp/release/deploy.log"
+    mkdir -p "$DEPLOY_TEST_ROOT/etc" "$DEPLOY_TEST_ROOT/bin"
+    [[ "$mode" == missing_logs ]] || mkdir "$DEPLOY_TEST_ROOT/logs"
     for file in "${files[@]}"; do printf 'old file\n' > "$DEPLOY_TEST_ROOT/$file"; done
-    printf 'HW_BOT_IMAGE=example/hw-bot:previous\n' > "$DEPLOY_TEST_ROOT/tools/deploy/.env.production"
-    printf '[app]\n' > "$DEPLOY_TEST_ROOT/tools/deploy/production.toml"
+    printf 'POSTGRES_PASSWORD=test\n' > "$DEPLOY_TEST_ROOT/etc/hw-bot.env"
+    printf '[app]\n' > "$DEPLOY_TEST_ROOT/etc/production.toml"
     printf 'running\n' > "$DEPLOY_TEST_ROOT/state"
     printf 'example/hw-bot:previous\n' > "$DEPLOY_TEST_ROOT/image"
     printf 'previous release\n' > "$DEPLOY_TEST_ROOT/current-release.json"
@@ -99,13 +106,17 @@ for mode in write_failure backup_failure rename_failure late_rename_failure env_
     status=0
     if [[ "$mode" == timeout_* ]]; then
         # Staging must finish on a busy runner before the deliberately blocked Docker call times out.
-        timeout --signal=TERM --kill-after=5s 10s bash "$root/tools/ops/deploy.sh" \
+        timeout --signal=TERM --kill-after=5s 10s bash "$root/dist/bin/deploy.sh" \
             "$DEPLOY_TEST_ROOT" "$tmp/release" > "$tmp/output.log" 2>&1 || status=$?
         [[ "$status" == 124 ]]
     else
-        bash "$root/tools/ops/deploy.sh" "$DEPLOY_TEST_ROOT" "$tmp/release" > "$tmp/output.log" 2>&1 || status=$?
+        bash "$root/dist/bin/deploy.sh" "$DEPLOY_TEST_ROOT" "$tmp/release" > "$tmp/output.log" 2>&1 || status=$?
     fi
     case "$mode" in
+        missing_logs)
+            [[ "$status" != 0 && "$(cat "$DEPLOY_TEST_ROOT/state")" == running ]]
+            [[ ! -s "$DEPLOY_TEST_LOG" ]]
+            ;;
         write_failure)
             [[ "$status" == 44 && "$(cat "$DEPLOY_TEST_ROOT/state")" == running ]]
             if grep -Eq '^(stop|backup)' "$DEPLOY_TEST_LOG"; then exit 1; fi
@@ -124,10 +135,27 @@ for mode in write_failure backup_failure rename_failure late_rename_failure env_
                 "$DEPLOY_TEST_ROOT/current-release.json" > /dev/null
             ;;
     esac
+    [[ "$(cat "$DEPLOY_TEST_ROOT/etc/hw-bot.env")" == 'POSTGRES_PASSWORD=test' ]]
+    case "$mode" in
+        success|startup_failure|term_start|timeout_start|record_failure)
+            [[ "$(cat "$DEPLOY_TEST_ROOT/Makefile")" == 'new file' ]]
+            [[ "$(cat "$DEPLOY_TEST_ROOT/compose.yml")" == 'new file' ]]
+            ;;
+        late_rename_failure)
+            [[ "$(cat "$DEPLOY_TEST_ROOT/Makefile")" == 'new file' ]]
+            [[ "$(cat "$DEPLOY_TEST_ROOT/compose.yml")" == 'old file' ]]
+            if grep -q '^up ' "$DEPLOY_TEST_LOG"; then exit 1; fi
+            ;;
+        *)
+            [[ "$(cat "$DEPLOY_TEST_ROOT/Makefile")" == 'old file' ]]
+            [[ "$(cat "$DEPLOY_TEST_ROOT/compose.yml")" == 'old file' ]]
+            if grep -q '^up ' "$DEPLOY_TEST_LOG"; then exit 1; fi
+            ;;
+    esac
     if [[ "$mode" != success ]]; then
         [[ "$(cat "$DEPLOY_TEST_ROOT/current-release.json")" == 'previous release' ]]
     fi
-    if [[ "$mode" != success ]]; then
+    if [[ "$mode" != success && "$mode" != missing_logs ]]; then
         [[ -s "$tmp/release/deploy.log" ]]
         case "$mode" in
             write_failure) phase=preflight ;;
@@ -140,22 +168,15 @@ for mode in write_failure backup_failure rename_failure late_rename_failure env_
         grep -qx "Phase: $phase" "$tmp/release/deploy.log"
         [[ ! -e "$DEPLOY_TEST_ROOT/current-release.json.next" ]]
     fi
-    if [[ "$mode" == late_rename_failure || "$mode" == env_rename_failure ]]; then
-        [[ "$(cat "$DEPLOY_TEST_ROOT/tools/deploy/compose.yml")" == 'new file' ]]
-        [[ "$(cat "$DEPLOY_TEST_ROOT/tools/deploy/.env.production")" == 'HW_BOT_IMAGE=example/hw-bot:previous' ]]
-        if grep -q '^up ' "$DEPLOY_TEST_LOG"; then exit 1; fi
-    elif [[ "$mode" != success && "$mode" != startup_failure && "$mode" != term_start && "$mode" != timeout_start && "$mode" != record_failure ]]; then
-        [[ "$(cat "$DEPLOY_TEST_ROOT/tools/deploy/compose.yml")" == 'old file' ]]
-        [[ "$(cat "$DEPLOY_TEST_ROOT/tools/deploy/.env.production")" == 'HW_BOT_IMAGE=example/hw-bot:previous' ]]
-        if grep -q '^up ' "$DEPLOY_TEST_LOG"; then exit 1; fi
-    fi
     for staged in "$DEPLOY_TEST_ROOT/".deploy.??????; do [[ ! -e "$staged" ]]; done
     flock -n "$DEPLOY_TEST_ROOT/.deploy.lock" true
 
     if [[ "$mode" != success ]]; then
         printf 'Deployment can be retried after %s\n' "$mode"
-        DEPLOY_TEST_MODE=success bash "$root/tools/ops/deploy.sh" "$DEPLOY_TEST_ROOT" "$tmp/release" > "$tmp/output.log" 2>&1
+        mkdir -p "$DEPLOY_TEST_ROOT/logs"
+        DEPLOY_TEST_MODE=success bash "$root/dist/bin/deploy.sh" "$DEPLOY_TEST_ROOT" "$tmp/release" > "$tmp/output.log" 2>&1
         [[ "$(cat "$DEPLOY_TEST_ROOT/state")" == new ]]
+        [[ "$(cat "$DEPLOY_TEST_ROOT/compose.yml")" == 'new file' ]]
         jq -e --arg image "$image" '.image == $image and .backup == "/backups/before-deploy.dump"' \
             "$DEPLOY_TEST_ROOT/current-release.json" > /dev/null
     fi

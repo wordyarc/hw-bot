@@ -2,16 +2,14 @@
 set -eu
 umask 077
 
-root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-cd "$root"
-export HW_BOT_ENV_FILE="${HW_BOT_ENV_FILE:-"$root/tools/deploy/.env.production"}"
-export HW_BOT_CONFIG_DIR="${HW_BOT_CONFIG_DIR:-"$root/tools/deploy"}"
+bin=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+export HW_BOT_ROOT="${HW_BOT_ROOT:-"$(dirname -- "$bin")"}"
 backup_timeout=${BACKUP_TIMEOUT_SECONDS:-300}
 case "$backup_timeout" in
     ''|*[!0-9]*) printf '%s\n' 'BACKUP_TIMEOUT_SECONDS must be a positive integer' >&2; exit 1 ;;
 esac
 [ "$backup_timeout" -gt 0 ] || { printf '%s\n' 'BACKUP_TIMEOUT_SECONDS must be a positive integer' >&2; exit 1; }
-backup_dir=${BACKUP_DIR:-"$root/backups"}
+backup_dir=${BACKUP_DIR:-"$HW_BOT_ROOT/backups"}
 mkdir -p "$backup_dir"
 backup_dir=$(CDPATH='' cd -- "$backup_dir" && pwd)
 exec 9> "$backup_dir/.backup.lock"
@@ -26,7 +24,7 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 compose() {
-    docker compose --env-file "$HW_BOT_ENV_FILE" -f tools/deploy/compose.yml "$@"
+    sh "$bin/compose.sh" "$@"
 }
 compose exec -T database timeout --verbose --kill-after=10s "${backup_timeout}s" \
     sh -c "exec pg_dump --username=\"\$POSTGRES_USER\" --dbname=\"\$POSTGRES_DB\" \

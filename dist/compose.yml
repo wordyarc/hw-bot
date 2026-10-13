@@ -1,5 +1,11 @@
 name: hw-bot
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   database:
     image: postgres:18.4-bookworm
@@ -33,30 +39,37 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *logging
     networks:
       - backend
 
   app:
-    image: ${HW_BOT_IMAGE:?required}
+    image: ${HW_BOT_IMAGE:?set by bin/compose.sh from current-release.json}
     init: true
-    group_add:
-      - ${HW_BOT_CONFIG_GID:?set to the group owning production.toml and bootstrap.production.json}
     restart: unless-stopped
     mem_limit: 320m
     cpus: 1.0
     stop_grace_period: 30s
     env_file:
-      - ${HW_BOT_ENV_FILE:-.env.production}
+      - etc/hw-bot.env
+    environment:
+      APP__DATABASE__URL: postgres://hw_bot:${POSTGRES_PASSWORD:?required}@database:5432/hw_bot
     volumes:
       - type: bind
-        source: ${HW_BOT_CONFIG_DIR:-.}/production.toml
+        source: ./etc/production.toml
         target: /app/config/local.toml
         read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./logs
+        target: /app/logs
         bind:
           create_host_path: false
     depends_on:
       database:
         condition: service_healthy
+    logging: *logging
     networks:
       - backend
 

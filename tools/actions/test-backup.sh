@@ -22,7 +22,7 @@ mkdir "$tmp/bin" "$tmp/backups"
 export BACKUP_DIR="$tmp/backups" BACKUP_TEST_DIR="$tmp"
 export BACKUP_TEST_MV
 BACKUP_TEST_MV=$(command -v mv)
-export HW_BOT_ENV_FILE="$tmp/unused.env" HW_BOT_CONFIG_DIR="$tmp"
+export HW_BOT_ROOT="$tmp" HW_BOT_IMAGE=example/hw-bot
 cat > "$tmp/bin/docker" <<'EOF'
 #!/bin/sh
 set -eu
@@ -72,7 +72,7 @@ export PATH="$tmp/bin:$PATH"
 export POSTGRES_USER=hw_bot POSTGRES_DB=hw_bot
 
 backup() {
-    sh "$root/tools/ops/backup.sh"
+    sh "$root/dist/bin/backup.sh"
 }
 verify_backup() {
     local dump partial
@@ -111,7 +111,7 @@ for mode in dump_failure restore_failure timeout before_marker; do
         before_marker) expected=1 ;;
     esac
     expect_failure "$expected" env BACKUP_TEST_MODE="$mode" BACKUP_TIMEOUT_SECONDS=1 \
-        sh "$root/tools/ops/backup.sh"
+        sh "$root/dist/bin/backup.sh"
     cmp "$tmp/previous" "$BACKUP_DIR/.last-success"
     verify_backup
 done
@@ -120,7 +120,7 @@ for signal in HUP TERM; do
     printf 'Backup keeps published files after %s\n' "$signal"
     cp "$BACKUP_DIR/.last-success" "$tmp/previous"
     expect_failure 1 env BACKUP_TEST_MODE=after_marker BACKUP_TEST_SIGNAL="$signal" \
-        sh "$root/tools/ops/backup.sh"
+        sh "$root/dist/bin/backup.sh"
     [[ "$(cat "$tmp/previous")" != "$(cat "$BACKUP_DIR/.last-success")" ]]
     verify_backup
 done
@@ -141,7 +141,7 @@ verify_backup
 
 for value in 0 00 -1 1s; do
     printf 'Backup rejects invalid timeout %s\n' "$value"
-    expect_failure 1 env BACKUP_TIMEOUT_SECONDS="$value" sh "$root/tools/ops/backup.sh"
+    expect_failure 1 env BACKUP_TIMEOUT_SECONDS="$value" sh "$root/dist/bin/backup.sh"
 done
 
 printf '%s\n' 'Backup runs again after failures and interruptions'

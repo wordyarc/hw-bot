@@ -112,12 +112,12 @@ jobs:
         id: deploy
         timeout-minutes: 17
         run: |
-          destination="$DEPLOY_PATH/deployments/$VERSION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          destination="$DEPLOY_PATH/releases/$VERSION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           printf 'directory=%s\n' "$destination" >> "$GITHUB_OUTPUT"
           printf 'mkdir -p %q\n' "$destination" | ssh production bash -s
           scp release.json deploy.tar.gz "production:$destination/"
-          printf 'tar -xzf %q -C %q && timeout --signal=TERM --kill-after=30s 15m bash %q %q %q\n' \
-            "$destination/deploy.tar.gz" "$destination" "$destination/tools/ops/deploy.sh" "$DEPLOY_PATH" "$destination" \
+          printf 'tar -xzf %q -C %q --strip-components=1 && timeout --signal=TERM --kill-after=30s 15m bash %q %q %q\n' \
+            "$destination/deploy.tar.gz" "$destination" "$destination/bin/deploy.sh" "$DEPLOY_PATH" "$destination" \
             | ssh production bash -s
 
       - name: Retrieve deployment diagnostics

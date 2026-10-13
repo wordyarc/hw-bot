@@ -683,9 +683,8 @@ mod tests {
 
     #[test]
     fn the_deployment_example_is_a_valid_seed_with_a_sandbox_course() {
-        let seed: Seed =
-            serde_json::from_str(include_str!("../../tools/deploy/bootstrap.example.json"))
-                .expect("the example matches the seed format");
+        let seed: Seed = serde_json::from_str(include_str!("../../dist/examples/bootstrap.json"))
+            .expect("the example matches the seed format");
         let seed = validate_seed(seed).expect("the example is a valid seed");
 
         let sandbox = seed
