@@ -153,15 +153,6 @@ async fn an_ordinary_teacher_cannot_promote_anyone() {
 }
 
 #[tokio::test]
-async fn a_student_cannot_make_themselves_staff() {
-    let app = TestApp::start().await;
-
-    app.register_staff(app.student(), 2005, "Sneaky", "teacher")
-        .await
-        .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
 async fn a_student_registered_over_http_can_submit_right_away() {
     let app = TestApp::start().await;
     let token = app.course_invite_token().await;

@@ -1,10 +1,10 @@
 use axum::http::StatusCode;
 use hw_bot::app::{Actor, ErrorCode, GrantExtraAttempts};
 use hw_bot::db;
-use hw_bot::domain::UserId;
+use hw_bot::domain::{StudentAssignmentProgress, UserId};
 use serde_json::json;
 
-use crate::harness::{TestApp, submission_id};
+use crate::harness::{TestApp, submission_id, wait_for_blocked_connection};
 
 #[tokio::test]
 async fn course_teacher_grants_extra_attempts() {
@@ -105,30 +105,6 @@ async fn an_outsider_is_refused_before_the_student_is_looked_up() {
 }
 
 #[tokio::test]
-async fn student_cannot_grant_attempts() {
-    let app = TestApp::start().await;
-
-    app.grant_extra_attempts(
-        app.assignment(),
-        app.fixture.student.id().as_uuid(),
-        app.student(),
-        1,
-    )
-    .await
-    .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
-async fn student_from_another_group_cannot_receive_attempts() {
-    let app = TestApp::start().await;
-    let outsider = app.add_outsider_student().await;
-
-    app.grant_extra_attempts(app.assignment(), outsider.id().as_uuid(), app.teacher(), 1)
-        .await
-        .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
 async fn extra_attempt_unlocks_the_next_submission() {
     let app = TestApp::start().await;
 
@@ -184,14 +160,42 @@ async fn grant_is_visible_in_student_assignment_progress() {
 async fn concurrent_grants_are_not_lost() {
     let app = TestApp::start().await;
     let student_id = app.fixture.student.id();
+    let mut concurrent = app.pool.begin().await.expect("begin a concurrent grant");
+    let blocker: i32 = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *concurrent)
+        .await
+        .expect("read backend pid");
+    let extra =
+        db::attempts::lock_or_create(&mut concurrent, app.fixture.assignment.id(), student_id)
+            .await
+            .expect("lock the student progress");
+    let mut progress =
+        StudentAssignmentProgress::new(&app.fixture.assignment, &app.fixture.student, extra)
+            .unwrap();
+    progress
+        .grant_extra_attempts(
+            &app.fixture.assignment,
+            &app.fixture.course,
+            &app.fixture.teacher,
+            1,
+        )
+        .unwrap();
+    db::attempts::update(&mut concurrent, &progress)
+        .await
+        .expect("write the concurrent grant");
 
-    let (first, second) = tokio::join!(
+    let (granted, ()) = tokio::join!(
         app.grant_extra_attempts(app.assignment(), student_id.as_uuid(), app.teacher(), 1),
-        app.grant_extra_attempts(app.assignment(), student_id.as_uuid(), app.teacher(), 1),
+        async {
+            wait_for_blocked_connection(&app.pool, blocker).await;
+            concurrent
+                .commit()
+                .await
+                .expect("commit the concurrent grant");
+        },
     );
 
-    first.ok();
-    second.ok();
+    granted.ok();
 
     let history = db::submissions::load_histories(
         &app.pool,

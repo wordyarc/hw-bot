@@ -226,6 +226,25 @@ async fn the_removed_closing_date_is_rejected_in_every_assignment_request_includ
 }
 
 #[tokio::test]
+async fn the_former_name_of_the_penalty_per_period_is_rejected() {
+    rejects_json::<assignments::ChangeGradingRequest>(json!({
+        "max_score": 5, "late_period_days": 7, "late_penalty": 1, "late_max_periods": 4,
+        "late_deducted_from": "work_score",
+    }))
+    .await;
+}
+
+#[tokio::test]
+async fn an_unknown_deduction_is_rejected() {
+    rejects_json::<assignments::CreateAssignmentRequest>(json!({
+        "title": "Task", "body": "Body", "max_attempts": 2, "max_score": 10,
+        "deadline_at": t0(), "late_period_days": 7, "late_penalty_per_period": 2,
+        "late_max_periods": 4, "late_deducted_from": "everything",
+    }))
+    .await;
+}
+
+#[tokio::test]
 async fn normalization_preserves_the_file_size_error() {
     let error = AppError::FileTooLarge {
         max_bytes: 5,

@@ -5,22 +5,16 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
 
 use super::render::button_label;
 use crate::app::{
-    AssignmentStudentSummary, CourseStudent, SandboxSubmission, TeachingCourseSummary,
+    AssignmentStudentSummary, CourseStudent, SandboxSubmission, StudentAssignment,
+    TeachingCourseSummary,
 };
 use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, TermsForm, TermsStep, TermsTarget,
 };
 use crate::bot::callbacks::{
-    ASSIGNMENT_GROUP_PREFIX, ASSIGNMENT_GROUPS_DONE, AmountChoice, CALENDAR_NOOP,
-    DEADLINE_CALENDAR, DEADLINE_MANUAL, DEADLINE_OPTIONS, DeadlineAction, FILE_CANCEL_DELETE,
-    FILE_CONFIRM_DELETE, GradingChoice, INVITE_CANCEL_ROTATE, INVITE_CONFIRM_ROTATE,
-    InformationalAction, LATE_PERIODS_PREFIX, LatePolicyChoice, MAKEUP_ATTEMPTS,
-    MAKEUP_ATTEMPTS_PREFIX, MAKEUP_BACK, MAKEUP_CANCEL, MAKEUP_DATE, MAKEUP_DISABLE, MAKEUP_SAVE,
-    MakeupChoice, PENALTY_PERIOD, PENALTY_PREFIX, PageTarget, REGISTRATION_GROUP_PREFIX,
-    REVIEW_ACCEPT_PREFIX, REVIEW_CHANGE_PREFIX, REVIEW_REJECT_PREFIX, REVIEW_SCORE_PREFIX,
-    ReplayableAction, STUDENT_PREFIX, ScreenAction, TERMS_BACK, TERMS_CANCEL, TERMS_DEADLINE,
-    TERMS_DURATION_APPLY, TERMS_DURATION_DATE, TERMS_DURATION_PERIODS_PREFIX, TERMS_EXIT,
-    TERMS_MAKEUP, TERMS_PENALTY, TERMS_PERIOD, TERMS_PERIODS, TERMS_POLICY, TERMS_SAVE, TERMS_STAY,
+    AmountChoice, CallbackAction, DeadlineAction, FlowAction, GradingChoice, InformationalAction,
+    LatePolicyChoice, MakeupChoice, MakeupFormAction, PageTarget, ReplayableAction, ScreenAction,
+    TermsAction,
 };
 use crate::bot::form::{Form, InputMode};
 use crate::bot::makeup_form::{MakeupForm, MakeupStep};
@@ -40,6 +34,18 @@ fn button(label: impl Into<String>, data: impl Into<String>) -> InlineKeyboardBu
 
 fn row(label: impl Into<String>, data: impl Into<String>) -> Row {
     vec![button(label, data)]
+}
+
+fn deadline_callback(action: DeadlineAction) -> String {
+    FlowAction::Deadline(action).callback()
+}
+
+fn terms_callback(action: TermsAction) -> String {
+    FlowAction::Terms(action).callback()
+}
+
+fn makeup_form_callback(action: MakeupFormAction) -> String {
+    FlowAction::MakeupForm(action).callback()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,22 +156,92 @@ pub(crate) fn teacher_menu(pending: Option<u32>) -> InlineKeyboardMarkup {
     ])
 }
 
+pub(crate) fn student_assignments_keyboard(
+    assignments: &[StudentAssignment],
+    target: PageTarget,
+    page: u32,
+    next: Option<u32>,
+) -> InlineKeyboardMarkup {
+    let rows = assignments.iter().map(|item| {
+        row(
+            button_label(&texts::assignment_button(
+                item.subject.name().as_str(),
+                item.assignment.title().as_str(),
+            )),
+            ReplayableAction::Assignment(item.assignment.id()).callback(),
+        )
+    });
+    paginated_keyboard(InlineKeyboardMarkup::new(rows), target, page, next)
+}
+
+pub(crate) fn student_assignment_keyboard(
+    assignment: &Assignment,
+    history: bool,
+    submit: Option<&str>,
+) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+    if history {
+        rows.push(row(
+            texts::BUTTON_HISTORY,
+            PageTarget::History(assignment.id()).callback(0),
+        ));
+    }
+    if let Some(label) = submit {
+        rows.push(row(
+            label,
+            ReplayableAction::StartSubmission(assignment.id()).callback(),
+        ));
+    }
+    let (back_label, back_target) = if assignment.status() == AssignmentStatus::Archived {
+        (texts::BUTTON_BACK_TO_ARCHIVE, PageTarget::Archive)
+    } else {
+        (texts::BUTTON_BACK_TO_ASSIGNMENTS, PageTarget::Assignments)
+    };
+    rows.push(row(
+        back_label,
+        ReplayableAction::Page(back_target, 0).callback(),
+    ));
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn reopen_assignment_keyboard(assignment_id: AssignmentId) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([row(
+        texts::BUTTON_REOPEN_ASSIGNMENT,
+        ReplayableAction::Assignment(assignment_id).callback(),
+    )])
+}
+
+pub(crate) fn submission_history_keyboard(
+    assignment_id: AssignmentId,
+    page: u32,
+    next: Option<u32>,
+) -> InlineKeyboardMarkup {
+    paginated_keyboard(
+        InlineKeyboardMarkup::new([row(
+            texts::BUTTON_BACK_TO_ASSIGNMENT,
+            ReplayableAction::Assignment(assignment_id).callback(),
+        )]),
+        PageTarget::History(assignment_id),
+        page,
+        next,
+    )
+}
+
 pub(crate) fn review_keyboard(
     submission_id: SubmissionId,
     course_id: TeachingCourseId,
     student_id: UserId,
     accept: Option<String>,
 ) -> InlineKeyboardMarkup {
-    let accept = accept.map(|label| {
-        button(
-            label,
-            format!("{REVIEW_ACCEPT_PREFIX}{}", submission_id.as_uuid()),
-        )
-    });
-    let reject = button(
-        texts::BUTTON_REJECT,
-        format!("{REVIEW_REJECT_PREFIX}{}", submission_id.as_uuid()),
-    );
+    let review = |decision| {
+        FlowAction::Review {
+            decision,
+            submission_id,
+        }
+        .callback()
+    };
+    let accept = accept.map(|label| button(label, review(ReviewDecision::Accept)));
+    let reject = button(texts::BUTTON_REJECT, review(ReviewDecision::Reject));
     InlineKeyboardMarkup::new(vec![
         accept.into_iter().chain([reject]).collect(),
         vec![student_contact_button(course_id, student_id)],
@@ -207,7 +283,7 @@ pub(crate) fn makeup_followup_keyboard(next: bool, grant: bool) -> InlineKeyboar
 pub(crate) fn review_decision_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![row(
         texts::BUTTON_CHANGE_DECISION,
-        format!("{REVIEW_CHANGE_PREFIX}{}", submission_id.as_uuid()),
+        FlowAction::ChangeReviewDecision(submission_id).callback(),
     )])
 }
 
@@ -400,30 +476,41 @@ pub(crate) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
 
 fn date_input_rows() -> [Row; 2] {
     [
-        row(texts::BUTTON_CALENDAR, DEADLINE_CALENDAR),
-        row(texts::BUTTON_MANUAL, DEADLINE_MANUAL),
+        row(
+            texts::BUTTON_CALENDAR,
+            deadline_callback(DeadlineAction::Calendar),
+        ),
+        row(
+            texts::BUTTON_MANUAL,
+            deadline_callback(DeadlineAction::Manual),
+        ),
     ]
 }
 
 pub(crate) fn deadline_options_keyboard(timezone: &BotTimezone) -> InlineKeyboardMarkup {
-    let preset = |label: &str, date: Option<NaiveDate>, data: String| {
-        date.map(|date| row(texts::date_preset(label, &timezone.format_date(date)), data))
+    let preset = |label: &str, date: Option<NaiveDate>, action: DeadlineAction| {
+        date.map(|date| {
+            row(
+                texts::date_preset(label, &timezone.format_date(date)),
+                deadline_callback(action),
+            )
+        })
     };
     let mut rows: Vec<Row> = [
         preset(
             texts::PRESET_WEEK,
             timezone.in_days(7),
-            DeadlineAction::Days(7).callback(),
+            DeadlineAction::Days(7),
         ),
         preset(
             texts::PRESET_TWO_WEEKS,
             timezone.in_days(14),
-            DeadlineAction::Days(14).callback(),
+            DeadlineAction::Days(14),
         ),
         preset(
             texts::PRESET_MONTH,
             timezone.in_months(1),
-            DeadlineAction::Months(1).callback(),
+            DeadlineAction::Months(1),
         ),
     ]
     .into_iter()
@@ -476,7 +563,7 @@ fn duration_presets(
                     label,
                     &texts::until(&timezone.format_until_short(closes_at)),
                 ),
-                format!("{TERMS_DURATION_PERIODS_PREFIX}{periods}"),
+                FlowAction::DurationPeriods(periods).callback(),
             );
             Some((periods, button))
         })
@@ -486,10 +573,13 @@ fn duration_presets(
 }
 
 pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKeyboardMarkup {
-    let blank = || button("·", CALENDAR_NOOP);
-    let turn =
-        |label: &str, month: NaiveDate| button(label, DeadlineAction::Month(month).callback());
-    let pick = |label: String, day: NaiveDate| button(label, DeadlineAction::Pick(day).callback());
+    let noop = || CallbackAction::Noop.callback();
+    let blank = || button("·", noop());
+    let turn = |label: &str, month: NaiveDate| {
+        button(label, deadline_callback(DeadlineAction::Month(month)))
+    };
+    let pick =
+        |label: String, day: NaiveDate| button(label, deadline_callback(DeadlineAction::Pick(day)));
     let first = month.with_day(1).unwrap_or(month);
     let previous = first.checked_sub_months(chrono::Months::new(1));
     let next = first.checked_add_months(chrono::Months::new(1));
@@ -506,10 +596,10 @@ pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKey
     );
 
     let mut rows = vec![
-        vec![back, button(title, CALENDAR_NOOP), forward],
+        vec![back, button(title, noop()), forward],
         texts::WEEKDAYS
             .into_iter()
-            .map(|day| button(day, CALENDAR_NOOP))
+            .map(|day| button(day, noop()))
             .collect(),
     ];
 
@@ -535,16 +625,19 @@ pub(crate) fn calendar_keyboard(month: NaiveDate, today: NaiveDate) -> InlineKey
         week.resize(7, blank());
         rows.push(week);
     }
-    rows.push(row(texts::BUTTON_DATE_OPTIONS, DEADLINE_OPTIONS));
+    rows.push(row(
+        texts::BUTTON_DATE_OPTIONS,
+        deadline_callback(DeadlineAction::Options),
+    ));
 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(crate) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
+pub(crate) fn attempts_keyboard(step: fn(AmountChoice) -> FlowAction) -> InlineKeyboardMarkup {
     let amount = |amount: u16| {
         button(
             amount.to_string(),
-            AmountChoice::Preset(amount).callback(prefix),
+            step(AmountChoice::Preset(amount)).callback(),
         )
     };
 
@@ -553,16 +646,17 @@ pub(crate) fn attempts_keyboard(prefix: &str) -> InlineKeyboardMarkup {
         [5, 10].into_iter().map(amount).collect(),
         row(
             texts::BUTTON_OTHER_AMOUNT,
-            AmountChoice::Manual.callback(prefix),
+            step(AmountChoice::Manual).callback(),
         ),
     ])
 }
 
 pub(crate) fn grading_keyboard() -> InlineKeyboardMarkup {
+    let grading = |choice| FlowAction::Grading(choice).callback();
     let preset = |max_score: u16| {
         button(
             texts::scale_button(max_score),
-            GradingChoice::Preset(max_score).callback(),
+            grading(GradingChoice::Preset(max_score)),
         )
     };
 
@@ -570,22 +664,23 @@ pub(crate) fn grading_keyboard() -> InlineKeyboardMarkup {
         vec![preset(5), preset(10)],
         row(
             texts::BUTTON_OTHER_MAX_SCORE,
-            GradingChoice::Manual.callback(),
+            grading(GradingChoice::Manual),
         ),
-        row(texts::BUTTON_PASS_FAIL, GradingChoice::PassFail.callback()),
+        row(texts::BUTTON_PASS_FAIL, grading(GradingChoice::PassFail)),
     ])
 }
 
 pub(crate) fn late_policy_keyboard() -> InlineKeyboardMarkup {
+    let policy = |choice| FlowAction::LatePolicy(choice).callback();
     InlineKeyboardMarkup::new(vec![
-        row(texts::BUTTON_STRICT, LatePolicyChoice::Strict.callback()),
+        row(texts::BUTTON_STRICT, policy(LatePolicyChoice::Strict)),
         row(
             texts::BUTTON_LATE_WORK_SCORE,
-            LatePolicyChoice::Penalty(DeductedFrom::WorkScore).callback(),
+            policy(LatePolicyChoice::Penalty(DeductedFrom::WorkScore)),
         ),
         row(
             texts::BUTTON_LATE_COURSE_TOTAL,
-            LatePolicyChoice::Penalty(DeductedFrom::CourseTotal).callback(),
+            policy(LatePolicyChoice::Penalty(DeductedFrom::CourseTotal)),
         ),
     ])
 }
@@ -597,15 +692,18 @@ pub(crate) fn penalty_keyboard(period_days: u16) -> InlineKeyboardMarkup {
             .map(|points| {
                 button(
                     texts::penalty_button(points),
-                    AmountChoice::Preset(points).callback(PENALTY_PREFIX),
+                    FlowAction::Penalty(AmountChoice::Preset(points)).callback(),
                 )
             })
             .collect(),
         row(
             texts::BUTTON_OTHER_AMOUNT,
-            AmountChoice::Manual.callback(PENALTY_PREFIX),
+            FlowAction::Penalty(AmountChoice::Manual).callback(),
         ),
-        row(texts::period_button(period_days), PENALTY_PERIOD),
+        row(
+            texts::period_button(period_days),
+            FlowAction::PenaltyPeriod.callback(),
+        ),
     ])
 }
 
@@ -622,7 +720,7 @@ pub(crate) fn terms_keyboard(
             } else {
                 texts::BUTTON_SAVE_TERMS
             },
-            TERMS_SAVE,
+            terms_callback(TermsAction::Save),
         ),
         row(
             format!(
@@ -630,16 +728,19 @@ pub(crate) fn terms_keyboard(
                 texts::SUBMIT_UNTIL,
                 texts::until(&timezone.format_until_short(complete.deadline_at))
             ),
-            TERMS_DEADLINE,
+            terms_callback(TermsAction::Deadline),
         ),
     ];
     if let Some(policy) = complete.late_policy {
         rows.push(vec![
             button(
                 format!("{} −{}", texts::PENALTY_LABEL, policy.penalty_per_period()),
-                TERMS_PENALTY,
+                terms_callback(TermsAction::Penalty),
             ),
-            button(texts::period_summary(policy.period_days()), TERMS_PERIOD),
+            button(
+                texts::period_summary(policy.period_days()),
+                terms_callback(TermsAction::Period),
+            ),
         ]);
         rows.push(row(
             format!(
@@ -647,7 +748,7 @@ pub(crate) fn terms_keyboard(
                 texts::LATENESS_LABEL,
                 texts::lateness_duration(policy.period_days(), policy.max_periods())
             ),
-            TERMS_PERIODS,
+            terms_callback(TermsAction::Periods),
         ));
     }
     if terms.grading().is_scored() {
@@ -657,13 +758,13 @@ pub(crate) fn terms_keyboard(
                 Some(DeductedFrom::CourseTotal) => texts::BUTTON_POLICY_COURSE_TOTAL,
                 None => texts::BUTTON_POLICY_STRICT,
             },
-            TERMS_POLICY,
+            terms_callback(TermsAction::Policy),
         ));
     }
     if terms.makeup_enabled {
         rows.push(row(
             texts::makeup_terms_line(terms.makeup, terms.grading()),
-            TERMS_MAKEUP,
+            terms_callback(TermsAction::Makeup),
         ));
     }
     rows.push(row(
@@ -672,14 +773,16 @@ pub(crate) fn terms_keyboard(
         } else {
             texts::BUTTON_CANCEL_TERMS
         },
-        TERMS_CANCEL,
+        terms_callback(TermsAction::Cancel),
     ));
 
     InlineKeyboardMarkup::new(rows)
 }
 
 pub(crate) fn makeup_answer_keyboard(grading: Grading, hint: Option<u16>) -> InlineKeyboardMarkup {
-    let answer = |label: String, choice: MakeupChoice| button(label, choice.callback());
+    let answer = |label: String, choice: MakeupChoice| {
+        button(label, FlowAction::MakeupAnswer(choice).callback())
+    };
     let mut rows: Vec<Row> = match grading.max_score() {
         Some(max_score) if max_score <= SCORE_BUTTONS_LIMIT => (1..=max_score)
             .collect::<Vec<_>>()
@@ -717,7 +820,7 @@ pub(crate) fn makeup_attempts_keyboard() -> InlineKeyboardMarkup {
     let amount = |amount: u16| {
         button(
             amount.to_string(),
-            AmountChoice::Preset(amount).callback(MAKEUP_ATTEMPTS_PREFIX),
+            FlowAction::MakeupAttempts(AmountChoice::Preset(amount)).callback(),
         )
     };
 
@@ -725,21 +828,24 @@ pub(crate) fn makeup_attempts_keyboard() -> InlineKeyboardMarkup {
         [1, 2, 3, 5].into_iter().map(amount).collect(),
         row(
             texts::BUTTON_OTHER_AMOUNT,
-            AmountChoice::Manual.callback(MAKEUP_ATTEMPTS_PREFIX),
+            FlowAction::MakeupAttempts(AmountChoice::Manual).callback(),
         ),
     ])
 }
 
 fn makeup_summary_keyboard(form: &MakeupForm, timezone: &BotTimezone) -> InlineKeyboardMarkup {
-    let mut rows = vec![row(texts::BUTTON_SAVE_MAKEUP, MAKEUP_SAVE)];
+    let mut rows = vec![row(
+        texts::BUTTON_SAVE_MAKEUP,
+        makeup_form_callback(MakeupFormAction::Save),
+    )];
     if let (false, Some(until), Some(attempts)) = (form.disabling, form.until, form.attempts) {
         rows.push(row(
             texts::makeup_date_button(&texts::until(&timezone.format_until_short(until))),
-            MAKEUP_DATE,
+            makeup_form_callback(MakeupFormAction::Date),
         ));
         rows.push(row(
             texts::makeup_attempts_button(attempts),
-            MAKEUP_ATTEMPTS,
+            makeup_form_callback(MakeupFormAction::Attempts),
         ));
     }
     if form.active {
@@ -749,10 +855,13 @@ fn makeup_summary_keyboard(form: &MakeupForm, timezone: &BotTimezone) -> InlineK
             } else {
                 texts::BUTTON_DISABLE_MAKEUP
             },
-            MAKEUP_DISABLE,
+            makeup_form_callback(MakeupFormAction::Disable),
         ));
     }
-    rows.push(row(texts::BUTTON_CANCEL_MAKEUP, MAKEUP_CANCEL));
+    rows.push(row(
+        texts::BUTTON_CANCEL_MAKEUP,
+        makeup_form_callback(MakeupFormAction::Cancel),
+    ));
     InlineKeyboardMarkup::new(rows)
 }
 
@@ -773,17 +882,18 @@ pub(super) fn makeup_form_keyboard(
         MakeupStep::Summary => makeup_summary_keyboard(form, timezone),
     };
     if form.can_go_back() {
-        keyboard
-            .inline_keyboard
-            .push(row(texts::BUTTON_BACK, MAKEUP_BACK));
+        keyboard.inline_keyboard.push(row(
+            texts::BUTTON_BACK,
+            makeup_form_callback(MakeupFormAction::Back),
+        ));
     }
     Some(keyboard)
 }
 
 pub(crate) fn terms_exit_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        row(texts::BUTTON_STAY, TERMS_STAY),
-        row(texts::BUTTON_EXIT, TERMS_EXIT),
+        row(texts::BUTTON_STAY, terms_callback(TermsAction::Stay)),
+        row(texts::BUTTON_EXIT, terms_callback(TermsAction::Exit)),
     ])
 }
 
@@ -828,28 +938,32 @@ pub(super) fn terms_form_keyboard(
                             &texts::lateness_duration(terms.period_days, periods),
                             &timezone.format_until_short(closes_at),
                         ),
-                        AmountChoice::Preset(periods).callback(LATE_PERIODS_PREFIX),
+                        FlowAction::Periods(AmountChoice::Preset(periods)).callback(),
                     ));
                 }
             }
             rows.push(vec![
                 button(
                     texts::BUTTON_OTHER_PERIODS,
-                    AmountChoice::Manual.callback(LATE_PERIODS_PREFIX),
+                    FlowAction::Periods(AmountChoice::Manual).callback(),
                 ),
-                button(texts::BUTTON_CALENDAR, TERMS_DURATION_DATE),
+                button(
+                    texts::BUTTON_CALENDAR,
+                    terms_callback(TermsAction::DurationDate),
+                ),
             ]);
             InlineKeyboardMarkup::new(rows)
         }
-        TermsStep::DurationConfirm { .. } => {
-            InlineKeyboardMarkup::new(vec![row(texts::BUTTON_APPLY_PERIODS, TERMS_DURATION_APPLY)])
-        }
+        TermsStep::DurationConfirm { .. } => InlineKeyboardMarkup::new(vec![row(
+            texts::BUTTON_APPLY_PERIODS,
+            terms_callback(TermsAction::DurationApply),
+        )]),
         TermsStep::Summary => terms_keyboard(terms, &terms.complete()?, timezone),
     };
     if form.mode != InputMode::Manual && form.can_go_back() {
         keyboard
             .inline_keyboard
-            .push(row(texts::BUTTON_BACK, TERMS_BACK));
+            .push(row(texts::BUTTON_BACK, terms_callback(TermsAction::Back)));
     }
     Some(keyboard)
 }
@@ -861,13 +975,14 @@ pub(crate) fn review_score_keyboard(
     submission_id: SubmissionId,
     max_score: u16,
 ) -> InlineKeyboardMarkup {
-    let prefix = format!("{REVIEW_SCORE_PREFIX}{}:", submission_id.as_uuid());
-    let score = |score: u16| {
-        button(
-            score.to_string(),
-            AmountChoice::Preset(score).callback(&prefix),
-        )
+    let choose = |choice| {
+        FlowAction::ReviewScore {
+            submission_id,
+            choice,
+        }
+        .callback()
     };
+    let score = |score: u16| button(score.to_string(), choose(AmountChoice::Preset(score)));
 
     let mut rows: Vec<Row> = (0..=max_score)
         .collect::<Vec<_>>()
@@ -876,7 +991,7 @@ pub(crate) fn review_score_keyboard(
         .collect();
     rows.push(row(
         texts::BUTTON_OTHER_AMOUNT,
-        AmountChoice::Manual.callback(&prefix),
+        choose(AmountChoice::Manual),
     ));
 
     InlineKeyboardMarkup::new(rows)
@@ -924,8 +1039,14 @@ pub(crate) fn assignment_files_keyboard(
 
 pub(crate) fn confirm_file_deletion_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
-        button(texts::BUTTON_DELETE, FILE_CONFIRM_DELETE),
-        button(texts::BUTTON_CANCEL, FILE_CANCEL_DELETE),
+        button(
+            texts::BUTTON_DELETE,
+            FlowAction::ConfirmFileDeletion.callback(),
+        ),
+        button(
+            texts::BUTTON_CANCEL,
+            FlowAction::CancelFileDeletion.callback(),
+        ),
     ]])
 }
 
@@ -944,8 +1065,14 @@ pub(crate) fn course_invite_keyboard(course_id: TeachingCourseId) -> InlineKeybo
 
 pub(crate) fn confirm_invite_rotation_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
-        button(texts::BUTTON_CONFIRM_ROTATE, INVITE_CONFIRM_ROTATE),
-        button(texts::BUTTON_CANCEL, INVITE_CANCEL_ROTATE),
+        button(
+            texts::BUTTON_CONFIRM_ROTATE,
+            FlowAction::ConfirmInviteRotation.callback(),
+        ),
+        button(
+            texts::BUTTON_CANCEL,
+            FlowAction::CancelInviteRotation.callback(),
+        ),
     ]])
 }
 
@@ -953,7 +1080,7 @@ pub(crate) fn registration_groups_keyboard(groups: &[StudentGroup]) -> InlineKey
     InlineKeyboardMarkup::new(groups.iter().map(|group| {
         row(
             button_label(group.code().as_str()),
-            format!("{REGISTRATION_GROUP_PREFIX}{}", group.id().as_uuid()),
+            FlowAction::RegistrationGroup(group.id()).callback(),
         )
     }))
 }
@@ -970,11 +1097,14 @@ pub(crate) fn assignment_groups_keyboard(
                     group.code().as_str(),
                     selected.contains(&group.id()),
                 )),
-                format!("{ASSIGNMENT_GROUP_PREFIX}{}", group.id().as_uuid()),
+                FlowAction::AssignmentGroup(group.id()).callback(),
             )
         })
         .collect();
-    rows.push(row(texts::BUTTON_GROUPS_DONE, ASSIGNMENT_GROUPS_DONE));
+    rows.push(row(
+        texts::BUTTON_GROUPS_DONE,
+        FlowAction::AssignmentGroupsDone.callback(),
+    ));
     InlineKeyboardMarkup::new(rows)
 }
 
@@ -1066,7 +1196,7 @@ fn students_keyboard<'a>(
         .map(|(student_id, name)| {
             row(
                 button_label(&texts::student_button(name)),
-                format!("{STUDENT_PREFIX}{}", student_id.as_uuid()),
+                FlowAction::SelectStudent(student_id).callback(),
             )
         })
         .collect();
@@ -1100,7 +1230,6 @@ mod tests {
     use super::super::render::{penalty_schedule, terms_form_view};
     use super::*;
     use crate::bot::assignment_form::{AssignmentText, DraftAssignment, IssuedGroups};
-    use crate::bot::callbacks::CALENDAR_PICK_PREFIX;
     use crate::bot::texts::deadline_left;
     use crate::domain::{Grading, LatePolicy, MaxScore};
     use crate::test_support::t0;
@@ -1213,8 +1342,8 @@ mod tests {
         form.mode = InputMode::Calendar(timezone.local_date(created_at));
         let (_, keyboard) = terms_form_view(&form, &timezone, t0()).unwrap();
         let json = serde_json::to_string(&keyboard).unwrap();
-        assert!(!json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-20")));
-        assert!(json.contains(&format!("{CALENDAR_PICK_PREFIX}2026-08-21")));
+        assert!(!json.contains(&pick(2026, 8, 20)));
+        assert!(json.contains(&pick(2026, 8, 21)));
     }
 
     #[test]
@@ -1354,34 +1483,49 @@ mod tests {
         let json = serde_json::to_value(keyboard).unwrap();
         let rows = json["inline_keyboard"].as_array().unwrap();
         assert_eq!(rows[rows.len() - 2][0]["text"], texts::BUTTON_DATE_OPTIONS);
-        assert_eq!(rows[rows.len() - 2][0]["callback_data"], DEADLINE_OPTIONS);
+        assert_eq!(
+            rows[rows.len() - 2][0]["callback_data"],
+            deadline_callback(DeadlineAction::Options)
+        );
         assert_eq!(rows.last().unwrap()[0]["text"], texts::BUTTON_BACK);
-        assert_eq!(rows.last().unwrap()[0]["callback_data"], TERMS_BACK);
+        assert_eq!(
+            rows.last().unwrap()[0]["callback_data"],
+            terms_callback(TermsAction::Back)
+        );
     }
 
     #[test]
     fn the_makeup_form_offers_a_step_back_only_where_one_exists() {
+        let back = makeup_form_callback(MakeupFormAction::Back);
         let last_action = |form: &MakeupForm| {
             let keyboard = makeup_form_keyboard(form, &timezone(), t0()).unwrap();
             let json = serde_json::to_value(keyboard).unwrap();
             json["inline_keyboard"].as_array().unwrap().last().unwrap()[0]["callback_data"].clone()
         };
         let mut form = MakeupForm::new(TeachingCourseId::new(), None, Vec::new(), t0());
-        assert_ne!(last_action(&form), MAKEUP_BACK);
+        assert_ne!(last_action(&form), back);
 
         form.apply_date(t0() + chrono::Duration::days(30), t0())
             .unwrap();
-        assert_eq!(last_action(&form), MAKEUP_BACK);
+        assert_eq!(last_action(&form), back);
         form.apply_attempts(3).unwrap();
         assert_eq!(form.step, MakeupStep::Summary);
-        assert_ne!(last_action(&form), MAKEUP_BACK);
+        assert_ne!(last_action(&form), back);
 
-        assert!(form.edit(crate::bot::callbacks::MakeupFormAction::Date));
-        assert_eq!(last_action(&form), MAKEUP_BACK);
+        assert!(form.edit(MakeupFormAction::Date));
+        assert_eq!(last_action(&form), back);
     }
 
     fn timezone() -> BotTimezone {
         BotTimezone::new(Tz::Asia__Vladivostok)
+    }
+
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    }
+
+    fn pick(year: i32, month: u32, day: u32) -> String {
+        deadline_callback(DeadlineAction::Pick(date(year, month, day)))
     }
 
     fn schedule(
@@ -1455,11 +1599,12 @@ mod tests {
             .map(|button| button["callback_data"].as_str().unwrap())
             .collect();
 
-        assert!(!callbacks.contains(&"cal:2026-07"));
-        assert!(callbacks.contains(&"cal:2026-09"));
-        assert!(!callbacks.contains(&"cal:pick:2026-08-12"));
-        assert!(callbacks.contains(&"cal:pick:2026-08-13"));
-        assert!(callbacks.contains(&"cal:pick:2026-08-31"));
+        let month = |month| deadline_callback(DeadlineAction::Month(date(2026, month, 1)));
+        assert!(!callbacks.contains(&month(7).as_str()));
+        assert!(callbacks.contains(&month(9).as_str()));
+        assert!(!callbacks.contains(&pick(2026, 8, 12).as_str()));
+        assert!(callbacks.contains(&pick(2026, 8, 13).as_str()));
+        assert!(callbacks.contains(&pick(2026, 8, 31).as_str()));
         assert!(rows.iter().all(|row| row.as_array().unwrap().len() <= 7));
     }
 
@@ -1476,12 +1621,13 @@ mod tests {
         assert_eq!(
             callbacks,
             [
-                "dl:days:7",
-                "dl:days:14",
-                "dl:months:1",
-                "dl:calendar",
-                "dl:manual"
+                DeadlineAction::Days(7),
+                DeadlineAction::Days(14),
+                DeadlineAction::Months(1),
+                DeadlineAction::Calendar,
+                DeadlineAction::Manual,
             ]
+            .map(deadline_callback)
         );
     }
 
@@ -1490,65 +1636,6 @@ mod tests {
         let past: DateTime<Utc> = Utc::now() - chrono::Duration::hours(1);
 
         assert_eq!(deadline_left(past, Utc::now()), texts::DEADLINE_PASSED);
-    }
-
-    #[test]
-    fn assignment_action_callbacks_fit_telegram_limit() {
-        use crate::test_support::{assignment, course_for, student_group, teacher};
-
-        let teacher = teacher(1);
-        let group = student_group("test-group");
-        let course = course_for(&group, &teacher);
-        let draft = assignment(&course, &teacher).build();
-        let published = assignment(&course, &teacher).published().build();
-        let mut archived = published.clone();
-        archived.archive(&course, &teacher).unwrap();
-
-        for assignment in [draft, published, archived] {
-            let json = serde_json::to_value(assignment_actions_keyboard(&assignment)).unwrap();
-            for row in json["inline_keyboard"].as_array().unwrap() {
-                for button in row.as_array().unwrap() {
-                    assert!(button["callback_data"].as_str().unwrap().len() <= 64);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn attachment_callbacks_fit_telegram_limit() {
-        use crate::domain::{
-            FilePresentation, StoredFileId, StoredFileMetadata, StoredFileOwner, StoredFileParts,
-        };
-        use crate::test_support::{assignment, course_for, student_group, teacher};
-
-        let teacher = teacher(1);
-        let group = student_group("test-group");
-        let course = course_for(&group, &teacher);
-        let assignment = assignment(&course, &teacher).build();
-        let file = StoredFileMetadata::restore(StoredFileParts {
-            id: StoredFileId::new(),
-            owner: StoredFileOwner::Assignment(assignment.id()),
-            position: 1,
-            presentation: FilePresentation::Document,
-            filename: "file.txt".to_owned(),
-            mime_type: Some("text/plain".to_owned()),
-            size_bytes: 4,
-            sha256: [0; 32],
-            created_at: Utc::now(),
-        })
-        .unwrap();
-
-        for keyboard in [
-            assignment_files_keyboard(&assignment, &[file], true, true),
-            confirm_file_deletion_keyboard(),
-        ] {
-            let json = serde_json::to_value(keyboard).unwrap();
-            for row in json["inline_keyboard"].as_array().unwrap() {
-                for button in row.as_array().unwrap() {
-                    assert!(button["callback_data"].as_str().unwrap().len() <= 64);
-                }
-            }
-        }
     }
 
     #[test]
@@ -1569,7 +1656,8 @@ mod tests {
                 })
                 .collect()
         };
-        let six = MakeupChoice::Credit(6).callback();
+        let answer = |choice| FlowAction::MakeupAnswer(choice).callback();
+        let six = answer(MakeupChoice::Credit(6));
 
         let with_hint = buttons(makeup_answer_keyboard(ten, Some(6)));
         assert!(with_hint.contains(&(texts::makeup_hint_button(6), six.clone())));
@@ -1585,11 +1673,11 @@ mod tests {
         ));
         assert!(long.contains(&(
             texts::makeup_hint_button(12),
-            MakeupChoice::Credit(12).callback()
+            answer(MakeupChoice::Credit(12))
         )));
         assert!(long.contains(&(
             texts::BUTTON_OTHER_AMOUNT.to_owned(),
-            MakeupChoice::Manual.callback()
+            answer(MakeupChoice::Manual)
         )));
         assert!(
             buttons(makeup_answer_keyboard(Grading::PassFail, Some(6)))

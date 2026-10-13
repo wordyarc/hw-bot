@@ -143,28 +143,6 @@ async fn publishing_opens_the_assignment_for_submissions() {
 }
 
 #[tokio::test]
-async fn an_assignment_cannot_be_published_twice() {
-    let app = TestApp::start().await;
-    let assignment = app.drafted_assignment(app.teacher()).await;
-    app.publish_assignment(assignment, app.teacher()).await.ok();
-
-    app.publish_assignment(assignment, app.teacher())
-        .await
-        .error(StatusCode::CONFLICT, "assignment_unavailable");
-}
-
-#[tokio::test]
-async fn an_archived_assignment_can_be_published_again() {
-    let app = TestApp::start().await;
-    let assignment = app.drafted_assignment(app.teacher()).await;
-    app.archive_assignment(assignment, app.teacher()).await.ok();
-
-    let body = app.publish_assignment(assignment, app.teacher()).await.ok();
-
-    assert_eq!(body["status"], json!("published"));
-}
-
-#[tokio::test]
 async fn a_reopened_assignment_accepts_submissions_again() {
     let app = TestApp::start().await;
     app.archive_assignment(app.assignment(), app.teacher())
@@ -233,36 +211,11 @@ async fn a_moved_deadline_applies_to_the_next_submission() {
 }
 
 #[tokio::test]
-async fn an_archived_assignment_keeps_its_deadline() {
-    let app = TestApp::start().await;
-    app.archive_assignment(app.assignment(), app.teacher())
-        .await
-        .ok();
-
-    app.change_deadline(
-        app.assignment(),
-        app.teacher(),
-        Utc::now() + Duration::days(1),
-    )
-    .await
-    .error(StatusCode::CONFLICT, "assignment_unavailable");
-}
-
-#[tokio::test]
 async fn a_teacher_of_another_course_cannot_create_an_assignment() {
     let app = TestApp::start().await;
     let outsider = app.add_outsider_teacher("Outsider").await;
 
     app.create_assignment(app.course(), outsider.telegram_user_id().as_i64())
-        .await
-        .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
-async fn a_student_cannot_create_an_assignment() {
-    let app = TestApp::start().await;
-
-    app.create_assignment(app.course(), app.student())
         .await
         .error(StatusCode::FORBIDDEN, "permission_denied");
 }

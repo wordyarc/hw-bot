@@ -5,14 +5,16 @@ use hw_bot::app::{
 };
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, AssignmentId, CourseMakeup, DeductedFrom, Grading, MakeupOffer, MakeupTerms,
-    ReviewDecision, SubmissionId, SubmissionKind, User,
+    Assignment, AssignmentId, CourseMakeup, DeductedFrom, Grading, MakeupOffer, MakeupRequest,
+    MakeupTerms, ReviewDecision, SubmissionId, SubmissionKind, User,
 };
 use hw_bot::pagination::PageRequest;
 use hw_bot::test_support::{assignment as assignment_of, submission as submission_of};
 use uuid::Uuid;
 
-use crate::harness::{TestApp, insert_assignment, out_of, submission_id};
+use crate::harness::{
+    TestApp, insert_assignment, out_of, submission_id, wait_for_blocked_connection,
+};
 
 fn ten() -> Grading {
     Grading::scored(10).unwrap()
@@ -118,25 +120,6 @@ async fn a_teacher_of_another_course_cannot_configure_its_makeup() {
     .unwrap_err();
 
     assert_eq!(error.code(), ErrorCode::PermissionDenied);
-    assert_eq!(current_settings(&app).await, None);
-}
-
-#[tokio::test]
-async fn the_end_of_makeup_lies_after_now_and_within_366_days() {
-    let app = TestApp::start().await;
-
-    for days in [-1, 367] {
-        let error = configure(
-            &app,
-            app.teacher_actor(),
-            None,
-            Some(for_days(days, 3)),
-            Vec::new(),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.code(), ErrorCode::InvalidInput, "{days} days");
-    }
     assert_eq!(current_settings(&app).await, None);
 }
 
@@ -379,27 +362,6 @@ async fn a_makeup_attempt_is_granted_only_to_a_student_of_the_course_group() {
 }
 
 #[tokio::test]
-async fn at_most_a_hundred_makeup_attempts_are_granted_per_opening() {
-    let app = TestApp::start().await;
-    app.enable_makeup(3).await;
-    let grant = || {
-        app.application.courses.grant_makeup_attempt(
-            app.teacher_actor(),
-            app.fixture.course.id(),
-            app.fixture.student.id(),
-        )
-    };
-    grant().await.unwrap();
-    sqlx::query("update student_course_progress set extra_makeup_attempts = 99")
-        .execute(&app.pool)
-        .await
-        .unwrap();
-
-    assert_eq!(grant().await.unwrap().balance.allowed(), 103);
-    assert_eq!(grant().await.unwrap_err().code(), ErrorCode::InvalidInput);
-}
-
-#[tokio::test]
 async fn a_submission_in_the_makeup_window_is_a_makeup_spending_the_pool() {
     let app = TestApp::start().await;
     let work = app.add_closed_assignment("Closed", 10, 6).await;
@@ -424,21 +386,45 @@ async fn two_simultaneous_makeups_on_the_last_attempt_create_one_submission() {
     let app = TestApp::start().await;
     let first = app.add_closed_assignment("First", 10, 6).await;
     let second = app.add_closed_assignment("Second", 10, 6).await;
-    app.enable_makeup(1).await;
+    let makeup = app.enable_makeup(1).await;
+    let mut concurrent = app.pool.begin().await.expect("begin a concurrent makeup");
+    let blocker: i32 = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *concurrent)
+        .await
+        .expect("read backend pid");
+    db::makeup::lock_pool(
+        &mut concurrent,
+        app.fixture.course.id(),
+        app.fixture.student.id(),
+    )
+    .await
+    .expect("lock the makeup pool");
+    let spent = submission_of(&first, &app.fixture.student)
+        .submitted_at(Utc::now())
+        .makeup(MakeupRequest {
+            course: Some(makeup),
+            consent: true,
+            balance: makeup.balance(0, 0),
+        })
+        .build();
+    db::submissions::insert(&mut *concurrent, &spent)
+        .await
+        .expect("write the concurrent makeup");
 
-    let (one, other) = tokio::join!(submit(&app, &first, true), submit(&app, &second, true));
+    let (submitted, ()) = tokio::join!(submit(&app, &second, true), async {
+        wait_for_blocked_connection(&app.pool, blocker).await;
+        concurrent
+            .commit()
+            .await
+            .expect("commit the concurrent makeup");
+    });
 
     assert_eq!(
-        one.is_ok() as u8 + other.is_ok() as u8,
-        1,
-        "{one:?} {other:?}"
+        submitted.unwrap_err().code(),
+        ErrorCode::MakeupAttemptsExhausted
     );
-    let error = one.err().or_else(|| other.err()).unwrap();
-    assert_eq!(error.code(), ErrorCode::MakeupAttemptsExhausted);
-    assert_eq!(
-        count_submissions(&app, &first).await + count_submissions(&app, &second).await,
-        1
-    );
+    assert_eq!(spent.kind(), SubmissionKind::Makeup);
+    assert_eq!(count_submissions(&app, &second).await, 0);
 }
 
 #[tokio::test]

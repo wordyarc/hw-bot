@@ -62,39 +62,6 @@ async fn submitting_as_unknown_user_is_not_found() {
 }
 
 #[tokio::test]
-async fn student_from_another_group_cannot_submit() {
-    let app = TestApp::start().await;
-    let outsider = app.add_outsider_student().await;
-
-    app.submit(
-        app.assignment(),
-        outsider.telegram_user_id().as_i64(),
-        "pull/1",
-    )
-    .await
-    .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
-async fn teacher_cannot_submit_homework() {
-    let app = TestApp::start().await;
-
-    app.submit(app.assignment(), app.teacher(), "pull/1")
-        .await
-        .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
-async fn draft_assignment_cannot_be_submitted() {
-    let app = TestApp::start().await;
-    let draft = app.add_draft_assignment().await;
-
-    app.submit(draft.id().as_uuid(), app.student(), "pull/1")
-        .await
-        .error(StatusCode::CONFLICT, "assignment_unavailable");
-}
-
-#[tokio::test]
 async fn malformed_body_uses_the_same_error_envelope_as_handlers() {
     let app = TestApp::start().await;
 

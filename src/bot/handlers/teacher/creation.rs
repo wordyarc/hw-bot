@@ -9,7 +9,7 @@ use crate::bot::HandlerResult;
 use crate::bot::assignment_form::{
     AssignmentTerms, AssignmentText, DraftAssignment, IssuedGroups, TermsForm,
 };
-use crate::bot::callbacks::{AmountChoice, GradingChoice, MAX_ATTEMPTS_PREFIX};
+use crate::bot::callbacks::{AmountChoice, FlowAction, GradingChoice};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::handlers::input::{
     parse_max_score, require_attempts, require_text, require_text_within,
@@ -116,7 +116,7 @@ async fn ask_max_attempts(
     let chat_id = chat.chat_id();
     let sent = bot
         .send_message(chat_id, texts::ATTEMPTS_QUESTION)
-        .reply_markup(attempts_keyboard(MAX_ATTEMPTS_PREFIX))
+        .reply_markup(attempts_keyboard(FlowAction::MaxAttempts))
         .await?;
     chat.dialogue()
         .update(BotState::Flow(FlowState::AwaitingAssignmentMaxAttempts {

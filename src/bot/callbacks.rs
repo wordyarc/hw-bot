@@ -116,6 +116,18 @@ pub(super) enum CallbackAction {
     Noop,
 }
 
+impl CallbackAction {
+    pub fn callback(self) -> String {
+        match self {
+            Replayable(action) => action.callback(),
+            Screen(action) => action.callback(),
+            Flow(action) => action.callback(),
+            Informational(action) => action.callback(),
+            Self::Noop => CALENDAR_NOOP.to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum InformationalAction {
     StudentContact {
@@ -344,6 +356,50 @@ pub(super) enum FlowAction {
     MakeupForm(MakeupFormAction),
 }
 
+impl FlowAction {
+    pub fn callback(self) -> String {
+        match self {
+            Self::Review {
+                decision: ReviewDecision::Accept,
+                submission_id,
+            } => format!("{REVIEW_ACCEPT_PREFIX}{}", submission_id.as_uuid()),
+            Self::Review {
+                decision: ReviewDecision::Reject,
+                submission_id,
+            } => format!("{REVIEW_REJECT_PREFIX}{}", submission_id.as_uuid()),
+            Self::ChangeReviewDecision(id) => format!("{REVIEW_CHANGE_PREFIX}{}", id.as_uuid()),
+            Self::MaxAttempts(choice) => choice.callback(MAX_ATTEMPTS_PREFIX),
+            Self::Grading(choice) => choice.callback(),
+            Self::LatePolicy(choice) => choice.callback(),
+            Self::Penalty(choice) => choice.callback(PENALTY_PREFIX),
+            Self::Periods(choice) => choice.callback(LATE_PERIODS_PREFIX),
+            Self::DurationPeriods(periods) => format!("{TERMS_DURATION_PERIODS_PREFIX}{periods}"),
+            Self::PenaltyPeriod => PENALTY_PERIOD.to_owned(),
+            Self::Terms(action) => action.callback().to_owned(),
+            Self::ReviewScore {
+                submission_id,
+                choice,
+            } => choice.callback(&format!(
+                "{REVIEW_SCORE_PREFIX}{}:",
+                submission_id.as_uuid()
+            )),
+            Self::Deadline(action) => action.callback(),
+            Self::SelectStudent(id) => format!("{STUDENT_PREFIX}{}", id.as_uuid()),
+            Self::ExtraAttempts(choice) => choice.callback(EXTRA_ATTEMPTS_PREFIX),
+            Self::ConfirmFileDeletion => FILE_CONFIRM_DELETE.to_owned(),
+            Self::CancelFileDeletion => FILE_CANCEL_DELETE.to_owned(),
+            Self::ConfirmInviteRotation => INVITE_CONFIRM_ROTATE.to_owned(),
+            Self::CancelInviteRotation => INVITE_CANCEL_ROTATE.to_owned(),
+            Self::RegistrationGroup(id) => format!("{REGISTRATION_GROUP_PREFIX}{}", id.as_uuid()),
+            Self::AssignmentGroup(id) => format!("{ASSIGNMENT_GROUP_PREFIX}{}", id.as_uuid()),
+            Self::AssignmentGroupsDone => ASSIGNMENT_GROUPS_DONE.to_owned(),
+            Self::MakeupAnswer(choice) => choice.callback(),
+            Self::MakeupAttempts(choice) => choice.callback(MAKEUP_ATTEMPTS_PREFIX),
+            Self::MakeupForm(action) => action.callback().to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MakeupChoice {
     Credit(u16),
@@ -353,7 +409,7 @@ pub(super) enum MakeupChoice {
 }
 
 impl MakeupChoice {
-    pub fn callback(self) -> String {
+    fn callback(self) -> String {
         let value = match self {
             Self::Credit(credit) => credit.to_string(),
             Self::Manual => MAKEUP_ANSWER_MANUAL.to_owned(),
@@ -383,6 +439,19 @@ pub(super) enum MakeupFormAction {
     Back,
 }
 
+impl MakeupFormAction {
+    fn callback(self) -> &'static str {
+        match self {
+            Self::Date => MAKEUP_DATE,
+            Self::Attempts => MAKEUP_ATTEMPTS,
+            Self::Disable => MAKEUP_DISABLE,
+            Self::Save => MAKEUP_SAVE,
+            Self::Cancel => MAKEUP_CANCEL,
+            Self::Back => MAKEUP_BACK,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AmountChoice {
     Preset(u16),
@@ -390,7 +459,7 @@ pub(super) enum AmountChoice {
 }
 
 impl AmountChoice {
-    pub fn callback(self, prefix: &str) -> String {
+    fn callback(self, prefix: &str) -> String {
         match self {
             Self::Preset(amount) => format!("{prefix}{amount}"),
             Self::Manual => format!("{prefix}{MANUAL_CHOICE}"),
@@ -406,7 +475,7 @@ pub(super) enum GradingChoice {
 }
 
 impl GradingChoice {
-    pub fn callback(self) -> String {
+    fn callback(self) -> String {
         match self {
             Self::PassFail => format!("{GRADING_PREFIX}{PASS_FAIL_GRADING}"),
             Self::Preset(max_score) => format!("{GRADING_PREFIX}{max_score}"),
@@ -422,7 +491,7 @@ pub(super) enum LatePolicyChoice {
 }
 
 impl LatePolicyChoice {
-    pub fn callback(self) -> String {
+    fn callback(self) -> String {
         let value = match self {
             Self::Strict => STRICT_LATE_POLICY,
             Self::Penalty(deducted_from) => deducted_from.as_str(),
@@ -455,6 +524,26 @@ pub(super) enum TermsAction {
     Makeup,
 }
 
+impl TermsAction {
+    fn callback(self) -> &'static str {
+        match self {
+            Self::Save => TERMS_SAVE,
+            Self::Deadline => TERMS_DEADLINE,
+            Self::Penalty => TERMS_PENALTY,
+            Self::Period => TERMS_PERIOD,
+            Self::Periods => TERMS_PERIODS,
+            Self::Policy => TERMS_POLICY,
+            Self::Back => TERMS_BACK,
+            Self::DurationDate => TERMS_DURATION_DATE,
+            Self::DurationApply => TERMS_DURATION_APPLY,
+            Self::Exit => TERMS_EXIT,
+            Self::Stay => TERMS_STAY,
+            Self::Cancel => TERMS_CANCEL,
+            Self::Makeup => TERMS_MAKEUP,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeadlineAction {
     Days(u32),
@@ -467,7 +556,7 @@ pub(super) enum DeadlineAction {
 }
 
 impl DeadlineAction {
-    pub fn callback(self) -> String {
+    fn callback(self) -> String {
         match self {
             Self::Days(days) => format!("{DEADLINE_DAYS_PREFIX}{days}"),
             Self::Months(months) => format!("{DEADLINE_MONTHS_PREFIX}{months}"),
@@ -776,40 +865,6 @@ mod tests {
     }
 
     #[test]
-    fn flow_choices_round_trip_through_their_callbacks() {
-        for choice in [
-            GradingChoice::PassFail,
-            GradingChoice::Preset(7),
-            GradingChoice::Manual,
-        ] {
-            assert_eq!(
-                parse(&choice.callback()),
-                Some(CallbackAction::Flow(FlowAction::Grading(choice)))
-            );
-        }
-        for choice in [AmountChoice::Preset(3), AmountChoice::Manual] {
-            assert_eq!(
-                parse(&choice.callback(PENALTY_PREFIX)),
-                Some(CallbackAction::Flow(FlowAction::Penalty(choice)))
-            );
-        }
-        for action in [
-            DeadlineAction::Days(7),
-            DeadlineAction::Months(1),
-            DeadlineAction::Calendar,
-            DeadlineAction::Manual,
-            DeadlineAction::Options,
-            DeadlineAction::Month(NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()),
-            DeadlineAction::Pick(NaiveDate::from_ymd_opt(2026, 9, 21).unwrap()),
-        ] {
-            assert_eq!(
-                parse(&action.callback()),
-                Some(CallbackAction::Flow(FlowAction::Deadline(action)))
-            );
-        }
-    }
-
-    #[test]
     fn a_first_page_round_trips_through_its_short_route() {
         for target in [
             PageTarget::Assignments,
@@ -832,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn pagination_routes_fit_telegram_even_with_two_ids_and_the_last_page() {
+    fn pagination_routes_fit_telegram_from_the_first_to_the_last_page() {
         for target in [
             PageTarget::Assignments,
             PageTarget::Archive,
@@ -846,15 +901,15 @@ mod tests {
             PageTarget::StudentGrades(TeachingCourseId::new(), UserId::new()),
             PageTarget::Roster(TeachingCourseId::new()),
         ] {
-            let data = target.callback(u32::MAX);
-            assert!(data.len() <= 64, "{data}");
-            assert_eq!(
-                parse(&data),
-                Some(CallbackAction::Replayable(ReplayableAction::Page(
-                    target,
-                    u32::MAX
-                )))
-            );
+            for page in [0, u32::MAX] {
+                let data = target.callback(page);
+                assert!(data.len() <= 64, "{data}");
+                assert_eq!(
+                    parse(&data),
+                    Some(Replayable(ReplayableAction::Page(target, page))),
+                    "{data}"
+                );
+            }
         }
         for invalid in [
             "pg:a:-1",
@@ -870,279 +925,390 @@ mod tests {
         }
     }
 
-    #[test]
-    fn callbacks_are_split_by_state_policy() {
-        let assignment_id = AssignmentId::new();
-        let submission_id = SubmissionId::new();
-
-        assert_eq!(
-            parse(&format!("assignment:{}", assignment_id.as_uuid())),
-            Some(CallbackAction::Replayable(ReplayableAction::Assignment(
-                assignment_id
-            )))
-        );
-        assert_eq!(
-            parse(&format!("archive:{}", assignment_id.as_uuid())),
-            Some(CallbackAction::Screen(ScreenAction::Archive(assignment_id)))
-        );
-        assert_eq!(
-            parse(&format!("review:accept:{}", submission_id.as_uuid())),
-            Some(CallbackAction::Flow(FlowAction::Review {
-                decision: ReviewDecision::Accept,
-                submission_id,
-            }))
-        );
-        let score = format!("{REVIEW_SCORE_PREFIX}{}:5", submission_id.as_uuid());
-        assert_eq!(
-            parse(&score),
-            Some(CallbackAction::Flow(FlowAction::ReviewScore {
-                submission_id,
-                choice: AmountChoice::Preset(5),
-            }))
-        );
-        assert!(score.len() <= 64);
+    macro_rules! one_of_each {
+        ($($variant:pat => $sample:expr),+ $(,)?) => {{
+            fn _every_variant_has_a_sample(action: CallbackAction) {
+                match action {
+                    $($variant => {})+
+                }
+            }
+            vec![$({
+                let sample: CallbackAction = $sample;
+                assert!(matches!(sample, $variant), "{sample:?}");
+                sample
+            }),+]
+        }};
     }
 
     #[test]
-    fn every_callback_family_has_an_explicit_state_policy() {
-        let assignment = AssignmentId::new().as_uuid();
-        let course = TeachingCourseId::new().as_uuid();
-        let submission = SubmissionId::new().as_uuid();
-        let student = UserId::new().as_uuid();
-        let group = StudentGroupId::new().as_uuid();
-        let cases = [
-            ("menu:assignments".to_owned(), "replayable"),
-            ("menu:sandbox".to_owned(), "replayable"),
-            (format!("review:open:{submission}"), "replayable"),
-            (format!("course:{course}"), "replayable"),
-            (format!("makeup:{course}"), "replayable"),
-            ("review:hub".to_owned(), "replayable"),
-            ("review:makeup".to_owned(), "replayable"),
-            ("makeup-grant".to_owned(), "screen"),
-            ("makeup-answer:6".to_owned(), "flow"),
-            ("makeup-answer:manual".to_owned(), "flow"),
-            ("makeup-answer:off".to_owned(), "flow"),
-            ("makeup-answer:pass".to_owned(), "flow"),
-            ("makeup-answer:".to_owned(), "invalid"),
-            ("makeup-answer:-1".to_owned(), "invalid"),
-            ("makeup-attempts:3".to_owned(), "flow"),
-            ("makeup-attempts:manual".to_owned(), "flow"),
-            ("makeup-form:date".to_owned(), "flow"),
-            ("makeup-form:attempts".to_owned(), "flow"),
-            ("makeup-form:disable".to_owned(), "flow"),
-            ("makeup-form:save".to_owned(), "flow"),
-            ("makeup-form:cancel".to_owned(), "flow"),
-            ("makeup-form:enable".to_owned(), "invalid"),
-            ("makeup:grant".to_owned(), "invalid"),
-            (TERMS_MAKEUP.to_owned(), "flow"),
-            (format!("assignment:{assignment}"), "replayable"),
-            (format!("manage:{assignment}"), "replayable"),
-            (format!("create:{course}"), "replayable"),
-            (format!("submit:{assignment}"), "replayable"),
-            (format!("files:{assignment}"), "replayable"),
-            (format!("attempts:{assignment}"), "replayable"),
-            (format!("invite:{course}"), "replayable"),
-            (format!("grades:{course}"), "replayable"),
-            (format!("pg:r:{}:0", encode_id(course)), "replayable"),
-            (
-                format!(
-                    "{CONTACT_PREFIX}{}:{}",
-                    encode_id(course),
-                    encode_id(student)
-                ),
-                "informational",
-            ),
-            (format!("publish:{assignment}"), "screen"),
-            (format!("archive:{assignment}"), "screen"),
-            (format!("deadline:{assignment}"), "screen"),
-            ("file:add".to_owned(), "screen"),
-            ("file:open:0".to_owned(), "screen"),
-            ("file:delete:0".to_owned(), "screen"),
-            ("file:finish".to_owned(), "screen"),
-            ("invite:rotate".to_owned(), "screen"),
-            ("sandbox:accept-all".to_owned(), "screen"),
-            ("sandbox:reject-all".to_owned(), "screen"),
-            (format!("review:accept:{submission}"), "flow"),
-            (format!("review:change:{submission}"), "flow"),
-            ("maxattempts:3".to_owned(), "flow"),
-            ("grading:passfail".to_owned(), "flow"),
-            ("grading:5".to_owned(), "flow"),
-            ("grading:manual".to_owned(), "flow"),
-            (format!("reviewscore:{submission}:0"), "flow"),
-            ("late:none".to_owned(), "flow"),
-            ("late:work_score".to_owned(), "flow"),
-            ("late:course_total".to_owned(), "flow"),
-            ("late:penalty".to_owned(), "invalid"),
-            ("late:7:1:4".to_owned(), "invalid"),
-            ("late:manual".to_owned(), "invalid"),
-            (format!("{PENALTY_PREFIX}1"), "flow"),
-            (PENALTY_PERIOD.to_owned(), "flow"),
-            (TERMS_SAVE.to_owned(), "flow"),
-            (TERMS_DEADLINE.to_owned(), "flow"),
-            (TERMS_PERIODS.to_owned(), "flow"),
-            (TERMS_CANCEL.to_owned(), "flow"),
-            ("dl:calendar".to_owned(), "flow"),
-            (format!("student:{student}"), "flow"),
-            ("attempt:3".to_owned(), "flow"),
-            ("file:confirm-delete".to_owned(), "flow"),
-            ("invite:confirm-rotate".to_owned(), "flow"),
-            ("invite:cancel-rotate".to_owned(), "flow"),
-            (format!("reg-group:{group}"), "flow"),
-            ("reg-group:done".to_owned(), "invalid"),
-            (format!("agroup:{group}"), "flow"),
-            ("agroup:done".to_owned(), "flow"),
-            ("agroup:all".to_owned(), "invalid"),
+    fn every_action_is_parsed_back_from_its_own_callback() {
+        let course = TeachingCourseId::new();
+        let assignment = AssignmentId::new();
+        let submission = SubmissionId::new();
+        let student = UserId::new();
+        let group = StudentGroupId::new();
+        let day = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+        let month = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        let last = u32::MAX;
+        let most = u16::MAX;
+        let page = |target, page| Replayable(ReplayableAction::Page(target, page));
+        let review = |decision| {
+            Flow(FlowAction::Review {
+                decision,
+                submission_id: submission,
+            })
+        };
+        let score = |choice| {
+            Flow(FlowAction::ReviewScore {
+                submission_id: submission,
+                choice,
+            })
+        };
+
+        let samples = one_of_each![
+            Replayable(ReplayableAction::Page(PageTarget::Assignments, 0)) =>
+                page(PageTarget::Assignments, 0),
+            Replayable(ReplayableAction::Page(PageTarget::Assignments, 1..=u32::MAX)) =>
+                page(PageTarget::Assignments, last),
+            Replayable(ReplayableAction::Page(PageTarget::Archive, 0)) =>
+                page(PageTarget::Archive, 0),
+            Replayable(ReplayableAction::Page(PageTarget::Archive, 1..=u32::MAX)) =>
+                page(PageTarget::Archive, last),
+            Replayable(ReplayableAction::Page(PageTarget::Queue, 0)) =>
+                page(PageTarget::Queue, 0),
+            Replayable(ReplayableAction::Page(PageTarget::Queue, 1..=u32::MAX)) =>
+                page(PageTarget::Queue, last),
+            Replayable(ReplayableAction::Page(PageTarget::Courses, 0)) =>
+                page(PageTarget::Courses, 0),
+            Replayable(ReplayableAction::Page(PageTarget::Courses, 1..=u32::MAX)) =>
+                page(PageTarget::Courses, last),
+            Replayable(ReplayableAction::Page(PageTarget::Sandbox, 0)) =>
+                page(PageTarget::Sandbox, 0),
+            Replayable(ReplayableAction::Page(PageTarget::Sandbox, 1..=u32::MAX)) =>
+                page(PageTarget::Sandbox, last),
+            Replayable(ReplayableAction::Page(PageTarget::Course(_), 0)) =>
+                page(PageTarget::Course(course), 0),
+            Replayable(ReplayableAction::Page(PageTarget::Course(_), 1..=u32::MAX)) =>
+                page(PageTarget::Course(course), last),
+            Replayable(ReplayableAction::Page(PageTarget::Students(_), 0)) =>
+                page(PageTarget::Students(assignment), 0),
+            Replayable(ReplayableAction::Page(PageTarget::Students(_), 1..=u32::MAX)) =>
+                page(PageTarget::Students(assignment), last),
+            Replayable(ReplayableAction::Page(PageTarget::Gradebook(..), _)) =>
+                page(PageTarget::Gradebook(course, group), last),
+            Replayable(ReplayableAction::Page(PageTarget::History(_), _)) =>
+                page(PageTarget::History(assignment), last),
+            Replayable(ReplayableAction::Page(PageTarget::StudentGrades(..), _)) =>
+                page(PageTarget::StudentGrades(course, student), last),
+            Replayable(ReplayableAction::Page(PageTarget::Roster(_), _)) =>
+                page(PageTarget::Roster(course), last),
+            Replayable(ReplayableAction::Profile) => Replayable(ReplayableAction::Profile),
+            Replayable(ReplayableAction::ReviewHub) => Replayable(ReplayableAction::ReviewHub),
+            Replayable(ReplayableAction::NextReview) => Replayable(ReplayableAction::NextReview),
+            Replayable(ReplayableAction::NextMakeupReview) =>
+                Replayable(ReplayableAction::NextMakeupReview),
+            Replayable(ReplayableAction::CourseMakeup(_)) =>
+                Replayable(ReplayableAction::CourseMakeup(course)),
+            Replayable(ReplayableAction::Assignment(_)) =>
+                Replayable(ReplayableAction::Assignment(assignment)),
+            Replayable(ReplayableAction::ManageAssignment(_)) =>
+                Replayable(ReplayableAction::ManageAssignment(assignment)),
+            Replayable(ReplayableAction::StartAssignmentCreation(_)) =>
+                Replayable(ReplayableAction::StartAssignmentCreation(course)),
+            Replayable(ReplayableAction::StartSubmission(_)) =>
+                Replayable(ReplayableAction::StartSubmission(assignment)),
+            Replayable(ReplayableAction::AssignmentFiles(_)) =>
+                Replayable(ReplayableAction::AssignmentFiles(assignment)),
+            Replayable(ReplayableAction::CourseInvite(_)) =>
+                Replayable(ReplayableAction::CourseInvite(course)),
+            Replayable(ReplayableAction::GradebookGroups(_)) =>
+                Replayable(ReplayableAction::GradebookGroups(course)),
+            Replayable(ReplayableAction::ReviewSubmission(_)) =>
+                Replayable(ReplayableAction::ReviewSubmission(submission)),
+            Screen(ScreenAction::Publish(_)) => Screen(ScreenAction::Publish(assignment)),
+            Screen(ScreenAction::Archive(_)) => Screen(ScreenAction::Archive(assignment)),
+            Screen(ScreenAction::ChangeDeadline(_)) =>
+                Screen(ScreenAction::ChangeDeadline(assignment)),
+            Screen(ScreenAction::AddFile) => Screen(ScreenAction::AddFile),
+            Screen(ScreenAction::OpenFile(_)) => Screen(ScreenAction::OpenFile(usize::MAX)),
+            Screen(ScreenAction::DeleteFile(_)) => Screen(ScreenAction::DeleteFile(usize::MAX)),
+            Screen(ScreenAction::FinishFileCreation) => Screen(ScreenAction::FinishFileCreation),
+            Screen(ScreenAction::RotateCourseInvite) => Screen(ScreenAction::RotateCourseInvite),
+            Screen(ScreenAction::BulkReview(ReviewDecision::Accept)) =>
+                Screen(ScreenAction::BulkReview(ReviewDecision::Accept)),
+            Screen(ScreenAction::BulkReview(ReviewDecision::Reject)) =>
+                Screen(ScreenAction::BulkReview(ReviewDecision::Reject)),
+            Screen(ScreenAction::GrantMakeupAttempt) => Screen(ScreenAction::GrantMakeupAttempt),
+            Flow(FlowAction::Review { decision: ReviewDecision::Accept, .. }) =>
+                review(ReviewDecision::Accept),
+            Flow(FlowAction::Review { decision: ReviewDecision::Reject, .. }) =>
+                review(ReviewDecision::Reject),
+            Flow(FlowAction::ChangeReviewDecision(_)) =>
+                Flow(FlowAction::ChangeReviewDecision(submission)),
+            Flow(FlowAction::MaxAttempts(AmountChoice::Preset(_))) =>
+                Flow(FlowAction::MaxAttempts(AmountChoice::Preset(most))),
+            Flow(FlowAction::MaxAttempts(AmountChoice::Manual)) =>
+                Flow(FlowAction::MaxAttempts(AmountChoice::Manual)),
+            Flow(FlowAction::Grading(GradingChoice::PassFail)) =>
+                Flow(FlowAction::Grading(GradingChoice::PassFail)),
+            Flow(FlowAction::Grading(GradingChoice::Preset(_))) =>
+                Flow(FlowAction::Grading(GradingChoice::Preset(most))),
+            Flow(FlowAction::Grading(GradingChoice::Manual)) =>
+                Flow(FlowAction::Grading(GradingChoice::Manual)),
+            Flow(FlowAction::LatePolicy(LatePolicyChoice::Strict)) =>
+                Flow(FlowAction::LatePolicy(LatePolicyChoice::Strict)),
+            Flow(FlowAction::LatePolicy(LatePolicyChoice::Penalty(DeductedFrom::WorkScore))) =>
+                Flow(FlowAction::LatePolicy(LatePolicyChoice::Penalty(DeductedFrom::WorkScore))),
+            Flow(FlowAction::LatePolicy(LatePolicyChoice::Penalty(DeductedFrom::CourseTotal))) =>
+                Flow(FlowAction::LatePolicy(LatePolicyChoice::Penalty(DeductedFrom::CourseTotal))),
+            Flow(FlowAction::Penalty(AmountChoice::Preset(_))) =>
+                Flow(FlowAction::Penalty(AmountChoice::Preset(most))),
+            Flow(FlowAction::Penalty(AmountChoice::Manual)) =>
+                Flow(FlowAction::Penalty(AmountChoice::Manual)),
+            Flow(FlowAction::Periods(AmountChoice::Preset(_))) =>
+                Flow(FlowAction::Periods(AmountChoice::Preset(most))),
+            Flow(FlowAction::Periods(AmountChoice::Manual)) =>
+                Flow(FlowAction::Periods(AmountChoice::Manual)),
+            Flow(FlowAction::DurationPeriods(_)) => Flow(FlowAction::DurationPeriods(most)),
+            Flow(FlowAction::PenaltyPeriod) => Flow(FlowAction::PenaltyPeriod),
+            Flow(FlowAction::Terms(TermsAction::Save)) =>
+                Flow(FlowAction::Terms(TermsAction::Save)),
+            Flow(FlowAction::Terms(TermsAction::Deadline)) =>
+                Flow(FlowAction::Terms(TermsAction::Deadline)),
+            Flow(FlowAction::Terms(TermsAction::Penalty)) =>
+                Flow(FlowAction::Terms(TermsAction::Penalty)),
+            Flow(FlowAction::Terms(TermsAction::Period)) =>
+                Flow(FlowAction::Terms(TermsAction::Period)),
+            Flow(FlowAction::Terms(TermsAction::Periods)) =>
+                Flow(FlowAction::Terms(TermsAction::Periods)),
+            Flow(FlowAction::Terms(TermsAction::Policy)) =>
+                Flow(FlowAction::Terms(TermsAction::Policy)),
+            Flow(FlowAction::Terms(TermsAction::Back)) =>
+                Flow(FlowAction::Terms(TermsAction::Back)),
+            Flow(FlowAction::Terms(TermsAction::DurationDate)) =>
+                Flow(FlowAction::Terms(TermsAction::DurationDate)),
+            Flow(FlowAction::Terms(TermsAction::DurationApply)) =>
+                Flow(FlowAction::Terms(TermsAction::DurationApply)),
+            Flow(FlowAction::Terms(TermsAction::Exit)) =>
+                Flow(FlowAction::Terms(TermsAction::Exit)),
+            Flow(FlowAction::Terms(TermsAction::Stay)) =>
+                Flow(FlowAction::Terms(TermsAction::Stay)),
+            Flow(FlowAction::Terms(TermsAction::Cancel)) =>
+                Flow(FlowAction::Terms(TermsAction::Cancel)),
+            Flow(FlowAction::Terms(TermsAction::Makeup)) =>
+                Flow(FlowAction::Terms(TermsAction::Makeup)),
+            Flow(FlowAction::ReviewScore { choice: AmountChoice::Preset(_), .. }) =>
+                score(AmountChoice::Preset(most)),
+            Flow(FlowAction::ReviewScore { choice: AmountChoice::Manual, .. }) =>
+                score(AmountChoice::Manual),
+            Flow(FlowAction::Deadline(DeadlineAction::Days(_))) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Days(last))),
+            Flow(FlowAction::Deadline(DeadlineAction::Months(_))) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Months(last))),
+            Flow(FlowAction::Deadline(DeadlineAction::Calendar)) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Calendar)),
+            Flow(FlowAction::Deadline(DeadlineAction::Manual)) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Manual)),
+            Flow(FlowAction::Deadline(DeadlineAction::Options)) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Options)),
+            Flow(FlowAction::Deadline(DeadlineAction::Month(_))) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Month(month))),
+            Flow(FlowAction::Deadline(DeadlineAction::Pick(_))) =>
+                Flow(FlowAction::Deadline(DeadlineAction::Pick(day))),
+            Flow(FlowAction::SelectStudent(_)) => Flow(FlowAction::SelectStudent(student)),
+            Flow(FlowAction::ExtraAttempts(AmountChoice::Preset(_))) =>
+                Flow(FlowAction::ExtraAttempts(AmountChoice::Preset(most))),
+            Flow(FlowAction::ExtraAttempts(AmountChoice::Manual)) =>
+                Flow(FlowAction::ExtraAttempts(AmountChoice::Manual)),
+            Flow(FlowAction::ConfirmFileDeletion) => Flow(FlowAction::ConfirmFileDeletion),
+            Flow(FlowAction::CancelFileDeletion) => Flow(FlowAction::CancelFileDeletion),
+            Flow(FlowAction::ConfirmInviteRotation) => Flow(FlowAction::ConfirmInviteRotation),
+            Flow(FlowAction::CancelInviteRotation) => Flow(FlowAction::CancelInviteRotation),
+            Flow(FlowAction::RegistrationGroup(_)) => Flow(FlowAction::RegistrationGroup(group)),
+            Flow(FlowAction::AssignmentGroup(_)) => Flow(FlowAction::AssignmentGroup(group)),
+            Flow(FlowAction::AssignmentGroupsDone) => Flow(FlowAction::AssignmentGroupsDone),
+            Flow(FlowAction::MakeupAnswer(MakeupChoice::Credit(_))) =>
+                Flow(FlowAction::MakeupAnswer(MakeupChoice::Credit(most))),
+            Flow(FlowAction::MakeupAnswer(MakeupChoice::Manual)) =>
+                Flow(FlowAction::MakeupAnswer(MakeupChoice::Manual)),
+            Flow(FlowAction::MakeupAnswer(MakeupChoice::NotOffered)) =>
+                Flow(FlowAction::MakeupAnswer(MakeupChoice::NotOffered)),
+            Flow(FlowAction::MakeupAnswer(MakeupChoice::PassFail)) =>
+                Flow(FlowAction::MakeupAnswer(MakeupChoice::PassFail)),
+            Flow(FlowAction::MakeupAttempts(AmountChoice::Preset(_))) =>
+                Flow(FlowAction::MakeupAttempts(AmountChoice::Preset(most))),
+            Flow(FlowAction::MakeupAttempts(AmountChoice::Manual)) =>
+                Flow(FlowAction::MakeupAttempts(AmountChoice::Manual)),
+            Flow(FlowAction::MakeupForm(MakeupFormAction::Date)) =>
+                Flow(FlowAction::MakeupForm(MakeupFormAction::Date)),
+            Flow(FlowAction::MakeupForm(MakeupFormAction::Attempts)) =>
+                Flow(FlowAction::MakeupForm(MakeupFormAction::Attempts)),
+            Flow(FlowAction::MakeupForm(MakeupFormAction::Disable)) =>
+                Flow(FlowAction::MakeupForm(MakeupFormAction::Disable)),
+            Flow(FlowAction::MakeupForm(MakeupFormAction::Save)) =>
+                Flow(FlowAction::MakeupForm(MakeupFormAction::Save)),
+            Flow(FlowAction::MakeupForm(MakeupFormAction::Cancel)) =>
+                Flow(FlowAction::MakeupForm(MakeupFormAction::Cancel)),
+            Flow(FlowAction::MakeupForm(MakeupFormAction::Back)) =>
+                Flow(FlowAction::MakeupForm(MakeupFormAction::Back)),
+            Informational(InformationalAction::StudentContact { .. }) =>
+                Informational(InformationalAction::StudentContact {
+                    course_id: course,
+                    student_id: student,
+                }),
+            CallbackAction::Noop => CallbackAction::Noop,
         ];
 
-        for (data, expected) in cases {
-            let actual = match parse(&data) {
-                Some(CallbackAction::Replayable(_)) => "replayable",
-                Some(CallbackAction::Screen(_)) => "screen",
-                Some(CallbackAction::Flow(_)) => "flow",
-                Some(CallbackAction::Informational(_)) => "informational",
-                Some(CallbackAction::Noop) => "noop",
-                None => "invalid",
-            };
-            assert_eq!(actual, expected, "{data}");
-        }
-    }
-
-    #[test]
-    fn group_buttons_fit_telegram_and_round_trip() {
-        let course = TeachingCourseId::new();
-        let group = StudentGroupId::new();
-
-        let gradebook = ReplayableAction::GradebookGroups(course).callback();
-        assert_eq!(
-            parse(&gradebook),
-            Some(Replayable(ReplayableAction::GradebookGroups(course)))
-        );
-        let first_page = ReplayableAction::Page(PageTarget::Gradebook(course, group), 0).callback();
-        assert!(first_page.len() <= 64, "{first_page}");
-        assert_eq!(
-            parse(&first_page),
-            Some(Replayable(ReplayableAction::Page(
-                PageTarget::Gradebook(course, group),
-                0
-            )))
-        );
-        for (data, action) in [
-            (
-                format!("{REGISTRATION_GROUP_PREFIX}{}", group.as_uuid()),
-                FlowAction::RegistrationGroup(group),
-            ),
-            (
-                format!("{ASSIGNMENT_GROUP_PREFIX}{}", group.as_uuid()),
-                FlowAction::AssignmentGroup(group),
-            ),
-            (
-                ASSIGNMENT_GROUPS_DONE.to_owned(),
-                FlowAction::AssignmentGroupsDone,
-            ),
-        ] {
+        for action in samples {
+            let data = action.callback();
             assert!(data.len() <= 64, "{data}");
-            assert_eq!(parse(&data), Some(Flow(action)), "{data}");
+            assert_eq!(parse(&data), Some(action), "{data}");
         }
     }
 
     #[test]
-    fn changing_a_review_decision_is_a_flow_step_of_its_submission() {
-        let submission_id = SubmissionId::new();
-        let data = format!("{REVIEW_CHANGE_PREFIX}{}", submission_id.as_uuid());
+    fn representative_buttons_keep_their_wire_format() {
+        let id = Uuid::from_u128(1);
+        let other = Uuid::from_u128(2);
+        let course = TeachingCourseId::from_uuid(id);
+        let assignment = AssignmentId::from_uuid(id);
+        let submission = SubmissionId::from_uuid(id);
+        let day = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+        let month = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
 
-        assert_eq!(data.len(), 50);
-        assert_eq!(
-            parse(&data),
-            Some(CallbackAction::Flow(FlowAction::ChangeReviewDecision(
-                submission_id
-            )))
-        );
-        assert_eq!(parse(&format!("{REVIEW_CHANGE_PREFIX}not-a-uuid")), None);
-    }
-
-    #[test]
-    fn late_policy_choices_name_the_deduction_and_drop_the_old_penalty_choice() {
-        for (choice, data) in [
-            (LatePolicyChoice::Strict, "late:none"),
+        for (action, data) in [
             (
-                LatePolicyChoice::Penalty(DeductedFrom::WorkScore),
-                "late:work_score",
+                Replayable(ReplayableAction::Page(PageTarget::Assignments, 0)),
+                "menu:assignments",
             ),
             (
-                LatePolicyChoice::Penalty(DeductedFrom::CourseTotal),
+                Replayable(ReplayableAction::Page(PageTarget::Course(course), 0)),
+                "course:00000000-0000-0000-0000-000000000001",
+            ),
+            (
+                Replayable(ReplayableAction::Page(
+                    PageTarget::Gradebook(course, StudentGroupId::from_uuid(other)),
+                    3,
+                )),
+                "pg:g:AAAAAAAAAAAAAAAAAAAAAQ:AAAAAAAAAAAAAAAAAAAAAg:3",
+            ),
+            (
+                Replayable(ReplayableAction::Assignment(assignment)),
+                "assignment:00000000-0000-0000-0000-000000000001",
+            ),
+            (
+                Replayable(ReplayableAction::ManageAssignment(assignment)),
+                "manage:00000000-0000-0000-0000-000000000001",
+            ),
+            (Screen(ScreenAction::OpenFile(2)), "file:open:2"),
+            (
+                Screen(ScreenAction::BulkReview(ReviewDecision::Reject)),
+                "sandbox:reject-all",
+            ),
+            (
+                Flow(FlowAction::Review {
+                    decision: ReviewDecision::Accept,
+                    submission_id: submission,
+                }),
+                "review:accept:00000000-0000-0000-0000-000000000001",
+            ),
+            (
+                Flow(FlowAction::ReviewScore {
+                    submission_id: submission,
+                    choice: AmountChoice::Preset(5),
+                }),
+                "reviewscore:00000000-0000-0000-0000-000000000001:5",
+            ),
+            (
+                Flow(FlowAction::MaxAttempts(AmountChoice::Preset(3))),
+                "maxattempts:3",
+            ),
+            (
+                Flow(FlowAction::ExtraAttempts(AmountChoice::Manual)),
+                "attempt:manual",
+            ),
+            (
+                Flow(FlowAction::Grading(GradingChoice::PassFail)),
+                "grading:passfail",
+            ),
+            (
+                Flow(FlowAction::LatePolicy(LatePolicyChoice::Strict)),
+                "late:none",
+            ),
+            (
+                Flow(FlowAction::LatePolicy(LatePolicyChoice::Penalty(
+                    DeductedFrom::CourseTotal,
+                ))),
                 "late:course_total",
             ),
+            (
+                Flow(FlowAction::Deadline(DeadlineAction::Pick(day))),
+                "cal:pick:2026-09-21",
+            ),
+            (
+                Flow(FlowAction::Deadline(DeadlineAction::Month(month))),
+                "cal:2026-09",
+            ),
+            (
+                Flow(FlowAction::MakeupAnswer(MakeupChoice::Credit(6))),
+                "makeup-answer:6",
+            ),
+            (Flow(FlowAction::Terms(TermsAction::Save)), "terms:save"),
+            (
+                Flow(FlowAction::SelectStudent(UserId::from_uuid(id))),
+                "student:00000000-0000-0000-0000-000000000001",
+            ),
+            (
+                Informational(InformationalAction::StudentContact {
+                    course_id: course,
+                    student_id: UserId::from_uuid(other),
+                }),
+                "contact:AAAAAAAAAAAAAAAAAAAAAQ:AAAAAAAAAAAAAAAAAAAAAg",
+            ),
+            (CallbackAction::Noop, "cal:noop"),
         ] {
-            assert_eq!(choice.callback(), data);
-            assert_eq!(
-                parse(data),
-                Some(CallbackAction::Flow(FlowAction::LatePolicy(choice)))
-            );
+            assert_eq!(action.callback(), data);
+            assert_eq!(parse(data), Some(action), "{data}");
         }
-        assert_eq!(parse("late:penalty"), None);
-        assert_eq!(LatePolicyChoice::Strict.deducted_from(), None);
-        assert_eq!(
-            LatePolicyChoice::Penalty(DeductedFrom::CourseTotal).deducted_from(),
-            Some(DeductedFrom::CourseTotal)
-        );
     }
 
     #[test]
-    fn makeup_buttons_fit_telegram_and_round_trip() {
-        let course = TeachingCourseId::new();
-        let opened = ReplayableAction::CourseMakeup(course).callback();
-        assert_eq!(opened.len(), 43);
-        assert_eq!(
-            parse(&opened),
-            Some(Replayable(ReplayableAction::CourseMakeup(course)))
-        );
-        for choice in [
-            MakeupChoice::Credit(100),
-            MakeupChoice::Manual,
-            MakeupChoice::NotOffered,
-            MakeupChoice::PassFail,
-        ] {
-            let data = choice.callback();
-            assert!(data.len() <= 20, "{data}");
-            assert_eq!(parse(&data), Some(Flow(FlowAction::MakeupAnswer(choice))));
+    fn a_late_policy_choice_names_its_deduction() {
+        assert_eq!(LatePolicyChoice::Strict.deducted_from(), None);
+        for deducted_from in [DeductedFrom::WorkScore, DeductedFrom::CourseTotal] {
+            assert_eq!(
+                LatePolicyChoice::Penalty(deducted_from).deducted_from(),
+                Some(deducted_from)
+            );
         }
-        for (data, action) in [
-            (MAKEUP_DATE, MakeupFormAction::Date),
-            (MAKEUP_ATTEMPTS, MakeupFormAction::Attempts),
-            (MAKEUP_DISABLE, MakeupFormAction::Disable),
-            (MAKEUP_SAVE, MakeupFormAction::Save),
-            (MAKEUP_CANCEL, MakeupFormAction::Cancel),
-            (MAKEUP_BACK, MakeupFormAction::Back),
-        ] {
-            assert!(data.len() <= 20, "{data}");
-            assert_eq!(parse(data), Some(Flow(FlowAction::MakeupForm(action))));
-        }
-        assert_eq!(
-            parse(&format!("{MAKEUP_ATTEMPTS_PREFIX}5")),
-            Some(Flow(FlowAction::MakeupAttempts(AmountChoice::Preset(5))))
-        );
-        assert_eq!(
-            parse(MAKEUP_GRANT),
-            Some(Screen(ScreenAction::GrantMakeupAttempt))
-        );
-        assert_eq!(
-            ScreenAction::GrantMakeupAttempt.callback(),
-            MAKEUP_GRANT.to_owned()
-        );
     }
 
     #[test]
     fn malformed_callbacks_do_not_fall_into_a_broader_route() {
-        assert_eq!(parse("archive:not-a-uuid"), None);
-        assert_eq!(parse("file:open:nope"), None);
-        assert_eq!(parse("maxattempts:+1"), None);
-        assert_eq!(parse("grading:none"), None);
-        assert_eq!(parse("score:0"), None);
-        assert_eq!(parse("reviewscore:0"), None);
-        assert_eq!(parse("reviewscore:not-a-uuid:0"), None);
-        assert_eq!(parse("late:7:1"), None);
-        assert_eq!(parse("late:7:1:4:9"), None);
-        assert_eq!(parse("dl:days:nope"), None);
-        assert_eq!(parse("cal:2026-13"), None);
+        for invalid in [
+            "archive:not-a-uuid",
+            "file:open:nope",
+            "maxattempts:+1",
+            "grading:none",
+            "score:0",
+            "reviewscore:0",
+            "reviewscore:not-a-uuid:0",
+            "review:change:not-a-uuid",
+            "late:penalty",
+            "late:manual",
+            "late:7:1",
+            "late:7:1:4",
+            "late:7:1:4:9",
+            "dl:days:nope",
+            "cal:2026-13",
+            "makeup-answer:",
+            "makeup-answer:-1",
+            "makeup-form:enable",
+            "makeup:grant",
+            "reg-group:done",
+            "agroup:all",
+        ] {
+            assert_eq!(parse(invalid), None, "{invalid}");
+        }
     }
 }

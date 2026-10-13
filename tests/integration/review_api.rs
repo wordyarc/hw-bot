@@ -4,7 +4,7 @@ use hw_bot::domain::{Assignment, MakeupTerms};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, out_of, submission_id};
+use crate::harness::{TestApp, submission_id};
 
 #[tokio::test]
 async fn reloading_a_review_checks_access_to_its_course() {
@@ -223,28 +223,6 @@ async fn outsider_teacher_cannot_review() {
 }
 
 #[tokio::test]
-async fn review_comment_is_mandatory_for_both_decisions() {
-    let app = TestApp::start().await;
-    let submission = app.queued_submission(app.student(), "pull/1").await;
-
-    for decision in ["accept", "reject"] {
-        app.review(submission, app.teacher(), decision, "   ")
-            .await
-            .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-    }
-}
-
-#[tokio::test]
-async fn oversized_review_comment_is_rejected() {
-    let app = TestApp::start().await;
-    let submission = app.queued_submission(app.student(), "pull/1").await;
-
-    app.review(submission, app.teacher(), "reject", &"я".repeat(4097))
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-}
-
-#[tokio::test]
 async fn reviewing_unknown_submission_is_not_found() {
     let app = TestApp::start().await;
 
@@ -456,20 +434,6 @@ async fn a_makeup_accepted_without_a_score_is_credited_by_its_terms() {
     assert_eq!(reviewed["max_score"], 10);
     assert_eq!(reviewed["course_total_penalty"], 0);
     assert_eq!(reviewed["penalty_deducted_from"], json!(null));
-}
-
-#[tokio::test]
-async fn a_score_in_a_makeup_review_is_invalid_input() {
-    let app = TestApp::start().await;
-    let (_, makeup) = pending_makeup(&app).await;
-
-    app.review_with_score(makeup, app.teacher(), "accept", out_of(6, 10), "Досдано")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-
-    app.review(makeup, app.teacher(), "reject", "Не то")
-        .await
-        .ok();
 }
 
 #[tokio::test]

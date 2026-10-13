@@ -427,79 +427,41 @@ async fn a_concurrent_change_during_upload_brings_the_menu_back() {
 
 #[tokio::test]
 async fn stale_file_callback_does_not_delete_the_attachment() {
-    use hw_bot::app::AddAssignmentFile;
-    use hw_bot::domain::FilePresentation;
-
     let app = TestApp::start().await;
     let assignment = app.fixture.assignment.id();
-    let card = app
-        .application
-        .files
-        .list_assignment_files_for_teacher(app.teacher_actor(), assignment)
-        .await
-        .unwrap();
-    app.application
-        .files
-        .add_assignment_file(AddAssignmentFile {
-            assignment_id: assignment,
-            actor: app.teacher_actor(),
-            expected_revision: card.revision,
-            presentation: FilePresentation::Document,
-            filename: "assignment-note.txt".to_owned(),
-            mime_type: Some("text/plain".to_owned()),
-            telegram_file_id: None,
-            content: DOCUMENT_FIXTURE.to_vec(),
-        })
-        .await
-        .unwrap();
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::MENU_COURSES, BOT_MESSAGE_ID),
-        callback_update(
-            3,
-            app.teacher(),
-            &format!("{}{}", callbacks::COURSE_PREFIX, app.course()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            4,
-            app.teacher(),
-            &format!("{}{}", callbacks::MANAGE_PREFIX, assignment.as_uuid()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            5,
-            app.teacher(),
-            &format!("{}{}", callbacks::FILES_PREFIX, assignment.as_uuid()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            6,
-            app.teacher(),
-            &cb(callbacks::FILE_DELETE_PREFIX, 0),
-            BOT_MESSAGE_ID - 1,
-        ),
-    ];
-    let telegram = telegram_server(updates).await;
-    let stale = Mock::given(method("POST"))
-        .and(path("/bottest-token/SendMessage"))
-        .and(body_json(json!({
-            "chat_id": app.teacher(),
-            "text": texts::STALE_BUTTON
-        })))
-        .respond_with(telegram_message_response())
-        .expect(1)
-        .with_priority(1)
-        .mount_as_scoped(&telegram)
+    add_document(&app, None).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_files(&app, &telegram, 0).await;
+    let delete = telegram
+        .button(app.teacher(), &cb(callbacks::FILE_DELETE_PREFIX, 0))
         .await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
+    open_files(&app, &telegram, delete.message_id).await;
 
-    tokio::time::timeout(Duration::from_secs(5), stale.wait_until_satisfied())
-        .await
-        .expect("stale file callback is rejected");
+    telegram.click(app.teacher(), &delete);
+    telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
+    assert!(
+        telegram
+            .messages(app.teacher())
+            .iter()
+            .any(|message| message["text"] == texts::STALE_BUTTON)
+    );
     assert_eq!(stored_file_count(&app.pool, assignment.as_uuid()).await, 1);
+}
+
+async fn open_files(app: &TestApp, telegram: &TelegramScenario, after: i32) {
+    telegram.message(app.teacher(), "/courses");
+    for data in [
+        cb(callbacks::COURSE_PREFIX, app.course()),
+        cb(callbacks::MANAGE_PREFIX, app.assignment()),
+        cb(callbacks::FILES_PREFIX, app.assignment()),
+    ] {
+        let button = telegram.button_after(app.teacher(), &data, after).await;
+        telegram.click(app.teacher(), &button);
+        telegram.flush(app.teacher()).await;
+    }
 }
 
 #[tokio::test]

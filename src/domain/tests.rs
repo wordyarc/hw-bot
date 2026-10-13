@@ -7,7 +7,8 @@ use crate::domain::{
     DomainError, Grade, Grading, LATEST_TERM_YEAR, LatePenalty, LatePolicy, MakeupOffer,
     MakeupRequest, MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role,
     StaffRole, StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionId,
-    SubmissionKind, SubmissionStatus, TeachingCourse, TelegramUserId, User, UserId,
+    SubmissionKind, SubmissionStatus, TeachingCourse, TelegramUserId, USER_TEXT_MAX_LEN, User,
+    UserId,
 };
 use crate::test_support::{
     ASSIGNMENT_BODY, ASSIGNMENT_TITLE, GROUP_CODE, OTHER_GROUP_CODE, PULL_REQUEST_URL,
@@ -263,6 +264,35 @@ fn student_cannot_submit_assignment_after_deadline() {
 }
 
 #[test]
+fn without_a_late_policy_the_deadline_moment_already_refuses_a_submission() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).published().build();
+    let deadline_at = assignment.deadline_at();
+    let last_moment = deadline_at - Duration::nanoseconds(1);
+
+    assert_eq!(
+        submission(&assignment, &student)
+            .submitted_at(deadline_at)
+            .try_build()
+            .unwrap_err(),
+        DomainError::AssignmentDeadlineExceeded {
+            deadline_at,
+            submitted_at: deadline_at,
+        }
+    );
+    assert_eq!(
+        submission(&assignment, &student)
+            .submitted_at(last_moment)
+            .try_build()
+            .map(|submission| submission.submitted_at()),
+        Ok(last_moment)
+    );
+}
+
+#[test]
 fn course_teacher_or_admin_can_move_deadline_both_ways() {
     let (course_teacher, other_teacher, admin) = (teacher(1), teacher(2), admin(3));
     let group = student_group(GROUP_CODE);
@@ -304,6 +334,30 @@ fn deadline_cannot_be_moved_before_creation() {
     assert_eq!(
         result.unwrap_err(),
         DomainError::AssignmentDeadlineMustBeAfterCreatedAt
+    );
+}
+
+#[test]
+fn a_deadline_must_lie_strictly_after_the_creation_moment() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    let just_after = t0() + Duration::nanoseconds(1);
+
+    assert_eq!(
+        assignment(&course, &teacher)
+            .created_at(t0())
+            .deadline_at(t0())
+            .try_build()
+            .unwrap_err(),
+        DomainError::AssignmentDeadlineMustBeAfterCreatedAt
+    );
+    assert_eq!(
+        assignment(&course, &teacher)
+            .created_at(t0())
+            .deadline_at(just_after)
+            .try_build()
+            .map(|assignment| assignment.deadline_at()),
+        Ok(just_after)
     );
 }
 
@@ -354,6 +408,42 @@ fn only_a_student_of_an_issued_group_submits_and_receives_extra_attempts() {
             StudentAssignmentProgress::new(&assignment, &student, 0).map(drop),
             expected,
             "extra attempts of {code}"
+        );
+    }
+}
+
+#[test]
+fn staff_cannot_submit_homework() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    let assignment = assignment(&course, &teacher).published().build();
+
+    for staff in [&teacher, &admin(2)] {
+        assert_eq!(
+            submission(&assignment, staff).try_build().unwrap_err(),
+            DomainError::PermissionDenied {
+                action: "submit homework"
+            },
+            "{:?}",
+            staff.role()
+        );
+    }
+}
+
+#[test]
+fn staff_receive_no_extra_attempts() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+    let assignment = assignment(&course, &teacher).published().build();
+
+    for staff in [&teacher, &admin(2)] {
+        assert_eq!(
+            StudentAssignmentProgress::new(&assignment, staff, 0).unwrap_err(),
+            DomainError::PermissionDenied {
+                action: "receive extra attempts"
+            },
+            "{:?}",
+            staff.role()
         );
     }
 }
@@ -519,6 +609,64 @@ fn accepted_review_requires_comment_and_stores_it() {
 
     assert_eq!(submission.status(), SubmissionStatus::Accepted);
     assert_eq!(submission.review_comment().unwrap().as_str(), "95/100");
+}
+
+#[test]
+fn a_rejection_requires_a_comment_too() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).published().build();
+    let mut submission = submission(&assignment, &student).build();
+
+    assert_eq!(
+        submission
+            .reject(&assignment, &course, &teacher, " ", reviewed_at())
+            .unwrap_err(),
+        DomainError::EmptyField {
+            field: "submission.review_comment"
+        }
+    );
+    assert_eq!(submission.status(), SubmissionStatus::PendingReview);
+}
+
+#[test]
+fn a_review_comment_is_bounded_by_the_user_text_limit() {
+    let teacher = teacher(1);
+    let group = student_group(GROUP_CODE);
+    let course = course_for(&group, &teacher);
+    let student = student(2, &group);
+    let assignment = assignment(&course, &teacher).published().build();
+    let pending = submission(&assignment, &student).build();
+
+    let mut longest = pending.clone();
+    longest
+        .reject(
+            &assignment,
+            &course,
+            &teacher,
+            "я".repeat(USER_TEXT_MAX_LEN),
+            reviewed_at(),
+        )
+        .unwrap();
+    let mut too_long = pending;
+    assert_eq!(
+        too_long
+            .reject(
+                &assignment,
+                &course,
+                &teacher,
+                "я".repeat(USER_TEXT_MAX_LEN + 1),
+                reviewed_at(),
+            )
+            .unwrap_err(),
+        DomainError::FieldTooLong {
+            field: "submission.review_comment",
+            max: USER_TEXT_MAX_LEN,
+            actual: USER_TEXT_MAX_LEN + 1,
+        }
+    );
 }
 
 #[test]
@@ -750,6 +898,20 @@ fn exactly_366_days_of_lateness_are_allowed() {
         .late_policy(183, 1, 2, DeductedFrom::WorkScore)
         .build();
     assert_eq!(work.closes_at(), work.deadline_at() + Duration::days(366));
+}
+
+#[test]
+fn the_shortest_representable_horizon_over_366_days_is_rejected() {
+    let teacher = teacher(1);
+    let course = course_for(&student_group(GROUP_CODE), &teacher);
+
+    assert_eq!(
+        assignment(&course, &teacher)
+            .scored(10)
+            .late_policy(184, 1, 2, DeductedFrom::WorkScore)
+            .try_build(),
+        Err(DomainError::LateHorizonTooLong { max_days: 366 })
+    );
 }
 
 #[test]

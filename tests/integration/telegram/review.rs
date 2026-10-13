@@ -300,46 +300,44 @@ async fn score_button_from_another_submission_is_stale() {
         .await
         .created(),
     );
-    let score =
-        |submission, value| format!("{}{submission}:{value}", callbacks::REVIEW_SCORE_PREFIX);
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
-        callback_update(
-            3,
-            app.teacher(),
-            &format!("{}{first}", callbacks::REVIEW_ACCEPT_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(4, app.teacher(), &score(first, 3), BOT_MESSAGE_ID),
-        message_update(5, app.teacher(), 2, "Первая"),
-        callback_update(6, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
-        callback_update(
-            7,
-            app.teacher(),
-            &format!("{}{second}", callbacks::REVIEW_ACCEPT_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(8, app.teacher(), &score(first, 1), BOT_MESSAGE_ID),
-        callback_update(9, app.teacher(), &score(second, 4), BOT_MESSAGE_ID),
-        message_update(10, app.teacher(), 3, "Вторая"),
-    ];
-    let telegram = telegram_server(updates).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
+    let score = |submission, value| {
+        cb(
+            callbacks::REVIEW_SCORE_PREFIX,
+            format!("{submission}:{value}"),
+        )
+    };
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, first))
+        .await;
+    let first_score = telegram.button(app.teacher(), &score(first, 1)).await;
+    telegram.click_button(app.teacher(), &score(first, 3)).await;
+    telegram.message(app.teacher(), "Первая");
+    wait_for_review_result(&app.pool, first)
+        .await
+        .expect("the first review is saved");
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, second))
+        .await;
 
+    telegram.click(app.teacher(), &first_score);
+    telegram.flush(app.teacher()).await;
+    telegram
+        .click_button(app.teacher(), &score(second, 4))
+        .await;
+    telegram.message(app.teacher(), "Вторая");
     let reviewed = wait_for_review_result(&app.pool, second).await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
 
-    let (status, raw_score, work_score) =
-        reviewed.unwrap_or_else(|| panic!("submission was not reviewed; requests:\n{requests}"));
+    let (status, raw_score, work_score) = reviewed.expect("the second review is saved");
     assert_eq!(status, "accepted");
     assert_eq!(raw_score, Some(4));
     assert_eq!(work_score, Some(4));
-    assert!(
-        requests.contains(texts::STALE_BUTTON),
-        "the old score button was not rejected; requests:\n{requests}"
-    );
+    let sent = texts_sent(&telegram, app.teacher());
+    assert!(sent.contains(&texts::STALE_BUTTON.to_owned()), "{sent:#?}");
 }
 
 #[tokio::test]

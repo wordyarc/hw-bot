@@ -692,10 +692,9 @@ mod tests {
     use chrono::Utc;
     use chrono_tz::Tz;
 
-    use super::input::parse_positive_attempts;
     use super::*;
     use crate::bot::BotTimezone;
-    use crate::bot::callbacks::{EXTRA_ATTEMPTS_PREFIX, MAX_ATTEMPTS_PREFIX};
+    use crate::bot::callbacks::AmountChoice;
     use crate::bot::views::{
         assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
     };
@@ -759,8 +758,10 @@ mod tests {
 
     #[test]
     fn every_button_the_bot_sends_is_routable() {
-        use crate::app::TeachingCourseSummary;
-        use crate::app::{MakeupQuestion, UndecidedAssignment};
+        use crate::app::{
+            AssignmentStudentSummary, CourseStudent, MakeupQuestion, StudentAssignment,
+            TeachingCourseSummary, UndecidedAssignment,
+        };
         use crate::bot::assignment_form::{AssignmentTerms, TermsForm, TermsStep};
         use crate::bot::callbacks::MakeupFormAction;
         use crate::bot::makeup_form::{MakeupForm, MakeupStep};
@@ -768,20 +769,23 @@ mod tests {
             assignment_files_keyboard, assignment_groups_keyboard, assignment_students_keyboard,
             attempts_keyboard, calendar_keyboard, confirm_file_deletion_keyboard,
             confirm_invite_rotation_keyboard, contact_keyboard, course_assignments_keyboard,
-            course_invite_keyboard, deadline_options_keyboard, gradebook_groups_keyboard,
-            gradebook_students_keyboard, grading_keyboard, late_policy_keyboard,
-            makeup_answer_keyboard, makeup_attempts_keyboard, makeup_followup_keyboard,
-            makeup_form_view, paginated_keyboard, penalty_keyboard, registration_groups_keyboard,
-            review_decision_keyboard, review_hub_keyboard, review_score_keyboard, roster_keyboard,
-            sandbox_keyboard, student_grades_keyboard, terms_exit_keyboard, terms_form_view,
-            terms_keyboard,
+            course_invite_keyboard, courses_keyboard, deadline_options_keyboard,
+            gradebook_groups_keyboard, gradebook_students_keyboard, grading_keyboard,
+            late_policy_keyboard, makeup_answer_keyboard, makeup_attempts_keyboard,
+            makeup_followup_keyboard, makeup_form_view, paginated_keyboard, penalty_keyboard,
+            registration_groups_keyboard, reopen_assignment_keyboard, review_decision_keyboard,
+            review_hub_keyboard, review_score_keyboard, roster_keyboard, sandbox_keyboard,
+            student_assignment_keyboard, student_assignments_keyboard, student_grades_keyboard,
+            student_keyboard, submission_history_keyboard, teacher_keyboard, terms_exit_keyboard,
+            terms_form_view, terms_keyboard,
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
             StoredFileMetadata, StoredFileOwner, StoredFileParts,
         };
         use crate::test_support::{
-            assignment, course_for, student_group, subject, teacher, teaching_course,
+            assignment, course_for, history, student, student_group, subject, teacher,
+            teaching_course,
         };
 
         let teacher = teacher(1);
@@ -793,7 +797,30 @@ mod tests {
             subject: subject("Stream"),
             groups: vec![group.clone(), other_group.clone()],
         };
+        let draft = assignment(&course, &teacher).build();
         let assignment = assignment(&course, &teacher).scored(5).published().build();
+        let mut archived = assignment.clone();
+        archived.archive(&course, &teacher).unwrap();
+        let single = TeachingCourseSummary {
+            course: course.clone(),
+            subject: subject("Single"),
+            groups: vec![group.clone()],
+        };
+        let student_assignment = StudentAssignment {
+            assignment: assignment.clone(),
+            subject: subject("Single"),
+            history: history().build(),
+            makeup: None,
+        };
+        let course_student = CourseStudent {
+            student_id: UserId::new(),
+            display_name: "Student".to_owned(),
+        };
+        let assignment_student = AssignmentStudentSummary {
+            student: student(2, &group),
+            group_code: "test-group".to_owned(),
+            history: history().build(),
+        };
         let file = StoredFileMetadata::restore(StoredFileParts {
             id: StoredFileId::new(),
             owner: StoredFileOwner::Assignment(assignment.id()),
@@ -838,6 +865,17 @@ mod tests {
         let mut keyboards = vec![
             student_menu(),
             teacher_menu(Some(1)),
+            student_assignments_keyboard(
+                std::slice::from_ref(&student_assignment),
+                PageTarget::Assignments,
+                1,
+                Some(2),
+            ),
+            student_assignment_keyboard(&assignment, true, Some(texts::BUTTON_SUBMIT)),
+            student_assignment_keyboard(&archived, false, None),
+            reopen_assignment_keyboard(assignment.id()),
+            submission_history_keyboard(assignment.id(), 1, Some(2)),
+            courses_keyboard(&[single, stream.clone()]),
             review_keyboard(
                 SubmissionId::new(),
                 course.id(),
@@ -884,9 +922,11 @@ mod tests {
             makeup_answer_keyboard(Grading::scored(10).unwrap(), Some(6)),
             makeup_answer_keyboard(Grading::scored(20).unwrap(), Some(12)),
             makeup_answer_keyboard(Grading::PassFail, None),
+            assignment_actions_keyboard(&draft),
             assignment_actions_keyboard(&assignment),
-            attempts_keyboard(MAX_ATTEMPTS_PREFIX),
-            attempts_keyboard(EXTRA_ATTEMPTS_PREFIX),
+            assignment_actions_keyboard(&archived),
+            attempts_keyboard(FlowAction::MaxAttempts),
+            attempts_keyboard(FlowAction::ExtraAttempts),
             grading_keyboard(),
             late_policy_keyboard(),
             penalty_keyboard(7),
@@ -898,8 +938,8 @@ mod tests {
             assignment_files_keyboard(&assignment, &[file], true, true),
             assignment_files_keyboard(&assignment, &[], true, false),
             confirm_file_deletion_keyboard(),
-            assignment_students_keyboard(assignment.id(), &[], true),
-            gradebook_students_keyboard(course.id(), &[]),
+            assignment_students_keyboard(assignment.id(), &[assignment_student], true),
+            gradebook_students_keyboard(course.id(), &[course_student]),
             gradebook_groups_keyboard(stream.course.id(), &stream.groups),
             registration_groups_keyboard(&stream.groups),
             assignment_groups_keyboard(
@@ -1011,24 +1051,28 @@ mod tests {
                 }
             }
         }
+        for keyboard in [student_keyboard(), teacher_keyboard()] {
+            for button in keyboard.keyboard.into_iter().flatten() {
+                assert!(
+                    menu_action(&button.text).is_some(),
+                    "menu button {:?} is not recognised",
+                    button.text
+                );
+            }
+        }
     }
 
     #[test]
     fn the_attempts_keyboard_speaks_the_language_of_the_step_that_sent_it() {
-        for (prefix, expected) in [
-            (MAX_ATTEMPTS_PREFIX, "maxattempts:3"),
-            (EXTRA_ATTEMPTS_PREFIX, "attempt:3"),
-        ] {
-            let json = serde_json::to_value(attempts_keyboard(prefix)).unwrap();
+        for step in [FlowAction::MaxAttempts, FlowAction::ExtraAttempts] {
+            let json = serde_json::to_value(attempts_keyboard(step)).unwrap();
             let third = json["inline_keyboard"][0][2]["callback_data"]
                 .as_str()
-                .unwrap()
-                .to_owned();
+                .unwrap();
 
-            assert_eq!(third, expected);
             assert_eq!(
-                third.strip_prefix(prefix).and_then(parse_positive_attempts),
-                Some(3)
+                callbacks::parse(third),
+                Some(CallbackAction::Flow(step(AmountChoice::Preset(3))))
             );
         }
     }

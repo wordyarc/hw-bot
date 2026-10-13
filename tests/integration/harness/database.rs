@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use futures::future::join_all;
 use hw_bot::db;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool};
@@ -14,7 +15,10 @@ const POSTGRES_PORT: u16 = 5432;
 /// Именованный контейнер, который переиспользуется между прогонами. Имя обязательно: по нему
 /// testcontainers находит уже запущенный контейнер вместо того, чтобы поднимать новый.
 const CONTAINER_NAME: &str = "hw-bot-test-postgres";
+const MIGRATED_TEMPLATE: &str = "template_hw_bot";
+const EMPTY_TEMPLATE: &str = "template1";
 const DATABASE_LIFECYCLE_LOCK: i64 = 0x6877_626f_745f_6462;
+const CLEANUP_CONNECTIONS: usize = 8;
 
 /// Контейнер один на весь тестовый бинарник, база - на каждый тест.
 static POSTGRES: OnceCell<Postgres> = OnceCell::const_new();
@@ -27,10 +31,7 @@ struct Postgres {
 
 impl Postgres {
     fn url(&self, database: &str) -> String {
-        format!(
-            "postgres://postgres:postgres@{}:{}/{database}",
-            self.host, self.port
-        )
+        format!("postgres://postgres@{}:{}/{database}", self.host, self.port)
     }
 }
 
@@ -43,14 +44,14 @@ async fn postgres() -> &'static Postgres {
                     "database system is ready to accept connections",
                 ))
                 .with_env_var("POSTGRES_USER", "postgres")
-                .with_env_var("POSTGRES_PASSWORD", "postgres")
+                .with_env_var("POSTGRES_HOST_AUTH_METHOD", "trust")
                 // Контейнер живёт в `static`, а статики не дропаются: без явного реюза каждый
                 // прогон оставлял бы за собой ещё один Postgres. С реюзом он ровно один и
                 // переживает прогон намеренно.
                 .with_container_name(CONTAINER_NAME)
                 .with_reuse(ReuseDirective::Always)
                 // База одноразовая, долговечность не нужна. Без этого `create database` на
-                // каждый тест гонит копию template1 через WAL с fsync.
+                // каждый тест гонит копию шаблона через WAL с fsync.
                 .with_cmd([
                     "postgres",
                     "-c",
@@ -82,7 +83,9 @@ async fn postgres() -> &'static Postgres {
                 port,
             };
             let mut admin = connect_when_ready(&postgres.url("postgres")).await;
-            drop_stale_databases(&mut admin).await;
+            lock_database_lifecycle(&mut admin).await;
+            drop_stale_databases(&postgres, &mut admin).await;
+            ensure_migrated_template(&postgres, &mut admin).await;
             admin.close().await.expect("close readiness connection");
 
             postgres
@@ -92,22 +95,79 @@ async fn postgres() -> &'static Postgres {
 
 /// Контейнер переиспользуется, поэтому базы прошлых прогонов убираем сами - иначе они копятся.
 /// Ошибки глотаем: занятую параллельным прогоном базу дропнуть нельзя, и это нормально.
-async fn drop_stale_databases(conn: &mut PgConnection) {
-    lock_database_lifecycle(conn).await;
+async fn drop_stale_databases(postgres: &Postgres, admin: &mut PgConnection) {
+    let stale: Vec<String> = sqlx::query_scalar(
+        r"select datname from pg_database
+          where datname like 'test\_%'
+            and not exists (
+                select 1 from pg_stat_activity where pg_stat_activity.datid = pg_database.oid
+            )",
+    )
+    .fetch_all(&mut *admin)
+    .await
+    .unwrap_or_default();
 
-    let stale: Vec<String> =
-        sqlx::query_scalar(r"select datname from pg_database where datname like 'test\_%'")
-            .fetch_all(&mut *conn)
+    join_all((0..CLEANUP_CONNECTIONS).map(|worker| {
+        let names = stale.iter().skip(worker).step_by(CLEANUP_CONNECTIONS);
+        async move {
+            let Ok(mut connection) = PgConnection::connect(&postgres.url("postgres")).await else {
+                return;
+            };
+            for name in names {
+                let _ = sqlx::query(AssertSqlSafe(format!(
+                    r#"drop database if exists "{name}""#
+                )))
+                .execute(&mut connection)
+                .await;
+            }
+            let _ = connection.close().await;
+        }
+    }))
+    .await;
+}
+
+async fn ensure_migrated_template(postgres: &Postgres, admin: &mut PgConnection) {
+    let exists: bool =
+        sqlx::query_scalar("select exists (select 1 from pg_database where datname = $1)")
+            .bind(MIGRATED_TEMPLATE)
+            .fetch_one(&mut *admin)
             .await
-            .unwrap_or_default();
+            .expect("look up the migrated template");
 
-    for name in stale {
-        let _ = sqlx::query(AssertSqlSafe(format!(
-            r#"drop database if exists "{name}""#
+    if exists {
+        let pool = connect_template(postgres).await;
+        let current = db::validate_migrations(&pool).await.is_ok();
+        pool.close().await;
+        if current {
+            return;
+        }
+        sqlx::query(AssertSqlSafe(format!(
+            r#"drop database "{MIGRATED_TEMPLATE}""#
         )))
-        .execute(&mut *conn)
-        .await;
+        .execute(&mut *admin)
+        .await
+        .expect("drop the outdated template");
     }
+
+    sqlx::query(AssertSqlSafe(format!(
+        r#"create database "{MIGRATED_TEMPLATE}""#
+    )))
+    .execute(&mut *admin)
+    .await
+    .expect("create the migrated template");
+    let pool = connect_template(postgres).await;
+    db::run_migrations(&pool)
+        .await
+        .expect("migrations apply to the template");
+    pool.close().await;
+}
+
+async fn connect_template(postgres: &Postgres) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&postgres.url(MIGRATED_TEMPLATE))
+        .await
+        .expect("connect to the migrated template")
 }
 
 async fn lock_database_lifecycle(conn: &mut PgConnection) {
@@ -116,6 +176,14 @@ async fn lock_database_lifecycle(conn: &mut PgConnection) {
         .execute(conn)
         .await
         .expect("lock test database lifecycle");
+}
+
+async fn share_database_lifecycle(conn: &mut PgConnection) {
+    sqlx::query("select pg_advisory_lock_shared($1)")
+        .bind(DATABASE_LIFECYCLE_LOCK)
+        .execute(conn)
+        .await
+        .expect("share test database lifecycle");
 }
 
 // Первое ready относится к временному серверу initdb. Первый admin-connect обязан дождаться
@@ -142,22 +210,20 @@ async fn connect_when_ready(url: &str) -> PgConnection {
 }
 
 pub async fn fresh_database() -> PgPool {
-    connect_fresh(PgPoolOptions::new().max_connections(4)).await
+    connect_fresh(PgPoolOptions::new().max_connections(4), EMPTY_TEMPLATE).await
 }
 
 pub async fn saturated_database() -> PgPool {
-    let pool = connect_fresh(
+    connect_fresh(
         PgPoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_millis(250)),
+        MIGRATED_TEMPLATE,
     )
-    .await;
-    db::run_migrations(&pool).await.expect("migrations apply");
-
-    pool
+    .await
 }
 
-async fn connect_fresh(options: PgPoolOptions) -> PgPool {
+async fn connect_fresh(options: PgPoolOptions, template: &str) -> PgPool {
     let postgres = postgres().await;
     let name = format!("test_{}", Uuid::now_v7().simple());
 
@@ -168,12 +234,14 @@ async fn connect_fresh(options: PgPoolOptions) -> PgPool {
     let mut admin = PgConnection::connect(&postgres.url("postgres"))
         .await
         .expect("connect to the maintenance database");
-    lock_database_lifecycle(&mut admin).await;
+    share_database_lifecycle(&mut admin).await;
 
-    sqlx::query(AssertSqlSafe(format!(r#"create database "{name}""#)))
-        .execute(&mut admin)
-        .await
-        .expect("create a database for the test");
+    sqlx::query(AssertSqlSafe(format!(
+        r#"create database "{name}" template "{template}""#
+    )))
+    .execute(&mut admin)
+    .await
+    .expect("create a database for the test");
 
     // Lock держим до первого подключения: другой прогон уже не сможет удалить только что
     // созданную базу в зазоре между `create database` и коннектом.
@@ -190,10 +258,7 @@ async fn connect_fresh(options: PgPoolOptions) -> PgPool {
 }
 
 pub async fn migrated_database() -> PgPool {
-    let pool = fresh_database().await;
-    db::run_migrations(&pool).await.expect("migrations apply");
-
-    pool
+    connect_fresh(PgPoolOptions::new().max_connections(4), MIGRATED_TEMPLATE).await
 }
 
 pub async fn wait_for_blocked_connection(pool: &PgPool, blocker: i32) {

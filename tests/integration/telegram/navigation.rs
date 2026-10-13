@@ -3,7 +3,7 @@ use std::time::Duration;
 use hw_bot::bot::{callbacks, texts};
 use serde_json::json;
 use wiremock::Mock;
-use wiremock::matchers::{body_json, body_partial_json, method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 
 use crate::harness::TestApp;
 use crate::harness::telegram::*;
@@ -80,41 +80,25 @@ async fn the_bottom_menu_opens_a_screen_even_in_the_middle_of_a_dialogue() {
 #[tokio::test]
 async fn replayable_inline_navigation_cancels_the_previous_input_flow() {
     let app = TestApp::start().await;
-    let updates = vec![
-        message_update(1, app.student(), 1, "/menu"),
-        callback_update(
-            2,
-            app.student(),
-            &format!("{}{}", callbacks::SUBMIT_PREFIX, app.assignment()),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            3,
-            app.student(),
-            callbacks::MENU_ASSIGNMENTS,
-            BOT_MESSAGE_ID - 5,
-        ),
-        message_update(4, app.student(), 2, "https://example.test/pull/1"),
-    ];
-    let telegram = telegram_server(updates).await;
-    let idle = Mock::given(method("POST"))
-        .and(path("/bottest-token/SendMessage"))
-        .and(body_json(json!({
-            "chat_id": app.student(),
-            "text": texts::USE_THE_MENU
-        })))
-        .respond_with(telegram_message_response())
-        .expect(1)
-        .with_priority(1)
-        .mount_as_scoped(&telegram)
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_submission_prompt(&app, &telegram).await;
+    let assignments = telegram
+        .button(app.student(), callbacks::MENU_ASSIGNMENTS)
         .await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
 
-    let observed = tokio::time::timeout(Duration::from_secs(5), idle.wait_until_satisfied()).await;
+    telegram.click(app.student(), &assignments);
+    telegram.flush(app.student()).await;
+    telegram.message(app.student(), "https://example.test/pull/1");
+    telegram.flush(app.student()).await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-    observed.unwrap_or_else(|_| panic!("the old flow remained active; requests:\n{requests}"));
 
+    assert!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .any(|message| message["text"] == texts::USE_THE_MENU)
+    );
     let submissions: i64 = sqlx::query_scalar("select count(*) from submissions")
         .fetch_one(&app.pool)
         .await

@@ -5,7 +5,7 @@ use super::form::detach;
 use super::gradebook::show_student_grades_page;
 use crate::app::GrantExtraAttempts;
 use crate::bot::HandlerResult;
-use crate::bot::callbacks::{AmountChoice, EXTRA_ATTEMPTS_PREFIX, PageTarget};
+use crate::bot::callbacks::{AmountChoice, FlowAction, PageTarget};
 use crate::bot::context::{Screen, TextStep};
 use crate::bot::handlers::input::require_attempts;
 use crate::bot::handlers::reset_dialogue;
@@ -119,7 +119,7 @@ pub(crate) async fn select_student(
     let sent = screen
         .bot()
         .send_message(screen.chat_id(), texts::EXTRA_ATTEMPTS_QUESTION)
-        .reply_markup(attempts_keyboard(EXTRA_ATTEMPTS_PREFIX))
+        .reply_markup(attempts_keyboard(FlowAction::ExtraAttempts))
         .await?;
     screen
         .dialogue()

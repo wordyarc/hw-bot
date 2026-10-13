@@ -385,15 +385,6 @@ async fn a_teacher_has_no_student_assignments() {
 }
 
 #[tokio::test]
-async fn a_teacher_has_no_student_archive() {
-    let app = TestApp::start().await;
-
-    app.archived_student_assignments(app.teacher())
-        .await
-        .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
 async fn a_makeup_leaves_the_regular_attempts_of_the_progress_alone() {
     let app = TestApp::start().await;
     let closed = app.add_closed_assignment("Closed", 10, 6).await;

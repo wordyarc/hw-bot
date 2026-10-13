@@ -678,3 +678,181 @@ fn parse_score(text: &str, max_score: u16) -> Option<u16> {
     let score = parse_number(text)?;
     (score <= max_score).then_some(score)
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+
+    use super::*;
+    use crate::domain::{
+        Assignment, CourseMakeup, DeductedFrom, MakeupRequest, MakeupTerms, Submission,
+        TeachingCourse, User,
+    };
+    use crate::test_support::{
+        GROUP_CODE, SUBJECT_NAME, assignment, course_for, student, student_group, subject,
+        submission, t0, teacher,
+    };
+
+    fn people() -> (TeachingCourse, User, User) {
+        let teacher = teacher(1);
+        let group = student_group(GROUP_CODE);
+        (course_for(&group, &teacher), teacher, student(2, &group))
+    }
+
+    fn item(assignment: Assignment, submission: Submission, student: User) -> ReviewQueueItem {
+        ReviewQueueItem {
+            submission,
+            assignment,
+            subject: subject(SUBJECT_NAME),
+            student,
+            group_code: GROUP_CODE.to_owned(),
+            previous_attempts: Vec::new(),
+            earlier_attempts_hidden: false,
+            makeup: None,
+        }
+    }
+
+    fn makeup_of(assignment: &Assignment, student: &User) -> Submission {
+        let window = CourseMakeup::open(t0() + Duration::days(60), 3, t0()).unwrap();
+        submission(assignment, student)
+            .submitted_at(assignment.closes_at() + Duration::days(1))
+            .makeup(MakeupRequest {
+                course: Some(window),
+                consent: true,
+                balance: window.balance(0, 0),
+            })
+            .build()
+    }
+
+    #[test]
+    fn a_late_submission_is_reviewed_with_the_penalty_of_its_sending_moment() {
+        let (course, teacher, student) = people();
+        let work = assignment(&course, &teacher)
+            .scored(5)
+            .late_policy(7, 1, 4, DeductedFrom::WorkScore)
+            .published()
+            .build();
+        let sent = submission(&work, &student)
+            .submitted_at(work.deadline_at() + Duration::days(8))
+            .build();
+
+        assert_eq!(
+            review_target(&item(work, sent, student)),
+            ReviewTarget::Regular {
+                grading: Grading::scored(5).unwrap(),
+                late: LatePenalty::restore(2, 2, DeductedFrom::WorkScore),
+            }
+        );
+    }
+
+    #[test]
+    fn a_makeup_submission_is_reviewed_as_a_makeup() {
+        let (course, teacher, student) = people();
+        let work = assignment(&course, &teacher)
+            .scored(10)
+            .makeup_credit(6)
+            .published()
+            .build();
+        let makeup = makeup_of(&work, &student);
+
+        assert_eq!(
+            review_target(&item(work, makeup, student)),
+            ReviewTarget::Makeup
+        );
+    }
+
+    #[test]
+    fn the_accept_button_names_what_the_acceptance_grants() {
+        let (course, teacher, student) = people();
+        let regular = assignment(&course, &teacher).published().build();
+        let credited = assignment(&course, &teacher)
+            .scored(10)
+            .makeup_credit(6)
+            .published()
+            .build();
+        let pass_fail = assignment(&course, &teacher)
+            .makeup(MakeupTerms::PassFail)
+            .published()
+            .build();
+
+        for (work, sent, label) in [
+            (
+                regular.clone(),
+                submission(&regular, &student).build(),
+                texts::BUTTON_ACCEPT.to_owned(),
+            ),
+            (
+                credited.clone(),
+                makeup_of(&credited, &student),
+                texts::accept_makeup_button(6),
+            ),
+            (
+                pass_fail.clone(),
+                makeup_of(&pass_fail, &student),
+                texts::BUTTON_ACCEPT_MAKEUP.to_owned(),
+            ),
+        ] {
+            assert_eq!(
+                accept_label(&item(work, sent, student.clone())),
+                Some(label)
+            );
+        }
+    }
+
+    #[test]
+    fn a_makeup_whose_terms_were_withdrawn_has_no_accept_button() {
+        let (course, teacher, student) = people();
+        let mut work = assignment(&course, &teacher)
+            .scored(10)
+            .makeup_credit(6)
+            .published()
+            .build();
+        let makeup = makeup_of(&work, &student);
+        work.decide_makeup(&course, &teacher, MakeupTerms::NotOffered)
+            .unwrap();
+
+        assert_eq!(accept_label(&item(work, makeup, student)), None);
+    }
+
+    #[test]
+    fn a_decided_missing_or_forbidden_submission_closes_the_review() {
+        for error in [
+            AppError::Domain(DomainError::SubmissionIsNotPendingReview),
+            AppError::NotFound {
+                resource: "submission",
+            },
+            AppError::Domain(DomainError::PermissionDenied {
+                action: "review submission",
+            }),
+        ] {
+            assert!(review_closed(&error), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_changed_grading_or_a_transient_failure_keeps_the_review_open() {
+        for error in [
+            AppError::Domain(DomainError::ScoreRequired),
+            AppError::Domain(DomainError::MakeupNotOffered),
+            AppError::AssignmentChangedConcurrently,
+            AppError::Overloaded,
+        ] {
+            assert!(!review_closed(&error), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_typed_score_is_accepted_from_zero_up_to_the_scale_maximum() {
+        assert_eq!(parse_score("0", 10), Some(0));
+        assert_eq!(parse_score("10", 10), Some(10));
+        assert_eq!(parse_score("11", 10), None);
+    }
+
+    #[test]
+    fn a_typed_score_is_a_plain_integer_with_optional_surrounding_spaces() {
+        assert_eq!(parse_score(" 7 ", 10), Some(7));
+        for text in ["", "семь", "7.5", "+7", "-1", "7 из 10"] {
+            assert_eq!(parse_score(text, 10), None, "{text}");
+        }
+    }
+}

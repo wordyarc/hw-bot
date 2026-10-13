@@ -1,23 +1,21 @@
 use chrono::{DateTime, Utc};
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::{AppError, ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::HandlerResult;
-use crate::bot::callbacks::{PageTarget, ReplayableAction};
+use crate::bot::callbacks::PageTarget;
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::{app_error_message, log_handler_error, optional_stat};
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
 use crate::bot::views::{
-    button_label, list_text, makeup_credit_terms, paginated_keyboard, send_message_chunks,
-    student_grading_lines, student_keyboard, student_menu,
+    list_text, makeup_credit_terms, paginated_keyboard, reopen_assignment_keyboard,
+    send_message_chunks, student_assignment_keyboard, student_assignments_keyboard,
+    student_grading_lines, student_keyboard, student_menu, submission_history_keyboard,
 };
-use crate::domain::{
-    AssignmentId, AssignmentStatus, MakeupOffer, StoredFileMetadata, Submission, USER_TEXT_MAX_LEN,
-};
+use crate::domain::{AssignmentId, MakeupOffer, StoredFileMetadata, Submission, USER_TEXT_MAX_LEN};
 use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -151,10 +149,8 @@ async fn show_assignment_list(
     }
 
     let mut lines = vec![title.to_owned()];
-    let mut rows = Vec::with_capacity(assignments.items.len());
     let mut current: Option<&str> = None;
     for item in &assignments.items {
-        let assignment = &item.assignment;
         let subject = item.subject.name().as_str();
         if current != Some(subject) {
             lines.push(String::new());
@@ -163,21 +159,14 @@ async fn show_assignment_list(
         }
         lines.push(String::new());
         lines.push(describe(item));
-        rows.push(vec![InlineKeyboardButton::callback(
-            button_label(&texts::assignment_button(
-                subject,
-                assignment.title().as_str(),
-            )),
-            ReplayableAction::Assignment(assignment.id()).callback(),
-        )]);
     }
 
     send_message_chunks(
         bot,
         chat_id,
         lines.join("\n"),
-        Some(paginated_keyboard(
-            InlineKeyboardMarkup::new(rows),
+        Some(student_assignments_keyboard(
+            &assignments.items,
             target,
             assignments.page,
             assignments.next_page,
@@ -222,33 +211,13 @@ pub(super) async fn show_assignment(
         summary.push_str(&texts::pending_place(&texts::queue_ahead(place.position)));
     }
 
-    let mut rows = Vec::new();
-    if details.latest_submission.is_some() {
-        rows.push(vec![InlineKeyboardButton::callback(
-            texts::BUTTON_HISTORY,
-            PageTarget::History(assignment_id).callback(0),
-        )]);
-    }
     let submit = if history.accepts_new_attempt_for(assignment, now) {
         Some(texts::BUTTON_SUBMIT)
     } else {
         available(makeup).map(|_| texts::BUTTON_SUBMIT_MAKEUP)
     };
-    if let Some(label) = submit {
-        rows.push(vec![InlineKeyboardButton::callback(
-            label,
-            ReplayableAction::StartSubmission(assignment.id()).callback(),
-        )]);
-    }
-    let (back_label, back_target) = if assignment.status() == AssignmentStatus::Archived {
-        (texts::BUTTON_BACK_TO_ARCHIVE, PageTarget::Archive)
-    } else {
-        (texts::BUTTON_BACK_TO_ASSIGNMENTS, PageTarget::Assignments)
-    };
-    rows.push(vec![InlineKeyboardButton::callback(
-        back_label,
-        ReplayableAction::Page(back_target, 0).callback(),
-    )]);
+    let keyboard =
+        student_assignment_keyboard(assignment, details.latest_submission.is_some(), submit);
 
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
@@ -258,7 +227,7 @@ pub(super) async fn show_assignment(
         send_submission(screen, submission).await?;
     }
     bot.send_message(chat_id, texts::CHOOSE_ACTION)
-        .reply_markup(InlineKeyboardMarkup::new(rows))
+        .reply_markup(keyboard)
         .await?;
     if let Err(error) = send_assignment_files(screen, assignment_id, &details.files).await {
         if error.is_invalid_token() {
@@ -266,12 +235,7 @@ pub(super) async fn show_assignment(
         }
         log_handler_error(&error);
         bot.send_message(chat_id, texts::ASSIGNMENT_FILES_SEND_FAILED)
-            .reply_markup(InlineKeyboardMarkup::new([[
-                InlineKeyboardButton::callback(
-                    texts::BUTTON_REOPEN_ASSIGNMENT,
-                    ReplayableAction::Assignment(assignment_id).callback(),
-                ),
-            ]]))
+            .reply_markup(reopen_assignment_keyboard(assignment_id))
             .await?;
     }
     Ok(())
@@ -336,16 +300,11 @@ pub(super) async fn show_history(
     for submission in &submissions.items {
         send_submission(screen, submission).await?;
     }
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        texts::BUTTON_BACK_TO_ASSIGNMENT,
-        ReplayableAction::Assignment(assignment_id).callback(),
-    )]]);
     screen
         .bot()
         .send_message(screen.chat_id(), texts::CHOOSE_ACTION)
-        .reply_markup(paginated_keyboard(
-            keyboard,
-            PageTarget::History(assignment_id),
+        .reply_markup(submission_history_keyboard(
+            assignment_id,
             submissions.page,
             submissions.next_page,
         ))

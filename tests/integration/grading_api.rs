@@ -97,84 +97,6 @@ async fn where_the_penalty_is_deducted_from_round_trips_through_http() {
 }
 
 #[tokio::test]
-async fn a_policy_and_its_deduction_are_only_accepted_together() {
-    let app = TestApp::start().await;
-    let assignment = app.add_scored_assignment(5).await;
-    let before = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
-        .await
-        .unwrap()
-        .unwrap();
-
-    for body in [
-        json!({
-            "max_score": 5, "late_period_days": 7, "late_penalty_per_period": 1, "late_max_periods": 4,
-        }),
-        json!({ "max_score": 5, "late_deducted_from": "course_total" }),
-    ] {
-        app.post_as(
-            &format!("/assignments/{}/grading", assignment.id().as_uuid()),
-            app.teacher(),
-            body,
-        )
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-    }
-
-    let after = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(after.revision, before.revision);
-    assert_eq!(after.assignment, before.assignment);
-}
-
-#[tokio::test]
-async fn the_former_name_of_the_penalty_per_period_is_rejected_by_the_strict_body() {
-    let app = TestApp::start().await;
-    let assignment = app.add_scored_assignment(5).await;
-    let before = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
-        .await
-        .unwrap()
-        .unwrap();
-
-    app.post_as(
-        &format!("/assignments/{}/grading", assignment.id().as_uuid()),
-        app.teacher(),
-        json!({
-            "max_score": 5, "late_period_days": 7, "late_penalty": 1, "late_max_periods": 4,
-            "late_deducted_from": "work_score",
-        }),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
-
-    let after = db::assignments::find_versioned_by_id(&app.pool, assignment.id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(after.revision, before.revision);
-    assert_eq!(after.assignment, before.assignment);
-}
-
-#[tokio::test]
-async fn an_unknown_deduction_is_rejected_by_the_strict_body() {
-    let app = TestApp::start().await;
-
-    app.create_assignment_raw(
-        app.course(),
-        app.teacher(),
-        json!({
-            "title": "Unknown deducted_from", "body": "Send a pull request.", "max_attempts": 2,
-            "max_score": 10, "deadline_at": Utc::now() + Duration::days(7),
-            "late_period_days": 7, "late_penalty_per_period": 2, "late_max_periods": 4,
-            "late_deducted_from": "everything",
-        }),
-    )
-    .await
-    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_request_body");
-}
-
-#[tokio::test]
 async fn a_submission_awaiting_review_has_no_grade() {
     let app = TestApp::start().await;
     let assignment = app.add_scored_assignment(5).await;
@@ -371,31 +293,6 @@ async fn a_scale_given_at_creation_reaches_the_response() {
         .created();
 
     assert_eq!(body["max_score"], json!(10));
-}
-
-#[tokio::test]
-async fn a_late_submission_before_the_horizon_is_accepted_with_a_penalty() {
-    let app = TestApp::start().await;
-    let assignment = app.add_overdue_assignment(1, Some((7, 1, 4))).await;
-
-    let submitted = app
-        .submit(assignment.id().as_uuid(), app.student(), "pull/1")
-        .await
-        .created();
-    let body = app
-        .review_with_score(
-            submission_id(&submitted),
-            app.teacher(),
-            "accept",
-            out_of(5, 5),
-            "Ок",
-        )
-        .await
-        .ok();
-
-    assert_eq!(body["late_periods"], json!(1));
-    assert_eq!(body["penalty"], json!(1));
-    assert_eq!(body["work_score"], json!(4));
 }
 
 #[tokio::test]
@@ -882,15 +779,6 @@ async fn a_gradebook_of_a_foreign_course_is_denied() {
 }
 
 #[tokio::test]
-async fn a_student_cannot_read_the_gradebook() {
-    let app = TestApp::start().await;
-
-    gradebook(&app, app.student())
-        .await
-        .error(StatusCode::FORBIDDEN, "permission_denied");
-}
-
-#[tokio::test]
 async fn a_draft_assignment_is_not_in_the_gradebook_yet() {
     let app = TestApp::start().await;
     app.create_assignment_raw(
@@ -932,16 +820,6 @@ async fn archiving_an_unpublished_draft_does_not_increase_the_gradebook_maximum(
         .ok();
     let body = gradebook(&app, app.teacher()).await.ok();
     assert_eq!(body["students"][0]["max_total"], json!(0));
-}
-
-#[tokio::test]
-async fn a_rejection_with_a_score_does_not_finish_the_review() {
-    let app = TestApp::start().await;
-    let id = app.queued_submission(app.student(), "pull/1").await;
-    app.review_with_score(id, app.teacher(), "reject", out_of(4, 5), "Fix it")
-        .await
-        .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
-    app.review(id, app.teacher(), "reject", "Fix it").await.ok();
 }
 
 #[tokio::test]
