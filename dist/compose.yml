@@ -51,12 +51,12 @@ services:
     cpus: 1.0
     stop_grace_period: 30s
     env_file:
-      - etc/hw-bot.env
+      - config/hw-bot.env
     environment:
       APP__DATABASE__URL: postgres://hw_bot:${POSTGRES_PASSWORD:?required}@database:5432/hw_bot
     volumes:
       - type: bind
-        source: ./etc/production.toml
+        source: ./config/production.toml
         target: /app/config/local.toml
         read_only: true
         bind:

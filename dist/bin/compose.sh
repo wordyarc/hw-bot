@@ -11,5 +11,5 @@ if [ -z "${HW_BOT_IMAGE:-}" ]; then
     HW_BOT_IMAGE=$(jq -er '.image' "$root/current-release.json")
     export HW_BOT_IMAGE
 fi
-exec docker compose --project-directory "$root" --env-file "$root/etc/hw-bot.env" \
+exec docker compose --project-directory "$root" --env-file "$root/config/hw-bot.env" \
     -f "$dist/compose.yml" "$@"

@@ -94,11 +94,11 @@ for mode in missing_logs write_failure backup_failure rename_failure late_rename
     printf 'Deployment handles %s\n' "$mode"
     export DEPLOY_TEST_MODE="$mode"
     rm -rf "$DEPLOY_TEST_ROOT" "$tmp/release/deploy.log"
-    mkdir -p "$DEPLOY_TEST_ROOT/etc" "$DEPLOY_TEST_ROOT/bin"
+    mkdir -p "$DEPLOY_TEST_ROOT/config" "$DEPLOY_TEST_ROOT/bin"
     [[ "$mode" == missing_logs ]] || mkdir "$DEPLOY_TEST_ROOT/logs"
     for file in "${files[@]}"; do printf 'old file\n' > "$DEPLOY_TEST_ROOT/$file"; done
-    printf 'POSTGRES_PASSWORD=test\n' > "$DEPLOY_TEST_ROOT/etc/hw-bot.env"
-    printf '[app]\n' > "$DEPLOY_TEST_ROOT/etc/production.toml"
+    printf 'POSTGRES_PASSWORD=test\n' > "$DEPLOY_TEST_ROOT/config/hw-bot.env"
+    printf '[app]\n' > "$DEPLOY_TEST_ROOT/config/production.toml"
     printf 'running\n' > "$DEPLOY_TEST_ROOT/state"
     printf 'example/hw-bot:previous\n' > "$DEPLOY_TEST_ROOT/image"
     printf 'previous release\n' > "$DEPLOY_TEST_ROOT/current-release.json"
@@ -135,7 +135,7 @@ for mode in missing_logs write_failure backup_failure rename_failure late_rename
                 "$DEPLOY_TEST_ROOT/current-release.json" > /dev/null
             ;;
     esac
-    [[ "$(cat "$DEPLOY_TEST_ROOT/etc/hw-bot.env")" == 'POSTGRES_PASSWORD=test' ]]
+    [[ "$(cat "$DEPLOY_TEST_ROOT/config/hw-bot.env")" == 'POSTGRES_PASSWORD=test' ]]
     case "$mode" in
         success|startup_failure|term_start|timeout_start|record_failure)
             [[ "$(cat "$DEPLOY_TEST_ROOT/Makefile")" == 'new file' ]]

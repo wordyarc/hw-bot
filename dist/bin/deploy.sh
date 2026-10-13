@@ -16,7 +16,7 @@ image=$(jq -er '.image' "$release_dir/release.json")
     printf '%s\n' 'Release image must be pinned to a SHA-256 digest' >&2
     exit 1
 }
-for file in etc/hw-bot.env etc/production.toml; do
+for file in config/hw-bot.env config/production.toml; do
     [[ -f "$file" && -r "$file" ]] || { printf 'Missing or unreadable file: %s\n' "$root/$file" >&2; exit 1; }
 done
 [[ -d logs ]] || { printf 'Missing log directory: %s\n' "$root/logs" >&2; exit 1; }

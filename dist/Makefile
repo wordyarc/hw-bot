@@ -12,7 +12,7 @@ help:
 	@echo 'make backup        dump the database into backups/'
 	@echo 'make prune         delete backups older than 14 days, old releases and images'
 	@echo 'make restart       recreate the app with the deployed image'
-	@echo 'make bootstrap     apply etc/bootstrap.json'
+	@echo 'make bootstrap     apply config/bootstrap.json'
 	@echo 'make deploy DIR=releases/<version>'
 	@echo 'make restore DUMP=backups/<file>.dump CONFIRM=yes'
 	@echo 'make cron          nightly backup and prune at 17:00 server time'
@@ -44,8 +44,8 @@ restart:
 	$(compose) up -d --no-deps --force-recreate $(wait) app
 
 bootstrap:
-	chgrp 10001 etc/production.toml etc/bootstrap.json
-	chmod 640 etc/production.toml etc/bootstrap.json
+	chgrp 10001 config/production.toml config/bootstrap.json
+	chmod 640 config/production.toml config/bootstrap.json
 	$(compose) up -d --no-recreate $(wait) database
 	$(compose) -f compose.bootstrap.yml up -d --no-deps --force-recreate $(wait) app
 	$(compose) up -d --no-deps --force-recreate $(wait) app

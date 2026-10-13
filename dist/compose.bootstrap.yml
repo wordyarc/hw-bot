@@ -5,7 +5,7 @@ services:
       APP__DATABASE__BOOTSTRAP_FILE: /run/bootstrap/data.json
     volumes:
       - type: bind
-        source: ./etc/bootstrap.json
+        source: ./config/bootstrap.json
         target: /run/bootstrap/data.json
         read_only: true
         bind:

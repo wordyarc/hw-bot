@@ -32,18 +32,18 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM
 
 sh tools/actions/package.sh HEAD "$tmp/deploy.tar.gz"
-mkdir -p "$installation/etc" "$installation/logs"
+mkdir -p "$installation/config" "$installation/logs"
 tar -xzf "$tmp/deploy.tar.gz" -C "$installation" --strip-components=1
 sed '/^\[server\]$/,/^\[/ {
     s/^host = .*/host = "::1"/
     s/^port = .*/port = 3001/
-}' "$installation/examples/production.toml" > "$installation/etc/production.toml"
-grep -qx 'host = "::1"' "$installation/etc/production.toml"
-grep -qx 'port = 3001' "$installation/etc/production.toml"
-cp "$installation/examples/bootstrap.json" "$installation/etc/bootstrap.json"
+}' "$installation/examples/production.toml" > "$installation/config/production.toml"
+grep -qx 'host = "::1"' "$installation/config/production.toml"
+grep -qx 'port = 3001' "$installation/config/production.toml"
+cp "$installation/examples/bootstrap.json" "$installation/config/bootstrap.json"
 chmod 0770 "$installation/logs"
-sudo chgrp 10001 "$installation/etc/production.toml" "$installation/etc/bootstrap.json" "$installation/logs"
-cat > "$installation/etc/hw-bot.env" <<EOF
+sudo chgrp 10001 "$installation/config/production.toml" "$installation/config/bootstrap.json" "$installation/logs"
+cat > "$installation/config/hw-bot.env" <<EOF
 POSTGRES_PASSWORD=smoke
 APP__TELEGRAM__ENABLED=false
 APP__NOTIFICATION_WORKER__ENABLED=false
