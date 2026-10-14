@@ -11,3 +11,5 @@
 
 .idea/*
 !.idea/icon.svg
+
+/config/local.toml
