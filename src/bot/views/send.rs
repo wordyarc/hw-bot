@@ -1,5 +1,4 @@
 use anyhow::Context;
-use chrono::{DateTime, Utc};
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardRemove, MessageId};
 
@@ -66,20 +65,20 @@ async fn send_chunks(
 }
 
 pub(crate) async fn ask_input(bot: &Bot, chat_id: ChatId, prompt: &str) -> HandlerResult {
-    ask_input_dated(bot, chat_id, prompt).await?;
+    ask_input_message(bot, chat_id, prompt).await?;
     Ok(())
 }
 
-pub(crate) async fn ask_input_dated(
+pub(crate) async fn ask_input_message(
     bot: &Bot,
     chat_id: ChatId,
     prompt: &str,
-) -> HandlerResult<DateTime<Utc>> {
+) -> HandlerResult<MessageId> {
     let sent = bot
         .send_message(chat_id, texts::input_prompt(prompt))
         .reply_markup(KeyboardRemove::new())
         .await?;
-    Ok(sent.date)
+    Ok(sent.id)
 }
 
 pub(crate) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {

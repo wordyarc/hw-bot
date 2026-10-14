@@ -2,9 +2,9 @@ use chrono::{DateTime, Duration, Utc};
 
 use super::{Fixture, fixture, reviewed_at};
 use crate::domain::{
-    Acceptance, Assignment, CourseMakeup, DeductedFrom, DomainError, Grade, Grading, LatePolicy,
-    MAX_ATTEMPTS, MakeupOffer, MakeupPool, MakeupRequest, MakeupTerms, SubmissionHistory,
-    SubmissionKind, SubmissionStart, SubmissionStatus, TeachingCourse, User,
+    Acceptance, Assignment, CourseMakeup, DeductedFrom, DomainError, DomainResult, Grade, Grading,
+    LatePolicy, MAX_ATTEMPTS, MakeupOffer, MakeupPool, MakeupRequest, MakeupTerms,
+    SubmissionHistory, SubmissionKind, SubmissionStart, SubmissionStatus, TeachingCourse, User,
 };
 use crate::test_support::{ReviewShortcuts, assignment, history, out_of, submission, t0, teacher};
 
@@ -497,6 +497,21 @@ fn pool(used: u16) -> MakeupPool {
     }
 }
 
+fn reopened_pool(reopened_at: DateTime<Utc>, used: u16) -> MakeupPool {
+    let course = CourseMakeup::open(makeup_window().until(), 3, reopened_at).unwrap();
+    MakeupPool {
+        course,
+        balance: course.balance(0, used),
+    }
+}
+
+fn consented(start: DomainResult<SubmissionStart>) -> Option<bool> {
+    match start {
+        Ok(SubmissionStart::Makeup { consented, .. }) => Some(consented),
+        _ => None,
+    }
+}
+
 #[test]
 fn a_makeup_button_shown_before_the_end_admits_work_handled_after_it() {
     let Fixture {
@@ -508,17 +523,12 @@ fn a_makeup_button_shown_before_the_end_admits_work_handled_after_it() {
     let start = history().build().submission_start(
         &work,
         Some(pool(0)),
+        SubmissionKind::Makeup,
         until - Duration::hours(1),
         until + Duration::hours(1),
     );
 
-    assert!(matches!(
-        start,
-        Ok(SubmissionStart::Makeup {
-            offered_when_shown: true,
-            ..
-        })
-    ));
+    assert_eq!(consented(start), Some(true));
 }
 
 #[test]
@@ -533,6 +543,7 @@ fn a_button_shown_after_the_makeup_end_is_refused_as_closed() {
         history().build().submission_start(
             &work,
             Some(pool(0)),
+            SubmissionKind::Makeup,
             shown_at,
             shown_at + Duration::hours(1)
         ),
@@ -546,20 +557,55 @@ fn a_regular_button_handled_after_closing_asks_for_makeup_consent_in_the_prompt(
         teacher, course, ..
     } = fixture();
     let work = credit_assignment(&course, &teacher);
-    let shown_at = work.closes_at() - Duration::hours(1);
 
-    let start =
-        history()
-            .build()
-            .submission_start(&work, Some(pool(0)), shown_at, after_closing(&work));
+    let start = history().build().submission_start(
+        &work,
+        Some(pool(0)),
+        SubmissionKind::Regular,
+        work.closes_at() - Duration::hours(1),
+        after_closing(&work),
+    );
 
-    assert!(matches!(
-        start,
-        Ok(SubmissionStart::Makeup {
-            offered_when_shown: false,
-            ..
-        })
-    ));
+    assert_eq!(consented(start), Some(false));
+}
+
+#[test]
+fn a_regular_button_shown_in_the_makeup_window_does_not_consent_to_a_makeup() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = after_closing(&work);
+
+    let start = history().build().submission_start(
+        &work,
+        Some(pool(0)),
+        SubmissionKind::Regular,
+        shown_at,
+        shown_at + Duration::hours(1),
+    );
+
+    assert_eq!(consented(start), Some(false));
+}
+
+#[test]
+fn a_regular_button_shown_in_the_makeup_window_is_refused_after_its_end() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = after_closing(&work);
+
+    assert_eq!(
+        history().build().submission_start(
+            &work,
+            Some(pool(0)),
+            SubmissionKind::Regular,
+            shown_at,
+            makeup_window().until()
+        ),
+        Err(closed_at(&work, shown_at))
+    );
 }
 
 #[test]
@@ -574,7 +620,7 @@ fn a_regular_button_without_a_makeup_stays_regular_whenever_it_is_handled() {
         assert_eq!(
             history()
                 .build()
-                .submission_start(&work, None, shown_at, now),
+                .submission_start(&work, None, SubmissionKind::Regular, shown_at, now),
             Ok(SubmissionStart::Regular)
         );
     }
@@ -589,9 +635,13 @@ fn an_empty_pool_names_the_pool_instead_of_the_closed_deadline() {
     let shown_at = after_closing(&work);
 
     assert_eq!(
-        history()
-            .build()
-            .submission_start(&work, Some(pool(3)), shown_at, shown_at),
+        history().build().submission_start(
+            &work,
+            Some(pool(3)),
+            SubmissionKind::Makeup,
+            shown_at,
+            shown_at
+        ),
         Err(DomainError::MakeupAttemptsExhausted {
             allowed: 3,
             used: 3
@@ -600,27 +650,86 @@ fn an_empty_pool_names_the_pool_instead_of_the_closed_deadline() {
 }
 
 #[test]
-fn a_button_shown_before_the_makeup_was_reopened_does_not_open_the_new_pool() {
+fn a_button_shown_before_the_makeup_was_reopened_asks_for_consent_in_the_prompt() {
     let Fixture {
         teacher, course, ..
     } = fixture();
     let work = credit_assignment(&course, &teacher);
     let shown_at = after_closing(&work);
     let reopened_at = shown_at + Duration::days(1);
-    let reopened = CourseMakeup::open(makeup_window().until(), 3, reopened_at).unwrap();
-    let pool = MakeupPool {
-        course: reopened,
-        balance: reopened.balance(0, 0),
-    };
+
+    let start = history().build().submission_start(
+        &work,
+        Some(reopened_pool(reopened_at, 0)),
+        SubmissionKind::Makeup,
+        shown_at,
+        reopened_at + Duration::hours(1),
+    );
+
+    assert_eq!(consented(start), Some(false));
+}
+
+#[test]
+fn a_button_shown_before_the_makeup_was_reopened_names_the_spent_new_pool() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = after_closing(&work);
+    let reopened_at = shown_at + Duration::days(1);
 
     assert_eq!(
         history().build().submission_start(
             &work,
-            Some(pool),
+            Some(reopened_pool(reopened_at, 3)),
+            SubmissionKind::Makeup,
             shown_at,
             reopened_at + Duration::hours(1)
         ),
-        Err(closed_at(&work, shown_at))
+        Err(DomainError::MakeupAttemptsExhausted {
+            allowed: 3,
+            used: 3
+        })
+    );
+}
+
+#[test]
+fn a_regular_button_with_spent_attempts_asks_for_makeup_consent_after_closing() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+
+    let start = history().used(2).submissions(2).build().submission_start(
+        &work,
+        Some(pool(0)),
+        SubmissionKind::Regular,
+        work.closes_at() - Duration::hours(1),
+        after_closing(&work),
+    );
+
+    assert_eq!(consented(start), Some(false));
+}
+
+#[test]
+fn a_regular_button_with_spent_attempts_names_them_without_a_makeup() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+
+    assert_eq!(
+        history().used(2).submissions(2).build().submission_start(
+            &work,
+            None,
+            SubmissionKind::Regular,
+            work.closes_at() - Duration::hours(1),
+            after_closing(&work)
+        ),
+        Err(DomainError::AttemptsExhausted {
+            allowed: 2,
+            used: 2
+        })
     );
 }
 

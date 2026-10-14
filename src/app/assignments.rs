@@ -13,7 +13,7 @@ use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
     MakeupOffer, MakeupPool, MakeupTerms, NewAssignment, StoredFileMetadata,
     StudentAssignmentProgress, StudentGroupId, Subject, Submission, SubmissionHistory,
-    SubmissionStart, TeachingCourse, TeachingCourseId, User, UserId,
+    SubmissionKind, SubmissionStart, TeachingCourse, TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{AssignmentStudentSummary, VersionedAssignment};
@@ -85,12 +85,13 @@ impl StudentAssignment {
 
     pub fn submission_start(
         &self,
+        button: SubmissionKind,
         shown_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> AppResult<SubmissionStart> {
         Ok(self
             .history
-            .submission_start(&self.assignment, self.pool, shown_at, now)?)
+            .submission_start(&self.assignment, self.pool, button, shown_at, now)?)
     }
 }
 

@@ -23,7 +23,7 @@ use crate::bot::timezone::BotTimezone;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom, Grading,
     ReviewDecision, Role, StoredFileMetadata, StudentGroup, StudentGroupId, SubmissionId,
-    TeachingCourseId, UserId,
+    SubmissionKind, TeachingCourseId, UserId,
 };
 
 type Row = Vec<InlineKeyboardButton>;
@@ -177,7 +177,7 @@ pub(crate) fn student_assignments_keyboard(
 pub(crate) fn student_assignment_keyboard(
     assignment: &Assignment,
     history: bool,
-    submit: Option<&str>,
+    submit: Option<SubmissionKind>,
 ) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     if history {
@@ -186,10 +186,14 @@ pub(crate) fn student_assignment_keyboard(
             PageTarget::History(assignment.id()).callback(0),
         ));
     }
-    if let Some(label) = submit {
+    if let Some(button) = submit {
+        let label = match button {
+            SubmissionKind::Regular => texts::BUTTON_SUBMIT,
+            SubmissionKind::Makeup => texts::BUTTON_SUBMIT_MAKEUP,
+        };
         rows.push(row(
             label,
-            ReplayableAction::StartSubmission(assignment.id()).callback(),
+            ReplayableAction::StartSubmission(assignment.id(), button).callback(),
         ));
     }
     let (back_label, back_target) = if assignment.status() == AssignmentStatus::Archived {

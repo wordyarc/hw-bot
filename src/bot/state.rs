@@ -51,7 +51,7 @@ impl BotState {
             ) => *course_id == started,
             (
                 Self::Flow(FlowState::AwaitingSubmission { assignment_id, .. }),
-                ReplayableAction::StartSubmission(started),
+                ReplayableAction::StartSubmission(started, _),
             ) => *assignment_id == started,
             _ => false,
         }
@@ -452,15 +452,15 @@ pub(super) enum ScreenState {
 pub(super) enum MakeupConsent {
     Withheld,
     Given,
-    PromptedAt(DateTime<Utc>),
+    Prompted(MessageId),
 }
 
 impl MakeupConsent {
-    pub fn covers(self, sent_at: DateTime<Utc>) -> bool {
+    pub fn covers(self, work: MessageId) -> bool {
         match self {
             Self::Withheld => false,
             Self::Given => true,
-            Self::PromptedAt(prompted_at) => sent_at >= prompted_at,
+            Self::Prompted(prompt) => work.0 > prompt.0,
         }
     }
 }

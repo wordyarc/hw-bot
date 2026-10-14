@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::MakeupQuestion;
 use crate::bot::assignment_form::AssignmentTerms;
-use crate::domain::DeductedFrom;
+use crate::domain::{DeductedFrom, SubmissionKind};
 use crate::test_support::{invite_codec, t0};
 
 fn invite() -> VerifiedInvite {
@@ -209,17 +209,12 @@ fn bulk_review_requires_the_current_sandbox_screen() {
 
 #[test]
 fn a_makeup_prompt_covers_only_work_sent_after_it() {
-    let prompted_at = t0();
+    let prompt = MessageId(20);
 
-    assert!(MakeupConsent::PromptedAt(prompted_at).covers(prompted_at));
-    assert!(
-        MakeupConsent::PromptedAt(prompted_at).covers(prompted_at + chrono::Duration::seconds(1))
-    );
-    assert!(
-        !MakeupConsent::PromptedAt(prompted_at).covers(prompted_at - chrono::Duration::seconds(1))
-    );
-    assert!(MakeupConsent::Given.covers(prompted_at - chrono::Duration::days(1)));
-    assert!(!MakeupConsent::Withheld.covers(prompted_at));
+    assert!(MakeupConsent::Prompted(prompt).covers(MessageId(21)));
+    assert!(!MakeupConsent::Prompted(prompt).covers(MessageId(19)));
+    assert!(MakeupConsent::Given.covers(MessageId(1)));
+    assert!(!MakeupConsent::Withheld.covers(MessageId(21)));
 }
 
 #[test]
@@ -232,7 +227,11 @@ fn the_start_button_of_the_current_prompt_restarts_it() {
     });
 
     assert!(title.is_restarted_by(ReplayableAction::StartAssignmentCreation(course_id)));
-    assert!(submission.is_restarted_by(ReplayableAction::StartSubmission(assignment_id)));
+    for button in [SubmissionKind::Regular, SubmissionKind::Makeup] {
+        assert!(
+            submission.is_restarted_by(ReplayableAction::StartSubmission(assignment_id, button))
+        );
+    }
 }
 
 #[test]
@@ -249,10 +248,20 @@ fn a_start_button_of_another_target_or_flow_does_not_restart_the_prompt() {
             TeachingCourseId::new()
         ))
     );
-    assert!(!submission.is_restarted_by(ReplayableAction::StartSubmission(AssignmentId::new())));
+    assert!(
+        !submission.is_restarted_by(ReplayableAction::StartSubmission(
+            AssignmentId::new(),
+            SubmissionKind::Regular
+        ))
+    );
     assert!(!title.is_restarted_by(ReplayableAction::CourseInvite(course_id)));
     assert!(!submission.is_restarted_by(ReplayableAction::Assignment(assignment_id)));
-    assert!(!BotState::Idle.is_restarted_by(ReplayableAction::StartSubmission(assignment_id)));
+    assert!(
+        !BotState::Idle.is_restarted_by(ReplayableAction::StartSubmission(
+            assignment_id,
+            SubmissionKind::Regular
+        ))
+    );
 }
 
 #[test]

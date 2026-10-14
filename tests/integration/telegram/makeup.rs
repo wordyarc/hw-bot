@@ -678,7 +678,7 @@ async fn a_closed_assignment_with_makeup_prompts_and_confirms_with_the_remaining
     telegram
         .click_button(
             app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid()),
+            &cb(callbacks::SUBMIT_MAKEUP_PREFIX, closed.id().as_uuid()),
         )
         .await;
     telegram.message(app.student(), "pull/makeup");
@@ -712,13 +712,7 @@ async fn an_empty_pool_leaves_the_card_without_a_submit_button() {
     open_assignment(&app, &telegram, closed.id().as_uuid()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let submit = cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid());
-    assert!(
-        telegram
-            .messages(app.student())
-            .iter()
-            .all(|message| !callbacks_of(message).contains(&submit))
-    );
+    assert!(!offers_submission(&telegram, app.student(), &closed));
     assert!(
         telegram
             .texts(app.student())
@@ -740,13 +734,7 @@ async fn a_makeup_ended_by_the_bot_clock_leaves_a_closed_card_without_a_submit_b
     open_assignment(&app, &telegram, closed.id().as_uuid()).await;
     stop_bot(cancellation, &mut task).await;
 
-    let submit = cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid());
-    assert!(
-        telegram
-            .messages(app.student())
-            .iter()
-            .all(|message| !callbacks_of(message).contains(&submit))
-    );
+    assert!(!offers_submission(&telegram, app.student(), &closed));
 }
 
 #[tokio::test]
@@ -762,7 +750,7 @@ async fn an_old_makeup_button_names_the_spent_pool_instead_of_asking_for_work() 
     let submit = telegram
         .button(
             app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid()),
+            &cb(callbacks::SUBMIT_MAKEUP_PREFIX, closed.id().as_uuid()),
         )
         .await;
     makeup_of(&app, &spent, &app.fixture.student).await;
@@ -816,7 +804,7 @@ async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_k
     let makeup = telegram
         .button_after(
             app.student(),
-            &cb(callbacks::SUBMIT_PREFIX, work.id().as_uuid()),
+            &cb(callbacks::SUBMIT_MAKEUP_PREFIX, work.id().as_uuid()),
             submit.message_id,
         )
         .await;
@@ -847,24 +835,32 @@ fn whole_seconds(at: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp(at.timestamp(), 0).unwrap()
 }
 
+const CARD_MESSAGE_ID: i32 = 10;
+const PROMPT_MESSAGE_ID: i32 = 20;
+const BEFORE_PROMPT: i32 = PROMPT_MESSAGE_ID - 1;
+const AFTER_PROMPT: i32 = PROMPT_MESSAGE_ID + 1;
+
 async fn work_handled_late(
     app: &TestApp,
     assignment: &Assignment,
+    button: &str,
     shown_at: DateTime<Utc>,
+    work_message_id: i32,
     sent_at: DateTime<Utc>,
     handled_at: DateTime<Utc>,
-) -> Option<Submission> {
+) -> (Option<Submission>, Vec<String>) {
     let mut press = callback_update(
         1,
         app.student(),
-        &cb(callbacks::SUBMIT_PREFIX, assignment.id().as_uuid()),
-        BOT_MESSAGE_ID,
+        &cb(button, assignment.id().as_uuid()),
+        CARD_MESSAGE_ID,
     );
     press["callback_query"]["message"]["date"] = json!(shown_at.timestamp());
-    let mut work = message_update(2, app.student(), 2, "pull/late");
+    let mut work = message_update(2, app.student(), work_message_id, "pull/late");
     work["message"]["date"] = json!(sent_at.timestamp());
     let telegram = telegram_server(vec![press, work]).await;
     let mut sent = telegram_message_body();
+    sent["result"]["message_id"] = json!(PROMPT_MESSAGE_ID);
     sent["result"]["date"] = json!(handled_at.timestamp());
     Mock::given(method("POST"))
         .and(path("/bottest-token/SendMessage"))
@@ -878,9 +874,17 @@ async fn work_handled_late(
 
     wait_for_sent_message_count(&telegram, 2).await;
     stop_bot(cancellation, &mut task).await;
-    db::submissions::latest_for_student(&app.pool, assignment.id(), app.fixture.student.id())
+    let submission =
+        db::submissions::latest_for_student(&app.pool, assignment.id(), app.fixture.student.id())
+            .await
+            .unwrap();
+    (submission, sent_texts(&telegram).await)
+}
+
+async fn closing_in_an_hour(app: &TestApp) -> Assignment {
+    let closes_at = whole_seconds(Utc::now() + Duration::hours(1));
+    app.add_makeup_assignment("Closing", ten(), credit(6), closes_at)
         .await
-        .unwrap()
 }
 
 #[tokio::test]
@@ -890,33 +894,45 @@ async fn a_makeup_button_pressed_before_the_end_keeps_work_handled_after_it() {
     let until = open_makeup(&app, 2).await.until();
     let sent_at = whole_seconds(until - Duration::seconds(5));
 
-    let submission = work_handled_late(
+    let (submission, sent) = work_handled_late(
         &app,
         &closed,
+        callbacks::SUBMIT_MAKEUP_PREFIX,
         whole_seconds(until - Duration::seconds(10)),
+        BEFORE_PROMPT,
         sent_at,
         until + Duration::minutes(1),
     )
-    .await
-    .expect("work sent before the end is stored");
+    .await;
+    let submission = submission.expect("work sent before the end is stored");
 
     assert_eq!(submission.kind(), SubmissionKind::Makeup);
     assert_eq!(submission.submitted_at(), sent_at);
+    let terms = texts::makeup_credit_text(Some((6, 10)));
+    let closed_since = vladivostok().format_closed_since(until);
+    assert!(
+        sent.contains(&texts::input_prompt(&texts::closed_makeup_prompt(
+            &terms,
+            2,
+            &closed_since
+        ))),
+        "{sent:#?}"
+    );
 }
 
 #[tokio::test]
 async fn work_sent_before_the_makeup_prompt_does_not_spend_the_pool() {
     let app = TestApp::start().await;
-    let closes_at = whole_seconds(Utc::now() + Duration::hours(1));
-    let work = app
-        .add_makeup_assignment("Closing", ten(), credit(6), closes_at)
-        .await;
+    let work = closing_in_an_hour(&app).await;
     open_makeup(&app, 2).await;
+    let closes_at = work.closes_at();
 
-    let submission = work_handled_late(
+    let (submission, sent) = work_handled_late(
         &app,
         &work,
+        callbacks::SUBMIT_PREFIX,
         closes_at - Duration::seconds(10),
+        BEFORE_PROMPT,
         closes_at + Duration::seconds(5),
         closes_at + Duration::minutes(1),
     )
@@ -924,6 +940,124 @@ async fn work_sent_before_the_makeup_prompt_does_not_spend_the_pool() {
 
     assert!(submission.is_none(), "{submission:#?}");
     assert_eq!(pool_balance(&app).await, (2, 2));
+    let terms = texts::makeup_credit_text(Some((6, 10)));
+    assert!(
+        sent.contains(&texts::input_prompt(&texts::makeup_prompt(&terms, 2))),
+        "{sent:#?}"
+    );
+    assert!(
+        sent.contains(&app_error_message(ErrorCode::DeadlineExceeded).to_owned()),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn work_sent_after_the_makeup_prompt_spends_the_pool() {
+    let app = TestApp::start().await;
+    let work = closing_in_an_hour(&app).await;
+    open_makeup(&app, 2).await;
+    let handled_at = work.closes_at() + Duration::minutes(1);
+
+    let (submission, _) = work_handled_late(
+        &app,
+        &work,
+        callbacks::SUBMIT_PREFIX,
+        work.closes_at() - Duration::seconds(10),
+        AFTER_PROMPT,
+        handled_at + Duration::seconds(5),
+        handled_at,
+    )
+    .await;
+
+    assert_eq!(
+        submission.map(|submission| submission.kind()),
+        Some(SubmissionKind::Makeup)
+    );
+    assert_eq!(pool_balance(&app).await, (1, 2));
+}
+
+#[tokio::test]
+async fn work_sent_in_the_second_of_the_makeup_prompt_but_before_it_does_not_spend_the_pool() {
+    let app = TestApp::start().await;
+    let work = closing_in_an_hour(&app).await;
+    open_makeup(&app, 2).await;
+    let handled_at = work.closes_at() + Duration::minutes(1);
+
+    let (submission, _) = work_handled_late(
+        &app,
+        &work,
+        callbacks::SUBMIT_PREFIX,
+        work.closes_at() - Duration::seconds(10),
+        BEFORE_PROMPT,
+        handled_at,
+        handled_at,
+    )
+    .await;
+
+    assert!(submission.is_none(), "{submission:#?}");
+    assert_eq!(pool_balance(&app).await, (2, 2));
+}
+
+#[tokio::test]
+async fn a_regular_button_does_not_consent_to_a_makeup_open_on_its_date() {
+    let app = TestApp::start().await;
+    let work = closing_in_an_hour(&app).await;
+    open_makeup(&app, 2).await;
+    let shown_at = work.closes_at() + Duration::seconds(10);
+
+    let (submission, _) = work_handled_late(
+        &app,
+        &work,
+        callbacks::SUBMIT_PREFIX,
+        shown_at,
+        BEFORE_PROMPT,
+        shown_at + Duration::seconds(5),
+        shown_at + Duration::minutes(1),
+    )
+    .await;
+
+    assert!(submission.is_none(), "{submission:#?}");
+    assert_eq!(pool_balance(&app).await, (2, 2));
+}
+
+#[tokio::test]
+async fn a_submit_button_handled_after_closing_says_only_earlier_work_is_accepted() {
+    let app = TestApp::start().await;
+    let work = closing_in_an_hour(&app).await;
+    let closes_at = work.closes_at();
+
+    let (submission, sent) = work_handled_late(
+        &app,
+        &work,
+        callbacks::SUBMIT_PREFIX,
+        closes_at - Duration::seconds(10),
+        BEFORE_PROMPT,
+        closes_at - Duration::seconds(5),
+        closes_at + Duration::minutes(1),
+    )
+    .await;
+
+    assert_eq!(
+        submission.map(|submission| submission.kind()),
+        Some(SubmissionKind::Regular)
+    );
+    let closed_since = vladivostok().format_closed_since(closes_at);
+    assert!(
+        sent.contains(&texts::input_prompt(&texts::closed_submission_prompt(
+            &closed_since
+        ))),
+        "{sent:#?}"
+    );
+}
+
+fn offers_submission(telegram: &TelegramScenario, user: i64, assignment: &Assignment) -> bool {
+    let buttons = [callbacks::SUBMIT_PREFIX, callbacks::SUBMIT_MAKEUP_PREFIX]
+        .map(|prefix| cb(prefix, assignment.id().as_uuid()));
+    telegram
+        .messages(user)
+        .iter()
+        .flat_map(callbacks_of)
+        .any(|callback| buttons.contains(&callback))
 }
 
 async fn spend_the_whole_pool(app: &TestApp, attempts: u16) {

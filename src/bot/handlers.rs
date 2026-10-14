@@ -499,8 +499,8 @@ async fn handle_replayable_action(
                 .await?;
             screen.ask(texts::ASSIGNMENT_TITLE_PROMPT).await
         }
-        ReplayableAction::StartSubmission(assignment_id) => {
-            student::start_submission(screen, assignment_id, shown_at).await
+        ReplayableAction::StartSubmission(assignment_id, button) => {
+            student::start_submission(screen, assignment_id, button, shown_at).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await
@@ -769,7 +769,7 @@ mod tests {
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
-            StoredFileMetadata, StoredFileOwner, StoredFileParts,
+            StoredFileMetadata, StoredFileOwner, StoredFileParts, SubmissionKind,
         };
         use crate::test_support::{
             assignment, course_for, history, student, student_group, subject, teacher,
@@ -859,7 +859,8 @@ mod tests {
                 1,
                 Some(2),
             ),
-            student_assignment_keyboard(&assignment, true, Some(texts::BUTTON_SUBMIT)),
+            student_assignment_keyboard(&assignment, true, Some(SubmissionKind::Regular)),
+            student_assignment_keyboard(&assignment, false, Some(SubmissionKind::Makeup)),
             student_assignment_keyboard(&archived, false, None),
             reopen_assignment_keyboard(assignment.id()),
             submission_history_keyboard(assignment.id(), 1, Some(2)),

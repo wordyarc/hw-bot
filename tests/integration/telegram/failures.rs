@@ -45,9 +45,10 @@ fn offers_submission(telegram: &TelegramScenario, user: i64) -> bool {
                 rows.iter()
                     .flat_map(|row| row.as_array().unwrap())
                     .any(|button| {
-                        button["callback_data"]
-                            .as_str()
-                            .is_some_and(|data| data.starts_with(callbacks::SUBMIT_PREFIX))
+                        button["callback_data"].as_str().is_some_and(|data| {
+                            data.starts_with(callbacks::SUBMIT_PREFIX)
+                                || data.starts_with(callbacks::SUBMIT_MAKEUP_PREFIX)
+                        })
                     })
             })
     })

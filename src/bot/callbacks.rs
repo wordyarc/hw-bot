@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::handlers::input::parse_u16;
 use crate::domain::{
     AssignmentId, DeductedFrom, DomainResult, Grading, MakeupTerms, ReviewDecision, StudentGroupId,
-    SubmissionId, TeachingCourseId, UserId,
+    SubmissionId, SubmissionKind, TeachingCourseId, UserId,
 };
 
 use CallbackAction::{Flow, Informational, Replayable, Screen};
@@ -26,6 +26,7 @@ pub const ASSIGNMENT_PREFIX: &str = "assignment:";
 pub const MANAGE_PREFIX: &str = "manage:";
 pub const CREATE_PREFIX: &str = "create:";
 pub const SUBMIT_PREFIX: &str = "submit:";
+pub const SUBMIT_MAKEUP_PREFIX: &str = "submit-makeup:";
 pub const FILES_PREFIX: &str = "files:";
 pub const ATTEMPTS_PREFIX: &str = "attempts:";
 pub const INVITE_PREFIX: &str = "invite:";
@@ -179,7 +180,7 @@ pub(super) enum ReplayableAction {
     Assignment(AssignmentId),
     ManageAssignment(AssignmentId),
     StartAssignmentCreation(TeachingCourseId),
-    StartSubmission(AssignmentId),
+    StartSubmission(AssignmentId, SubmissionKind),
     AssignmentFiles(AssignmentId),
     CourseInvite(TeachingCourseId),
     GradebookGroups(TeachingCourseId),
@@ -205,7 +206,12 @@ impl ReplayableAction {
             Self::Assignment(id) => format!("{ASSIGNMENT_PREFIX}{}", id.as_uuid()),
             Self::ManageAssignment(id) => format!("{MANAGE_PREFIX}{}", id.as_uuid()),
             Self::StartAssignmentCreation(id) => format!("{CREATE_PREFIX}{}", id.as_uuid()),
-            Self::StartSubmission(id) => format!("{SUBMIT_PREFIX}{}", id.as_uuid()),
+            Self::StartSubmission(id, SubmissionKind::Regular) => {
+                format!("{SUBMIT_PREFIX}{}", id.as_uuid())
+            }
+            Self::StartSubmission(id, SubmissionKind::Makeup) => {
+                format!("{SUBMIT_MAKEUP_PREFIX}{}", id.as_uuid())
+            }
             Self::AssignmentFiles(id) => format!("{FILES_PREFIX}{}", id.as_uuid()),
             Self::CourseInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
             Self::GradebookGroups(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
@@ -644,9 +650,16 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         ))
     }),
     (SUBMIT_PREFIX, |id| {
-        Replayable(ReplayableAction::StartSubmission(AssignmentId::from_uuid(
-            id,
-        )))
+        Replayable(ReplayableAction::StartSubmission(
+            AssignmentId::from_uuid(id),
+            SubmissionKind::Regular,
+        ))
+    }),
+    (SUBMIT_MAKEUP_PREFIX, |id| {
+        Replayable(ReplayableAction::StartSubmission(
+            AssignmentId::from_uuid(id),
+            SubmissionKind::Makeup,
+        ))
     }),
     (FILES_PREFIX, |id| {
         Replayable(ReplayableAction::AssignmentFiles(AssignmentId::from_uuid(
@@ -1008,8 +1021,10 @@ mod tests {
                 Replayable(ReplayableAction::ManageAssignment(assignment)),
             Replayable(ReplayableAction::StartAssignmentCreation(_)) =>
                 Replayable(ReplayableAction::StartAssignmentCreation(course)),
-            Replayable(ReplayableAction::StartSubmission(_)) =>
-                Replayable(ReplayableAction::StartSubmission(assignment)),
+            Replayable(ReplayableAction::StartSubmission(_, SubmissionKind::Regular)) =>
+                Replayable(ReplayableAction::StartSubmission(assignment, SubmissionKind::Regular)),
+            Replayable(ReplayableAction::StartSubmission(_, SubmissionKind::Makeup)) =>
+                Replayable(ReplayableAction::StartSubmission(assignment, SubmissionKind::Makeup)),
             Replayable(ReplayableAction::AssignmentFiles(_)) =>
                 Replayable(ReplayableAction::AssignmentFiles(assignment)),
             Replayable(ReplayableAction::CourseInvite(_)) =>

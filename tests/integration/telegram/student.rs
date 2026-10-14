@@ -98,11 +98,10 @@ async fn student_opens_a_previously_published_assignment_from_the_archive() {
             .iter()
             .any(|callback| callback == callbacks::MENU_ARCHIVE)
     );
-    assert!(
-        !callbacks
-            .iter()
-            .any(|callback| callback.starts_with(callbacks::SUBMIT_PREFIX))
-    );
+    assert!(!callbacks.iter().any(|callback| {
+        callback.starts_with(callbacks::SUBMIT_PREFIX)
+            || callback.starts_with(callbacks::SUBMIT_MAKEUP_PREFIX)
+    }));
 }
 
 #[tokio::test]

@@ -45,6 +45,13 @@ struct State {
     acknowledged_offset: u64,
 }
 
+impl State {
+    fn next_message_id(&mut self) -> i32 {
+        self.next_message += 1;
+        self.next_message
+    }
+}
+
 pub struct TelegramScenario {
     pub server: MockServer,
     state: Arc<Mutex<State>>,
@@ -157,9 +164,8 @@ impl TelegramScenario {
                     }));
                 }
                 let mut state = messages.lock().unwrap();
-                state.next_message += 1;
                 let message = json!({
-                    "message_id": state.next_message, "date": Utc::now().timestamp(),
+                    "message_id": state.next_message_id(), "date": Utc::now().timestamp(),
                     "chat": {"id": body["chat_id"], "type": "private"},
                     "from": {"id": 999, "is_bot": true, "first_name": "Test Bot"},
                     "text": body["text"], "reply_markup": body["reply_markup"],
@@ -210,15 +216,17 @@ impl TelegramScenario {
     pub fn message(&self, user: i64, text: &str) {
         let mut state = self.state.lock().unwrap();
         let id = state.updates.len() as u32 + 1;
+        let message_id = state.next_message_id();
         state
             .updates
-            .push(message_update(id, user, id as i32, text));
+            .push(message_update(id, user, message_id, text));
     }
 
     pub fn message_with(&self, user: i64, fields: Value) {
         let mut state = self.state.lock().unwrap();
         let id = state.updates.len() as u32 + 1;
-        let mut update = message_update(id, user, id as i32, "");
+        let message_id = state.next_message_id();
+        let mut update = message_update(id, user, message_id, "");
         let message = update["message"].as_object_mut().unwrap();
         message.remove("text");
         message.extend(fields.as_object().unwrap().clone());
@@ -228,8 +236,9 @@ impl TelegramScenario {
     pub fn document(&self, user: i64, file_id: &str, filename: &str, size: usize) {
         let mut state = self.state.lock().unwrap();
         let id = state.updates.len() as u32 + 1;
+        let message_id = state.next_message_id();
         state.updates.push(document_update(
-            id, user, id as i32, file_id, filename, size,
+            id, user, message_id, file_id, filename, size,
         ));
     }
 

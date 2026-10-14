@@ -838,12 +838,31 @@ pub fn card_makeup_attempts(remaining: u16, allowed: u16) -> String {
     format!("Осталось попыток досдачи по предмету: {remaining} из {allowed}.")
 }
 
-pub fn makeup_prompt(terms: &str, remaining: u16) -> String {
-    let spend = match remaining {
+fn makeup_spend(remaining: u16) -> String {
+    match remaining {
         1 => "последнюю попытку досдачи по предмету".to_owned(),
         _ => format!("одну из {remaining} оставшихся попыток досдачи по предмету"),
-    };
-    format!("Это досдача: она {terms} и потратит {spend}.\n\n{SUBMISSION_PROMPT}")
+    }
+}
+
+pub fn makeup_prompt(terms: &str, remaining: u16) -> String {
+    format!(
+        "Это досдача: она {terms} и потратит {}.\n\n{SUBMISSION_PROMPT}",
+        makeup_spend(remaining)
+    )
+}
+
+pub fn closed_submission_prompt(closed_since: &str) -> String {
+    format!(
+        "{CLOSED_ON} {closed_since}. Если вы отправили работу до закрытия, бот её примет. Новую работу отправить уже нельзя."
+    )
+}
+
+pub fn closed_makeup_prompt(terms: &str, remaining: u16, closed_since: &str) -> String {
+    format!(
+        "Досдача по предмету закрыта {closed_since}. Если вы отправили работу до этого, бот примет её досдачей: она {terms} и потратит {}. Новую работу отправить уже нельзя.",
+        makeup_spend(remaining)
+    )
 }
 
 pub fn makeup_queued(remaining: u16) -> String {

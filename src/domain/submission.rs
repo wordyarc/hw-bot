@@ -114,32 +114,37 @@ impl SubmissionHistory {
         self,
         assignment: &Assignment,
         pool: Option<MakeupPool>,
+        button: SubmissionKind,
         shown_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> DomainResult<SubmissionStart> {
         let offer_at = |at| {
             pool.and_then(|pool| self.makeup_offer_at(assignment, at, pool.course, pool.balance))
         };
-        let shown = offer_at(shown_at);
+        let shown = offer_at(shown_at).filter(|_| button == SubmissionKind::Makeup);
         if let Some(offer) = shown.filter(MakeupOffer::has_attempts) {
             return Ok(SubmissionStart::Makeup {
                 offer,
-                offered_when_shown: true,
+                consented: true,
             });
         }
-        if let Err(refused) = self.ensure_regular_attempt(assignment, shown_at) {
-            return Err(shown
-                .and_then(|offer| offer.balance.ensure_available().err())
-                .unwrap_or(refused));
+        let regular = self.ensure_regular_attempt(assignment, shown_at);
+        let current = offer_at(now);
+        if let Some(offer) = current.filter(MakeupOffer::has_attempts) {
+            return Ok(SubmissionStart::Makeup {
+                offer,
+                consented: false,
+            });
         }
 
-        Ok(match offer_at(now).filter(MakeupOffer::has_attempts) {
-            Some(offer) => SubmissionStart::Makeup {
-                offer,
-                offered_when_shown: false,
-            },
-            None => SubmissionStart::Regular,
-        })
+        regular
+            .map(|()| SubmissionStart::Regular)
+            .map_err(|refused| {
+                shown
+                    .or(current)
+                    .and_then(|offer| offer.balance.ensure_available().err())
+                    .unwrap_or(refused)
+            })
     }
 
     fn ensure_admits(self, assignment: &Assignment, acceptance: Acceptance) -> DomainResult<()> {
@@ -192,10 +197,7 @@ impl SubmissionHistory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubmissionStart {
     Regular,
-    Makeup {
-        offer: MakeupOffer,
-        offered_when_shown: bool,
-    },
+    Makeup { offer: MakeupOffer, consented: bool },
 }
 
 str_enum! {

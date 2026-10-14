@@ -16,7 +16,8 @@ use crate::bot::views::{
     student_grading_lines, student_keyboard, student_menu, submission_history_keyboard,
 };
 use crate::domain::{
-    AssignmentId, MakeupOffer, StoredFileMetadata, Submission, SubmissionStart, USER_TEXT_MAX_LEN,
+    AssignmentId, MakeupOffer, StoredFileMetadata, Submission, SubmissionKind, SubmissionStart,
+    USER_TEXT_MAX_LEN,
 };
 use crate::pagination::{Page, PageRequest};
 
@@ -216,11 +217,11 @@ pub(super) async fn show_assignment(
     }
 
     let submit = if history.accepts_new_attempt_for(assignment, now) {
-        Some(texts::BUTTON_SUBMIT)
+        Some(SubmissionKind::Regular)
     } else {
         makeup
             .filter(MakeupOffer::has_attempts)
-            .map(|_| texts::BUTTON_SUBMIT_MAKEUP)
+            .map(|_| SubmissionKind::Makeup)
     };
     let keyboard =
         student_assignment_keyboard(assignment, details.latest_submission.is_some(), submit);
@@ -321,8 +322,10 @@ pub(super) async fn show_history(
 pub(super) async fn start_submission(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
+    button: SubmissionKind,
     shown_at: DateTime<Utc>,
 ) -> HandlerResult {
+    let now = screen.now();
     let started = screen
         .services()
         .assignments
@@ -330,7 +333,7 @@ pub(super) async fn start_submission(
         .await
         .and_then(|details| {
             let item = details.assignment;
-            item.submission_start(shown_at, screen.now())
+            item.submission_start(button, shown_at, now)
                 .map(|start| (item, start))
         });
     let (item, start) = match started {
@@ -340,22 +343,36 @@ pub(super) async fn start_submission(
             return send_with_menu(screen.chat(), app_error_message(error.code())).await;
         }
     };
+    let timezone = screen.timezone();
     let makeup = match start {
         SubmissionStart::Regular => {
-            screen.ask(texts::SUBMISSION_PROMPT).await?;
+            let prompt = if item.history.accepts_new_attempt_for(&item.assignment, now) {
+                texts::SUBMISSION_PROMPT.to_owned()
+            } else {
+                texts::closed_submission_prompt(
+                    &timezone.format_closed_since(item.assignment.closes_at()),
+                )
+            };
+            screen.ask(&prompt).await?;
             MakeupConsent::Withheld
         }
-        SubmissionStart::Makeup {
-            offer,
-            offered_when_shown,
-        } => {
+        SubmissionStart::Makeup { offer, consented } => {
             let terms = makeup_credit_terms(offer.credit, item.assignment.grading());
-            let prompt = texts::makeup_prompt(&terms, offer.balance.remaining());
-            let prompted_at = screen.chat().ask_dated(&prompt).await?;
-            if offered_when_shown {
+            let remaining = offer.balance.remaining();
+            let prompt = if item.makeup_offer_at(now).is_some() {
+                texts::makeup_prompt(&terms, remaining)
+            } else {
+                texts::closed_makeup_prompt(
+                    &terms,
+                    remaining,
+                    &timezone.format_closed_since(offer.until),
+                )
+            };
+            let prompted = screen.chat().ask_message(&prompt).await?;
+            if consented {
                 MakeupConsent::Given
             } else {
-                MakeupConsent::PromptedAt(prompted_at)
+                MakeupConsent::Prompted(prompted)
             }
         }
     };
@@ -395,7 +412,7 @@ pub(super) async fn submit_homework_text(
             actor: screen.actor(),
             content: text.into_owned(),
             submitted_at: step.message().date,
-            allow_makeup: makeup.covers(step.message().date),
+            allow_makeup: makeup.covers(step.message().id),
         })
         .await;
     let submitted = match submitted {

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use teloxide::types::{ChatId, Message};
+use teloxide::types::{ChatId, Message, MessageId};
 
 use super::Bot;
 use super::HandlerResult;
@@ -92,8 +92,8 @@ impl<'a> Chat<'a> {
         super::views::ask_input(self.bot, self.chat_id, prompt).await
     }
 
-    pub async fn ask_dated(self, prompt: &str) -> HandlerResult<DateTime<Utc>> {
-        super::views::ask_input_dated(self.bot, self.chat_id, prompt).await
+    pub async fn ask_message(self, prompt: &str) -> HandlerResult<MessageId> {
+        super::views::ask_input_message(self.bot, self.chat_id, prompt).await
     }
 
     pub async fn fail(self, error: AppError) -> HandlerResult {
