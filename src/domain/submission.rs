@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::{
     Acceptance, Assignment, AssignmentId, CourseMakeup, DeductedFrom, DomainError, DomainResult,
-    LatePenalty, MAX_ATTEMPTS, MAX_SCORE, MakeupBalance, MakeupOffer, MakeupRequest,
+    LatePenalty, MAX_ATTEMPTS, MAX_SCORE, MakeupBalance, MakeupOffer, MakeupPool, MakeupRequest,
     NonEmptyString, SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
@@ -110,6 +110,38 @@ impl SubmissionHistory {
         })
     }
 
+    pub fn submission_start(
+        self,
+        assignment: &Assignment,
+        pool: Option<MakeupPool>,
+        shown_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> DomainResult<SubmissionStart> {
+        let offer_at = |at| {
+            pool.and_then(|pool| self.makeup_offer_at(assignment, at, pool.course, pool.balance))
+        };
+        let shown = offer_at(shown_at);
+        if let Some(offer) = shown.filter(MakeupOffer::has_attempts) {
+            return Ok(SubmissionStart::Makeup {
+                offer,
+                offered_when_shown: true,
+            });
+        }
+        if let Err(refused) = self.ensure_regular_attempt(assignment, shown_at) {
+            return Err(shown
+                .and_then(|offer| offer.balance.ensure_available().err())
+                .unwrap_or(refused));
+        }
+
+        Ok(match offer_at(now).filter(MakeupOffer::has_attempts) {
+            Some(offer) => SubmissionStart::Makeup {
+                offer,
+                offered_when_shown: false,
+            },
+            None => SubmissionStart::Regular,
+        })
+    }
+
     fn ensure_admits(self, assignment: &Assignment, acceptance: Acceptance) -> DomainResult<()> {
         if self.closed_for(acceptance) {
             return Err(DomainError::SubmissionAlreadyAccepted);
@@ -155,6 +187,15 @@ impl SubmissionHistory {
                 max: MAX_ATTEMPTS,
             })
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmissionStart {
+    Regular,
+    Makeup {
+        offer: MakeupOffer,
+        offered_when_shown: bool,
+    },
 }
 
 str_enum! {

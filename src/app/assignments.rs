@@ -11,12 +11,12 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    MakeupOffer, MakeupTerms, NewAssignment, StoredFileMetadata, StudentAssignmentProgress,
-    StudentGroupId, Subject, Submission, SubmissionHistory, TeachingCourse, TeachingCourseId, User,
-    UserId,
+    MakeupOffer, MakeupPool, MakeupTerms, NewAssignment, StoredFileMetadata,
+    StudentAssignmentProgress, StudentGroupId, Subject, Submission, SubmissionHistory,
+    SubmissionStart, TeachingCourse, TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::{AssignmentStudentSummary, MakeupPool, VersionedAssignment};
+use crate::read_models::{AssignmentStudentSummary, VersionedAssignment};
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
@@ -73,17 +73,25 @@ pub struct StudentAssignment {
     pub assignment: Assignment,
     pub subject: Subject,
     pub history: SubmissionHistory,
-    pub makeup: Option<MakeupOffer>,
+    pub pool: Option<MakeupPool>,
 }
 
-fn makeup_offer(
-    assignment: &Assignment,
-    history: SubmissionHistory,
-    pool: Option<MakeupPool>,
-    at: DateTime<Utc>,
-) -> Option<MakeupOffer> {
-    let pool = pool?;
-    history.makeup_offer_at(assignment, at, pool.course, pool.balance)
+impl StudentAssignment {
+    pub fn makeup_offer_at(&self, at: DateTime<Utc>) -> Option<MakeupOffer> {
+        let pool = self.pool?;
+        self.history
+            .makeup_offer_at(&self.assignment, at, pool.course, pool.balance)
+    }
+
+    pub fn submission_start(
+        &self,
+        shown_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<SubmissionStart> {
+        Ok(self
+            .history
+            .submission_start(&self.assignment, self.pool, shown_at, now)?)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -252,9 +260,8 @@ impl AssignmentService {
         &self,
         actor: Actor,
         page: PageRequest,
-        now: DateTime<Utc>,
     ) -> AppResult<Page<StudentAssignment>> {
-        self.list_for_group(actor, page, now, |group_id| {
+        self.list_for_group(actor, page, |group_id| {
             db::assignments::list_published_for_group(&self.pool, group_id, page)
         })
         .await
@@ -264,9 +271,8 @@ impl AssignmentService {
         &self,
         actor: Actor,
         page: PageRequest,
-        now: DateTime<Utc>,
     ) -> AppResult<Page<StudentAssignment>> {
-        self.list_for_group(actor, page, now, |group_id| {
+        self.list_for_group(actor, page, |group_id| {
             db::assignments::list_archived_for_group(&self.pool, group_id, page)
         })
         .await
@@ -276,7 +282,6 @@ impl AssignmentService {
         &self,
         actor: Actor,
         page: PageRequest,
-        now: DateTime<Utc>,
         fetch: impl FnOnce(StudentGroupId) -> F,
     ) -> AppResult<Page<StudentAssignment>>
     where
@@ -286,7 +291,7 @@ impl AssignmentService {
         let group_id = student.student_group_id().required("student group")?;
 
         let assignments = fetch(group_id).await?;
-        self.with_student_histories(assignments, student.id(), now)
+        self.with_student_histories(assignments, student.id())
             .await
             .map(|items| Page::from_rows(items, page))
     }
@@ -295,7 +300,6 @@ impl AssignmentService {
         &self,
         cards: Vec<db::assignments::StudentAssignmentCard>,
         student_id: UserId,
-        now: DateTime<Utc>,
     ) -> AppResult<Vec<StudentAssignment>> {
         let ids: Vec<_> = cards
             .iter()
@@ -314,9 +318,8 @@ impl AssignmentService {
             .into_iter()
             .map(|card| {
                 let history = histories.remove(&card.assignment.id()).unwrap_or_default();
-                let pool = pools.get(&card.assignment.teaching_course_id()).copied();
                 StudentAssignment {
-                    makeup: makeup_offer(&card.assignment, history, pool, now),
+                    pool: pools.get(&card.assignment.teaching_course_id()).copied(),
                     history,
                     assignment: card.assignment,
                     subject: card.subject,
@@ -329,7 +332,6 @@ impl AssignmentService {
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
-        now: DateTime<Utc>,
     ) -> AppResult<StudentAssignmentDetails> {
         let (student, assignment) =
             load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
@@ -352,7 +354,7 @@ impl AssignmentService {
 
         Ok(StudentAssignmentDetails {
             assignment: StudentAssignment {
-                makeup: makeup_offer(&assignment, history, pool, now),
+                pool,
                 assignment,
                 subject,
                 history,

@@ -3,19 +3,21 @@ use teloxide::payloads::SendMessageSetters;
 
 use super::input::require_text_within;
 use super::reset_dialogue;
-use crate::app::{AppError, ErrorCode, StudentAssignment, SubmitHomework};
+use crate::app::{ErrorCode, StudentAssignment, SubmitHomework};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::{app_error_message, log_handler_error, optional_stat};
-use crate::bot::state::{BotState, FlowState};
+use crate::bot::state::{BotState, FlowState, MakeupConsent};
 use crate::bot::texts;
 use crate::bot::views::{
     list_text, makeup_credit_terms, paginated_keyboard, reopen_assignment_keyboard,
     send_message_chunks, student_assignment_keyboard, student_assignments_keyboard,
     student_grading_lines, student_keyboard, student_menu, submission_history_keyboard,
 };
-use crate::domain::{AssignmentId, MakeupOffer, StoredFileMetadata, Submission, USER_TEXT_MAX_LEN};
+use crate::domain::{
+    AssignmentId, MakeupOffer, StoredFileMetadata, Submission, SubmissionStart, USER_TEXT_MAX_LEN,
+};
 use crate::pagination::{Page, PageRequest};
 
 pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
@@ -62,10 +64,7 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
     let services = screen.services();
     let timezone = screen.timezone();
     let now = screen.now();
-    let assignments = services
-        .assignments
-        .list_for_student(actor, page, now)
-        .await?;
+    let assignments = services.assignments.list_for_student(actor, page).await?;
 
     show_assignment_list(
         screen.chat(),
@@ -94,7 +93,9 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
             let closing = assignment
                 .late_policy()
                 .map(|_| texts::closing_line(&timezone.format(assignment.closes_at())));
-            let makeup = available(item.makeup)
+            let makeup = item
+                .makeup_offer_at(now)
+                .filter(MakeupOffer::has_attempts)
                 .map(|makeup| texts::makeup_until_line(&timezone.format(makeup.until)));
             texts::assignment_entry(
                 assignment.title().as_str(),
@@ -115,7 +116,7 @@ pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> 
     let services = screen.services();
     let assignments = services
         .assignments
-        .list_archived_for_student(actor, page, screen.now())
+        .list_archived_for_student(actor, page)
         .await?;
 
     show_assignment_list(
@@ -190,11 +191,11 @@ pub(super) async fn show_assignment(
     let now = screen.now();
     let details = services
         .assignments
-        .find_for_student(actor, assignment_id, now)
+        .find_for_student(actor, assignment_id)
         .await?;
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
-    let makeup = details.assignment.makeup;
+    let makeup = details.assignment.makeup_offer_at(now);
     let mut summary = texts::assignment_card(
         details.assignment.subject.name().as_str(),
         assignment.title().as_str(),
@@ -217,7 +218,9 @@ pub(super) async fn show_assignment(
     let submit = if history.accepts_new_attempt_for(assignment, now) {
         Some(texts::BUTTON_SUBMIT)
     } else {
-        available(makeup).map(|_| texts::BUTTON_SUBMIT_MAKEUP)
+        makeup
+            .filter(MakeupOffer::has_attempts)
+            .map(|_| texts::BUTTON_SUBMIT_MAKEUP)
     };
     let keyboard =
         student_assignment_keyboard(assignment, details.latest_submission.is_some(), submit);
@@ -315,72 +318,61 @@ pub(super) async fn show_history(
     Ok(())
 }
 
-fn available(makeup: Option<MakeupOffer>) -> Option<MakeupOffer> {
-    makeup.filter(|makeup| makeup.balance.remaining() > 0)
-}
-
-fn submission_offer(
-    item: &StudentAssignment,
-    shown_at: DateTime<Utc>,
-) -> Result<Option<MakeupOffer>, AppError> {
-    let makeup = available(item.makeup);
-    if makeup.is_none()
-        && let Err(refused) = item
-            .history
-            .ensure_regular_attempt(&item.assignment, shown_at)
-    {
-        let reason = item
-            .makeup
-            .and_then(|offered| offered.balance.ensure_available().err())
-            .unwrap_or(refused);
-        return Err(reason.into());
-    }
-    Ok(makeup)
-}
-
 pub(super) async fn start_submission(
     screen: Screen<'_>,
     assignment_id: AssignmentId,
     shown_at: DateTime<Utc>,
 ) -> HandlerResult {
-    let admitted = screen
+    let started = screen
         .services()
         .assignments
-        .find_for_student(screen.actor(), assignment_id, screen.now())
+        .find_for_student(screen.actor(), assignment_id)
         .await
         .and_then(|details| {
-            submission_offer(&details.assignment, shown_at).map(|makeup| (details, makeup))
+            let item = details.assignment;
+            item.submission_start(shown_at, screen.now())
+                .map(|start| (item, start))
         });
-    let (details, makeup) = match admitted {
-        Ok(admitted) => admitted,
+    let (item, start) = match started {
+        Ok(started) => started,
         Err(error) if error.code().is_server_failure() => return Err(error.into()),
         Err(error) => {
             return send_with_menu(screen.chat(), app_error_message(error.code())).await;
         }
     };
-    let item = &details.assignment;
+    let makeup = match start {
+        SubmissionStart::Regular => {
+            screen.ask(texts::SUBMISSION_PROMPT).await?;
+            MakeupConsent::Withheld
+        }
+        SubmissionStart::Makeup {
+            offer,
+            offered_when_shown,
+        } => {
+            let terms = makeup_credit_terms(offer.credit, item.assignment.grading());
+            let prompt = texts::makeup_prompt(&terms, offer.balance.remaining());
+            let prompted_at = screen.chat().ask_dated(&prompt).await?;
+            if offered_when_shown {
+                MakeupConsent::Given
+            } else {
+                MakeupConsent::PromptedAt(prompted_at)
+            }
+        }
+    };
     screen
         .dialogue()
         .update(BotState::Flow(FlowState::AwaitingSubmission {
             assignment_id,
-            makeup: makeup.is_some(),
+            makeup,
         }))
         .await?;
-    match makeup {
-        Some(makeup) => {
-            let terms = makeup_credit_terms(makeup.credit, item.assignment.grading());
-            screen
-                .ask(&texts::makeup_prompt(&terms, makeup.balance.remaining()))
-                .await
-        }
-        None => screen.ask(texts::SUBMISSION_PROMPT).await,
-    }
+    Ok(())
 }
 
 pub(super) async fn submit_homework_text(
     step: TextStep<'_>,
     assignment_id: AssignmentId,
-    makeup: bool,
+    makeup: MakeupConsent,
 ) -> HandlerResult {
     let Some(text) = require_text_within(
         step.bot(),
@@ -403,7 +395,7 @@ pub(super) async fn submit_homework_text(
             actor: screen.actor(),
             content: text.into_owned(),
             submitted_at: step.message().date,
-            allow_makeup: makeup,
+            allow_makeup: makeup.covers(step.message().date),
         })
         .await;
     let submitted = match submitted {

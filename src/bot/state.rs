@@ -448,6 +448,23 @@ pub(super) enum ScreenState {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MakeupConsent {
+    Withheld,
+    Given,
+    PromptedAt(DateTime<Utc>),
+}
+
+impl MakeupConsent {
+    pub fn covers(self, sent_at: DateTime<Utc>) -> bool {
+        match self {
+            Self::Withheld => false,
+            Self::Given => true,
+            Self::PromptedAt(prompted_at) => sent_at >= prompted_at,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum FlowState {
     /// После проверки подписи исходный bearer credential больше не хранится.
@@ -466,7 +483,7 @@ pub(super) enum FlowState {
     },
     AwaitingSubmission {
         assignment_id: AssignmentId,
-        makeup: bool,
+        makeup: MakeupConsent,
     },
     AwaitingReviewDecision {
         submission_id: SubmissionId,

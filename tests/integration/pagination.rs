@@ -1,4 +1,3 @@
-use chrono::Utc;
 use hw_bot::app::{Actor, ErrorCode};
 use hw_bot::bot::{callbacks, texts};
 use hw_bot::domain::{Assignment, UserId};
@@ -30,7 +29,7 @@ async fn telegram_opens_the_next_assignment_page_using_a_real_navigation_button(
     let second = app
         .application
         .assignments
-        .list_for_student(app.student_actor(), PageRequest::new(1), Utc::now())
+        .list_for_student(app.student_actor(), PageRequest::new(1))
         .await
         .unwrap();
     let id = second.items[0].assignment.id();
@@ -197,7 +196,7 @@ async fn the_card_carries_only_the_latest_attempt() {
     let details = app
         .application
         .assignments
-        .find_for_student(app.student_actor(), assignment.id(), Utc::now())
+        .find_for_student(app.student_actor(), assignment.id())
         .await
         .unwrap();
 

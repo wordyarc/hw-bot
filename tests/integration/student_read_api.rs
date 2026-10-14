@@ -69,11 +69,7 @@ async fn the_student_list_names_the_subject_and_groups_assignments_by_it() {
     let assignments = app
         .application
         .assignments
-        .list_for_student(
-            Actor::new(app.fixture.student.id()),
-            Default::default(),
-            Utc::now(),
-        )
+        .list_for_student(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the student list is readable")
         .items;

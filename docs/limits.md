@@ -34,7 +34,7 @@
 |------------------------------------|---------|------|---------------------------------------|
 | `telegram.request_timeout_ms`      | 5 с     | 5 с  | один запрос к Bot API                 |
 | `telegram.polling_timeout_ms`      | 10 с    | 20 с | long polling                          |
-| `telegram.rate_limit_burst`        | 8       | 6    | updates подряд от одного пользователя |
+| `telegram.rate_limit_burst`        | 20      | 20   | updates подряд от одного пользователя |
 | `telegram.rate_limit_replenish_ms` | 1 с     | 1 с  | восстановление одного токена          |
 | `telegram.max_concurrent_updates`  | 32      | 8    | одновременно обрабатываемых updates   |
 
@@ -91,7 +91,7 @@
 | `server.request_timeout_ms ≥ acquire_timeout_ms + statement_timeout_ms`                             | 10 ≥ 8 с    | 10 ≥ 7 с    | 408 раньше, чем ответила БД                                 |
 | `lease_duration_ms ≥ 2 × (acquire_timeout_ms + statement_timeout_ms) + telegram.request_timeout_ms` | 25 ≥ 21 с   | 25 ≥ 19 с   | аренда истекает посреди доставки, уведомление уходит дважды |
 | `files.transfer_timeout_ms ≤ эффективный grace`                                                     | 20 ≤ 20 с   | 20 ≤ 20 с   | остановка обрывает передачу файла                           |
-| `rate_limit_burst × rate_limit_replenish_ms ≤ 24 ч`                                                 | 8 с         | 6 с         | лимитер не собирается                                       |
+| `rate_limit_burst × rate_limit_replenish_ms ≤ 24 ч`                                                 | 20 с        | 20 с        | лимитер не собирается                                       |
 | `retry_max_ms ≥ retry_initial_ms`                                                                   | 5 мин ≥ 1 с | 5 мин ≥ 1 с | —                                                           |
 | `max_files_per_assignment ≤ 10`                                                                     | 5           | 5           | клавиатура вложений слишком длинная                         |
 | `max_concurrent_updates ≤ 1024`                                                                     | 32          | 8           | —                                                           |

@@ -9,12 +9,12 @@ use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
     AssignmentId, AssignmentStatus, CourseMakeup, DomainError, Grading, InviteGeneration,
-    MakeupTerms, StudentGroup, StudentGroupId, Subject, TeachingCourse, TeachingCourseId,
-    TelegramUserId, User, UserId,
+    MakeupPool, MakeupTerms, StudentGroup, StudentGroupId, Subject, TeachingCourse,
+    TeachingCourseId, TelegramUserId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{
-    AssignmentGrade, CourseRoster, CourseStudent, MakeupPool, RosterGroup, TeachingCourseSummary,
+    AssignmentGrade, CourseRoster, CourseStudent, RosterGroup, TeachingCourseSummary,
     UndecidedAssignment, VersionedAssignment,
 };
 

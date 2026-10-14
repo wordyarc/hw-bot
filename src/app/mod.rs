@@ -34,7 +34,7 @@ pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
     AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradebookScore,
-    MakeupPool, QueuePlace, RosterGroup, RosterStudent, SandboxSubmission, TeachingCourseSummary,
+    QueuePlace, RosterGroup, RosterStudent, SandboxSubmission, TeachingCourseSummary,
     UndecidedAssignment, UserStatistics, VersionedAssignment,
 };
 

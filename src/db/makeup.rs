@@ -7,8 +7,10 @@ use uuid::Uuid;
 
 use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
-use crate::domain::{AssignmentId, CourseMakeup, Grading, MaxScore, TeachingCourseId, UserId};
-use crate::read_models::{MakeupPool, UndecidedAssignment};
+use crate::domain::{
+    AssignmentId, CourseMakeup, Grading, MakeupPool, MaxScore, TeachingCourseId, UserId,
+};
+use crate::read_models::UndecidedAssignment;
 
 const MAKEUP: &str = "teaching_courses.makeup";
 const MAKEUP_ATTEMPTS: &str = "teaching_courses.makeup_attempts";

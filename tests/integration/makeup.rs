@@ -1,12 +1,12 @@
 use chrono::{Duration, Utc};
 use hw_bot::app::{
-    Actor, AppError, ChangeTerms, ConfigureMakeup, ErrorCode, MakeupDecision, MakeupPool,
-    MakeupSettings, ReviewSubmission, SubmitHomework, SubmittedHomework,
+    Actor, AppError, ChangeTerms, ConfigureMakeup, ErrorCode, MakeupDecision, MakeupSettings,
+    ReviewSubmission, SubmitHomework, SubmittedHomework,
 };
 use hw_bot::db;
 use hw_bot::domain::{
-    Assignment, AssignmentId, CourseMakeup, DeductedFrom, Grading, MakeupOffer, MakeupRequest,
-    MakeupTerms, ReviewDecision, SubmissionId, SubmissionKind, User,
+    Assignment, AssignmentId, CourseMakeup, DeductedFrom, Grading, MakeupOffer, MakeupPool,
+    MakeupRequest, MakeupTerms, ReviewDecision, SubmissionId, SubmissionKind, User,
 };
 use hw_bot::pagination::PageRequest;
 use hw_bot::test_support::{assignment as assignment_of, submission as submission_of};
@@ -489,7 +489,7 @@ async fn a_rejected_makeup_spends_the_pool_but_not_the_assignment_attempts() {
     let details = app
         .application
         .assignments
-        .find_for_student(app.student_actor(), work.id(), Utc::now())
+        .find_for_student(app.student_actor(), work.id())
         .await
         .unwrap();
     assert_eq!(details.assignment.history.used_attempts(), 0);
@@ -632,7 +632,7 @@ fn offered(
         .iter()
         .find(|item| item.assignment.id() == assignment.id())
         .expect("the assignment is listed")
-        .makeup
+        .makeup_offer_at(Utc::now())
 }
 
 #[tokio::test]
@@ -644,7 +644,7 @@ async fn the_student_list_offers_a_makeup_with_its_end_credit_and_balance() {
     let listed = app
         .application
         .assignments
-        .list_for_student(app.student_actor(), PageRequest::default(), Utc::now())
+        .list_for_student(app.student_actor(), PageRequest::default())
         .await
         .unwrap()
         .items;
@@ -666,11 +666,14 @@ async fn the_student_card_counts_the_pool_spent_on_another_assignment() {
     let card = app
         .application
         .assignments
-        .find_for_student(app.student_actor(), open.id(), Utc::now())
+        .find_for_student(app.student_actor(), open.id())
         .await
         .unwrap();
 
-    let exhausted = card.assignment.makeup.expect("the empty pool is shown");
+    let exhausted = card
+        .assignment
+        .makeup_offer_at(Utc::now())
+        .expect("the empty pool is shown");
     assert_eq!(exhausted.balance.remaining(), 0);
 }
 

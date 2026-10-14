@@ -31,11 +31,11 @@ pub use ids::{
 pub use invites::InviteGeneration;
 pub use makeup::{
     Acceptance, CourseMakeup, MAX_MAKEUP_ATTEMPTS, MAX_MAKEUP_DAYS, MakeupBalance, MakeupCredit,
-    MakeupOffer, MakeupRequest, MakeupTerms,
+    MakeupOffer, MakeupPool, MakeupRequest, MakeupTerms,
 };
 pub use submission::{
     Grade, Review, ReviewDecision, ReviewScore, Submission, SubmissionHistory, SubmissionKind,
-    SubmissionStatus,
+    SubmissionStart, SubmissionStatus,
 };
 pub use text::{
     ASSIGNMENT_TITLE_MAX_LEN, DISPLAY_NAME_MAX_LEN, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN,

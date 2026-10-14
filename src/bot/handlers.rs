@@ -798,7 +798,7 @@ mod tests {
             assignment: assignment.clone(),
             subject: subject("Single"),
             history: history().build(),
-            makeup: None,
+            pool: None,
         };
         let course_student = CourseStudent {
             student_id: UserId::new(),

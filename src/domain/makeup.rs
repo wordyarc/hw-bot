@@ -271,10 +271,22 @@ impl Acceptance {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MakeupPool {
+    pub course: CourseMakeup,
+    pub balance: MakeupBalance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MakeupOffer {
     pub until: DateTime<Utc>,
     pub credit: Option<MakeupCredit>,
     pub balance: MakeupBalance,
+}
+
+impl MakeupOffer {
+    pub fn has_attempts(&self) -> bool {
+        self.balance.remaining() > 0
+    }
 }
 
 #[cfg(test)]

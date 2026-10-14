@@ -1,12 +1,15 @@
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use hw_bot::app::{ChangeTerms, ConfigureMakeup, ErrorCode, MakeupSettings};
 use hw_bot::bot::{app_error_message, callbacks, texts};
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, AssignmentId, CourseMakeup, Grading, MakeupTerms, Submission, SubmissionId,
-    SubmissionStatus, User,
+    SubmissionKind, SubmissionStatus, User,
 };
+use serde_json::json;
 use uuid::Uuid;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 use super::flows::{
     manage_assignment, open_assignment, open_course, open_fixture_student_grades,
@@ -837,6 +840,89 @@ async fn a_regular_prompt_answered_after_the_closing_shows_the_makeup_card_and_k
             .await
             .unwrap();
     assert_eq!(submitted, 0);
+    assert_eq!(pool_balance(&app).await, (2, 2));
+}
+
+fn whole_seconds(at: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp(at.timestamp(), 0).unwrap()
+}
+
+async fn work_handled_late(
+    app: &TestApp,
+    assignment: &Assignment,
+    shown_at: DateTime<Utc>,
+    sent_at: DateTime<Utc>,
+    handled_at: DateTime<Utc>,
+) -> Option<Submission> {
+    let mut press = callback_update(
+        1,
+        app.student(),
+        &cb(callbacks::SUBMIT_PREFIX, assignment.id().as_uuid()),
+        BOT_MESSAGE_ID,
+    );
+    press["callback_query"]["message"]["date"] = json!(shown_at.timestamp());
+    let mut work = message_update(2, app.student(), 2, "pull/late");
+    work["message"]["date"] = json!(sent_at.timestamp());
+    let telegram = telegram_server(vec![press, work]).await;
+    let mut sent = telegram_message_body();
+    sent["result"]["date"] = json!(handled_at.timestamp());
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/SendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(sent))
+        .with_priority(1)
+        .mount(&telegram)
+        .await;
+    let clock = TestClock::default();
+    clock.move_to(handled_at);
+    let (cancellation, mut task) = start_bot_with_clock(app, &telegram, clock.clock());
+
+    wait_for_sent_message_count(&telegram, 2).await;
+    stop_bot(cancellation, &mut task).await;
+    db::submissions::latest_for_student(&app.pool, assignment.id(), app.fixture.student.id())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_makeup_button_pressed_before_the_end_keeps_work_handled_after_it() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    let until = open_makeup(&app, 2).await.until();
+    let sent_at = whole_seconds(until - Duration::seconds(5));
+
+    let submission = work_handled_late(
+        &app,
+        &closed,
+        whole_seconds(until - Duration::seconds(10)),
+        sent_at,
+        until + Duration::minutes(1),
+    )
+    .await
+    .expect("work sent before the end is stored");
+
+    assert_eq!(submission.kind(), SubmissionKind::Makeup);
+    assert_eq!(submission.submitted_at(), sent_at);
+}
+
+#[tokio::test]
+async fn work_sent_before_the_makeup_prompt_does_not_spend_the_pool() {
+    let app = TestApp::start().await;
+    let closes_at = whole_seconds(Utc::now() + Duration::hours(1));
+    let work = app
+        .add_makeup_assignment("Closing", ten(), credit(6), closes_at)
+        .await;
+    open_makeup(&app, 2).await;
+
+    let submission = work_handled_late(
+        &app,
+        &work,
+        closes_at - Duration::seconds(10),
+        closes_at + Duration::seconds(5),
+        closes_at + Duration::minutes(1),
+    )
+    .await;
+
+    assert!(submission.is_none(), "{submission:#?}");
     assert_eq!(pool_balance(&app).await, (2, 2));
 }
 

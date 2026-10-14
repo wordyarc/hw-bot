@@ -3,8 +3,8 @@ use chrono::{DateTime, Duration, Utc};
 use super::{Fixture, fixture, reviewed_at};
 use crate::domain::{
     Acceptance, Assignment, CourseMakeup, DeductedFrom, DomainError, Grade, Grading, LatePolicy,
-    MAX_ATTEMPTS, MakeupOffer, MakeupRequest, MakeupTerms, SubmissionHistory, SubmissionKind,
-    SubmissionStatus, TeachingCourse, User,
+    MAX_ATTEMPTS, MakeupOffer, MakeupPool, MakeupRequest, MakeupTerms, SubmissionHistory,
+    SubmissionKind, SubmissionStart, SubmissionStatus, TeachingCourse, User,
 };
 use crate::test_support::{ReviewShortcuts, assignment, history, out_of, submission, t0, teacher};
 
@@ -486,6 +486,141 @@ fn the_card_offers_a_makeup_with_its_balance_or_nothing() {
             window.balance(0, 0)
         ),
         None
+    );
+}
+
+fn pool(used: u16) -> MakeupPool {
+    let course = makeup_window();
+    MakeupPool {
+        course,
+        balance: course.balance(0, used),
+    }
+}
+
+#[test]
+fn a_makeup_button_shown_before_the_end_admits_work_handled_after_it() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let until = makeup_window().until();
+
+    let start = history().build().submission_start(
+        &work,
+        Some(pool(0)),
+        until - Duration::hours(1),
+        until + Duration::hours(1),
+    );
+
+    assert!(matches!(
+        start,
+        Ok(SubmissionStart::Makeup {
+            offered_when_shown: true,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_button_shown_after_the_makeup_end_is_refused_as_closed() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = makeup_window().until();
+
+    assert_eq!(
+        history().build().submission_start(
+            &work,
+            Some(pool(0)),
+            shown_at,
+            shown_at + Duration::hours(1)
+        ),
+        Err(closed_at(&work, shown_at))
+    );
+}
+
+#[test]
+fn a_regular_button_handled_after_closing_asks_for_makeup_consent_in_the_prompt() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = work.closes_at() - Duration::hours(1);
+
+    let start =
+        history()
+            .build()
+            .submission_start(&work, Some(pool(0)), shown_at, after_closing(&work));
+
+    assert!(matches!(
+        start,
+        Ok(SubmissionStart::Makeup {
+            offered_when_shown: false,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_regular_button_without_a_makeup_stays_regular_whenever_it_is_handled() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = work.closes_at() - Duration::hours(1);
+
+    for now in [shown_at, after_closing(&work)] {
+        assert_eq!(
+            history()
+                .build()
+                .submission_start(&work, None, shown_at, now),
+            Ok(SubmissionStart::Regular)
+        );
+    }
+}
+
+#[test]
+fn an_empty_pool_names_the_pool_instead_of_the_closed_deadline() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = after_closing(&work);
+
+    assert_eq!(
+        history()
+            .build()
+            .submission_start(&work, Some(pool(3)), shown_at, shown_at),
+        Err(DomainError::MakeupAttemptsExhausted {
+            allowed: 3,
+            used: 3
+        })
+    );
+}
+
+#[test]
+fn a_button_shown_before_the_makeup_was_reopened_does_not_open_the_new_pool() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let work = credit_assignment(&course, &teacher);
+    let shown_at = after_closing(&work);
+    let reopened_at = shown_at + Duration::days(1);
+    let reopened = CourseMakeup::open(makeup_window().until(), 3, reopened_at).unwrap();
+    let pool = MakeupPool {
+        course: reopened,
+        balance: reopened.balance(0, 0),
+    };
+
+    assert_eq!(
+        history().build().submission_start(
+            &work,
+            Some(pool),
+            shown_at,
+            reopened_at + Duration::hours(1)
+        ),
+        Err(closed_at(&work, shown_at))
     );
 }
 

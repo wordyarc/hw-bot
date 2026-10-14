@@ -208,12 +208,27 @@ fn bulk_review_requires_the_current_sandbox_screen() {
 }
 
 #[test]
+fn a_makeup_prompt_covers_only_work_sent_after_it() {
+    let prompted_at = t0();
+
+    assert!(MakeupConsent::PromptedAt(prompted_at).covers(prompted_at));
+    assert!(
+        MakeupConsent::PromptedAt(prompted_at).covers(prompted_at + chrono::Duration::seconds(1))
+    );
+    assert!(
+        !MakeupConsent::PromptedAt(prompted_at).covers(prompted_at - chrono::Duration::seconds(1))
+    );
+    assert!(MakeupConsent::Given.covers(prompted_at - chrono::Duration::days(1)));
+    assert!(!MakeupConsent::Withheld.covers(prompted_at));
+}
+
+#[test]
 fn the_start_button_of_the_current_prompt_restarts_it() {
     let (course_id, assignment_id) = (TeachingCourseId::new(), AssignmentId::new());
     let title = BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id });
     let submission = BotState::Flow(FlowState::AwaitingSubmission {
         assignment_id,
-        makeup: true,
+        makeup: MakeupConsent::Given,
     });
 
     assert!(title.is_restarted_by(ReplayableAction::StartAssignmentCreation(course_id)));
@@ -226,7 +241,7 @@ fn a_start_button_of_another_target_or_flow_does_not_restart_the_prompt() {
     let title = BotState::Flow(FlowState::AwaitingAssignmentTitle { course_id });
     let submission = BotState::Flow(FlowState::AwaitingSubmission {
         assignment_id,
-        makeup: false,
+        makeup: MakeupConsent::Withheld,
     });
 
     assert!(
@@ -674,7 +689,7 @@ fn the_terms_exit_question_keeps_the_terms_form_active() {
 fn abandoning_a_submission_prompt_restores_the_student_menu() {
     let flow = FlowState::AwaitingSubmission {
         assignment_id: AssignmentId::new(),
-        makeup: false,
+        makeup: MakeupConsent::Withheld,
     };
 
     assert_eq!(
@@ -927,7 +942,7 @@ fn idle_and_typed_input_states_have_no_button_hint() {
         }),
         BotState::Flow(FlowState::AwaitingSubmission {
             assignment_id: AssignmentId::new(),
-            makeup: false,
+            makeup: MakeupConsent::Withheld,
         }),
         BotState::Flow(FlowState::AwaitingReviewScore {
             submission_id: SubmissionId::new(),

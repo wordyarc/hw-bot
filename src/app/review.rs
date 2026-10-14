@@ -11,11 +11,11 @@ use crate::app::{Actor, AppResult, Required};
 use crate::db;
 use crate::db::submissions::ReviewStream;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, Review, ReviewDecision, ReviewScore, Subject,
-    Submission, SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
+    Assignment, AssignmentId, DomainError, MakeupPool, Review, ReviewDecision, ReviewScore,
+    Subject, Submission, SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::{MakeupPool, SandboxSubmission};
+use crate::read_models::SandboxSubmission;
 
 const PREVIOUS_ATTEMPTS_SHOWN: u16 = 10;
 

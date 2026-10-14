@@ -550,7 +550,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::bot::state::FlowState;
+    use crate::bot::state::{FlowState, MakeupConsent};
     use crate::domain::AssignmentId;
 
     fn admission(burst: u32, concurrency: usize) -> Arc<UpdateAdmission> {
@@ -647,7 +647,7 @@ mod tests {
         dialogue
             .update(BotState::Flow(FlowState::AwaitingSubmission {
                 assignment_id: AssignmentId::new(),
-                makeup: false,
+                makeup: MakeupConsent::Withheld,
             }))
             .await
             .unwrap();

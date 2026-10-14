@@ -255,7 +255,7 @@ impl From<&StudentAssignment> for ProgressResponse {
             assignment,
             subject: _,
             history,
-            makeup: _,
+            pool: _,
         } = view;
 
         Self {
@@ -286,7 +286,7 @@ pub async fn list_student_assignments(
     let assignments = state
         .application
         .assignments
-        .list_for_student(actor, page, Utc::now())
+        .list_for_student(actor, page)
         .await?;
 
     Ok(page_json(&assignments))
@@ -300,7 +300,7 @@ pub async fn list_archived_student_assignments(
     let assignments = state
         .application
         .assignments
-        .list_archived_for_student(actor, page, Utc::now())
+        .list_archived_for_student(actor, page)
         .await?;
 
     Ok(page_json(&assignments))
@@ -314,7 +314,7 @@ pub async fn find_student_assignment(
     let details = state
         .application
         .assignments
-        .find_for_student(actor, assignment_id, Utc::now())
+        .find_for_student(actor, assignment_id)
         .await?;
 
     Ok(Json(StudentAssignmentDetailsResponse::from(&details)))

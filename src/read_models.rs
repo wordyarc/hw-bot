@@ -1,9 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, CourseMakeup, Grading, MakeupBalance, StoredFileMetadata,
-    StudentGroup, Subject, SubmissionHistory, SubmissionId, SubmissionKind, TeachingCourse, User,
-    UserId,
+    Assignment, AssignmentId, Grading, StoredFileMetadata, StudentGroup, Subject,
+    SubmissionHistory, SubmissionId, SubmissionKind, TeachingCourse, User, UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -100,12 +99,6 @@ pub struct UserStatistics {
     pub assignments: u32,
     pub pending: u32,
     pub courses: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MakeupPool {
-    pub course: CourseMakeup,
-    pub balance: MakeupBalance,
 }
 
 #[derive(Clone, Debug)]
