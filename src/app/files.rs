@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
@@ -36,6 +36,7 @@ pub struct AddAssignmentFile {
     pub mime_type: Option<String>,
     pub telegram_file_id: Option<String>,
     pub content: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,7 +124,7 @@ impl FileService {
             mime_type: command.mime_type,
             size_bytes,
             sha256,
-            created_at: Utc::now(),
+            created_at: command.created_at,
         })?;
 
         let mut tx = self.pool.begin().await?;

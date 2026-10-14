@@ -21,7 +21,7 @@ status:
 	@sh bin/status.sh
 
 logs:
-	tail -n 100 -F $$(ls -t logs/*.log | head -n 1)
+	tail -n 100 -F logs/hw-bot.$$(date -u +%F).log logs/hw-bot.$$(date -u -d tomorrow +%F).log
 
 docker-logs:
 	$(compose) logs --tail 100 app database
@@ -36,7 +36,9 @@ backup:
 	sh bin/backup.sh
 
 prune:
-	find backups -name 'hw-bot-*.dump*' -mtime +14 -delete
+	last=$$(cat backups/.last-success 2>/dev/null || true); \
+	find backups -name 'hw-bot-*.dump*' -mtime +14 \
+		! -name "$${last##*/}" ! -name "$${last##*/}.sha256" -delete
 	ls -dt releases/*/ | tail -n +4 | xargs -r rm -rf
 	docker image prune -f
 

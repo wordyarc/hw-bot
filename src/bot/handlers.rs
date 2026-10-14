@@ -137,14 +137,8 @@ pub(super) async fn handle_command(
             let Some(screen) = chat.resolve(telegram_user_id).await? else {
                 return Ok(());
             };
-            if let BotState::Flow(FlowState::ConfirmingTermsExit { message_id, .. }) = &state {
-                return teacher::handle_terms(
-                    screen,
-                    *message_id,
-                    callbacks::TermsAction::Stay,
-                    state,
-                )
-                .await;
+            if let BotState::Flow(FlowState::ConfirmingTermsExit { form, .. }) = &state {
+                return teacher::stay_in_terms(screen, form.clone()).await;
             }
             return teacher::form_back(screen, form).await;
         }

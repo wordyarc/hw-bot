@@ -10,6 +10,12 @@ fn points_at(assignment: &Assignment, at: DateTime<Utc>) -> Option<u16> {
     assignment.late_penalty_at(at).map(LatePenalty::points)
 }
 
+fn periods_at(assignment: &Assignment, at: DateTime<Utc>) -> u32 {
+    assignment
+        .late_penalty_at(at)
+        .map_or(0, LatePenalty::periods)
+}
+
 #[test]
 fn the_deadline_moment_itself_is_already_late() {
     let Fixture {
@@ -18,9 +24,9 @@ fn the_deadline_moment_itself_is_already_late() {
     let (assignment, deadline_at) = weekly_penalty_assignment(&course, &teacher);
 
     let just_before = deadline_at - Duration::nanoseconds(1);
-    assert_eq!(assignment.late_periods_at(just_before), 0);
+    assert_eq!(periods_at(&assignment, just_before), 0);
     assert_eq!(assignment.late_penalty_at(just_before), None);
-    assert_eq!(assignment.late_periods_at(deadline_at), 1);
+    assert_eq!(periods_at(&assignment, deadline_at), 1);
     assert_eq!(points_at(&assignment, deadline_at), Some(1));
 }
 
@@ -33,7 +39,7 @@ fn any_lateness_costs_the_first_period_at_once() {
 
     let at = Utc.with_ymd_and_hms(2026, 8, 25, 0, 0, 0).unwrap();
 
-    assert_eq!(assignment.late_periods_at(at), 1);
+    assert_eq!(periods_at(&assignment, at), 1);
     assert_eq!(points_at(&assignment, at), Some(1));
 }
 
@@ -70,10 +76,10 @@ fn the_second_period_starts_exactly_one_week_after_the_first() {
     let second_period = Utc.with_ymd_and_hms(2026, 8, 31, 23, 59, 0).unwrap();
 
     assert_eq!(
-        assignment.late_periods_at(second_period - Duration::nanoseconds(1)),
+        periods_at(&assignment, second_period - Duration::nanoseconds(1)),
         1
     );
-    assert_eq!(assignment.late_periods_at(second_period), 2);
+    assert_eq!(periods_at(&assignment, second_period), 2);
 }
 
 #[test]
@@ -85,12 +91,9 @@ fn each_period_boundary_belongs_to_the_next_period_down_to_a_fraction_of_a_secon
 
     for period in 0..4 {
         let boundary = deadline_at + Duration::weeks(period);
-        assert_eq!(assignment.late_periods_at(boundary), period as u32 + 1);
+        assert_eq!(periods_at(&assignment, boundary), period as u32 + 1);
         for fraction in [Duration::nanoseconds(1), Duration::milliseconds(500)] {
-            assert_eq!(
-                assignment.late_periods_at(boundary - fraction),
-                period as u32
-            );
+            assert_eq!(periods_at(&assignment, boundary - fraction), period as u32);
         }
     }
 }
@@ -107,7 +110,7 @@ fn the_horizon_is_closed_at_its_own_moment_and_open_just_before_it() {
 
     let last_moment = closes_at - Duration::nanoseconds(1);
     assignment.ensure_open_for_submission(last_moment).unwrap();
-    assert_eq!(assignment.late_periods_at(last_moment), 4);
+    assert_eq!(periods_at(&assignment, last_moment), 4);
     assert_eq!(
         assignment
             .ensure_open_for_submission(closes_at)

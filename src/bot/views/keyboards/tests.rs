@@ -375,26 +375,31 @@ fn calendar_hides_past_days_and_the_way_back_to_past_months() {
 }
 
 #[test]
-fn deadline_presets_offer_a_week_two_weeks_and_a_month() {
-    let json = serde_json::to_value(deadline_options_keyboard(&vladivostok(), t0())).unwrap();
-    let callbacks: Vec<_> = json["inline_keyboard"]
-        .as_array()
-        .unwrap()
+fn deadline_presets_pick_the_dates_their_labels_show() {
+    let timezone = vladivostok();
+    let json = serde_json::to_value(deadline_options_keyboard(&timezone, t0())).unwrap();
+    let rows = json["inline_keyboard"].as_array().unwrap();
+    let callbacks: Vec<_> = rows
         .iter()
         .map(|row| row[0]["callback_data"].as_str().unwrap().to_owned())
         .collect();
+    let presets = [date(2026, 1, 8), date(2026, 1, 15), date(2026, 2, 1)];
 
     assert_eq!(
         callbacks,
         [
-            DeadlineAction::Days(7),
-            DeadlineAction::Days(14),
-            DeadlineAction::Months(1),
+            DeadlineAction::Pick(presets[0]),
+            DeadlineAction::Pick(presets[1]),
+            DeadlineAction::Pick(presets[2]),
             DeadlineAction::Calendar,
             DeadlineAction::Manual,
         ]
         .map(deadline_callback)
     );
+    for (row, preset) in rows.iter().zip(presets) {
+        let label = row[0]["text"].as_str().unwrap();
+        assert!(label.contains(&timezone.format_date(preset)), "{label}");
+    }
 }
 
 #[test]

@@ -19,19 +19,15 @@ pub(super) enum DateChoice {
 pub(super) fn choose_date(
     action: DeadlineAction,
     timezone: &BotTimezone,
-    now: DateTime<Utc>,
     calendar_from: NaiveDate,
 ) -> DateChoice {
-    let date = match action {
-        DeadlineAction::Manual => return DateChoice::Mode(InputMode::Manual),
-        DeadlineAction::Options => return DateChoice::Mode(InputMode::Buttons),
-        DeadlineAction::Calendar => return DateChoice::Mode(InputMode::Calendar(calendar_from)),
-        DeadlineAction::Month(month) => return DateChoice::Mode(InputMode::Calendar(month)),
-        DeadlineAction::Days(days) => timezone.in_days(now, u64::from(days)),
-        DeadlineAction::Months(months) => timezone.in_months(now, months),
-        DeadlineAction::Pick(date) => Some(date),
-    };
-    DateChoice::At(date.and_then(|date| timezone.end_of(date)))
+    match action {
+        DeadlineAction::Manual => DateChoice::Mode(InputMode::Manual),
+        DeadlineAction::Options => DateChoice::Mode(InputMode::Buttons),
+        DeadlineAction::Calendar => DateChoice::Mode(InputMode::Calendar(calendar_from)),
+        DeadlineAction::Month(month) => DateChoice::Mode(InputMode::Calendar(month)),
+        DeadlineAction::Pick(date) => DateChoice::At(timezone.end_of(date)),
+    }
 }
 
 pub(crate) async fn handle_deadline(
@@ -52,14 +48,11 @@ pub(crate) async fn handle_deadline(
     let Some(form) = state.current_terms_form(message_id) else {
         return screen.stale().await;
     };
-    let step = form.step;
-    let presets_allowed = step == TermsStep::Deadline
-        || !matches!(action, DeadlineAction::Days(_) | DeadlineAction::Months(_));
-    if !matches!(step, TermsStep::Deadline | TermsStep::DurationDate) || !presets_allowed {
+    if !matches!(form.step, TermsStep::Deadline | TermsStep::DurationDate) {
         return screen.stale().await;
     }
     let timezone = screen.timezone();
-    let calendar_from = match (step, form.terms.deadline_at) {
+    let calendar_from = match (form.step, form.terms.deadline_at) {
         (TermsStep::DurationDate, Some(deadline)) => timezone.first_date_ending_after(deadline),
         _ => timezone.local_date(screen.now()),
     };

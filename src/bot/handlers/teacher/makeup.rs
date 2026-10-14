@@ -23,7 +23,7 @@ use crate::pagination::PageRequest;
 
 impl FormScreen for MakeupForm {
     fn view(
-        &mut self,
+        &self,
         timezone: &BotTimezone,
         now: DateTime<Utc>,
     ) -> Option<(String, InlineKeyboardMarkup)> {

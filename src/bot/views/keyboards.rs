@@ -491,30 +491,18 @@ pub(crate) fn deadline_options_keyboard(
     timezone: &BotTimezone,
     now: DateTime<Utc>,
 ) -> InlineKeyboardMarkup {
-    let preset = |label: &str, date: Option<NaiveDate>, action: DeadlineAction| {
+    let preset = |label: &str, date: Option<NaiveDate>| {
         date.map(|date| {
             row(
                 texts::date_preset(label, &timezone.format_date(date)),
-                deadline_callback(action),
+                deadline_callback(DeadlineAction::Pick(date)),
             )
         })
     };
     let mut rows: Vec<Row> = [
-        preset(
-            texts::PRESET_WEEK,
-            timezone.in_days(now, 7),
-            DeadlineAction::Days(7),
-        ),
-        preset(
-            texts::PRESET_TWO_WEEKS,
-            timezone.in_days(now, 14),
-            DeadlineAction::Days(14),
-        ),
-        preset(
-            texts::PRESET_MONTH,
-            timezone.in_months(now, 1),
-            DeadlineAction::Months(1),
-        ),
+        preset(texts::PRESET_WEEK, timezone.in_days(now, 7)),
+        preset(texts::PRESET_TWO_WEEKS, timezone.in_days(now, 14)),
+        preset(texts::PRESET_MONTH, timezone.in_months(now, 1)),
     ]
     .into_iter()
     .flatten()

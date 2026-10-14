@@ -82,6 +82,7 @@ pub(super) async fn submit_file(
             mime_type: incoming.mime_type,
             telegram_file_id: Some(incoming.file_id.0),
             content,
+            created_at: screen.now(),
         })
         .await;
     drop(transfer);
@@ -256,7 +257,7 @@ async fn render(screen: Screen<'_>, card: &AssignmentFiles, creation_flow: bool)
     ));
     let text = lines.join("\n");
     let can_add = card.files.len() < policy.max_files_per_assignment;
-    send_message_chunks(bot, chat_id, text, None).await?;
+    send_message_chunks(bot, chat_id, &text, None).await?;
     let message = bot
         .send_message(chat_id, texts::CHOOSE_ACTION)
         .reply_markup(assignment_files_keyboard(

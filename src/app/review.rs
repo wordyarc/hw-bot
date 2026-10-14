@@ -83,12 +83,20 @@ impl ReviewService {
     /// Работа не резервируется за ревьюером: к моменту его решения блокировки уже нет.
     /// При одновременной проверке `save_review_result` условным update запишет первое решение,
     /// а последующие отклонит с `SubmissionIsNotPendingReview`.
-    pub async fn take_next_from_queue(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
-        self.take_next(actor, ReviewStream::Main).await
+    pub async fn take_next_from_queue(
+        &self,
+        actor: Actor,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<ReviewQueueItem>> {
+        self.take_next(actor, ReviewStream::Main, now).await
     }
 
-    pub async fn take_next_makeup(&self, actor: Actor) -> AppResult<Option<ReviewQueueItem>> {
-        self.take_next(actor, ReviewStream::Makeup).await
+    pub async fn take_next_makeup(
+        &self,
+        actor: Actor,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<ReviewQueueItem>> {
+        self.take_next(actor, ReviewStream::Makeup, now).await
     }
 
     /// Между подсчётом и `take_next_from_queue` работы могут разобрать; ненулевого счётчика недостаточно.
@@ -112,6 +120,7 @@ impl ReviewService {
         &self,
         actor: Actor,
         stream: ReviewStream,
+        now: DateTime<Utc>,
     ) -> AppResult<Option<ReviewQueueItem>> {
         let mut tx = self.pool.begin().await?;
 
@@ -124,7 +133,7 @@ impl ReviewService {
         };
 
         let context = load_review_context(&mut tx, submission.assignment_id()).await?;
-        let item = load_queue_item(&mut tx, submission, context).await?;
+        let item = load_queue_item(&mut tx, submission, context, now).await?;
         tx.commit().await?;
         Ok(Some(item))
     }
@@ -248,6 +257,7 @@ impl ReviewService {
         &self,
         actor: Actor,
         submission_id: SubmissionId,
+        now: DateTime<Utc>,
     ) -> AppResult<ReviewQueueItem> {
         let mut connection = self.pool.acquire().await?;
         let reviewer = load_reviewer(&mut *connection, actor).await?;
@@ -261,7 +271,7 @@ impl ReviewService {
         if !submission.is_pending_review() {
             return Err(DomainError::SubmissionIsNotPendingReview.into());
         }
-        load_queue_item(&mut connection, submission, context).await
+        load_queue_item(&mut connection, submission, context, now).await
     }
 }
 
@@ -322,6 +332,7 @@ async fn load_queue_item(
     connection: &mut PgConnection,
     submission: Submission,
     context: ReviewContext,
+    now: DateTime<Utc>,
 ) -> AppResult<ReviewQueueItem> {
     let student = db::users::find_by_id(&mut *connection, submission.student_id())
         .await?
@@ -341,13 +352,7 @@ async fn load_queue_item(
     previous_attempts.reverse();
     let makeup = match submission.kind() {
         SubmissionKind::Makeup => {
-            active_makeup_pool(
-                &mut *connection,
-                context.course.id(),
-                student.id(),
-                Utc::now(),
-            )
-            .await?
+            active_makeup_pool(&mut *connection, context.course.id(), student.id(), now).await?
         }
         SubmissionKind::Regular => None,
     };

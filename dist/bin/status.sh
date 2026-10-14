@@ -19,8 +19,13 @@ fi
 
 if [ -f backups/.last-success ]; then
     dump=$(cat backups/.last-success)
-    hours=$(( ($(date +%s) - $(stat -c %Y "$dump")) / 3600 ))
-    printf 'backup   %s, %s h ago\n' "$dump" "$hours"
+    if [ -f "$dump" ]; then
+        hours=$(( ($(date +%s) - $(stat -c %Y "$dump")) / 3600 ))
+        printf 'backup   %s, %s h ago\n' "$dump" "$hours"
+    else
+        printf 'backup   %s, missing\n' "$dump"
+        printf '%s\n' 'WARNING  the last successful backup is gone'
+    fi
 else
     printf '%s\n' 'backup   none'
 fi

@@ -1,6 +1,6 @@
 use teloxide::payloads::SendMessageSetters;
 
-use crate::app::{CourseStudent, StudentGradesCard};
+use crate::app::{CourseStudent, GradebookEntry, StudentGradesCard};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::Screen;
@@ -17,19 +17,22 @@ pub(crate) async fn show_gradebook_groups(
     screen: Screen<'_>,
     course_id: TeachingCourseId,
 ) -> HandlerResult {
-    let course = screen
+    let groups = match screen
         .services()
         .courses
-        .find_for_teacher(screen.actor(), course_id)
-        .await?;
-    if let [group] = course.groups.as_slice() {
-        return show_gradebook_page(screen, course_id, group.id(), PageRequest::default()).await;
-    }
+        .gradebook_entry(screen.actor(), course_id)
+        .await?
+    {
+        GradebookEntry::Groups(groups) => groups,
+        GradebookEntry::Students { group_id, students } => {
+            return render_gradebook(screen, course_id, group_id, &students).await;
+        }
+    };
 
     screen
         .bot()
         .send_message(screen.chat_id(), texts::GRADEBOOK_CHOOSE_GROUP)
-        .reply_markup(gradebook_groups_keyboard(course_id, &course.groups))
+        .reply_markup(gradebook_groups_keyboard(course_id, &groups))
         .await?;
     Ok(())
 }
@@ -98,7 +101,7 @@ pub(crate) async fn show_student_grades_page(
     let card = screen
         .services()
         .courses
-        .student_grades_card(screen.actor(), course_id, student_id, page)
+        .student_grades_card(screen.actor(), course_id, student_id, page, screen.now())
         .await?;
     send_student_grades(screen, course_id, card, list).await
 }
@@ -153,7 +156,7 @@ pub(crate) async fn send_student_grades(
         student.grade_page,
         student.next_grade_page,
     );
-    let message_id = send_screen(screen.bot(), screen.chat_id(), text, keyboard).await?;
+    let message_id = send_screen(screen.bot(), screen.chat_id(), &text, keyboard).await?;
     screen
         .dialogue()
         .update(BotState::Screen(ScreenState::StudentGrades {

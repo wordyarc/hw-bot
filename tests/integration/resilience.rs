@@ -27,7 +27,7 @@ async fn http_request_timeout_bounds_waiting_for_the_database() {
         connections.push(app.pool.acquire().await.unwrap());
     }
 
-    let response = app.get("/health").await;
+    let response = app.get("/health/ready").await;
 
     response.error(StatusCode::REQUEST_TIMEOUT, "request_timeout");
 }

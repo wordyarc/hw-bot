@@ -95,7 +95,7 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
         texts::timezone_note(&timezone.label_at(chat.now())),
         help_commands(role),
     );
-    send_message_chunks(bot, chat_id, text, None).await
+    send_message_chunks(bot, chat_id, &text, None).await
 }
 
 fn help_for(role: Option<Role>) -> String {
@@ -237,7 +237,7 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
         }
     }
     let keyboard = main_menu(role, None);
-    send_message_chunks(bot, chat_id, lines.join("\n"), Some(keyboard)).await
+    send_message_chunks(bot, chat_id, &lines.join("\n"), Some(keyboard)).await
 }
 
 #[cfg(test)]

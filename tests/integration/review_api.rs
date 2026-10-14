@@ -21,6 +21,7 @@ async fn reloading_a_review_checks_access_to_its_course() {
         .find_for_review(
             hw_bot::app::Actor::new(outsider.id()),
             hw_bot::domain::SubmissionId::from_uuid(submission),
+            Utc::now(),
         )
         .await
         .unwrap_err();
@@ -40,6 +41,7 @@ async fn reloading_a_completed_review_does_not_restart_it() {
         .find_for_review(
             hw_bot::app::Actor::new(app.fixture.teacher.id()),
             hw_bot::domain::SubmissionId::from_uuid(submission),
+            Utc::now(),
         )
         .await
         .unwrap_err();

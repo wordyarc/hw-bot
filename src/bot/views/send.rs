@@ -23,7 +23,7 @@ fn message_chunks(text: &str) -> impl Iterator<Item = &str> {
 pub(crate) async fn send_message_chunks(
     bot: &Bot,
     chat_id: ChatId,
-    text: String,
+    text: &str,
     keyboard: Option<InlineKeyboardMarkup>,
 ) -> HandlerResult {
     send_chunks(bot, chat_id, text, keyboard).await?;
@@ -33,7 +33,7 @@ pub(crate) async fn send_message_chunks(
 pub(crate) async fn send_screen(
     bot: &Bot,
     chat_id: ChatId,
-    text: String,
+    text: &str,
     keyboard: InlineKeyboardMarkup,
 ) -> HandlerResult<MessageId> {
     Ok(send_chunks(bot, chat_id, text, Some(keyboard))
@@ -44,11 +44,11 @@ pub(crate) async fn send_screen(
 async fn send_chunks(
     bot: &Bot,
     chat_id: ChatId,
-    text: String,
+    text: &str,
     mut keyboard: Option<InlineKeyboardMarkup>,
 ) -> HandlerResult<Option<MessageId>> {
     let mut last = None;
-    let mut chunks = message_chunks(&text).peekable();
+    let mut chunks = message_chunks(text).peekable();
     while let Some(chunk) = chunks.next() {
         let sent = if chunks.peek().is_none()
             && let Some(keyboard) = keyboard.take()

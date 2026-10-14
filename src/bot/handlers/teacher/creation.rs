@@ -97,7 +97,13 @@ async fn apply_grading(
     let question = screen
         .services()
         .courses
-        .makeup_question(screen.actor(), draft.text.course_id, grading, None)
+        .makeup_question(
+            screen.actor(),
+            draft.text.course_id,
+            grading,
+            None,
+            screen.now(),
+        )
         .await?;
 
     let terms = AssignmentTerms::creating(draft, question);

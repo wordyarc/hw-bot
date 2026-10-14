@@ -286,7 +286,7 @@ pub async fn list_student_assignments(
     let assignments = state
         .application
         .assignments
-        .list_for_student(actor, page)
+        .list_for_student(actor, page, Utc::now())
         .await?;
 
     Ok(page_json(&assignments))
@@ -300,7 +300,7 @@ pub async fn list_archived_student_assignments(
     let assignments = state
         .application
         .assignments
-        .list_archived_for_student(actor, page)
+        .list_archived_for_student(actor, page, Utc::now())
         .await?;
 
     Ok(page_json(&assignments))
@@ -314,7 +314,7 @@ pub async fn find_student_assignment(
     let details = state
         .application
         .assignments
-        .find_for_student(actor, assignment_id)
+        .find_for_student(actor, assignment_id, Utc::now())
         .await?;
 
     Ok(Json(StudentAssignmentDetailsResponse::from(&details)))
@@ -516,6 +516,40 @@ mod tests {
                 assert_eq!(error.status(), StatusCode::UNPROCESSABLE_ENTITY, "{value}");
                 assert_eq!(error.code(), "invalid_input", "{value}");
             }
+        }
+    }
+
+    #[test]
+    fn requests_with_a_flattened_policy_still_reject_unknown_fields() {
+        let policy = json!({
+            "late_period_days": 3, "late_penalty_per_period": 2, "late_max_periods": 5,
+            "late_deducted_from": "course_total",
+        });
+        let mut create = json!({
+            "title": "Ownership", "body": "Explain borrowing", "max_attempts": 3, "max_score": 10,
+            "deadline_at": "2026-10-20T00:00:00Z",
+        });
+        let mut grading = json!({ "max_score": 10 });
+        for body in [&mut create, &mut grading] {
+            body.as_object_mut()
+                .unwrap()
+                .extend(policy.as_object().unwrap().clone());
+        }
+        serde_json::from_value::<CreateAssignmentRequest>(create.clone()).unwrap();
+        serde_json::from_value::<ChangeGradingRequest>(grading.clone()).unwrap();
+
+        for body in [&mut create, &mut grading] {
+            body["late_closes_at"] = json!("2026-11-20T00:00:00Z");
+        }
+        let errors = [
+            serde_json::from_value::<CreateAssignmentRequest>(create).unwrap_err(),
+            serde_json::from_value::<ChangeGradingRequest>(grading).unwrap_err(),
+        ];
+        for error in errors {
+            assert!(
+                error.to_string().contains("unknown field `late_closes_at`"),
+                "{error}"
+            );
         }
     }
 

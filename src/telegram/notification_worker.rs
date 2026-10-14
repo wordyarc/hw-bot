@@ -188,13 +188,18 @@ impl NotificationWorker {
             Err(error) => return Err(NotificationWorkerError::Startup(request_error_kind(&error))),
         }
         let _ready = health.ready();
+        let mut database_failures = DatabaseFailures::default();
 
         loop {
             if cancellation.is_cancelled() {
                 return Ok(());
             }
 
-            match self.deliver_one(Utc::now()).await {
+            let delivery = self.deliver_one(Utc::now()).await;
+            if delivery.is_ok() {
+                database_failures.recover();
+            }
+            match delivery {
                 Ok(DeliveryOutcome::RateLimited { retry_after }) => {
                     cancellation
                         .run_until_cancelled(tokio::time::sleep(retry_after))
@@ -210,12 +215,38 @@ impl NotificationWorker {
                     return Err(NotificationWorkerError::InvalidCredentials);
                 }
                 Err(error) => {
-                    tracing::error!(error = ?error, "notification worker failed to access database");
+                    database_failures.record(&error);
                     cancellation
                         .run_until_cancelled(tokio::time::sleep(self.settings.poll_interval))
                         .await;
                 }
             }
+        }
+    }
+}
+
+#[derive(Default)]
+struct DatabaseFailures(u64);
+
+impl DatabaseFailures {
+    fn record(&mut self, error: &NotificationWorkerError) {
+        self.0 += 1;
+        if self.0.is_power_of_two() {
+            tracing::error!(
+                error = ?error,
+                failures = self.0,
+                "notification worker failed to access database"
+            );
+        }
+    }
+
+    fn recover(&mut self) {
+        if self.0 > 0 {
+            tracing::info!(
+                failures = self.0,
+                "notification worker regained database access"
+            );
+            self.0 = 0;
         }
     }
 }
@@ -266,6 +297,7 @@ fn after(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc> {
 mod tests {
     use super::*;
     use crate::domain::{DeductedFrom, LatePenalty, LatePolicy};
+    use crate::test_support::logs::LogBuffer;
 
     #[test]
     fn review_message_is_bounded_by_telegram_limit() {
@@ -365,6 +397,39 @@ mod tests {
             now + chrono::Duration::seconds(60)
         );
         assert_eq!(after(now, Duration::MAX), DateTime::<Utc>::MAX_UTC);
+    }
+
+    #[test]
+    fn repeated_database_failures_are_logged_sparsely_until_recovery() {
+        let logs = LogBuffer::of(|| {
+            let error = NotificationWorkerError::Database(DbError::Conflict {
+                message: "unavailable",
+            });
+            let mut failures = DatabaseFailures::default();
+            failures.recover();
+            for _ in 0..5 {
+                failures.record(&error);
+            }
+            failures.recover();
+            failures.recover();
+            failures.record(&error);
+        });
+        let logged: Vec<_> = logs
+            .events()
+            .into_iter()
+            .map(|event| (event["level"].clone(), event["fields"]["failures"].clone()))
+            .collect();
+
+        assert_eq!(
+            logged,
+            [
+                ("ERROR".into(), 1.into()),
+                ("ERROR".into(), 2.into()),
+                ("ERROR".into(), 4.into()),
+                ("INFO".into(), 5.into()),
+                ("ERROR".into(), 1.into()),
+            ]
+        );
     }
 
     #[test]

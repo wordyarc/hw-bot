@@ -70,6 +70,7 @@ async fn assignment_student_list_includes_only_its_group_with_default_progress()
         )
         .await
         .unwrap()
+        .students
         .items;
 
     let ids: Vec<_> = students.iter().map(|item| item.student.id()).collect();
@@ -108,6 +109,7 @@ async fn assignment_student_list_spans_the_issued_groups_only_and_names_their_co
         .list_students_for_assignment(app.teacher_actor(), assignment.id(), Default::default())
         .await
         .unwrap()
+        .students
         .items;
 
     let listed: Vec<_> = students
@@ -146,6 +148,7 @@ async fn assignment_student_list_contains_submission_and_extra_attempt_facts() {
         )
         .await
         .unwrap()
+        .students
         .items;
     let student = students
         .iter()
@@ -176,6 +179,7 @@ async fn assignment_student_list_contains_accepted_submission_facts() {
         )
         .await
         .unwrap()
+        .students
         .items;
     let student = students
         .iter()

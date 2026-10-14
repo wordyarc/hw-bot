@@ -1,4 +1,5 @@
 use axum::http::StatusCode;
+use chrono::Utc;
 use hw_bot::app::{Actor, AddAssignmentFile};
 use hw_bot::domain::FilePresentation;
 use serde_json::{Value, json};
@@ -68,7 +69,11 @@ async fn the_student_list_names_the_subject_and_groups_assignments_by_it() {
     let assignments = app
         .application
         .assignments
-        .list_for_student(Actor::new(app.fixture.student.id()), Default::default())
+        .list_for_student(
+            Actor::new(app.fixture.student.id()),
+            Default::default(),
+            Utc::now(),
+        )
         .await
         .expect("the student list is readable")
         .items;
@@ -277,6 +282,7 @@ async fn the_card_carries_assignment_file_metadata_without_content() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: b"read the notes".to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();

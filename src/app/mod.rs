@@ -11,13 +11,15 @@ mod users;
 
 pub use actor::Actor;
 pub use assignments::{
-    AssignmentService, AssignmentSubmissionHistory, ChangeDeadline, ChangeGrading, ChangeTerms,
-    CreateAssignment, GrantExtraAttempts, StudentAssignment, StudentAssignmentDetails,
+    AssignmentService, AssignmentStudents, AssignmentSubmissionHistory, ChangeDeadline,
+    ChangeGrading, ChangeTerms, CreateAssignment, GrantExtraAttempts, StudentAssignment,
+    StudentAssignmentDetails,
 };
 pub use container::ApplicationContainer;
 pub use courses::{
-    ConfigureMakeup, CourseInviteState, CourseMakeupState, CourseService, MakeupDecision,
-    MakeupQuestion, MakeupSettings, StudentContact, StudentGrades, StudentGradesCard,
+    ConfigureMakeup, CourseInviteState, CourseMakeupState, CourseService, GradebookEntry,
+    MakeupDecision, MakeupQuestion, MakeupSettings, StudentContact, StudentGrades,
+    StudentGradesCard,
 };
 pub use error::{AppError, AppResult, ErrorCode, Required};
 pub use files::{

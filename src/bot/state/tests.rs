@@ -538,7 +538,6 @@ fn a_grading_is_chosen_only_on_the_current_grading_question() {
 fn terms_buttons_require_the_current_form_message() {
     let state = || BotState::Flow(FlowState::ConfiguringTerms(terms_form(TermsStep::Deadline)));
     let exiting = BotState::Flow(FlowState::ConfirmingTermsExit {
-        message_id: MessageId(10),
         form: terms_form(TermsStep::Deadline),
         action: MenuAction::Profile,
         telegram_user_id: TelegramUserId::new(1).unwrap(),
@@ -652,7 +651,6 @@ fn a_makeup_form_stays_active_whatever_its_input_mode() {
 #[test]
 fn the_terms_exit_question_keeps_the_terms_form_active() {
     let exiting = BotState::Flow(FlowState::ConfirmingTermsExit {
-        message_id: MessageId(10),
         form: terms_form(TermsStep::Deadline),
         action: MenuAction::Profile,
         telegram_user_id: TelegramUserId::new(1).unwrap(),
@@ -785,7 +783,6 @@ fn registration_review_decisions_confirmations_and_forms_are_abandoned_silently(
         FlowState::ConfiguringTerms(terms_form(TermsStep::Deadline)),
         FlowState::ConfiguringMakeup(makeup_form(MakeupStep::Date)),
         FlowState::ConfirmingTermsExit {
-            message_id: MessageId(10),
             form: terms_form(TermsStep::Deadline),
             action: MenuAction::Profile,
             telegram_user_id: TelegramUserId::new(1).unwrap(),
@@ -883,7 +880,6 @@ fn typed_text_on_a_button_screen_is_answered_with_a_hint_naming_its_buttons() {
         ),
         (
             BotState::Flow(FlowState::ConfirmingTermsExit {
-                message_id: MessageId(10),
                 form: terms_form(TermsStep::Deadline),
                 action: MenuAction::Profile,
                 telegram_user_id: TelegramUserId::new(1).unwrap(),

@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with mine_page as (\n            select * from submissions where student_id = $1 and status = 'pending_review'\n              and ($4::uuid is null or assignment_id = $4)\n            order by submitted_at, id limit $2 offset $3\n        ), visible as (\n            select\n                mine.id as mine_id,\n                other.id as other_id,\n                other.submitted_at as other_submitted_at\n            from mine_page mine\n            join assignments mine_assignment\n              on mine_assignment.id = mine.assignment_id\n            join subjects mine_subject\n              on mine_subject.id = mine_assignment.subject_id\n            join assignments other_assignment\n              on exists (\n                  select 1\n                  from teaching_course_teachers mine_teacher\n                  join teaching_course_teachers other_teacher\n                    on other_teacher.teacher_id = mine_teacher.teacher_id\n                  where mine_teacher.teaching_course_id = mine_assignment.teaching_course_id\n                    and other_teacher.teaching_course_id = other_assignment.teaching_course_id\n              )\n            join subjects other_subject\n              on other_subject.id = other_assignment.subject_id\n             and other_subject.sandbox = mine_subject.sandbox\n            join submissions other\n              on other.assignment_id = other_assignment.id\n             and other.status = 'pending_review'\n             and (mine_subject.sandbox or other.kind = mine.kind)\n        )\n        select\n            submissions.assignment_id as \"assignment_id!\",\n            subjects.name as \"subject_name!\",\n            assignments.title as \"assignment_title!\",\n            submissions.submitted_at as \"submitted_at!\",\n            count(visible.other_id) filter (\n                where (visible.other_submitted_at, visible.other_id)\n                   <= (submissions.submitted_at, submissions.id)\n            ) as \"position!\",\n            count(visible.other_id) as \"total!\"\n        from mine_page submissions\n        join assignments\n          on assignments.id = submissions.assignment_id\n        join subjects\n          on subjects.id = assignments.subject_id\n        left join visible\n          on visible.mine_id = submissions.id\n        group by submissions.id, submissions.submitted_at, submissions.assignment_id,\n                 subjects.name, assignments.title\n        order by submissions.submitted_at, submissions.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignment_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "assignment_title!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "submitted_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "submitted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "position!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "bb6b0a07ceaae559afd24859463ad501548782d91515337c8b9d8b5ba4495874"
+}

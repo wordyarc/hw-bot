@@ -522,7 +522,6 @@ pub(super) enum FlowState {
     ConfiguringTerms(TermsForm),
     ConfiguringMakeup(MakeupForm),
     ConfirmingTermsExit {
-        message_id: MessageId,
         form: TermsForm,
         action: MenuAction,
         telegram_user_id: TelegramUserId,

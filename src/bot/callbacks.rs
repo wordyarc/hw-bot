@@ -101,8 +101,6 @@ pub const SANDBOX_REJECT_ALL: &str = "sandbox:reject-all";
 pub const DEADLINE_CALENDAR: &str = "dl:calendar";
 pub const DEADLINE_MANUAL: &str = "dl:manual";
 pub const DEADLINE_OPTIONS: &str = "dl:options";
-pub const DEADLINE_DAYS_PREFIX: &str = "dl:days:";
-pub const DEADLINE_MONTHS_PREFIX: &str = "dl:months:";
 pub const CALENDAR_PICK_PREFIX: &str = "cal:pick:";
 pub const CALENDAR_MONTH_PREFIX: &str = "cal:";
 pub const CALENDAR_NOOP: &str = "cal:noop";
@@ -546,8 +544,6 @@ impl TermsAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeadlineAction {
-    Days(u32),
-    Months(u32),
     Calendar,
     Manual,
     Options,
@@ -558,8 +554,6 @@ pub(super) enum DeadlineAction {
 impl DeadlineAction {
     fn callback(self) -> String {
         match self {
-            Self::Days(days) => format!("{DEADLINE_DAYS_PREFIX}{days}"),
-            Self::Months(months) => format!("{DEADLINE_MONTHS_PREFIX}{months}"),
             Self::Calendar => DEADLINE_CALENDAR.to_owned(),
             Self::Manual => DEADLINE_MANUAL.to_owned(),
             Self::Options => DEADLINE_OPTIONS.to_owned(),
@@ -809,12 +803,6 @@ fn parse_amount_value(value: &str) -> Option<AmountChoice> {
 }
 
 fn parse_deadline(data: &str) -> Option<DeadlineAction> {
-    if let Some(days) = data.strip_prefix(DEADLINE_DAYS_PREFIX) {
-        return days.parse().ok().map(DeadlineAction::Days);
-    }
-    if let Some(months) = data.strip_prefix(DEADLINE_MONTHS_PREFIX) {
-        return months.parse().ok().map(DeadlineAction::Months);
-    }
     // cal: поглотил бы cal:pick:, если разобрать общий префикс первым.
     if let Some(date) = data.strip_prefix(CALENDAR_PICK_PREFIX) {
         return NaiveDate::parse_from_str(date, DATE_FORMAT)
@@ -1106,10 +1094,6 @@ mod tests {
                 score(AmountChoice::Preset(most)),
             Flow(FlowAction::ReviewScore { choice: AmountChoice::Manual, .. }) =>
                 score(AmountChoice::Manual),
-            Flow(FlowAction::Deadline(DeadlineAction::Days(_))) =>
-                Flow(FlowAction::Deadline(DeadlineAction::Days(last))),
-            Flow(FlowAction::Deadline(DeadlineAction::Months(_))) =>
-                Flow(FlowAction::Deadline(DeadlineAction::Months(last))),
             Flow(FlowAction::Deadline(DeadlineAction::Calendar)) =>
                 Flow(FlowAction::Deadline(DeadlineAction::Calendar)),
             Flow(FlowAction::Deadline(DeadlineAction::Manual)) =>
@@ -1360,7 +1344,7 @@ mod tests {
             "late:7:1",
             "late:7:1:4",
             "late:7:1:4:9",
-            "dl:days:nope",
+            "cal:pick:2026-02-30",
             "cal:2026-13",
             "makeup-answer:",
             "makeup-answer:-1",

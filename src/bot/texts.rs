@@ -1196,12 +1196,19 @@ fn regular_grade_line(grade: Grade) -> String {
     let max_score = grade.max_score();
     match grade.late() {
         None => format!("🏅 Балл: {} из {max_score}", grade.work_score()),
-        Some(late) if late.deducted_from() == DeductedFrom::WorkScore => format!(
-            "🏅 Балл: {} − {} = {} из {max_score} (штраф за опоздание)",
-            grade.raw_score(),
-            late.points(),
-            grade.work_score(),
-        ),
+        Some(late) if late.deducted_from() == DeductedFrom::WorkScore => {
+            let (raw_score, points, work_score) =
+                (grade.raw_score(), late.points(), grade.work_score());
+            if raw_score < points {
+                format!(
+                    "🏅 Балл: {raw_score} − {points} → {work_score} из {max_score} (штраф за опоздание больше балла, балл не ниже нуля)"
+                )
+            } else {
+                format!(
+                    "🏅 Балл: {raw_score} − {points} = {work_score} из {max_score} (штраф за опоздание)"
+                )
+            }
+        }
         Some(late) => format!(
             "🏅 Балл: {} из {max_score} (штраф за опоздание −{} вычитается из итога по предмету)",
             grade.work_score(),
@@ -1361,6 +1368,24 @@ mod tests {
         assert_eq!(numbers(&line), [8, 4, 4, 10], "{line}");
         assert!(line.contains('−'), "{line}");
         assert!(line.contains(&out_of(4, 10)), "{line}");
+    }
+
+    #[test]
+    fn a_penalty_above_the_raw_score_leaves_zero_without_a_false_equation() {
+        let line = regular(Grade::new(4, 5, Some(late(5, 1, DeductedFrom::WorkScore))));
+
+        assert!(line.contains(&out_of(0, 5)), "{line}");
+        assert_eq!(numbers(&line), [4, 5, 0, 5], "{line}");
+        for (left, right) in line.split('=').zip(line.split('=').skip(1)) {
+            let [.., minuend, subtrahend] = numbers(left)[..] else {
+                panic!("{line}");
+            };
+            assert_eq!(
+                i64::from(minuend) - i64::from(subtrahend),
+                i64::from(numbers(right)[0]),
+                "{line}"
+            );
+        }
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub(super) use makeup::{
 pub(super) use roster::show_roster_page;
 pub(super) use terms::{
     begin_terms_edit, confirm_exit, handle_amount as handle_terms_amount, handle_duration_periods,
-    handle_late_policy, handle_makeup, handle_period, handle_terms, submit_terms,
+    handle_late_policy, handle_makeup, handle_period, handle_terms, stay_in_terms, submit_terms,
 };
 
 pub(super) async fn abandon_form(

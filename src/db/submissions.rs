@@ -609,8 +609,6 @@ async fn pending_queue_places(
               on other.assignment_id = other_assignment.id
              and other.status = 'pending_review'
              and (mine_subject.sandbox or other.kind = mine.kind)
-            where mine.student_id = $1
-              and mine.status = 'pending_review'
         )
         select
             submissions.assignment_id as "assignment_id!",
@@ -629,8 +627,6 @@ async fn pending_queue_places(
           on subjects.id = assignments.subject_id
         left join visible
           on visible.mine_id = submissions.id
-        where submissions.student_id = $1
-          and submissions.status = 'pending_review'
         group by submissions.id, submissions.submitted_at, submissions.assignment_id,
                  subjects.name, assignments.title
         order by submissions.submitted_at, submissions.id

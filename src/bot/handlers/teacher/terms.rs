@@ -26,13 +26,10 @@ use crate::domain::{AssignmentId, AssignmentStatus, MakeupTerms, TelegramUserId}
 
 impl FormScreen for TermsForm {
     fn view(
-        &mut self,
+        &self,
         timezone: &BotTimezone,
         now: DateTime<Utc>,
     ) -> Option<(String, InlineKeyboardMarkup)> {
-        if self.step == TermsStep::Summary {
-            self.go(TermsStep::Summary);
-        }
         terms_form_view(self, timezone, now)
     }
 
@@ -100,6 +97,7 @@ pub(crate) async fn begin_terms_edit(
             assignment.teaching_course_id(),
             assignment.grading(),
             Some(assignment.id()),
+            screen.now(),
         )
         .await?;
     let mut form = TermsForm::new(
@@ -218,20 +216,16 @@ pub(crate) async fn handle_terms(
     state: BotState,
 ) -> HandlerResult {
     if let BotState::Flow(FlowState::ConfirmingTermsExit {
-        message_id: current,
-        mut form,
+        form,
         action: menu,
         telegram_user_id,
     }) = state
     {
-        if current != message_id {
+        if form.message_id != Some(message_id) {
             return screen.stale().await;
         }
         return match action {
-            TermsAction::Stay => {
-                form.message_id = Some(current);
-                render(screen.chat(), form, None).await
-            }
+            TermsAction::Stay => stay_in_terms(screen, form).await,
             TermsAction::Exit => {
                 reset_dialogue(screen.dialogue()).await?;
                 abandon(screen.bot(), screen.chat_id(), &form).await?;
@@ -271,6 +265,10 @@ pub(crate) async fn handle_terms(
     render(screen.chat(), form, None).await
 }
 
+pub(crate) async fn stay_in_terms(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
+    render(screen.chat(), form, None).await
+}
+
 pub(crate) async fn confirm_exit(
     screen: Screen<'_>,
     mut form: TermsForm,
@@ -287,7 +285,6 @@ pub(crate) async fn confirm_exit(
     screen
         .dialogue()
         .update(BotState::Flow(FlowState::ConfirmingTermsExit {
-            message_id: sent.id,
             form,
             action,
             telegram_user_id,

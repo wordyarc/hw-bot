@@ -3,7 +3,7 @@ use teloxide::types::MessageId;
 
 use super::form::detach;
 use super::gradebook::show_student_grades_page;
-use crate::app::GrantExtraAttempts;
+use crate::app::{AssignmentStudents, GrantExtraAttempts};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, FlowAction, PageTarget};
 use crate::bot::context::{Screen, TextStep};
@@ -28,11 +28,10 @@ pub(crate) async fn show_students_page(
     let chat_id = screen.chat_id();
     let dialogue = screen.dialogue();
     let services = screen.services();
-    let assignment = services
-        .assignments
-        .find_for_teacher(actor, assignment_id)
-        .await?;
-    let students = services
+    let AssignmentStudents {
+        assignment,
+        students,
+    } = services
         .assignments
         .list_students_for_assignment(actor, assignment_id, page)
         .await?;
@@ -67,7 +66,7 @@ pub(crate) async fn show_students_page(
             )
         });
         let text = list_text(texts::STUDENTS_HEADER, entries);
-        send_message_chunks(bot, chat_id, text, None).await?;
+        send_message_chunks(bot, chat_id, &text, None).await?;
     }
 
     let message = bot

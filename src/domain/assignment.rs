@@ -201,6 +201,10 @@ impl LatePolicy {
 
     pub fn validate_horizon(self, deadline_at: DateTime<Utc>) -> DomainResult<()> {
         self.closes_at(deadline_at)?;
+        self.ensure_lateness_within_limit()
+    }
+
+    fn ensure_lateness_within_limit(self) -> DomainResult<()> {
         if u32::from(self.period_days) * u32::from(self.max_periods) > MAX_LATENESS_DAYS {
             return Err(DomainError::LateHorizonTooLong {
                 max_days: MAX_LATENESS_DAYS,
@@ -373,10 +377,6 @@ impl Assignment {
             });
         }
 
-        if let Some(policy) = input.late_policy {
-            policy.validate_horizon(input.deadline_at)?;
-        }
-
         let groups = match input.groups {
             None => teaching_course.group_ids().clone(),
             Some(groups) if groups.is_empty() => return Err(DomainError::AssignmentHasNoGroups),
@@ -386,7 +386,7 @@ impl Assignment {
             Some(groups) => groups,
         };
 
-        Self::restore(AssignmentParts {
+        let assignment = Self::restore(AssignmentParts {
             id,
             teaching_course_id: teaching_course.id(),
             subject_id: teaching_course.subject_id(),
@@ -402,7 +402,10 @@ impl Assignment {
             created_at: input.created_at,
             deadline_at: input.deadline_at,
             published_at: None,
-        })
+        })?;
+        Self::ensure_input_lateness(assignment.late_policy)?;
+
+        Ok(assignment)
     }
 
     pub fn publish(
@@ -537,11 +540,11 @@ impl Assignment {
         }
 
         Self::validate_terms(self.created_at, terms)?;
-        if let Some(policy) = terms.late_policy {
-            policy.validate_horizon(terms.deadline_at)?;
-        }
+        Self::ensure_input_lateness(terms.late_policy)
+    }
 
-        Ok(())
+    fn ensure_input_lateness(late_policy: Option<LatePolicy>) -> DomainResult<()> {
+        late_policy.map_or(Ok(()), LatePolicy::ensure_lateness_within_limit)
     }
 
     fn validate_terms(created_at: DateTime<Utc>, terms: ProposedTerms) -> DomainResult<()> {
@@ -682,14 +685,9 @@ impl Assignment {
         }
     }
 
-    pub fn late_periods_at(&self, at: DateTime<Utc>) -> u32 {
-        self.late_policy
-            .map_or(0, |policy| policy.periods_until(self.deadline_at, at))
-    }
-
     pub fn late_penalty_at(&self, at: DateTime<Utc>) -> Option<LatePenalty> {
         self.late_policy
-            .and_then(|policy| policy.late_penalty(self.late_periods_at(at)))
+            .and_then(|policy| policy.late_penalty(policy.periods_until(self.deadline_at, at)))
     }
 
     pub fn ensure_open_for_submission(&self, at: DateTime<Utc>) -> DomainResult<()> {

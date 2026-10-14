@@ -157,7 +157,7 @@ async fn failed_terms_transition_keeps_grading_choice_retryable() {
     telegram.flush(app.teacher()).await;
     telegram.click_button(app.teacher(), &grading_data).await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+        .click_preset(app.teacher(), texts::PRESET_WEEK)
         .await;
     telegram
         .click_button(app.teacher(), callbacks::TERMS_SAVE)
@@ -205,15 +205,21 @@ async fn unavailable_terms_screen_is_replaced_without_losing_input() {
     let app = TestApp::start().await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    for (description, days) in [
-        ("Bad Request: message to edit not found", 7),
-        ("Bad Request: message can't be edited", 14),
+    for (description, preset, days) in [
+        (
+            "Bad Request: message to edit not found",
+            texts::PRESET_WEEK,
+            7,
+        ),
+        (
+            "Bad Request: message can't be edited",
+            texts::PRESET_TWO_WEEKS,
+            14,
+        ),
     ] {
         let old = open_terms(&app, &telegram).await;
         let first = preset_deadline(days);
-        telegram
-            .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, days))
-            .await;
+        telegram.click_preset(app.teacher(), preset).await;
         let old_save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
         telegram
             .click_button(app.teacher(), callbacks::TERMS_DEADLINE)
@@ -392,6 +398,7 @@ async fn add_assignment_document(app: &TestApp) {
             mime_type: Some("text/plain".into()),
             telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -592,7 +599,7 @@ async fn failed_confirmation_does_not_create_a_second_assignment() {
         .click_button(app.teacher(), &cb(callbacks::GRADING_PREFIX, "passfail"))
         .await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
+        .click_preset(app.teacher(), texts::PRESET_WEEK)
         .await;
     let save = telegram.button(app.teacher(), callbacks::TERMS_SAVE).await;
     fail_next(&telegram, "SendMessage").await;

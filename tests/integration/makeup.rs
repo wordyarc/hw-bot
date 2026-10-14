@@ -54,7 +54,7 @@ async fn configure(
 async fn current_settings(app: &TestApp) -> Option<CourseMakeup> {
     app.application
         .courses
-        .active_makeup(app.teacher_actor(), app.fixture.course.id())
+        .active_makeup(app.teacher_actor(), app.fixture.course.id(), Utc::now())
         .await
         .unwrap()
 }
@@ -66,6 +66,7 @@ async fn student_pool(app: &TestApp) -> Option<MakeupPool> {
             app.teacher_actor(),
             app.fixture.course.id(),
             app.fixture.student.id(),
+            Utc::now(),
         )
         .await
         .unwrap()
@@ -267,6 +268,7 @@ async fn a_makeup_attempt_is_granted_only_on_a_course_with_makeup() {
             app.teacher_actor(),
             app.fixture.course.id(),
             app.fixture.student.id(),
+            Utc::now(),
         )
         .await
         .unwrap_err();
@@ -309,7 +311,13 @@ async fn an_ended_makeup_counts_as_disabled() {
     assert_eq!(current_settings(&app).await, None);
     assert_eq!(student_pool(&app).await, None);
     let question = courses
-        .makeup_question(app.teacher_actor(), app.fixture.course.id(), ten(), None)
+        .makeup_question(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            ten(),
+            None,
+            Utc::now(),
+        )
         .await
         .unwrap();
     assert!(!question.enabled);
@@ -318,6 +326,7 @@ async fn an_ended_makeup_counts_as_disabled() {
             app.teacher_actor(),
             app.fixture.course.id(),
             app.fixture.student.id(),
+            Utc::now(),
         )
         .await
         .unwrap_err();
@@ -354,7 +363,12 @@ async fn a_makeup_attempt_is_granted_only_to_a_student_of_the_course_group() {
     let error = app
         .application
         .courses
-        .grant_makeup_attempt(app.teacher_actor(), app.fixture.course.id(), outsider.id())
+        .grant_makeup_attempt(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            outsider.id(),
+            Utc::now(),
+        )
         .await
         .unwrap_err();
 
@@ -475,7 +489,7 @@ async fn a_rejected_makeup_spends_the_pool_but_not_the_assignment_attempts() {
     let details = app
         .application
         .assignments
-        .find_for_student(app.student_actor(), work.id())
+        .find_for_student(app.student_actor(), work.id(), Utc::now())
         .await
         .unwrap();
     assert_eq!(details.assignment.history.used_attempts(), 0);
@@ -489,6 +503,7 @@ async fn a_rejected_makeup_spends_the_pool_but_not_the_assignment_attempts() {
         .list_students_for_assignment(app.teacher_actor(), work.id(), PageRequest::default())
         .await
         .unwrap()
+        .students
         .items;
     assert_eq!(students[0].history.used_attempts(), 0);
     assert_eq!(student_pool(&app).await.unwrap().balance.remaining(), 2);
@@ -530,6 +545,7 @@ async fn a_granted_attempt_lets_a_student_with_an_empty_pool_send_another_makeup
             app.teacher_actor(),
             app.fixture.course.id(),
             app.fixture.student.id(),
+            Utc::now(),
         )
         .await
         .unwrap();
@@ -577,7 +593,7 @@ async fn a_makeup_sent_before_disabling_stays_in_the_makeup_queue() {
     let next = app
         .application
         .reviews
-        .take_next_makeup(app.teacher_actor())
+        .take_next_makeup(app.teacher_actor(), Utc::now())
         .await
         .unwrap()
         .expect("the makeup is still waiting");
@@ -628,7 +644,7 @@ async fn the_student_list_offers_a_makeup_with_its_end_credit_and_balance() {
     let listed = app
         .application
         .assignments
-        .list_for_student(app.student_actor(), PageRequest::default())
+        .list_for_student(app.student_actor(), PageRequest::default(), Utc::now())
         .await
         .unwrap()
         .items;
@@ -650,7 +666,7 @@ async fn the_student_card_counts_the_pool_spent_on_another_assignment() {
     let card = app
         .application
         .assignments
-        .find_for_student(app.student_actor(), open.id())
+        .find_for_student(app.student_actor(), open.id(), Utc::now())
         .await
         .unwrap();
 
@@ -689,7 +705,7 @@ async fn the_main_queue_and_its_counter_skip_an_earlier_makeup() {
     let next = app
         .application
         .reviews
-        .take_next_from_queue(app.teacher_actor())
+        .take_next_from_queue(app.teacher_actor(), Utc::now())
         .await
         .unwrap()
         .expect("the regular submission is in the queue");
@@ -709,7 +725,7 @@ async fn the_makeup_queue_hands_makeups_out_in_order_and_counts_what_it_hands_ou
 
     assert_eq!(reviews.makeup_size(app.teacher_actor()).await.unwrap(), 2);
     let next = reviews
-        .take_next_makeup(app.teacher_actor())
+        .take_next_makeup(app.teacher_actor(), Utc::now())
         .await
         .unwrap()
         .expect("a makeup is waiting");
@@ -721,7 +737,7 @@ async fn the_makeup_queue_hands_makeups_out_in_order_and_counts_what_it_hands_ou
 
     assert_eq!(reviews.makeup_size(app.teacher_actor()).await.unwrap(), 1);
     let next = reviews
-        .take_next_makeup(app.teacher_actor())
+        .take_next_makeup(app.teacher_actor(), Utc::now())
         .await
         .unwrap()
         .expect("the second makeup is waiting");
@@ -732,7 +748,7 @@ async fn the_makeup_queue_hands_makeups_out_in_order_and_counts_what_it_hands_ou
     assert_eq!(reviews.makeup_size(app.teacher_actor()).await.unwrap(), 0);
     assert!(
         reviews
-            .take_next_makeup(app.teacher_actor())
+            .take_next_makeup(app.teacher_actor(), Utc::now())
             .await
             .unwrap()
             .is_none()
@@ -759,7 +775,7 @@ async fn a_sandbox_makeup_stays_in_the_sandbox_list() {
     assert_eq!(reviews.makeup_size(app.teacher_actor()).await.unwrap(), 0);
     assert!(
         reviews
-            .take_next_makeup(app.teacher_actor())
+            .take_next_makeup(app.teacher_actor(), Utc::now())
             .await
             .unwrap()
             .is_none()

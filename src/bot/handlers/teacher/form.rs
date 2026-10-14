@@ -19,7 +19,7 @@ use crate::domain::DomainError;
 
 pub(super) trait FormScreen: Form + Sized {
     fn view(
-        &mut self,
+        &self,
         timezone: &BotTimezone,
         now: DateTime<Utc>,
     ) -> Option<(String, InlineKeyboardMarkup)>;
@@ -122,7 +122,7 @@ pub(super) async fn handle_date<F: FormScreen>(
     action: DeadlineAction,
     calendar_from: NaiveDate,
 ) -> HandlerResult {
-    match choose_date(action, screen.timezone(), screen.now(), calendar_from) {
+    match choose_date(action, screen.timezone(), calendar_from) {
         DateChoice::Mode(mode) => {
             form.set_mode(mode);
             render(screen.chat(), form, None).await

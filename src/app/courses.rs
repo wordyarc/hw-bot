@@ -72,6 +72,15 @@ pub struct StudentGradesCard {
 }
 
 #[derive(Clone, Debug)]
+pub enum GradebookEntry {
+    Groups(Vec<StudentGroup>),
+    Students {
+        group_id: StudentGroupId,
+        students: Page<CourseStudent>,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct CourseMakeupState {
     pub saved: Option<CourseMakeup>,
     pub undecided: Vec<UndecidedAssignment>,
@@ -203,6 +212,28 @@ impl CourseService {
         ))
     }
 
+    pub async fn gradebook_entry(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+    ) -> AppResult<GradebookEntry> {
+        let summary = self
+            .managed_summary(actor, course_id, "read course students")
+            .await?;
+        let [group] = summary.groups.as_slice() else {
+            return Ok(GradebookEntry::Groups(summary.groups));
+        };
+        let page = PageRequest::default();
+
+        Ok(GradebookEntry::Students {
+            group_id: group.id(),
+            students: Page::from_rows(
+                db::users::list_student_names(&self.pool, group.id(), page).await?,
+                page,
+            ),
+        })
+    }
+
     pub async fn list_students(
         &self,
         actor: Actor,
@@ -260,12 +291,13 @@ impl CourseService {
         course_id: TeachingCourseId,
         student_id: UserId,
         page: PageRequest,
+        now: DateTime<Utc>,
     ) -> AppResult<StudentGradesCard> {
         let (course, student, group_id) = self
             .managed_student(actor, course_id, student_id, "read student grades")
             .await?;
         let grades = load_student_grades(&self.pool, &course, group_id, student.id(), page).await?;
-        let makeup = active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await?;
+        let makeup = active_makeup_pool(&self.pool, course_id, student.id(), now).await?;
 
         Ok(StudentGradesCard {
             grades,
@@ -299,10 +331,11 @@ impl CourseService {
         &self,
         actor: Actor,
         course_id: TeachingCourseId,
+        now: DateTime<Utc>,
     ) -> AppResult<Option<CourseMakeup>> {
         load_managing_teacher(&self.pool, actor, course_id, "read course makeup").await?;
 
-        self.find_active_makeup(course_id).await
+        self.find_active_makeup(course_id, now).await
     }
 
     pub async fn makeup_state(
@@ -324,10 +357,11 @@ impl CourseService {
         course_id: TeachingCourseId,
         grading: Grading,
         except: Option<AssignmentId>,
+        now: DateTime<Utc>,
     ) -> AppResult<MakeupQuestion> {
         load_managing_teacher(&self.pool, actor, course_id, "read course makeup").await?;
 
-        let enabled = self.find_active_makeup(course_id).await?.is_some();
+        let enabled = self.find_active_makeup(course_id, now).await?.is_some();
         let hint = match grading {
             Grading::Score { max_score } if enabled => {
                 db::makeup::common_credit(&self.pool, course_id, max_score, except).await?
@@ -386,12 +420,13 @@ impl CourseService {
         actor: Actor,
         course_id: TeachingCourseId,
         student_id: UserId,
+        now: DateTime<Utc>,
     ) -> AppResult<Option<MakeupPool>> {
         let (_, student, _) = self
             .managed_student(actor, course_id, student_id, "read student makeup")
             .await?;
 
-        active_makeup_pool(&self.pool, course_id, student.id(), Utc::now()).await
+        active_makeup_pool(&self.pool, course_id, student.id(), now).await
     }
 
     pub async fn grant_makeup_attempt(
@@ -399,6 +434,7 @@ impl CourseService {
         actor: Actor,
         course_id: TeachingCourseId,
         student_id: UserId,
+        now: DateTime<Utc>,
     ) -> AppResult<MakeupPool> {
         let mut tx = self.pool.begin().await?;
 
@@ -414,7 +450,7 @@ impl CourseService {
             &mut tx,
             course_id,
             student.id(),
-            makeup.grant_attempt(extra, Utc::now())?,
+            makeup.grant_attempt(extra, now)?,
         )
         .await?;
         let pool = db::makeup::pool_for_student(&mut *tx, course_id, student.id())
@@ -457,8 +493,8 @@ impl CourseService {
     async fn find_active_makeup(
         &self,
         course_id: TeachingCourseId,
+        now: DateTime<Utc>,
     ) -> AppResult<Option<CourseMakeup>> {
-        let now = Utc::now();
         Ok(db::makeup::find_course(&self.pool, course_id)
             .await?
             .filter(|makeup| makeup.is_active_at(now)))

@@ -40,7 +40,7 @@ async fn open_makeup(app: &TestApp, attempts: u16) -> CourseMakeup {
 async fn settings(app: &TestApp) -> Option<CourseMakeup> {
     app.application
         .courses
-        .active_makeup(app.teacher_actor(), app.fixture.course.id())
+        .active_makeup(app.teacher_actor(), app.fixture.course.id(), Utc::now())
         .await
         .unwrap()
 }
@@ -61,6 +61,7 @@ async fn pool_balance(app: &TestApp) -> (u16, u16) {
             app.teacher_actor(),
             app.fixture.course.id(),
             app.fixture.student.id(),
+            Utc::now(),
         )
         .await
         .unwrap()
@@ -108,9 +109,7 @@ async fn enabling_with_a_date_a_pool_and_two_scales_writes_only_on_save() {
     let teacher = app.teacher();
 
     open_form(&app, &telegram).await;
-    telegram
-        .click_button(teacher, &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
-        .await;
+    telegram.click_preset(teacher, texts::PRESET_MONTH).await;
     telegram
         .click_button(teacher, &cb(callbacks::MAKEUP_ATTEMPTS_PREFIX, 3))
         .await;
@@ -146,7 +145,7 @@ async fn a_menu_item_during_the_form_writes_nothing_and_says_so() {
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     open_form(&app, &telegram).await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
+        .click_preset(app.teacher(), texts::PRESET_MONTH)
         .await;
     telegram
         .button(app.teacher(), &cb(callbacks::MAKEUP_ATTEMPTS_PREFIX, 3))
@@ -173,7 +172,7 @@ async fn a_save_opened_before_a_colleagues_save_keeps_the_colleagues_settings() 
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     open_form(&app, &telegram).await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
+        .click_preset(app.teacher(), texts::PRESET_MONTH)
         .await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::MAKEUP_ATTEMPTS_PREFIX, 3))
@@ -222,7 +221,7 @@ async fn a_prolongation_saved_after_the_makeup_ended_writes_nothing_and_announce
         .click_button(app.teacher(), callbacks::MAKEUP_DATE)
         .await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
+        .click_preset(app.teacher(), texts::PRESET_MONTH)
         .await;
     telegram.button(app.teacher(), callbacks::MAKEUP_SAVE).await;
     clock.move_to(opened.until() + Duration::seconds(1));
@@ -248,9 +247,7 @@ async fn finish_strict_creation(app: &TestApp, telegram: &TelegramScenario) {
     telegram
         .click_button(teacher, &cb(callbacks::LATE_POLICY_PREFIX, "none"))
         .await;
-    telegram
-        .click_button(teacher, &cb(callbacks::DEADLINE_DAYS_PREFIX, 7))
-        .await;
+    telegram.click_preset(teacher, texts::PRESET_WEEK).await;
     telegram.click_button(teacher, callbacks::TERMS_SAVE).await;
 }
 
@@ -298,6 +295,26 @@ async fn creating_on_a_course_without_makeup_asks_nothing_and_leaves_the_terms_u
 }
 
 #[tokio::test]
+async fn creating_after_the_makeup_ended_by_the_bot_clock_asks_no_makeup_question() {
+    let app = TestApp::start().await;
+    let opened = open_makeup(&app, 3).await;
+    let telegram = TelegramScenario::new().await;
+    let clock = TestClock::default();
+    clock.move_to(opened.until() + Duration::seconds(1));
+    let (cancellation, mut task) = start_bot_with_clock(&app, &telegram.server, clock.clock());
+
+    open_scored_creation(&app, &telegram, "After makeup", 10).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(
+        sent_callbacks(&telegram.server)
+            .await
+            .iter()
+            .all(|data| !data.starts_with(callbacks::MAKEUP_ANSWER_PREFIX))
+    );
+}
+
+#[tokio::test]
 async fn editing_terms_on_a_course_without_makeup_keeps_the_makeup_terms() {
     let app = TestApp::start().await;
     let work = app
@@ -323,7 +340,7 @@ async fn editing_terms_on_a_course_without_makeup_keeps_the_makeup_terms() {
         .click_button(teacher, callbacks::TERMS_DEADLINE)
         .await;
     telegram
-        .click_button(teacher, &cb(callbacks::DEADLINE_DAYS_PREFIX, 14))
+        .click_preset(teacher, texts::PRESET_TWO_WEEKS)
         .await;
     telegram.click_button(teacher, callbacks::TERMS_SAVE).await;
     stop_bot(cancellation, &mut task).await;
@@ -704,6 +721,28 @@ async fn an_empty_pool_leaves_the_card_without_a_submit_button() {
             .texts(app.student())
             .iter()
             .any(|text| text.contains(texts::MAKEUP_ATTEMPTS_EXHAUSTED))
+    );
+}
+
+#[tokio::test]
+async fn a_makeup_ended_by_the_bot_clock_leaves_a_closed_card_without_a_submit_button() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    let opened = open_makeup(&app, 2).await;
+    let telegram = TelegramScenario::new().await;
+    let clock = TestClock::default();
+    clock.move_to(opened.until() + Duration::seconds(1));
+    let (cancellation, mut task) = start_bot_with_clock(&app, &telegram.server, clock.clock());
+
+    open_assignment(&app, &telegram, closed.id().as_uuid()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let submit = cb(callbacks::SUBMIT_PREFIX, closed.id().as_uuid());
+    assert!(
+        telegram
+            .messages(app.student())
+            .iter()
+            .all(|message| !callbacks_of(message).contains(&submit))
     );
 }
 
@@ -1102,9 +1141,7 @@ async fn an_ended_makeup_is_shown_as_off_and_is_set_up_again_from_the_date() {
         .button_with_text(app.teacher(), texts::BUTTON_MAKEUP_OFF)
         .await;
     telegram.click(app.teacher(), &off);
-    telegram
-        .button(app.teacher(), &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
-        .await;
+    telegram.preset(app.teacher(), texts::PRESET_MONTH).await;
     stop_bot(cancellation, &mut task).await;
 
     assert!(
@@ -1172,9 +1209,7 @@ async fn cancelling_the_summary_writes_nothing_and_says_so() {
     let teacher = app.teacher();
 
     open_form(&app, &telegram).await;
-    telegram
-        .click_button(teacher, &cb(callbacks::DEADLINE_MONTHS_PREFIX, 1))
-        .await;
+    telegram.click_preset(teacher, texts::PRESET_MONTH).await;
     telegram
         .click_button(teacher, &cb(callbacks::MAKEUP_ATTEMPTS_PREFIX, 3))
         .await;

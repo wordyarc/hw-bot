@@ -46,7 +46,7 @@ pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerR
         )
     });
     let text = list_text(&texts::sandbox_header(total), entries);
-    send_message_chunks(bot, chat_id, text, None).await?;
+    send_message_chunks(bot, chat_id, &text, None).await?;
     let message = bot
         .send_message(chat_id, texts::SANDBOX_CHOOSE)
         .reply_markup(sandbox_keyboard(

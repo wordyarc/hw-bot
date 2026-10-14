@@ -112,7 +112,7 @@ fn deserialize_timezone<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Tz
 pub struct TelegramConfig {
     pub enabled: bool,
     pub api_base_url: String,
-    pub bot_token: Option<String>,
+    bot_token: Option<String>,
     pub request_timeout_ms: NonZeroU64,
     pub polling_timeout_ms: NonZeroU64,
     pub rate_limit_burst: NonZeroU32,

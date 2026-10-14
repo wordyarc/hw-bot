@@ -1388,10 +1388,7 @@ mod tests {
             saved.map_err(|error| format!("the domain refused saved terms: {error:?}"))
         }
 
-        fn view(&mut self, timezone: &BotTimezone, now: DateTime<Utc>) -> bool {
-            if self.form.step == TermsStep::Summary {
-                self.form.go(TermsStep::Summary);
-            }
+        fn view(&self, timezone: &BotTimezone, now: DateTime<Utc>) -> bool {
             terms_form_view(&self.form, timezone, now).is_some()
         }
     }

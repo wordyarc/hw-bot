@@ -340,6 +340,7 @@ async fn published_attachment_is_deleted_only_after_telegram_confirmation() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -391,6 +392,7 @@ async fn a_concurrent_change_during_upload_brings_the_menu_back() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -535,6 +537,7 @@ async fn student_receives_assignment_attachments_after_the_text() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT_FIXTURE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -549,6 +552,7 @@ async fn student_receives_assignment_attachments_after_the_text() {
             mime_type: Some("image/x-portable-pixmap".to_owned()),
             telegram_file_id: None,
             content: IMAGE_FIXTURE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -796,6 +800,7 @@ async fn add_document(app: &TestApp, assignment: AssignmentId, telegram_file_id:
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: telegram_file_id.map(str::to_owned),
             content: DOCUMENT_FIXTURE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();

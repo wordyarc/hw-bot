@@ -6,5 +6,5 @@ use crate::harness::TestApp;
 async fn health_endpoint_checks_the_database() {
     let app = TestApp::start().await;
 
-    app.get("/health").await.expect(StatusCode::OK);
+    app.get("/health/ready").await.expect(StatusCode::OK);
 }

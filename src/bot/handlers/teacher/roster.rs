@@ -26,7 +26,7 @@ pub(crate) async fn show_roster_page(
         roster.page,
         roster.next_page,
     );
-    send_screen(screen.bot(), screen.chat_id(), text, keyboard).await?;
+    send_screen(screen.bot(), screen.chat_id(), &text, keyboard).await?;
     reset_dialogue(screen.dialogue()).await
 }
 

@@ -34,7 +34,6 @@ pub const REQUEST_BODY_LIMIT: usize = 64 * 1024;
 
 pub fn router(state: AppState, request_timeout: Duration) -> Router {
     let router = Router::new()
-        .route("/health", get(health::readiness))
         .route("/health/live", get(health::liveness))
         .route("/health/ready", get(health::readiness))
         .route(

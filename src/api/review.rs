@@ -114,7 +114,7 @@ pub async fn take_next_from_queue(
     let Some(item) = state
         .application
         .reviews
-        .take_next_from_queue(reviewer)
+        .take_next_from_queue(reviewer, Utc::now())
         .await?
     else {
         return Ok(StatusCode::NO_CONTENT.into_response());

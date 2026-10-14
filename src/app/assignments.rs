@@ -94,6 +94,12 @@ pub struct StudentAssignmentDetails {
 }
 
 #[derive(Clone, Debug)]
+pub struct AssignmentStudents {
+    pub assignment: Assignment,
+    pub students: Page<AssignmentStudentSummary>,
+}
+
+#[derive(Clone, Debug)]
 pub struct AssignmentSubmissionHistory {
     pub subject_name: String,
     pub assignment_title: String,
@@ -246,8 +252,9 @@ impl AssignmentService {
         &self,
         actor: Actor,
         page: PageRequest,
+        now: DateTime<Utc>,
     ) -> AppResult<Page<StudentAssignment>> {
-        self.list_for_group(actor, page, |group_id| {
+        self.list_for_group(actor, page, now, |group_id| {
             db::assignments::list_published_for_group(&self.pool, group_id, page)
         })
         .await
@@ -257,8 +264,9 @@ impl AssignmentService {
         &self,
         actor: Actor,
         page: PageRequest,
+        now: DateTime<Utc>,
     ) -> AppResult<Page<StudentAssignment>> {
-        self.list_for_group(actor, page, |group_id| {
+        self.list_for_group(actor, page, now, |group_id| {
             db::assignments::list_archived_for_group(&self.pool, group_id, page)
         })
         .await
@@ -268,6 +276,7 @@ impl AssignmentService {
         &self,
         actor: Actor,
         page: PageRequest,
+        now: DateTime<Utc>,
         fetch: impl FnOnce(StudentGroupId) -> F,
     ) -> AppResult<Page<StudentAssignment>>
     where
@@ -277,7 +286,7 @@ impl AssignmentService {
         let group_id = student.student_group_id().required("student group")?;
 
         let assignments = fetch(group_id).await?;
-        self.with_student_histories(assignments, student.id())
+        self.with_student_histories(assignments, student.id(), now)
             .await
             .map(|items| Page::from_rows(items, page))
     }
@@ -286,6 +295,7 @@ impl AssignmentService {
         &self,
         cards: Vec<db::assignments::StudentAssignmentCard>,
         student_id: UserId,
+        now: DateTime<Utc>,
     ) -> AppResult<Vec<StudentAssignment>> {
         let ids: Vec<_> = cards
             .iter()
@@ -299,7 +309,6 @@ impl AssignmentService {
         courses.dedup();
         let mut histories = db::submissions::load_histories(&self.pool, &ids, student_id).await?;
         let pools = db::makeup::pools_for_student(&self.pool, &courses, student_id).await?;
-        let now = Utc::now();
 
         Ok(cards
             .into_iter()
@@ -320,6 +329,7 @@ impl AssignmentService {
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
+        now: DateTime<Utc>,
     ) -> AppResult<StudentAssignmentDetails> {
         let (student, assignment) =
             load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
@@ -342,7 +352,7 @@ impl AssignmentService {
 
         Ok(StudentAssignmentDetails {
             assignment: StudentAssignment {
-                makeup: makeup_offer(&assignment, history, pool, Utc::now()),
+                makeup: makeup_offer(&assignment, history, pool, now),
                 assignment,
                 subject,
                 history,
@@ -390,16 +400,20 @@ impl AssignmentService {
         actor: Actor,
         assignment_id: AssignmentId,
         page: PageRequest,
-    ) -> AppResult<Page<AssignmentStudentSummary>> {
+    ) -> AppResult<AssignmentStudents> {
         let assignment = self
             .load_managed_assignment(actor, assignment_id, "list assignment students")
             .await?;
-
-        Ok(Page::from_rows(
+        let students = Page::from_rows(
             db::users::list_students_with_assignment_history(&self.pool, assignment.id(), page)
                 .await?,
             page,
-        ))
+        );
+
+        Ok(AssignmentStudents {
+            assignment,
+            students,
+        })
     }
 
     /// Преподавателю нужны и черновики, и архив; ограничения студенческого списка здесь не действуют.

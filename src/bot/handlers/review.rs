@@ -49,8 +49,8 @@ pub(super) async fn show_next(screen: Screen<'_>, queue: Queue) -> HandlerResult
     let actor = screen.actor();
     let reviews = &screen.services().reviews;
     let next = match queue {
-        Queue::Main => reviews.take_next_from_queue(actor).await?,
-        Queue::Makeup => reviews.take_next_makeup(actor).await?,
+        Queue::Main => reviews.take_next_from_queue(actor, screen.now()).await?,
+        Queue::Makeup => reviews.take_next_makeup(actor, screen.now()).await?,
     };
     if let Some(item) = next {
         return show_item(screen, item).await;
@@ -88,7 +88,7 @@ pub(super) async fn open(screen: Screen<'_>, submission_id: SubmissionId) -> Han
     let item = screen
         .services()
         .reviews
-        .find_for_review(screen.actor(), submission_id)
+        .find_for_review(screen.actor(), submission_id, screen.now())
         .await?;
 
     show_item(screen, item).await
@@ -144,13 +144,7 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
         .await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
-    send_message_chunks(
-        bot,
-        chat_id,
-        item.assignment.body().as_str().to_owned(),
-        None,
-    )
-    .await?;
+    send_message_chunks(bot, chat_id, item.assignment.body().as_str(), None).await?;
     let submission_header = match send_previous_attempts(bot, chat_id, &item).await {
         Ok(()) => texts::SUBMISSION_HEADER.to_owned(),
         Err(error) if error.is_invalid_token() => return Err(error),
@@ -167,7 +161,7 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
     send_message_chunks(
         bot,
         chat_id,
-        item.submission.content().as_str().to_owned(),
+        item.submission.content().as_str(),
         Some(item_keyboard(&item)),
     )
     .await
@@ -222,7 +216,7 @@ async fn send_previous_attempts(
             attempt.content().as_str(),
             attempt.review_comment().map(|comment| comment.as_str()),
         );
-        send_message_chunks(bot, chat_id, text, None).await?;
+        send_message_chunks(bot, chat_id, &text, None).await?;
     }
     Ok(())
 }
@@ -246,12 +240,10 @@ pub(super) async fn submit_score_text(
             .await?;
         return Ok(());
     };
-    ask_review_comment(
+    score_chosen(
         step.chat(),
         submission_id,
-        ReviewDecision::Accept,
-        SubmissionKind::Regular,
-        Some(Grade::new(score, max_score, late)),
+        Grade::new(score, max_score, late),
     )
     .await
 }
@@ -364,7 +356,12 @@ async fn send_makeup_followup(screen: Screen<'_>, followup: MakeupFollowup) -> H
         optional_stat(
             services
                 .courses
-                .student_makeup(screen.actor(), followup.course_id, followup.student_id)
+                .student_makeup(
+                    screen.actor(),
+                    followup.course_id,
+                    followup.student_id,
+                    screen.now(),
+                )
                 .await,
             "student_makeup",
         )
@@ -415,7 +412,12 @@ pub(super) async fn grant_makeup_attempt(
     let notice = match screen
         .services()
         .courses
-        .grant_makeup_attempt(screen.actor(), grant.course_id, grant.student_id)
+        .grant_makeup_attempt(
+            screen.actor(),
+            grant.course_id,
+            grant.student_id,
+            screen.now(),
+        )
         .await
     {
         Ok(_) => texts::MAKEUP_ATTEMPT_GRANTED.to_owned(),
@@ -449,6 +451,7 @@ pub(super) async fn grant_makeup_attempt(
                         grant.course_id,
                         grant.student_id,
                         PageRequest::default(),
+                        screen.now(),
                     )
                     .await,
                 "student_grades",
@@ -486,7 +489,7 @@ async fn reload_item(
     match screen
         .services()
         .reviews
-        .find_for_review(screen.actor(), submission_id)
+        .find_for_review(screen.actor(), submission_id, screen.now())
         .await
     {
         Ok(item) => Ok(Some(item)),
@@ -663,12 +666,21 @@ pub(super) async fn handle_review_score(
             return screen.ask(&texts::score_prompt(max_score)).await;
         }
     };
-    ask_review_comment(
+    score_chosen(
         screen.chat(),
+        submission_id,
+        Grade::new(score, max_score, late),
+    )
+    .await
+}
+
+async fn score_chosen(chat: Chat<'_>, submission_id: SubmissionId, grade: Grade) -> HandlerResult {
+    ask_review_comment(
+        chat,
         submission_id,
         ReviewDecision::Accept,
         SubmissionKind::Regular,
-        Some(Grade::new(score, max_score, late)),
+        Some(grade),
     )
     .await
 }

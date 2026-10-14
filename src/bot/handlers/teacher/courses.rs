@@ -56,7 +56,10 @@ pub(crate) async fn show_course_assignments_page(
         .assignments
         .list_for_course(actor, course_id, page)
         .await?;
-    let makeup = services.courses.active_makeup(actor, course_id).await?;
+    let makeup = services
+        .courses
+        .active_makeup(actor, course_id, screen.now())
+        .await?;
 
     let codes: Vec<&str> = course
         .groups
@@ -79,7 +82,7 @@ pub(crate) async fn show_course_assignments_page(
             list_text(texts::COURSE_ASSIGNMENTS_HEADER, entries)
         )
     };
-    send_message_chunks(bot, chat_id, text, None).await?;
+    send_message_chunks(bot, chat_id, &text, None).await?;
 
     bot.send_message(chat_id, texts::CHOOSE_ASSIGNMENT)
         .reply_markup(paginated_keyboard(
@@ -131,7 +134,7 @@ pub(crate) async fn show_assignment(
         published.as_deref(),
         assignment.body().as_str(),
     );
-    send_message_chunks(bot, chat_id, text, None).await?;
+    send_message_chunks(bot, chat_id, &text, None).await?;
     let message = bot
         .send_message(chat_id, texts::CHOOSE_ACTION)
         .reply_markup(assignment_actions_keyboard(&assignment))

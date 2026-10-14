@@ -46,7 +46,7 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
     send_message_chunks(
         bot,
         chat_id,
-        text,
+        &text,
         Some(paginated_keyboard(
             student_menu(),
             PageTarget::Queue,
@@ -61,9 +61,12 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
     let actor = screen.actor();
     let services = screen.services();
     let timezone = screen.timezone();
-    let assignments = services.assignments.list_for_student(actor, page).await?;
-
     let now = screen.now();
+    let assignments = services
+        .assignments
+        .list_for_student(actor, page, now)
+        .await?;
+
     show_assignment_list(
         screen.chat(),
         assignments,
@@ -112,7 +115,7 @@ pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> 
     let services = screen.services();
     let assignments = services
         .assignments
-        .list_archived_for_student(actor, page)
+        .list_archived_for_student(actor, page, screen.now())
         .await?;
 
     show_assignment_list(
@@ -164,7 +167,7 @@ async fn show_assignment_list(
     send_message_chunks(
         bot,
         chat_id,
-        lines.join("\n"),
+        &lines.join("\n"),
         Some(student_assignments_keyboard(
             &assignments.items,
             target,
@@ -184,14 +187,14 @@ pub(super) async fn show_assignment(
     let chat_id = screen.chat_id();
     let services = screen.services();
     let timezone = screen.timezone();
+    let now = screen.now();
     let details = services
         .assignments
-        .find_for_student(actor, assignment_id)
+        .find_for_student(actor, assignment_id, now)
         .await?;
     let assignment = &details.assignment.assignment;
     let history = details.assignment.history;
     let makeup = details.assignment.makeup;
-    let now = screen.now();
     let mut summary = texts::assignment_card(
         details.assignment.subject.name().as_str(),
         assignment.title().as_str(),
@@ -222,7 +225,7 @@ pub(super) async fn show_assignment(
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
-    send_message_chunks(bot, chat_id, assignment.body().as_str().to_owned(), None).await?;
+    send_message_chunks(bot, chat_id, assignment.body().as_str(), None).await?;
     if let Some(submission) = &details.latest_submission {
         send_submission(screen, submission).await?;
     }
@@ -276,7 +279,7 @@ async fn send_submission(screen: Screen<'_>, submission: &Submission) -> Handler
         submission.content().as_str(),
         submission.review_comment().map(|comment| comment.as_str()),
     );
-    send_message_chunks(screen.bot(), screen.chat_id(), text, None).await
+    send_message_chunks(screen.bot(), screen.chat_id(), &text, None).await
 }
 
 pub(super) async fn show_history(
@@ -343,7 +346,7 @@ pub(super) async fn start_submission(
     let admitted = screen
         .services()
         .assignments
-        .find_for_student(screen.actor(), assignment_id)
+        .find_for_student(screen.actor(), assignment_id, screen.now())
         .await
         .and_then(|details| {
             submission_offer(&details.assignment, shown_at).map(|makeup| (details, makeup))
@@ -352,12 +355,7 @@ pub(super) async fn start_submission(
         Ok(admitted) => admitted,
         Err(error) if error.code().is_server_failure() => return Err(error.into()),
         Err(error) => {
-            screen
-                .bot()
-                .send_message(screen.chat_id(), app_error_message(error.code()))
-                .reply_markup(student_keyboard())
-                .await?;
-            return Ok(());
+            return send_with_menu(screen.chat(), app_error_message(error.code())).await;
         }
     };
     let item = &details.assignment;
@@ -384,10 +382,8 @@ pub(super) async fn submit_homework_text(
     assignment_id: AssignmentId,
     makeup: bool,
 ) -> HandlerResult {
-    let bot = step.bot();
-    let chat_id = step.chat_id();
     let Some(text) = require_text_within(
-        bot,
+        step.bot(),
         step.message(),
         USER_TEXT_MAX_LEN,
         texts::FIELD_SUBMISSION,
@@ -410,39 +406,38 @@ pub(super) async fn submit_homework_text(
             allow_makeup: makeup,
         })
         .await;
+    let submitted = match submitted {
+        Err(error) if error.code().is_server_failure() => return Err(error.into()),
+        submitted => submitted,
+    };
+    reset_dialogue(step.dialogue()).await?;
     match submitted {
         Ok(submitted) => {
-            reset_dialogue(step.dialogue()).await?;
             let confirmation = match submitted.makeup_balance {
                 Some(balance) => texts::makeup_queued(balance.remaining()),
                 None => texts::submission_queued(),
             };
-            bot.send_message(chat_id, confirmation)
-                .reply_markup(student_keyboard())
-                .await?;
-            Ok(())
+            send_with_menu(screen.chat(), confirmation).await
         }
-        Err(error)
+        Err(error) => {
+            send_with_menu(screen.chat(), app_error_message(error.code())).await?;
             if matches!(
                 error.code(),
                 ErrorCode::DeadlineExceeded | ErrorCode::SubmissionClosed
-            ) =>
-        {
-            reset_dialogue(step.dialogue()).await?;
-            bot.send_message(chat_id, app_error_message(error.code()))
-                .reply_markup(student_keyboard())
-                .await?;
-            show_assignment(screen, assignment_id).await
-        }
-        Err(error) if error.code().is_server_failure() => Err(error.into()),
-        Err(error) => {
-            reset_dialogue(step.dialogue()).await?;
-            bot.send_message(chat_id, app_error_message(error.code()))
-                .reply_markup(student_keyboard())
-                .await?;
+            ) {
+                return show_assignment(screen, assignment_id).await;
+            }
             Ok(())
         }
     }
+}
+
+async fn send_with_menu(chat: Chat<'_>, text: impl Into<String>) -> HandlerResult {
+    chat.bot()
+        .send_message(chat.chat_id(), text)
+        .reply_markup(student_keyboard())
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

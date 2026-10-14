@@ -238,6 +238,26 @@ impl TelegramScenario {
     }
 
     pub async fn button_with_text(&self, user: i64, text: &str) -> Button {
+        self.wait_for_labelled(user, |label| label == text)
+            .await
+            .unwrap_or_else(|| panic!("button {text} was not sent to {user}"))
+    }
+
+    pub async fn preset(&self, user: i64, label: &str) -> Button {
+        let prefix = texts::date_preset(label, "");
+        self.wait_for_labelled(user, |text| text.starts_with(&prefix))
+            .await
+            .unwrap_or_else(|| panic!("preset {label} was not sent to {user}"))
+    }
+
+    pub async fn click_preset(&self, user: i64, label: &str) -> Button {
+        let button = self.preset(user, label).await;
+        self.click(user, &button);
+        self.flush(user).await;
+        button
+    }
+
+    async fn wait_for_labelled(&self, user: i64, matches: impl Fn(&str) -> bool) -> Option<Button> {
         wait_for_some(Duration::from_secs(5), || async {
             let state = self.state.lock().unwrap();
             state.messages.iter().rev().find_map(|message| {
@@ -249,16 +269,18 @@ impl TelegramScenario {
                     .iter()
                     .flat_map(|row| row.as_array().unwrap())
                     .find_map(|button| {
-                        (button["text"] == text).then(|| Button {
-                            message_id: message["message_id"].as_i64().unwrap() as i32,
-                            data: button["callback_data"].as_str().unwrap().to_owned(),
-                            message: message.clone(),
-                        })
+                        button["text"]
+                            .as_str()
+                            .is_some_and(&matches)
+                            .then(|| Button {
+                                message_id: message["message_id"].as_i64().unwrap() as i32,
+                                data: button["callback_data"].as_str().unwrap().to_owned(),
+                                message: message.clone(),
+                            })
                     })
             })
         })
         .await
-        .unwrap_or_else(|| panic!("button {text} was not sent to {user}"))
     }
 
     pub async fn button_after(&self, user: i64, data: &str, previous: i32) -> Button {

@@ -1,3 +1,4 @@
+use chrono::Utc;
 use hw_bot::app::{
     AddAssignmentFile, ApplicationContainer, ChangeDeadline, DeleteAssignmentFile, ErrorCode,
     FilePolicy,
@@ -38,6 +39,7 @@ async fn add(
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: content.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap()
@@ -172,6 +174,7 @@ async fn a_draft_assignment_file_does_not_exist_for_a_student() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -206,6 +209,7 @@ async fn a_never_published_archived_file_does_not_exist_for_a_student() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap();
@@ -273,6 +277,7 @@ async fn file_size_limit_is_application_configuration() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap_err();
@@ -305,6 +310,7 @@ async fn assignment_file_count_limit_is_application_configuration() {
             mime_type: Some("image/x-portable-pixmap".to_owned()),
             telegram_file_id: None,
             content: IMAGE.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap_err();
@@ -327,6 +333,7 @@ async fn a_second_addition_from_the_same_card_is_refused() {
         mime_type: None,
         telegram_file_id: None,
         content: DOCUMENT.to_vec(),
+        created_at: Utc::now(),
     };
     application
         .files
@@ -391,6 +398,7 @@ async fn unrelated_teacher_cannot_manage_assignment_files() {
             mime_type: None,
             telegram_file_id: None,
             content: DOCUMENT.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap_err();
@@ -471,6 +479,7 @@ async fn assignment_change_invalidates_an_old_file_card() {
             mime_type: Some("text/plain".to_owned()),
             telegram_file_id: None,
             content: DOCUMENT.to_vec(),
+            created_at: Utc::now(),
         })
         .await
         .unwrap_err();
