@@ -50,6 +50,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       skip-image: true
+      skip-coverage: true
 
   publish-image:
     needs: [validate, checks]
