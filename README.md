@@ -8,7 +8,7 @@
 [![CI](https://github.com/WordyArc/hw-bot/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/WordyArc/hw-bot/actions/workflows/ci.yml)
 [![Release](https://github.com/WordyArc/hw-bot/actions/workflows/release.yml/badge.svg)](https://github.com/WordyArc/hw-bot/actions/workflows/release.yml)
 [![Docker Image](https://img.shields.io/docker/v/wordyarc/hw-bot?sort=semver&label=docker)](https://hub.docker.com/r/wordyarc/hw-bot)
-[![Rust 1.97](https://img.shields.io/badge/Rust-1.97-orange.svg?logo=rust)](https://www.rust-lang.org)
+[![Rust 1.99](https://img.shields.io/badge/Rust-1.99-orange.svg?logo=rust)](https://www.rust-lang.org)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-336791.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 
 A Telegram bot for submitting and reviewing homework.
