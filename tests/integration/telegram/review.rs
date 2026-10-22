@@ -28,6 +28,15 @@ fn regular_grade(grade: Grade) -> String {
     texts::grade_line(SubmissionKind::Regular, Some(grade)).unwrap()
 }
 
+async fn sent_at(app: &TestApp, submission: Uuid) -> String {
+    let submitted_at = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
+        .await
+        .unwrap()
+        .unwrap()
+        .submitted_at();
+    vladivostok().format_moment(submitted_at)
+}
+
 #[tokio::test]
 async fn the_review_card_shows_ten_previous_attempts_without_a_notice() {
     assert_previous_attempts_on_the_card(10, 1..=10, false).await;
@@ -534,7 +543,7 @@ async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
     app.review(first, app.teacher(), "reject", "Fix the tests")
         .await
         .ok();
-    app.queued_submission(app.student(), "pull/second").await;
+    let second = app.queued_submission(app.student(), "pull/second").await;
     let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
     telegram.message(app.teacher(), "/review");
@@ -561,10 +570,11 @@ async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
         app.fixture.student.display_name().as_str(),
         app.fixture.group.code().as_str(),
         2,
+        &sent_at(&app, second).await,
     );
     assert!(
         messages[..current].contains(&summary),
-        "the summary names the subject and the attempt number: {messages:#?}"
+        "the summary names the subject, the attempt number and when it was sent: {messages:#?}"
     );
 }
 
@@ -1379,6 +1389,7 @@ async fn the_review_card_names_the_group_of_the_author() {
         "Second group",
         second.code().as_str(),
         1,
+        &sent_at(&app, submission).await,
     );
     let sent = telegram.texts(app.teacher());
     assert!(sent.contains(&summary), "{sent:#?}");

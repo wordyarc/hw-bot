@@ -578,9 +578,10 @@ pub fn review_summary(
     student: &str,
     group: &str,
     attempt: u16,
+    sent_at: &str,
 ) -> String {
     format!(
-        "📘 {subject} · {title}\n👤 Студент: {student}\n👥 Группа: {group}\n🔁 Попытка {attempt}"
+        "📘 {subject} · {title}\n👤 Студент: {student}\n👥 Группа: {group}\n🔁 Попытка {attempt}\n🕒 Отправлено: {sent_at}"
     )
 }
 

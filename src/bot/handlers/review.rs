@@ -13,6 +13,7 @@ use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::errors::{log_handler_error, optional_stat, send_app_error};
 use crate::bot::state::{BotState, FlowState, GrantOrigin, ReviewTarget, ScreenState};
 use crate::bot::texts;
+use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
     SCORE_BUTTONS_LIMIT, makeup_followup_keyboard, review_decision_keyboard, review_hub_keyboard,
     review_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
@@ -140,8 +141,11 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
             target,
         }))
         .await?;
-    bot.send_message(chat_id, review_card_summary(&item, target))
-        .await?;
+    bot.send_message(
+        chat_id,
+        review_card_summary(&item, target, screen.timezone()),
+    )
+    .await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
         .await?;
     send_message_chunks(bot, chat_id, item.assignment.body().as_str(), None).await?;
@@ -167,13 +171,18 @@ async fn show_item(screen: Screen<'_>, item: ReviewQueueItem) -> HandlerResult {
     .await
 }
 
-fn review_card_summary(item: &ReviewQueueItem, target: ReviewTarget) -> String {
+fn review_card_summary(
+    item: &ReviewQueueItem,
+    target: ReviewTarget,
+    timezone: &BotTimezone,
+) -> String {
     let mut lines = vec![texts::review_summary(
         item.subject.name().as_str(),
         item.assignment.title().as_str(),
         item.student.display_name().as_str(),
         &item.group_code,
         item.submission.attempt_number(),
+        &timezone.format_moment(item.submission.submitted_at()),
     )];
     match target {
         ReviewTarget::Regular {
@@ -644,7 +653,10 @@ pub(super) async fn change_decision(
         .await?;
     screen
         .bot()
-        .send_message(screen.chat_id(), review_card_summary(&item, target))
+        .send_message(
+            screen.chat_id(),
+            review_card_summary(&item, target, screen.timezone()),
+        )
         .reply_markup(item_keyboard(&item))
         .await?;
     Ok(())
@@ -701,7 +713,7 @@ mod tests {
     };
     use crate::test_support::{
         GROUP_CODE, SUBJECT_NAME, assignment, course_for, student, student_group, subject,
-        submission, t0, teacher,
+        submission, t0, teacher, vladivostok,
     };
 
     fn people() -> (TeachingCourse, User, User) {
@@ -770,6 +782,20 @@ mod tests {
             review_target(&item(work, makeup, student)),
             ReviewTarget::Makeup
         );
+    }
+
+    #[test]
+    fn the_review_card_names_the_local_moment_the_work_was_sent() {
+        let (course, teacher, student) = people();
+        let work = assignment(&course, &teacher).published().build();
+        let sent = submission(&work, &student)
+            .submitted_at(t0() + Duration::hours(15) + Duration::minutes(7))
+            .build();
+        let item = item(work, sent, student);
+
+        let summary = review_card_summary(&item, review_target(&item), &vladivostok());
+
+        assert!(summary.contains("02.01.2026 01:07"), "{summary}");
     }
 
     #[test]
