@@ -1,6 +1,5 @@
-<p align="center">
-  <img src="docs/images/icon.svg" alt="hw-bot" width="120">
-</p>
+![HW·bot Logo (Light)](docs/logo/svg/hw-bot-lockup-en.svg#gh-light-mode-only)
+![HW·bot Logo (Dark)](docs/logo/svg/hw-bot-lockup-en-dark.svg#gh-dark-mode-only)
 
 # hw-bot
 

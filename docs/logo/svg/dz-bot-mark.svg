@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="ДЗ·бот">
+  <title>ДЗ·бот</title>
+  <rect width="120" height="120" rx="28" fill="#0B2A4A"/>
+  <circle cx="32" cy="34" r="9" fill="#E8833A"/>
+  <g stroke="#7FC4CF" stroke-width="1.6" stroke-linecap="round">
+    <line x1="88" y1="22" x2="58" y2="78"/><line x1="88" y1="22" x2="70" y2="78"/>
+    <line x1="88" y1="22" x2="82" y2="78"/><line x1="88" y1="22" x2="100" y2="78"/>
+  </g>
+  <line x1="20" y1="78" x2="104" y2="78" stroke="#7FC4CF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M30 58 L46 76 L88 22" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M22 92 q8 -6 16 0 t16 0 t16 0 t16 0 t16 0" fill="none" stroke="#2FA3B5" stroke-width="3" stroke-linecap="round"/>
+  <path d="M30 101 q8 -6 16 0 t16 0 t16 0 t16 0" fill="none" stroke="#2FA3B5" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
+</svg>
