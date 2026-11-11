@@ -59,7 +59,7 @@ pub struct ReviewedSubmission {
     pub subject: Subject,
     pub course_id: TeachingCourseId,
     pub sandbox: bool,
-    pub attempts: Option<RemainingAttempts>,
+    pub returned_attempt: Option<RemainingAttempts>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,13 +124,13 @@ impl ReviewService {
         Ok(db::submissions::count_by_subject_for_reviewer(&self.pool, &reviewer).await?)
     }
 
-    pub async fn subject(&self, actor: Actor, subject_id: SubjectId) -> AppResult<Subject> {
+    pub async fn subject_name(&self, actor: Actor, subject_id: SubjectId) -> AppResult<String> {
         load_reviewer(&self.pool, actor).await?;
         let (subject, _) = db::academic::find_subject_with_sandbox(&self.pool, subject_id)
             .await?
             .required("subject")?;
 
-        Ok(subject)
+        Ok(subject.name().as_str().to_owned())
     }
 
     pub async fn queue_page(
@@ -302,7 +302,7 @@ impl ReviewService {
 
         record_review(&mut tx, &submission, &context).await?;
 
-        let attempts = if command.return_attempt {
+        let returned_attempt = if command.return_attempt {
             let history = load_history(&mut tx, &submission).await?;
             Some(RemainingAttempts {
                 remaining: history.remaining_attempts_for(&context.assignment),
@@ -319,7 +319,7 @@ impl ReviewService {
             subject: context.subject,
             course_id: context.course.id(),
             sandbox: context.sandbox,
-            attempts,
+            returned_attempt,
         })
     }
 

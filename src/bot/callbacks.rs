@@ -187,7 +187,7 @@ pub(super) enum ReplayableAction {
     AssignmentFiles(AssignmentId),
     CourseInvite(TeachingCourseId),
     GradebookGroups(TeachingCourseId),
-    ReviewSubmission(SubmissionId),
+    OpenSandboxReview(SubmissionId),
     PickReview(SubmissionId),
 }
 
@@ -222,7 +222,7 @@ impl ReplayableAction {
             Self::AssignmentFiles(id) => format!("{FILES_PREFIX}{}", id.as_uuid()),
             Self::CourseInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
             Self::GradebookGroups(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
-            Self::ReviewSubmission(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
+            Self::OpenSandboxReview(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
             Self::PickReview(id) => format!("{REVIEW_PICK_PREFIX}{}", id.as_uuid()),
         }
     }
@@ -696,9 +696,9 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         ))
     }),
     (REVIEW_OPEN_PREFIX, |id| {
-        Replayable(ReplayableAction::ReviewSubmission(SubmissionId::from_uuid(
-            id,
-        )))
+        Replayable(ReplayableAction::OpenSandboxReview(
+            SubmissionId::from_uuid(id),
+        ))
     }),
     (NEXT_SUBJECT_REVIEW_PREFIX, |id| {
         Replayable(ReplayableAction::NextReview(Some(SubjectId::from_uuid(id))))
@@ -1061,8 +1061,8 @@ mod tests {
                 Replayable(ReplayableAction::CourseInvite(course)),
             Replayable(ReplayableAction::GradebookGroups(_)) =>
                 Replayable(ReplayableAction::GradebookGroups(course)),
-            Replayable(ReplayableAction::ReviewSubmission(_)) =>
-                Replayable(ReplayableAction::ReviewSubmission(submission)),
+            Replayable(ReplayableAction::OpenSandboxReview(_)) =>
+                Replayable(ReplayableAction::OpenSandboxReview(submission)),
             Replayable(ReplayableAction::PickReview(_)) =>
                 Replayable(ReplayableAction::PickReview(submission)),
             Screen(ScreenAction::Publish(_)) => Screen(ScreenAction::Publish(assignment)),

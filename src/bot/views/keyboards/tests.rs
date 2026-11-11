@@ -472,11 +472,11 @@ fn subject_queue(name: &str, pending: u32) -> SubjectQueue {
 #[test]
 fn the_review_hub_offers_the_queue_and_its_list_only_when_it_has_work() {
     assert_eq!(
-        hub_callbacks(review_hub_keyboard(&[], 2)),
+        hub_callbacks(review_hub_keyboard(0, &[], 2)),
         vec![ReplayableAction::NextMakeupReview.callback()]
     );
     assert_eq!(
-        hub_callbacks(review_hub_keyboard(&[subject_queue("Backend", 3)], 2)),
+        hub_callbacks(review_hub_keyboard(3, &[subject_queue("Backend", 3)], 2)),
         vec![
             ReplayableAction::NextReview(None).callback(),
             ReplayableAction::NextMakeupReview.callback(),
@@ -491,7 +491,11 @@ fn the_review_hub_offers_subjects_only_when_two_of_them_wait() {
     let frontend = subject_queue("Frontend", 5);
 
     assert_eq!(
-        hub_callbacks(review_hub_keyboard(&[backend.clone(), frontend.clone()], 0)),
+        hub_callbacks(review_hub_keyboard(
+            17,
+            &[backend.clone(), frontend.clone()],
+            0
+        )),
         vec![
             ReplayableAction::NextReview(None).callback(),
             ReplayableAction::NextReview(Some(backend.subject_id)).callback(),
@@ -499,7 +503,7 @@ fn the_review_hub_offers_subjects_only_when_two_of_them_wait() {
             ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
         ]
     );
-    let labels: Vec<String> = review_hub_keyboard(&[backend, frontend], 0)
+    let labels: Vec<String> = review_hub_keyboard(17, &[backend, frontend], 0)
         .inline_keyboard
         .into_iter()
         .flatten()
@@ -517,14 +521,18 @@ fn a_followup_offers_the_next_work_of_its_stream_only_while_work_is_left() {
     let subject = SubjectId::new();
 
     assert_eq!(
-        hub_callbacks(queue_followup_keyboard(Some(subject), true)),
+        hub_callbacks(queue_followup_keyboard(Some(subject), Some(4))),
         vec![
             ReplayableAction::NextReview(Some(subject)).callback(),
             ReplayableAction::ReviewHub.callback(),
         ]
     );
     assert_eq!(
-        hub_callbacks(queue_followup_keyboard(Some(subject), false)),
+        hub_callbacks(queue_followup_keyboard(Some(subject), None)),
+        hub_callbacks(queue_followup_keyboard(Some(subject), Some(4))),
+    );
+    assert_eq!(
+        hub_callbacks(queue_followup_keyboard(Some(subject), Some(0))),
         vec![ReplayableAction::ReviewHub.callback()]
     );
 }

@@ -524,7 +524,7 @@ async fn handle_replayable_action(
         ReplayableAction::GradebookGroups(course_id) => {
             teacher::show_gradebook_groups(screen, course_id).await
         }
-        ReplayableAction::ReviewSubmission(submission_id) => {
+        ReplayableAction::OpenSandboxReview(submission_id) => {
             review::open(screen, submission_id, ReviewOrigin::Sandbox).await
         }
         ReplayableAction::PickReview(submission_id) => {
@@ -707,7 +707,8 @@ mod tests {
     use super::*;
     use crate::bot::callbacks::AmountChoice;
     use crate::bot::views::{
-        assignment_actions_keyboard, attempts_keyboard, review_keyboard, student_menu, teacher_menu,
+        ReviewButtons, assignment_actions_keyboard, attempts_keyboard, review_keyboard,
+        student_menu, teacher_menu,
     };
     use crate::domain::{SubmissionId, TeachingCourseId, UserId};
 
@@ -773,12 +774,12 @@ mod tests {
         use crate::bot::callbacks::MakeupFormAction;
         use crate::bot::makeup_form::{MakeupForm, MakeupStep};
         use crate::bot::views::{
-            assignment_files_keyboard, assignment_groups_keyboard, assignment_students_keyboard,
-            attempts_keyboard, calendar_keyboard, confirm_file_deletion_keyboard,
-            confirm_invite_rotation_keyboard, contact_keyboard, course_assignments_keyboard,
-            course_invite_keyboard, courses_keyboard, deadline_options_keyboard,
-            gradebook_groups_keyboard, gradebook_students_keyboard, grading_keyboard,
-            late_policy_keyboard, list_followup_keyboard, makeup_answer_keyboard,
+            ReviewButtons, assignment_files_keyboard, assignment_groups_keyboard,
+            assignment_students_keyboard, attempts_keyboard, calendar_keyboard,
+            confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard, contact_keyboard,
+            course_assignments_keyboard, course_invite_keyboard, courses_keyboard,
+            deadline_options_keyboard, gradebook_groups_keyboard, gradebook_students_keyboard,
+            grading_keyboard, late_policy_keyboard, list_followup_keyboard, makeup_answer_keyboard,
             makeup_attempts_keyboard, makeup_followup_keyboard, makeup_form_view,
             paginated_keyboard, penalty_keyboard, queue_followup_keyboard,
             registration_groups_keyboard, reopen_assignment_keyboard, review_decision_keyboard,
@@ -903,14 +904,24 @@ mod tests {
                 SubmissionId::new(),
                 course.id(),
                 student_id,
-                Some(texts::BUTTON_ACCEPT.to_owned()),
-                true,
+                ReviewButtons {
+                    accept: Some(texts::BUTTON_ACCEPT.to_owned()),
+                    rework: true,
+                },
             ),
-            review_keyboard(SubmissionId::new(), course.id(), student_id, None, false),
+            review_keyboard(
+                SubmissionId::new(),
+                course.id(),
+                student_id,
+                ReviewButtons {
+                    accept: None,
+                    rework: false,
+                },
+            ),
             review_decision_keyboard(SubmissionId::new()),
-            review_hub_keyboard(&subject_queues, 5),
-            queue_followup_keyboard(Some(subject_queues[0].subject_id), true),
-            queue_followup_keyboard(None, false),
+            review_hub_keyboard(17, &subject_queues, 5),
+            queue_followup_keyboard(Some(subject_queues[0].subject_id), Some(12)),
+            queue_followup_keyboard(None, Some(0)),
             list_followup_keyboard(),
             review_list_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
             makeup_followup_keyboard(true, true),
@@ -1112,8 +1123,10 @@ mod tests {
             submission_id,
             TeachingCourseId::new(),
             UserId::new(),
-            Some(texts::BUTTON_ACCEPT.to_owned()),
-            true,
+            ReviewButtons {
+                accept: Some(texts::BUTTON_ACCEPT.to_owned()),
+                rework: true,
+            },
         );
         let json = serde_json::to_value(keyboard).unwrap();
         let accept = json["inline_keyboard"][0][0]["callback_data"]

@@ -257,7 +257,7 @@ async fn rework_rejects_and_returns_the_attempt() {
     assert_eq!(reviewed.submission.status(), SubmissionStatus::Rejected);
     assert_eq!(extra_attempts(&app, &work, &app.fixture.student).await, 1);
     assert_eq!(
-        reviewed.attempts,
+        reviewed.returned_attempt,
         Some(RemainingAttempts {
             remaining: 1,
             allowed: 2

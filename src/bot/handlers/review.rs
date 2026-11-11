@@ -18,10 +18,10 @@ use crate::bot::state::{
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
-    SCORE_BUTTONS_LIMIT, list_followup_keyboard, list_text, makeup_followup_keyboard,
-    queue_followup_keyboard, review_decision_keyboard, review_hub_keyboard, review_keyboard,
-    review_list_keyboard, review_score_keyboard, send_message_chunks, teacher_keyboard,
-    teacher_menu,
+    ReviewButtons, SCORE_BUTTONS_LIMIT, list_followup_keyboard, list_text,
+    makeup_followup_keyboard, queue_followup_keyboard, review_decision_keyboard,
+    review_hub_keyboard, review_keyboard, review_list_keyboard, review_score_keyboard,
+    send_message_chunks, teacher_keyboard, teacher_menu,
 };
 use crate::domain::{
     DomainError, Grade, Grading, LatePenalty, MaxScore, ReviewDecision, ReviewScore, SubjectId,
@@ -47,7 +47,7 @@ pub(super) async fn show_hub(screen: Screen<'_>) -> HandlerResult {
     screen
         .bot()
         .send_message(screen.chat_id(), texts::review_hub(queue, makeups))
-        .reply_markup(review_hub_keyboard(&subjects, makeups))
+        .reply_markup(review_hub_keyboard(queue, &subjects, makeups))
         .await?;
     Ok(())
 }
@@ -87,10 +87,10 @@ pub(super) async fn show_next(screen: Screen<'_>, queue: Queue) -> HandlerResult
             )
         }
         Queue::Main(Some(subject)) => {
-            let subject = reviews.subject(actor, subject).await?;
+            let subject = reviews.subject_name(actor, subject).await?;
             let queue = reviews.queue_size(actor, None).await?;
             (
-                texts::subject_queue_empty(subject.name().as_str()),
+                texts::subject_queue_empty(&subject),
                 (queue > 0).then(|| texts::review_queue_line(queue)),
                 teacher_menu(Some(queue)),
             )
@@ -202,8 +202,10 @@ fn item_keyboard(item: &ReviewQueueItem, now: DateTime<Utc>) -> InlineKeyboardMa
         item.submission.id(),
         item.assignment.teaching_course_id(),
         item.student.id(),
-        accept_label(item),
-        offers_rework(item, now),
+        ReviewButtons {
+            accept: accept_label(item),
+            rework: offers_rework(item, now),
+        },
     )
 }
 
@@ -459,7 +461,7 @@ fn saved_text(reviewed: &ReviewedSubmission) -> String {
     lines.extend(texts::grade_line(submission.kind(), submission.grade()));
     lines.extend(
         reviewed
-            .attempts
+            .returned_attempt
             .map(|attempts| texts::attempt_returned(attempts.remaining, attempts.allowed)),
     );
     lines.join("\n")
@@ -480,24 +482,20 @@ async fn send_queue_followup(
                 reviews.queue_size(actor, Some(subject)).await,
                 "subject_queue_left",
             );
-            if left == Some(0) {
-                let rest = optional_stat(reviews.queue_size(actor, None).await, "queue_left");
-                (
-                    texts::subject_done(subject_name, rest),
-                    Some(queue_followup_keyboard(Some(subject), false)),
-                )
-            } else {
-                (
-                    texts::subject_left(subject_name, left),
-                    Some(queue_followup_keyboard(Some(subject), true)),
-                )
-            }
+            let text = match left {
+                Some(0) => {
+                    let rest = optional_stat(reviews.queue_size(actor, None).await, "queue_left");
+                    texts::subject_done(subject_name, rest)
+                }
+                left => texts::subject_left(subject_name, left),
+            };
+            (text, Some(queue_followup_keyboard(Some(subject), left)))
         }
         ReviewOrigin::Queue { subject: None } => {
             let left = optional_stat(reviews.queue_size(actor, None).await, "queue_left");
             (
                 texts::queue_left(left),
-                Some(queue_followup_keyboard(None, left != Some(0))),
+                Some(queue_followup_keyboard(None, left)),
             )
         }
         ReviewOrigin::List => {
@@ -1029,38 +1027,31 @@ mod tests {
     }
 
     #[test]
-    fn the_card_marks_the_last_allowed_regular_attempt() {
+    fn the_card_numbers_a_regular_attempt_after_the_decided_ones() {
         let (course, teacher, student) = people();
         let work = assignment(&course, &teacher)
             .max_attempts(2)
             .published()
             .build();
-        let sent = submission(&work, &student)
-            .history(history().used(1).build())
-            .build();
+        let sent = submission(&work, &student).build();
         let mut item = item(work, sent, student);
         item.history = history().used(1).build();
 
         assert_eq!(attempt_line(&item), texts::regular_attempt(2, 2));
-        assert!(texts::regular_attempt(2, 2).contains("последняя"));
     }
 
     #[test]
-    fn an_extra_attempt_moves_the_last_one_further() {
+    fn an_extra_attempt_raises_the_allowed_count_on_the_card() {
         let (course, teacher, student) = people();
         let work = assignment(&course, &teacher)
             .max_attempts(2)
             .published()
             .build();
-        let sent = submission(&work, &student)
-            .history(history().used(1).extra(1).build())
-            .build();
+        let sent = submission(&work, &student).build();
         let mut item = item(work, sent, student);
         item.history = history().used(1).extra(1).build();
 
-        let line = attempt_line(&item);
-        assert_eq!(line, texts::regular_attempt(2, 3));
-        assert!(!line.contains("последняя"), "{line}");
+        assert_eq!(attempt_line(&item), texts::regular_attempt(2, 3));
     }
 
     #[test]

@@ -573,9 +573,11 @@ pub fn subject_done(subject: &str, rest: Option<u32>) -> String {
     format!("🎉 Работы по предмету «{subject}» закончились.{rest}")
 }
 
+pub const LAST_ATTEMPT_MARK: &str = " — последняя";
+
 pub fn regular_attempt(number: u16, allowed: u16) -> String {
     let last = if number >= allowed {
-        " — последняя"
+        LAST_ATTEMPT_MARK
     } else {
         ""
     };
@@ -1690,6 +1692,12 @@ mod tests {
         assert_eq!(queue_left(Some(0)), REVIEW_QUEUE_DONE);
         assert!(queue_left(Some(16)).contains("16"));
         assert!(subject_left("Backend", Some(11)).contains("11"));
+    }
+
+    #[test]
+    fn only_the_last_allowed_attempt_is_marked() {
+        assert!(regular_attempt(2, 2).ends_with(LAST_ATTEMPT_MARK));
+        assert!(!regular_attempt(2, 3).contains(LAST_ATTEMPT_MARK));
     }
 
     #[test]

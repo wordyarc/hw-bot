@@ -231,12 +231,16 @@ pub(crate) fn submission_history_keyboard(
     )
 }
 
+pub(crate) struct ReviewButtons {
+    pub(crate) accept: Option<String>,
+    pub(crate) rework: bool,
+}
+
 pub(crate) fn review_keyboard(
     submission_id: SubmissionId,
     course_id: TeachingCourseId,
     student_id: UserId,
-    accept: Option<String>,
-    rework: bool,
+    buttons: ReviewButtons,
 ) -> InlineKeyboardMarkup {
     let review = |decision| {
         FlowAction::Review {
@@ -245,10 +249,12 @@ pub(crate) fn review_keyboard(
         }
         .callback()
     };
-    let accept = accept.map(|label| button(label, review(ReviewDecision::Accept)));
+    let accept = buttons
+        .accept
+        .map(|label| button(label, review(ReviewDecision::Accept)));
     let reject = button(texts::BUTTON_REJECT, review(ReviewDecision::Reject));
     let mut rows = vec![accept.into_iter().chain([reject]).collect()];
-    if rework {
+    if buttons.rework {
         rows.push(row(
             texts::BUTTON_RETURN_FOR_REWORK,
             FlowAction::ReturnForRework(submission_id).callback(),
@@ -258,8 +264,11 @@ pub(crate) fn review_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(crate) fn review_hub_keyboard(subjects: &[SubjectQueue], makeups: u32) -> InlineKeyboardMarkup {
-    let queue: u32 = subjects.iter().map(|subject| subject.pending).sum();
+pub(crate) fn review_hub_keyboard(
+    queue: u32,
+    subjects: &[SubjectQueue],
+    makeups: u32,
+) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     if queue > 0 {
         rows.push(row(
@@ -295,10 +304,10 @@ pub(crate) fn review_hub_keyboard(subjects: &[SubjectQueue], makeups: u32) -> In
 
 pub(crate) fn queue_followup_keyboard(
     subject: Option<SubjectId>,
-    next: bool,
+    left: Option<u32>,
 ) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
-    if next {
+    if left != Some(0) {
         rows.push(row(
             texts::BUTTON_NEXT_REVIEW,
             ReplayableAction::NextReview(subject).callback(),
@@ -425,7 +434,7 @@ pub(crate) fn sandbox_keyboard(
                 &submission.student_name,
                 &submission.assignment_title,
             )),
-            ReplayableAction::ReviewSubmission(submission.submission_id).callback(),
+            ReplayableAction::OpenSandboxReview(submission.submission_id).callback(),
         )
     });
     let mut keyboard = paginated_keyboard(
