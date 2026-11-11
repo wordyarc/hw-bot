@@ -388,22 +388,25 @@ async fn the_review_entry_offers_the_queue_and_the_makeups_when_makeups_wait() {
 }
 
 #[tokio::test]
-async fn without_makeups_the_review_entry_opens_the_next_work() {
+async fn without_makeups_the_review_entry_offers_only_the_queue() {
     let app = TestApp::start().await;
-    let regular = app.queued_submission(app.student(), "pull/regular").await;
+    app.queued_submission(app.student(), "pull/regular").await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
     telegram.message(app.teacher(), texts::BUTTON_REVIEW);
-    telegram
-        .button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, regular))
-        .await;
+    let queue = telegram.button(app.teacher(), callbacks::NEXT_REVIEW).await;
     stop_bot(cancellation, &mut task).await;
 
-    let offered = sent_callbacks(&telegram.server).await;
+    let offered = callbacks_of(&telegram.message_by_id(app.teacher(), queue.message_id));
     assert!(
         !offered.contains(&callbacks::NEXT_MAKEUP_REVIEW.to_owned()),
         "{offered:#?}"
+    );
+    assert!(
+        telegram
+            .texts(app.teacher())
+            .contains(&texts::review_hub(1, 0))
     );
 }
 

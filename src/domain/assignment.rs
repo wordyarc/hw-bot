@@ -755,6 +755,10 @@ impl Assignment {
     pub fn is_published(&self) -> bool {
         self.status == AssignmentStatus::Published
     }
+
+    pub fn is_open_for_regular_at(&self, at: DateTime<Utc>) -> bool {
+        self.is_published() && self.ensure_open_for_submission(at).is_ok()
+    }
 }
 
 #[cfg(test)]

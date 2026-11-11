@@ -449,29 +449,82 @@ fn the_makeup_question_offers_the_common_credit_as_a_separate_button() {
     );
 }
 
-#[test]
-fn the_review_hub_offers_the_queue_only_when_it_has_work() {
-    let callbacks = |keyboard: InlineKeyboardMarkup| -> Vec<String> {
-        keyboard
-            .inline_keyboard
-            .into_iter()
-            .flatten()
-            .filter_map(|button| match button.kind {
-                teloxide::types::InlineKeyboardButtonKind::CallbackData(data) => Some(data),
-                _ => None,
-            })
-            .collect()
-    };
+fn hub_callbacks(keyboard: InlineKeyboardMarkup) -> Vec<String> {
+    keyboard
+        .inline_keyboard
+        .into_iter()
+        .flatten()
+        .filter_map(|button| match button.kind {
+            teloxide::types::InlineKeyboardButtonKind::CallbackData(data) => Some(data),
+            _ => None,
+        })
+        .collect()
+}
 
+fn subject_queue(name: &str, pending: u32) -> SubjectQueue {
+    SubjectQueue {
+        subject_id: SubjectId::new(),
+        subject_name: name.to_owned(),
+        pending,
+    }
+}
+
+#[test]
+fn the_review_hub_offers_the_queue_and_its_list_only_when_it_has_work() {
     assert_eq!(
-        callbacks(review_hub_keyboard(0, 2)),
+        hub_callbacks(review_hub_keyboard(&[], 2)),
         vec![ReplayableAction::NextMakeupReview.callback()]
     );
     assert_eq!(
-        callbacks(review_hub_keyboard(3, 2)),
+        hub_callbacks(review_hub_keyboard(&[subject_queue("Backend", 3)], 2)),
         vec![
-            ReplayableAction::NextReview.callback(),
+            ReplayableAction::NextReview(None).callback(),
             ReplayableAction::NextMakeupReview.callback(),
+            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
         ]
+    );
+}
+
+#[test]
+fn the_review_hub_offers_subjects_only_when_two_of_them_wait() {
+    let backend = subject_queue("Backend", 12);
+    let frontend = subject_queue("Frontend", 5);
+
+    assert_eq!(
+        hub_callbacks(review_hub_keyboard(&[backend.clone(), frontend.clone()], 0)),
+        vec![
+            ReplayableAction::NextReview(None).callback(),
+            ReplayableAction::NextReview(Some(backend.subject_id)).callback(),
+            ReplayableAction::NextReview(Some(frontend.subject_id)).callback(),
+            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+        ]
+    );
+    let labels: Vec<String> = review_hub_keyboard(&[backend, frontend], 0)
+        .inline_keyboard
+        .into_iter()
+        .flatten()
+        .map(|button| button.text)
+        .collect();
+    assert!(labels[0].contains("17"), "{labels:?}");
+    assert!(
+        labels[1].contains("Backend") && labels[1].contains("12"),
+        "{labels:?}"
+    );
+}
+
+#[test]
+fn a_followup_offers_the_next_work_of_its_stream_only_while_work_is_left() {
+    let subject = SubjectId::new();
+
+    assert_eq!(
+        hub_callbacks(queue_followup_keyboard(Some(subject), true)),
+        vec![
+            ReplayableAction::NextReview(Some(subject)).callback(),
+            ReplayableAction::ReviewHub.callback(),
+        ]
+    );
+    assert_eq!(
+        hub_callbacks(queue_followup_keyboard(Some(subject), false)),
+        vec![ReplayableAction::ReviewHub.callback()]
     );
 }

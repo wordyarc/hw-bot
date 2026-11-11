@@ -482,6 +482,7 @@ async fn a_rejected_makeup_spends_the_pool_but_not_the_assignment_attempts() {
             score: None,
             comment: "Не то".to_owned(),
             reviewed_at: Utc::now(),
+            return_attempt: false,
         })
         .await
         .unwrap();
@@ -616,6 +617,7 @@ async fn a_makeup_sent_before_disabling_is_credited_by_its_terms() {
             score: None,
             comment: "Досдано".to_owned(),
             reviewed_at: Utc::now(),
+            return_attempt: false,
         })
         .await
         .unwrap();
@@ -700,7 +702,7 @@ async fn the_main_queue_and_its_counter_skip_an_earlier_makeup() {
     assert_eq!(
         app.application
             .reviews
-            .queue_size(app.teacher_actor())
+            .queue_size(app.teacher_actor(), None)
             .await
             .unwrap(),
         1
@@ -708,7 +710,7 @@ async fn the_main_queue_and_its_counter_skip_an_earlier_makeup() {
     let next = app
         .application
         .reviews
-        .take_next_from_queue(app.teacher_actor(), Utc::now())
+        .take_next_from_queue(app.teacher_actor(), None, Utc::now())
         .await
         .unwrap()
         .expect("the regular submission is in the queue");

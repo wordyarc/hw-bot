@@ -351,9 +351,10 @@ pub fn teacher_help() -> String {
         "❓ Как вести предмет\n\n\
         Новое задание создаётся внутри предмета в «{BUTTON_COURSES}». Бот спросит текст, группы, если предмет читается нескольким группам, число попыток, шкалу оценивания, срок и возможность сдать с опозданием. Штраф за опоздание снижает балл работы либо вычитается из итога по предмету: способ выбирается вместе с допуском опозданий. Для штрафа укажите, сколько баллов снимать, за какой период и сколько таких периодов разрешить. Суммарное опоздание не может превышать {MAX_LATENESS_DAYS} дней.\n\n\
         После проверки условий сохраните черновик и при необходимости прикрепите файлы. На этом этапе задание доступно только преподавателям предмета. Студенты увидят его, когда вы нажмёте «{BUTTON_PUBLISH}».\n\n\
-        Для проверки нажмите «{BUTTON_REVIEW}»: бот откроет следующую работу из очереди. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
+        Для проверки нажмите «{BUTTON_REVIEW}» и выберите, что разбирать: «{BUTTON_IN_ORDER}» — всю очередь от ранних работ к поздним, кнопка предмета — работы только этого предмета, «{BUTTON_REVIEW_LIST}» — любую работу вне очереди. После решения бот предложит следующую работу того же потока. Оставьте комментарий независимо от того, принимаете работу или отклоняете. Бот передаст студенту результат.\n\n\
+        Кнопка «{BUTTON_RETURN_FOR_REWORK}» отклоняет работу и сразу возвращает студенту попытку, если приём по заданию ещё открыт. Напишите в комментарии, что исправить: о возврате попытки студент узнает из него.\n\n\
         Работы по предмету-песочнице в очередь не попадают: их список открывает «{BUTTON_SANDBOX}». Работу можно проверить по одной или ответить всем сразу кнопкой «{BUTTON_ACCEPT_ALL}» или «{BUTTON_REJECT_ALL}» с одним комментарием. Такое решение касается работ, отправленных до открытия списка. При принятии оценочные задания получают максимальный балл с учётом штрафа за опоздание.\n\n\
-        Досдача включается на экране предмета кнопкой «🩹 Досдача»: укажите последний день досдачи и сколько досдач положено каждому студенту на весь предмет. Бот спросит, на сколько баллов засчитывать досдачу заданий каждой шкалы. Досдачи не попадают в общую очередь: если они есть, «{BUTTON_REVIEW}» предложит выбрать между очередью и досдачами. Досдачу можно только засчитать на этот балл или отклонить. Отклонённая досдача попытку не возвращает: добавить попытку студенту можно сразу после отклонения или в «{BUTTON_GRADEBOOK}».\n\n\
+        Досдача включается на экране предмета кнопкой «🩹 Досдача»: укажите последний день досдачи и сколько досдач положено каждому студенту на весь предмет. Бот спросит, на сколько баллов засчитывать досдачу заданий каждой шкалы. Досдачи не попадают в общую очередь: их открывает кнопка досдач на экране «{BUTTON_REVIEW}». Досдачу можно только засчитать на этот балл или отклонить. Отклонённая досдача попытку не возвращает: добавить попытку студенту можно сразу после отклонения или в «{BUTTON_GRADEBOOK}».\n\n\
         Список студентов предмета открывает «{BUTTON_COURSES} → Предмет → {BUTTON_ROSTER}»: группы с числом студентов, а у каждого студента — сколько выданных его группе заданий принято. Ноль у группы значит, что из неё ещё никто не зарегистрировался по ссылке «{BUTTON_COURSE_INVITE}».\n\n\
         Кнопка «{BUTTON_STUDENT_CONTACT}» есть под работой и в «{BUTTON_COURSES} → Предмет → {BUTTON_GRADEBOOK} → Студент». Она сохраняет текущий шаг. Нажмите «{BUTTON_OPEN_TELEGRAM}», чтобы написать со своего личного аккаунта; доступность перехода зависит от Telegram. Если адрес изменился, нажмите «{BUTTON_REFRESH_CONTACT}».\n\n\
         Чтобы изменить условия, воспользуйтесь кнопкой «{BUTTON_EDIT_DATES}» в задании. Перенос срока также сдвигает конец приёма, поэтому перед сохранением сверьте новую дату. Команда /cancel во время настройки возвращает к предыдущему шагу. На первом шаге она завершает настройку."
@@ -520,11 +521,84 @@ pub fn review_button(pending: u32) -> String {
 }
 
 pub fn review_hub(queue: u32, makeups: u32) -> String {
-    format!("✅ Проверка работ\n⏳ В очереди: {queue}\n🩹 Досдач: {makeups}\n\nЧто проверять?")
+    let makeups = match makeups {
+        0 => String::new(),
+        makeups => format!("\n🩹 Досдач: {makeups}"),
+    };
+    format!("✅ Проверка работ\n⏳ В очереди: {queue}{makeups}\n\nЧто проверять?")
 }
 
+pub const BUTTON_IN_ORDER: &str = "▶️ По порядку";
+pub const BUTTON_REVIEW_LIST: &str = "📋 Списком";
+pub const BUTTON_NEXT_REVIEW: &str = "▶️ Следующая";
+pub const BUTTON_REVIEW_HUB: &str = "🗂 К выбору";
+pub const BUTTON_BACK_TO_REVIEW_LIST: &str = "📋 К списку";
+pub const BUTTON_RETURN_FOR_REWORK: &str = "🔁 На доработку";
+pub const REVIEW_QUEUE_DONE: &str = "🎉 Работ на проверку больше нет.";
+pub const REVIEW_LIST_CHOOSE: &str = "Откройте любую работу, чтобы проверить её вне очереди:";
+pub const REWORK_DECISION: &str = "🔁 Решение: отклонить работу и вернуть студенту попытку. Он сможет отправить исправленную работу ещё раз. Напишите в комментарии, что исправить.";
+
 pub fn queue_review_button(queue: u32) -> String {
-    format!("✅ Очередь ({queue})")
+    format!("{BUTTON_IN_ORDER} ({queue})")
+}
+
+pub fn subject_review_button(subject: &str, pending: u32) -> String {
+    format!("📘 {subject} ({pending})")
+}
+
+pub fn subject_queue_empty(subject: &str) -> String {
+    format!("🎉 Работ по предмету «{subject}» на проверку нет.")
+}
+
+pub fn queue_left(pending: Option<u32>) -> String {
+    match pending {
+        Some(0) => REVIEW_QUEUE_DONE.to_owned(),
+        Some(pending) => format!("⏳ Осталось в очереди: {pending}"),
+        None => "⏳ Продолжить разбор очереди:".to_owned(),
+    }
+}
+
+pub fn subject_left(subject: &str, pending: Option<u32>) -> String {
+    match pending {
+        Some(pending) => format!("⏳ Осталось по предмету «{subject}»: {pending}"),
+        None => format!("⏳ Продолжить разбор предмета «{subject}»:"),
+    }
+}
+
+pub fn subject_done(subject: &str, rest: Option<u32>) -> String {
+    let rest = match rest {
+        Some(0) | None => String::new(),
+        Some(rest) => format!("\n{}", review_queue_line(rest)),
+    };
+    format!("🎉 Работы по предмету «{subject}» закончились.{rest}")
+}
+
+pub fn regular_attempt(number: u16, allowed: u16) -> String {
+    let last = if number >= allowed {
+        " — последняя"
+    } else {
+        ""
+    };
+    format!("Попытка {number} из {allowed}{last}")
+}
+
+pub fn makeup_attempt(number: u16) -> String {
+    format!("Попытка {number}")
+}
+
+pub fn attempt_returned(remaining: u16, allowed: u16) -> String {
+    format!("🔁 Попытка возвращена: у студента осталось {remaining} из {allowed}.")
+}
+
+pub fn review_list_header(total: Option<u32>) -> String {
+    match total {
+        Some(total) => format!("📋 Очередь проверки\nРабот на проверке: {total}"),
+        None => "📋 Очередь проверки".to_owned(),
+    }
+}
+
+pub fn review_list_entry(student: &str, title: &str, subject: &str, sent_at: &str) -> String {
+    format!("👤 {student} · {title}\n📘 {subject} · отправлено {sent_at}")
 }
 
 pub fn makeup_review_button(makeups: u32) -> String {
@@ -577,11 +651,11 @@ pub fn review_summary(
     title: &str,
     student: &str,
     group: &str,
-    attempt: u16,
+    attempt: &str,
     sent_at: &str,
 ) -> String {
     format!(
-        "📘 {subject} · {title}\n👤 Студент: {student}\n👥 Группа: {group}\n🔁 Попытка {attempt}\n🕒 Отправлено: {sent_at}"
+        "📘 {subject} · {title}\n👤 Студент: {student}\n👥 Группа: {group}\n🔁 {attempt}\n🕒 Отправлено: {sent_at}"
     )
 }
 
@@ -645,7 +719,7 @@ pub fn sandbox_entry(student: &str, title: &str, sent_at: &str, kind: Submission
     format!("👤 {student} · {title}\nотправлено {sent_at}{kind}")
 }
 
-pub fn sandbox_button(student: &str, title: &str) -> String {
+pub fn pending_submission_button(student: &str, title: &str) -> String {
     format!("👤 {student} · {title}")
 }
 
@@ -1591,6 +1665,44 @@ mod tests {
                 format_file_size(1_048_576),
                 "{size}"
             );
+        }
+    }
+
+    #[test]
+    fn the_review_hub_names_makeups_only_when_they_wait() {
+        assert!(review_hub(17, 3).contains('3'));
+        assert!(!review_hub(17, 0).contains('🩹'));
+        assert!(review_hub(17, 0).contains("17"));
+    }
+
+    #[test]
+    fn a_finished_subject_names_the_rest_of_the_queue_only_when_work_is_left() {
+        let done = subject_done("Backend", Some(5));
+        assert!(done.contains("Backend") && done.contains('5'), "{done}");
+        assert_eq!(
+            subject_done("Backend", Some(0)),
+            subject_done("Backend", None)
+        );
+    }
+
+    #[test]
+    fn an_empty_stream_is_reported_as_done() {
+        assert_eq!(queue_left(Some(0)), REVIEW_QUEUE_DONE);
+        assert!(queue_left(Some(16)).contains("16"));
+        assert!(subject_left("Backend", Some(11)).contains("11"));
+    }
+
+    #[test]
+    fn a_returned_attempt_names_what_is_left_of_what_is_allowed() {
+        let line = attempt_returned(1, 3);
+        assert!(line.contains(&out_of(1, 3)), "{line}");
+    }
+
+    #[test]
+    fn a_list_entry_names_the_student_the_work_and_the_subject() {
+        let entry = review_list_entry("Иванов", "ДЗ1", "Backend", "10.11 14:02");
+        for fact in ["Иванов", "ДЗ1", "Backend", "10.11 14:02"] {
+            assert!(entry.contains(fact), "{entry}");
         }
     }
 }

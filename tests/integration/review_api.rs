@@ -461,6 +461,7 @@ async fn a_makeup_review_reads_the_terms_in_force_when_it_is_saved() {
             score: None,
             comment: "Досдано".to_owned(),
             reviewed_at: Utc::now(),
+            return_attempt: false,
         })
         .await
         .unwrap_err();

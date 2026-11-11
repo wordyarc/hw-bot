@@ -26,7 +26,8 @@ pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
 };
 pub use review::{
-    ReviewQueueItem, ReviewSandbox, ReviewService, ReviewSubmission, ReviewedSubmission,
+    RemainingAttempts, ReviewQueueItem, ReviewSandbox, ReviewService, ReviewSubmission,
+    ReviewedSubmission,
 };
 pub use submissions::{SubmissionService, SubmitHomework, SubmittedHomework};
 pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser, UserService};
@@ -34,7 +35,7 @@ pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
     AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradebookScore,
-    QueuePlace, RosterGroup, RosterStudent, SandboxSubmission, TeachingCourseSummary,
+    PendingSubmission, QueuePlace, RosterGroup, RosterStudent, SubjectQueue, TeachingCourseSummary,
     UndecidedAssignment, UserStatistics, VersionedAssignment,
 };
 

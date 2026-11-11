@@ -20,6 +20,7 @@ mod notification_worker;
 mod pagination;
 mod resilience;
 mod review_api;
+mod review_queue;
 mod sandbox_review;
 mod student_contacts;
 mod student_read_api;

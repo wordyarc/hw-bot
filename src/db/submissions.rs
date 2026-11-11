@@ -8,12 +8,14 @@ use uuid::Uuid;
 use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
-    AssignmentId, DeductedFrom, DomainError, GradeParts, StudentGroupId, Submission,
+    AssignmentId, DeductedFrom, DomainError, GradeParts, StudentGroupId, SubjectId, Submission,
     SubmissionHistory, SubmissionHistoryParts, SubmissionId, SubmissionKind, SubmissionParts,
     SubmissionStatus, TeachingCourseId, User, UserId,
 };
 use crate::pagination::PageRequest;
-use crate::read_models::{AssignmentGrade, GradebookScore, QueuePlace, SandboxSubmission};
+use crate::read_models::{
+    AssignmentGrade, GradebookScore, PendingSubmission, QueuePlace, SubjectQueue,
+};
 
 const ATTEMPT_NUMBER: &str = "submissions.attempt_number";
 const KIND: &str = "submissions.kind";
@@ -654,21 +656,30 @@ async fn pending_queue_places(
 
 #[derive(Clone, Copy, Debug)]
 pub enum ReviewStream {
-    Main,
+    Main { subject: Option<SubjectId> },
     Makeup,
     Sandbox,
 }
 
 impl ReviewStream {
+    pub const ALL_MAIN: Self = Self::Main { subject: None };
+
     fn sandbox(self) -> bool {
         matches!(self, Self::Sandbox)
     }
 
     fn kind(self) -> Option<&'static str> {
         match self {
-            Self::Main => Some(SubmissionKind::Regular.as_str()),
+            Self::Main { .. } => Some(SubmissionKind::Regular.as_str()),
             Self::Makeup => Some(SubmissionKind::Makeup.as_str()),
             Self::Sandbox => None,
+        }
+    }
+
+    fn subject(self) -> Option<Uuid> {
+        match self {
+            Self::Main { subject } => subject.map(SubjectId::as_uuid),
+            Self::Makeup | Self::Sandbox => None,
         }
     }
 }
@@ -695,12 +706,14 @@ macro_rules! reviewer_scope {
               and subjects.sandbox = $3
               and ($4::text is null or submissions.kind = $4)
               and ($5::timestamptz is null or submissions.submitted_at <= $5)
+              and ($6::uuid is null or assignments.subject_id = $6)
             "# + $tail,
             $reviewer.role().can_manage_all_teaching_courses(),
             $reviewer.id().as_uuid(),
             $stream.sandbox(),
             $stream.kind(),
             $cutoff,
+            $stream.subject(),
             $($arg,)*
         )
     };
@@ -753,27 +766,62 @@ pub async fn lock_next_for_reviewer(
     row.map(Submission::try_from).transpose()
 }
 
-pub async fn sandbox_page_for_reviewer(
+pub async fn count_by_subject_for_reviewer(
     executor: impl PgExecutor<'_>,
     reviewer: &User,
+) -> DbResult<Vec<SubjectQueue>> {
+    let rows = reviewer_scope!(query;
+        r#"
+        select
+            subjects.id as subject_id,
+            subjects.name as subject_name,
+            count(*) as "pending!"
+        "#,
+        r#"
+        group by subjects.id, subjects.name
+        order by subjects.name, subjects.id
+        "#,
+        reviewer,
+        ReviewStream::ALL_MAIN,
+        None::<DateTime<Utc>>
+    )
+    .fetch_all(executor)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(SubjectQueue {
+                subject_id: SubjectId::from_uuid(row.subject_id),
+                subject_name: row.subject_name,
+                pending: checked_num_cast("review_queue.subject_pending", row.pending)?,
+            })
+        })
+        .collect()
+}
+
+pub async fn pending_page_for_reviewer(
+    executor: impl PgExecutor<'_>,
+    reviewer: &User,
+    stream: ReviewStream,
     page: PageRequest,
-) -> DbResult<Vec<SandboxSubmission>> {
+) -> DbResult<Vec<PendingSubmission>> {
     let rows = reviewer_scope!(query;
         r#"
         select
             submissions.id,
             submissions.kind,
             submissions.submitted_at,
+            subjects.name as subject_name,
             assignments.title as assignment_title,
             (select display_name from users where users.id = submissions.student_id)
                 as "student_name!"
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
-        limit $6 offset $7
+        limit $7 offset $8
         "#,
         reviewer,
-        ReviewStream::Sandbox,
+        stream,
         None::<DateTime<Utc>>,
         page.fetch_limit(),
         page.offset(),
@@ -783,9 +831,10 @@ pub async fn sandbox_page_for_reviewer(
 
     rows.into_iter()
         .map(|row| {
-            Ok(SandboxSubmission {
+            Ok(PendingSubmission {
                 submission_id: SubmissionId::from_uuid(row.id),
                 kind: parse_kind(&row.kind)?,
+                subject_name: row.subject_name,
                 assignment_title: row.assignment_title,
                 student_name: row.student_name,
                 submitted_at: row.submitted_at,

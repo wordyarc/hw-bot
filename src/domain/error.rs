@@ -39,6 +39,9 @@ pub enum DomainError {
     #[error("total attempt limit must not exceed {max}, got {value}")]
     AttemptLimitExceeded { value: u32, max: u16 },
 
+    #[error("only a rejected regular submission returns its attempt")]
+    AttemptNotReturnable,
+
     #[error("assignment max score must be in 1..={max}, got {value}")]
     InvalidMaxScore { value: u16, max: u16 },
 

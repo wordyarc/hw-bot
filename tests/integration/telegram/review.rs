@@ -20,7 +20,7 @@ use wiremock::{Mock, ResponseTemplate};
 use super::flows::{open_course, open_fixture_student_grades, student_card_header};
 use crate::harness::telegram::*;
 use crate::harness::telegram_scenario::{
-    TelegramScenario, text_over_the_limit_once_its_link_is_revealed,
+    TelegramScenario, callbacks_of, text_over_the_limit_once_its_link_is_revealed,
 };
 use crate::harness::{TestApp, insert_assignment, out_of, submission_id, wall_clock_assignment};
 
@@ -81,7 +81,7 @@ async fn assert_previous_attempts_on_the_card(
 
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .button(
             app.teacher(),
@@ -145,7 +145,7 @@ async fn assert_review_recovers_from_grading_change(
     let accept = cb(callbacks::REVIEW_ACCEPT_PREFIX, submission);
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     let first_card = telegram.click_button(app.teacher(), &accept).await;
     if initial_max.is_some() {
         telegram
@@ -209,7 +209,7 @@ async fn a_score_button_chosen_before_the_scale_changed_is_stale_after_the_resta
     let accept = cb(callbacks::REVIEW_ACCEPT_PREFIX, submission);
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     let first_card = telegram.click_button(app.teacher(), &accept).await;
     let old_score = telegram
         .click_button(app.teacher(), &score_callback(submission, 4))
@@ -310,7 +310,7 @@ async fn score_button_from_another_submission_is_stale() {
     };
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, first))
         .await;
@@ -320,7 +320,7 @@ async fn score_button_from_another_submission_is_stale() {
     wait_for_review_result(&app.pool, first)
         .await
         .expect("the first review is saved");
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, second))
         .await;
@@ -353,7 +353,7 @@ async fn review_confirmation_uses_the_grade_saved_after_a_deadline_change() {
     );
     let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -546,7 +546,7 @@ async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
     let second = app.queued_submission(app.student(), "pull/second").await;
     let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
@@ -569,7 +569,7 @@ async fn a_resubmission_card_shows_the_previous_attempt_with_its_comment() {
         app.fixture.assignment.title().as_str(),
         app.fixture.student.display_name().as_str(),
         app.fixture.group.code().as_str(),
-        2,
+        &texts::regular_attempt(2, app.fixture.assignment.max_attempts()),
         &sent_at(&app, second).await,
     );
     assert!(
@@ -591,7 +591,7 @@ async fn a_long_previous_attempt_does_not_hide_the_decision_buttons() {
     let telegram = crate::harness::telegram_scenario::TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, second))
         .await;
@@ -627,7 +627,7 @@ async fn a_failed_previous_attempt_does_not_hide_the_decision_buttons() {
         .await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .button(app.teacher(), &cb(callbacks::REVIEW_ACCEPT_PREFIX, second))
         .await;
@@ -1021,7 +1021,7 @@ async fn a_late_card_shows_the_maximum_left_after_a_penalty_to_the_work_score() 
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram.flush(app.teacher()).await;
     stop_bot(cancellation, &mut task).await;
 
@@ -1047,7 +1047,7 @@ async fn changing_the_decision_after_a_score_saves_a_rejection_without_a_score()
     let submission = submitted(&app, &assignment).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1104,7 +1104,7 @@ async fn the_reject_button_of_the_card_still_works_on_the_score_step() {
     let submission = submitted(&app, &assignment).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     let reject = telegram
         .button(
             app.teacher(),
@@ -1137,7 +1137,7 @@ async fn the_help_menu_item_keeps_the_score_buttons_working() {
     );
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1171,7 +1171,7 @@ async fn a_review_restarted_from_the_comment_step_brings_the_menu_back() {
     let submission = app.queued_submission(app.student(), "pull/1").await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1203,7 +1203,7 @@ async fn a_change_button_after_the_review_is_saved_is_stale() {
     let submission = app.queued_submission(app.student(), "pull/1").await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1242,7 +1242,7 @@ async fn a_change_after_another_teacher_reviewed_the_submission_ends_the_review(
     let submission = app.queued_submission(app.student(), "pull/1").await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1295,7 +1295,7 @@ async fn the_confirmation_shows_the_deduction_saved_after_a_policy_change() {
     let submission = submitted(&app, &assignment).await;
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1374,7 +1374,7 @@ async fn the_review_card_names_the_group_of_the_author() {
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .button(
             app.teacher(),
@@ -1388,7 +1388,7 @@ async fn the_review_card_names_the_group_of_the_author() {
         "Stream lab",
         "Second group",
         second.code().as_str(),
-        1,
+        &texts::regular_attempt(1, assignment.max_attempts()),
         &sent_at(&app, submission).await,
     );
     let sent = telegram.texts(app.teacher());
@@ -1452,7 +1452,7 @@ async fn a_review_comment_over_the_limit_once_its_link_is_revealed_is_refused_an
     let telegram = TelegramScenario::new().await;
     let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .click_button(
             app.teacher(),
@@ -1505,4 +1505,219 @@ async fn a_bulk_comment_over_the_limit_once_its_link_is_revealed_is_refused_and_
         reviewed.map(|(status, _, _)| status).as_deref(),
         Some("rejected")
     );
+}
+
+async fn submit_as(
+    app: &TestApp,
+    assignment: &Assignment,
+    student: &hw_bot::domain::User,
+    content: &str,
+) -> Uuid {
+    submission_id(
+        &app.submit(
+            assignment.id().as_uuid(),
+            student.telegram_user_id().as_i64(),
+            content,
+        )
+        .await
+        .created(),
+    )
+}
+
+fn review_list_page() -> String {
+    format!("{}rq:0", callbacks::PAGE_PREFIX)
+}
+
+#[tokio::test]
+async fn the_next_work_of_a_subject_stays_in_that_subject() {
+    let app = TestApp::start().await;
+    let frontend = app.add_subject_course("Frontend").await;
+    let layout = app
+        .add_published_assignment(&frontend, &app.fixture.teacher, "Layout")
+        .await;
+    let classmate = app.add_student("Classmate").await;
+    let earlier = submit_as(&app, &layout, &app.fixture.student, "pull/layout").await;
+    let first = submit_as(
+        &app,
+        &app.fixture.assignment,
+        &app.fixture.student,
+        "pull/1",
+    )
+    .await;
+    let second = submit_as(&app, &app.fixture.assignment, &classmate, "pull/2").await;
+    let subject_next = cb(
+        callbacks::NEXT_SUBJECT_REVIEW_PREFIX,
+        app.fixture.subject.id().as_uuid(),
+    );
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram.click_button(app.teacher(), &subject_next).await;
+    let reject = telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_REJECT_PREFIX, first))
+        .await;
+    telegram.message(app.teacher(), "Нужны тесты");
+    wait_for_review_result(&app.pool, first)
+        .await
+        .expect("the first review is saved");
+    let next = telegram
+        .button_after(app.teacher(), &subject_next, reject.message_id)
+        .await;
+    telegram.click(app.teacher(), &next);
+    telegram
+        .button(app.teacher(), &cb(callbacks::REVIEW_REJECT_PREFIX, second))
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let followup = message_text(&telegram, app.teacher(), next.message_id);
+    assert_eq!(
+        followup,
+        texts::subject_left(app.fixture.subject.name().as_str(), Some(1))
+    );
+    assert!(
+        !sent_callbacks(&telegram.server)
+            .await
+            .contains(&cb(callbacks::REVIEW_REJECT_PREFIX, earlier)),
+        "the earlier work of another subject is not handed out"
+    );
+}
+
+#[tokio::test]
+async fn a_work_picked_from_the_list_is_reviewed_out_of_order_and_leads_back_to_the_list() {
+    let app = TestApp::start().await;
+    let middle_student = app.add_student("Middle").await;
+    let last_student = app.add_student("Last").await;
+    let first = submit_as(
+        &app,
+        &app.fixture.assignment,
+        &app.fixture.student,
+        "pull/1",
+    )
+    .await;
+    let middle = submit_as(&app, &app.fixture.assignment, &middle_student, "pull/2").await;
+    let last = submit_as(&app, &app.fixture.assignment, &last_student, "pull/3").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(app.teacher(), &review_list_page())
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_PICK_PREFIX, middle))
+        .await;
+    let reject = telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_REJECT_PREFIX, middle))
+        .await;
+    telegram.message(app.teacher(), "Оформите PR по шаблону");
+    wait_for_review_result(&app.pool, middle)
+        .await
+        .expect("the picked review is saved");
+    let back = telegram
+        .button_after(app.teacher(), &review_list_page(), reject.message_id)
+        .await;
+    telegram.click(app.teacher(), &back);
+    let reopened = telegram
+        .button_after(
+            app.teacher(),
+            &cb(callbacks::REVIEW_PICK_PREFIX, first),
+            back.message_id,
+        )
+        .await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(is_pending(&app, first).await);
+    assert!(is_pending(&app, last).await);
+    assert_eq!(
+        message_text(&telegram, app.teacher(), back.message_id),
+        texts::queue_left(Some(2))
+    );
+    let list = callbacks_of(&telegram.message_by_id(app.teacher(), reopened.message_id));
+    assert!(
+        !list.contains(&cb(callbacks::REVIEW_PICK_PREFIX, middle)),
+        "{list:?}"
+    );
+    assert!(
+        list.contains(&cb(callbacks::REVIEW_PICK_PREFIX, last)),
+        "{list:?}"
+    );
+}
+
+#[tokio::test]
+async fn rework_returns_the_attempt_so_the_student_can_send_again() {
+    let app = TestApp::start().await;
+    let single = wall_clock_assignment(&app.fixture.course, &app.fixture.teacher)
+        .title("Single")
+        .max_attempts(1)
+        .published()
+        .build();
+    insert_assignment(&app.pool, &single).await;
+    let sent = submit_as(&app, &single, &app.fixture.student, "pull/1").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.open_review_queue(app.teacher()).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_REWORK_PREFIX, sent))
+        .await;
+    telegram.message(app.teacher(), "Оформите PR по шаблону");
+    let reviewed = wait_for_review_result(&app.pool, sent).await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(reviewed, Some(("rejected".to_owned(), None, None)));
+    let messages = telegram.texts(app.teacher());
+    assert!(messages.contains(&texts::REWORK_DECISION.to_owned()));
+    assert!(
+        messages
+            .iter()
+            .any(|text| text.contains(&texts::attempt_returned(1, 2))),
+        "{messages:#?}"
+    );
+    app.submit(single.id().as_uuid(), app.student(), "pull/2")
+        .await
+        .created();
+}
+
+#[tokio::test]
+async fn a_rework_button_of_another_submission_is_stale() {
+    let app = TestApp::start().await;
+    let classmate = app.add_student("Classmate").await;
+    let first = submit_as(
+        &app,
+        &app.fixture.assignment,
+        &app.fixture.student,
+        "pull/1",
+    )
+    .await;
+    let second = submit_as(&app, &app.fixture.assignment, &classmate, "pull/2").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram
+        .click_button(app.teacher(), &review_list_page())
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_PICK_PREFIX, second))
+        .await;
+    let stale = telegram
+        .button(app.teacher(), &cb(callbacks::REVIEW_REWORK_PREFIX, second))
+        .await;
+    telegram.open_review_queue(app.teacher()).await;
+    telegram
+        .button(app.teacher(), &cb(callbacks::REVIEW_REWORK_PREFIX, first))
+        .await;
+    telegram.click(app.teacher(), &stale);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let messages = telegram.texts(app.teacher());
+    assert!(
+        messages.contains(&texts::STALE_BUTTON.to_owned()),
+        "{messages:#?}"
+    );
+    assert!(!messages.contains(&texts::REWORK_DECISION.to_owned()));
+    assert!(is_pending(&app, second).await);
 }

@@ -12,7 +12,8 @@ use super::texts;
 use super::views::{MenuAction, student_keyboard, teacher_keyboard};
 use crate::domain::{
     AssignmentId, Grading, InviteGeneration, LatePenalty, MaxScore, ReviewDecision, ReviewScore,
-    StoredFileId, StudentGroupId, SubmissionId, TeachingCourseId, TelegramUserId, UserId,
+    StoredFileId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId, TelegramUserId,
+    UserId,
 };
 use crate::invites::VerifiedInvite;
 
@@ -169,48 +170,65 @@ impl BotState {
     pub(super) fn review_decision_target(
         &self,
         submission_id: SubmissionId,
-    ) -> Option<ReviewTarget> {
+    ) -> Option<(ReviewTarget, ReviewOrigin)> {
         match self {
             Self::Flow(FlowState::AwaitingReviewDecision {
                 submission_id: current,
                 target,
-            }) if *current == submission_id => Some(*target),
+                origin,
+            }) if *current == submission_id => Some((*target, *origin)),
             Self::Flow(FlowState::AwaitingReviewScore {
                 submission_id: current,
                 max_score,
                 late,
-            }) if *current == submission_id => Some(ReviewTarget::Regular {
-                grading: Grading::Score {
-                    max_score: *max_score,
+                origin,
+            }) if *current == submission_id => Some((
+                ReviewTarget::Regular {
+                    grading: Grading::Score {
+                        max_score: *max_score,
+                    },
+                    late: *late,
                 },
-                late: *late,
-            }),
+                *origin,
+            )),
             _ => None,
+        }
+    }
+
+    pub(super) fn rework_origin(&self, submission_id: SubmissionId) -> Option<ReviewOrigin> {
+        match self.review_decision_target(submission_id)? {
+            (ReviewTarget::Regular { .. }, origin) => Some(origin),
+            (ReviewTarget::Makeup, _) => None,
         }
     }
 
     pub(super) fn awaiting_review_score(
         &self,
         submission_id: SubmissionId,
-    ) -> Option<(MaxScore, Option<LatePenalty>)> {
+    ) -> Option<(MaxScore, Option<LatePenalty>, ReviewOrigin)> {
         match self {
             Self::Flow(FlowState::AwaitingReviewScore {
                 submission_id: current,
                 max_score,
                 late,
-            }) if *current == submission_id => Some((*max_score, *late)),
+                origin,
+            }) if *current == submission_id => Some((*max_score, *late, *origin)),
             _ => None,
         }
     }
 
-    pub(super) fn is_awaiting_review_comment(&self, submission_id: SubmissionId) -> bool {
-        matches!(
-            self,
+    pub(super) fn awaiting_review_comment(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Option<ReviewOrigin> {
+        match self {
             Self::Flow(FlowState::AwaitingReviewComment {
                 submission_id: current,
+                origin,
                 ..
-            }) if *current == submission_id
-        )
+            }) if *current == submission_id => Some(*origin),
+            _ => None,
+        }
     }
 
     /// ID студента принимается только из показанного списка, чтобы отсечь чужие кнопки.
@@ -396,6 +414,14 @@ pub(super) enum ReviewTarget {
     Makeup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ReviewOrigin {
+    Queue { subject: Option<SubjectId> },
+    List,
+    Makeups,
+    Sandbox,
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum StudentChoice {
     Grades { course_id: TeachingCourseId },
@@ -488,16 +514,20 @@ pub(super) enum FlowState {
     AwaitingReviewDecision {
         submission_id: SubmissionId,
         target: ReviewTarget,
+        origin: ReviewOrigin,
     },
     AwaitingReviewScore {
         submission_id: SubmissionId,
         max_score: MaxScore,
         late: Option<LatePenalty>,
+        origin: ReviewOrigin,
     },
     AwaitingReviewComment {
         submission_id: SubmissionId,
         decision: ReviewDecision,
         score: Option<ReviewScore>,
+        return_attempt: bool,
+        origin: ReviewOrigin,
     },
     AwaitingBulkReviewComment {
         decision: ReviewDecision,

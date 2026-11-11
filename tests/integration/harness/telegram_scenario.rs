@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use hw_bot::bot::texts;
+use hw_bot::bot::{callbacks, texts};
 use hw_bot::domain::USER_TEXT_MAX_LEN;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -330,6 +330,14 @@ impl TelegramScenario {
             })
         })
         .await
+    }
+
+    pub async fn open_review_queue(&self, user: i64) -> Button {
+        self.message(user, "/review");
+        self.flush(user).await;
+        let button = self.button(user, callbacks::NEXT_REVIEW).await;
+        self.click(user, &button);
+        button
     }
 
     pub fn click(&self, user: i64, button: &Button) {

@@ -84,6 +84,7 @@ impl AppError {
                 | DomainError::InvalidAttemptLimit { .. }
                 | DomainError::InvalidAttemptGrant { .. }
                 | DomainError::AttemptLimitExceeded { .. }
+                | DomainError::AttemptNotReturnable
                 | DomainError::InvalidMaxScore { .. }
                 | DomainError::InvalidLatePolicy { .. }
                 | DomainError::LatePolicyRequiresScoredGrading

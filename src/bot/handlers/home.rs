@@ -159,7 +159,7 @@ pub(super) async fn send_home(chat: Chat<'_>, user: &User) -> HandlerResult {
         Role::Teacher | Role::Admin => {
             let mut lines = Vec::new();
             let pending = optional_stat(
-                services.reviews.queue_size(actor).await,
+                services.reviews.queue_size(actor, None).await,
                 "teacher_pending_queue",
             );
             if let Some(pending) = pending {
@@ -229,7 +229,7 @@ pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
                 lines.push(texts::profile_courses(stats.courses));
             }
             if let Some(pending) = optional_stat(
-                services.reviews.queue_size(actor).await,
+                services.reviews.queue_size(actor, None).await,
                 "teacher_pending_queue",
             ) {
                 lines.push(texts::profile_review_queue(pending));

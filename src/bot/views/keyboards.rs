@@ -5,7 +5,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
 
 use super::render::button_label;
 use crate::app::{
-    AssignmentStudentSummary, CourseStudent, SandboxSubmission, StudentAssignment,
+    AssignmentStudentSummary, CourseStudent, PendingSubmission, StudentAssignment, SubjectQueue,
     TeachingCourseSummary,
 };
 use crate::bot::assignment_form::{
@@ -22,8 +22,8 @@ use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, CourseMakeup, DeductedFrom, Grading,
-    ReviewDecision, Role, StoredFileMetadata, StudentGroup, StudentGroupId, SubmissionId,
-    SubmissionKind, TeachingCourseId, UserId,
+    ReviewDecision, Role, StoredFileMetadata, StudentGroup, StudentGroupId, SubjectId,
+    SubmissionId, SubmissionKind, TeachingCourseId, UserId,
 };
 
 type Row = Vec<InlineKeyboardButton>;
@@ -236,6 +236,7 @@ pub(crate) fn review_keyboard(
     course_id: TeachingCourseId,
     student_id: UserId,
     accept: Option<String>,
+    rework: bool,
 ) -> InlineKeyboardMarkup {
     let review = |decision| {
         FlowAction::Review {
@@ -246,25 +247,103 @@ pub(crate) fn review_keyboard(
     };
     let accept = accept.map(|label| button(label, review(ReviewDecision::Accept)));
     let reject = button(texts::BUTTON_REJECT, review(ReviewDecision::Reject));
-    InlineKeyboardMarkup::new(vec![
-        accept.into_iter().chain([reject]).collect(),
-        vec![student_contact_button(course_id, student_id)],
-    ])
+    let mut rows = vec![accept.into_iter().chain([reject]).collect()];
+    if rework {
+        rows.push(row(
+            texts::BUTTON_RETURN_FOR_REWORK,
+            FlowAction::ReturnForRework(submission_id).callback(),
+        ));
+    }
+    rows.push(vec![student_contact_button(course_id, student_id)]);
+    InlineKeyboardMarkup::new(rows)
 }
 
-pub(crate) fn review_hub_keyboard(queue: u32, makeups: u32) -> InlineKeyboardMarkup {
+pub(crate) fn review_hub_keyboard(subjects: &[SubjectQueue], makeups: u32) -> InlineKeyboardMarkup {
+    let queue: u32 = subjects.iter().map(|subject| subject.pending).sum();
     let mut rows = Vec::new();
     if queue > 0 {
         rows.push(row(
             texts::queue_review_button(queue),
-            ReplayableAction::NextReview.callback(),
+            ReplayableAction::NextReview(None).callback(),
+        ));
+    }
+    if subjects.len() > 1 {
+        rows.extend(subjects.iter().map(|subject| {
+            row(
+                button_label(&texts::subject_review_button(
+                    &subject.subject_name,
+                    subject.pending,
+                )),
+                ReplayableAction::NextReview(Some(subject.subject_id)).callback(),
+            )
+        }));
+    }
+    if makeups > 0 {
+        rows.push(row(
+            texts::makeup_review_button(makeups),
+            ReplayableAction::NextMakeupReview.callback(),
+        ));
+    }
+    if queue > 0 {
+        rows.push(row(
+            texts::BUTTON_REVIEW_LIST,
+            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+        ));
+    }
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn queue_followup_keyboard(
+    subject: Option<SubjectId>,
+    next: bool,
+) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+    if next {
+        rows.push(row(
+            texts::BUTTON_NEXT_REVIEW,
+            ReplayableAction::NextReview(subject).callback(),
         ));
     }
     rows.push(row(
-        texts::makeup_review_button(makeups),
-        ReplayableAction::NextMakeupReview.callback(),
+        texts::BUTTON_REVIEW_HUB,
+        ReplayableAction::ReviewHub.callback(),
     ));
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn list_followup_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        row(
+            texts::BUTTON_BACK_TO_REVIEW_LIST,
+            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+        ),
+        row(
+            texts::BUTTON_IN_ORDER,
+            ReplayableAction::NextReview(None).callback(),
+        ),
+    ])
+}
+
+pub(crate) fn review_list_keyboard(
+    submissions: &[PendingSubmission],
+    page: u32,
+    next: Option<u32>,
+) -> InlineKeyboardMarkup {
+    let rows = submissions.iter().map(|submission| {
+        row(
+            button_label(&texts::pending_submission_button(
+                &submission.student_name,
+                &submission.assignment_title,
+            )),
+            ReplayableAction::PickReview(submission.submission_id).callback(),
+        )
+    });
+    paginated_keyboard(
+        InlineKeyboardMarkup::new(rows),
+        PageTarget::ReviewQueue,
+        page,
+        next,
+    )
 }
 
 pub(crate) fn makeup_followup_keyboard(next: bool, grant: bool) -> InlineKeyboardMarkup {
@@ -336,13 +415,13 @@ pub(crate) fn contact_keyboard(
 }
 
 pub(crate) fn sandbox_keyboard(
-    submissions: &[SandboxSubmission],
+    submissions: &[PendingSubmission],
     page: u32,
     next: Option<u32>,
 ) -> InlineKeyboardMarkup {
     let rows = submissions.iter().map(|submission| {
         row(
-            button_label(&texts::sandbox_button(
+            button_label(&texts::pending_submission_button(
                 &submission.student_name,
                 &submission.assignment_title,
             )),

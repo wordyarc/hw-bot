@@ -1,6 +1,7 @@
 use crate::domain::assignment::MAX_ATTEMPTS;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, TeachingCourse, User, UserId,
+    Assignment, AssignmentId, DomainError, DomainResult, Submission, SubmissionKind,
+    SubmissionStatus, TeachingCourse, User, UserId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +66,28 @@ impl StudentAssignmentProgress {
         self.extra_attempts = extra_attempts;
 
         Ok(())
+    }
+
+    pub fn return_attempt(
+        &mut self,
+        submission: &Submission,
+        assignment: &Assignment,
+        teaching_course: &TeachingCourse,
+        reviewer: &User,
+    ) -> DomainResult<()> {
+        if submission.assignment_id() != self.assignment_id
+            || submission.student_id() != self.student_id
+        {
+            return Err(DomainError::StudentProgressDoesNotBelongToAssignment);
+        }
+
+        if submission.kind() != SubmissionKind::Regular
+            || submission.status() != SubmissionStatus::Rejected
+        {
+            return Err(DomainError::AttemptNotReturnable);
+        }
+
+        self.grant_extra_attempts(assignment, teaching_course, reviewer, 1)
     }
 
     pub fn assignment_id(&self) -> AssignmentId {

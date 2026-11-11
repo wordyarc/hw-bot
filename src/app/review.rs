@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgExecutor;
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 use crate::app::courses::active_makeup_pool;
 use crate::app::users::load_actor;
@@ -12,10 +12,11 @@ use crate::db;
 use crate::db::submissions::ReviewStream;
 use crate::domain::{
     Assignment, AssignmentId, DomainError, MakeupPool, Review, ReviewDecision, ReviewScore,
-    Subject, Submission, SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
+    StudentAssignmentProgress, Subject, SubjectId, Submission, SubmissionHistory, SubmissionId,
+    SubmissionKind, TeachingCourse, TeachingCourseId, User,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::SandboxSubmission;
+use crate::read_models::{PendingSubmission, SubjectQueue};
 
 const PREVIOUS_ATTEMPTS_SHOWN: u16 = 10;
 
@@ -40,6 +41,7 @@ pub struct ReviewSubmission {
     pub score: Option<ReviewScore>,
     pub comment: String,
     pub reviewed_at: DateTime<Utc>,
+    pub return_attempt: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -54,8 +56,16 @@ pub struct ReviewSandbox {
 #[derive(Clone, Debug)]
 pub struct ReviewedSubmission {
     pub submission: Submission,
+    pub subject: Subject,
     pub course_id: TeachingCourseId,
     pub sandbox: bool,
+    pub attempts: Option<RemainingAttempts>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemainingAttempts {
+    pub remaining: u16,
+    pub allowed: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +78,7 @@ pub struct ReviewQueueItem {
     pub previous_attempts: Vec<Submission>,
     pub earlier_attempts_hidden: bool,
     pub makeup: Option<MakeupPool>,
+    pub history: SubmissionHistory,
 }
 
 #[derive(Clone, Debug)]
@@ -86,9 +97,11 @@ impl ReviewService {
     pub async fn take_next_from_queue(
         &self,
         actor: Actor,
+        subject: Option<SubjectId>,
         now: DateTime<Utc>,
     ) -> AppResult<Option<ReviewQueueItem>> {
-        self.take_next(actor, ReviewStream::Main, now).await
+        self.take_next(actor, ReviewStream::Main { subject }, now)
+            .await
     }
 
     pub async fn take_next_makeup(
@@ -100,8 +113,43 @@ impl ReviewService {
     }
 
     /// Между подсчётом и `take_next_from_queue` работы могут разобрать; ненулевого счётчика недостаточно.
-    pub async fn queue_size(&self, actor: Actor) -> AppResult<u32> {
-        self.count(actor, ReviewStream::Main, None).await
+    pub async fn queue_size(&self, actor: Actor, subject: Option<SubjectId>) -> AppResult<u32> {
+        self.count(actor, ReviewStream::Main { subject }, None)
+            .await
+    }
+
+    pub async fn queue_by_subject(&self, actor: Actor) -> AppResult<Vec<SubjectQueue>> {
+        let reviewer = load_reviewer(&self.pool, actor).await?;
+
+        Ok(db::submissions::count_by_subject_for_reviewer(&self.pool, &reviewer).await?)
+    }
+
+    pub async fn subject(&self, actor: Actor, subject_id: SubjectId) -> AppResult<Subject> {
+        load_reviewer(&self.pool, actor).await?;
+        let (subject, _) = db::academic::find_subject_with_sandbox(&self.pool, subject_id)
+            .await?
+            .required("subject")?;
+
+        Ok(subject)
+    }
+
+    pub async fn queue_page(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+    ) -> AppResult<Page<PendingSubmission>> {
+        let reviewer = load_reviewer(&self.pool, actor).await?;
+
+        Ok(Page::from_rows(
+            db::submissions::pending_page_for_reviewer(
+                &self.pool,
+                &reviewer,
+                ReviewStream::ALL_MAIN,
+                page,
+            )
+            .await?,
+            page,
+        ))
     }
 
     pub async fn makeup_size(&self, actor: Actor) -> AppResult<u32> {
@@ -153,11 +201,17 @@ impl ReviewService {
         &self,
         actor: Actor,
         page: PageRequest,
-    ) -> AppResult<Page<SandboxSubmission>> {
+    ) -> AppResult<Page<PendingSubmission>> {
         let reviewer = load_reviewer(&self.pool, actor).await?;
 
         Ok(Page::from_rows(
-            db::submissions::sandbox_page_for_reviewer(&self.pool, &reviewer, page).await?,
+            db::submissions::pending_page_for_reviewer(
+                &self.pool,
+                &reviewer,
+                ReviewStream::Sandbox,
+                page,
+            )
+            .await?,
             page,
         ))
     }
@@ -242,14 +296,30 @@ impl ReviewService {
             },
         )?;
 
+        if command.return_attempt {
+            return_attempt(&mut tx, &submission, &context, &reviewer).await?;
+        }
+
         record_review(&mut tx, &submission, &context).await?;
+
+        let attempts = if command.return_attempt {
+            let history = load_history(&mut tx, &submission).await?;
+            Some(RemainingAttempts {
+                remaining: history.remaining_attempts_for(&context.assignment),
+                allowed: history.allowed_attempts_for(&context.assignment),
+            })
+        } else {
+            None
+        };
 
         tx.commit().await?;
 
         Ok(ReviewedSubmission {
             submission,
+            subject: context.subject,
             course_id: context.course.id(),
             sandbox: context.sandbox,
+            attempts,
         })
     }
 
@@ -306,6 +376,40 @@ async fn load_review_context(
     })
 }
 
+async fn return_attempt(
+    tx: &mut Transaction<'_, Postgres>,
+    submission: &Submission,
+    context: &ReviewContext,
+    reviewer: &User,
+) -> AppResult<()> {
+    let student = db::users::find_by_id(&mut **tx, submission.student_id())
+        .await?
+        .required("student")?;
+    let extra_attempts =
+        db::attempts::lock_or_create(tx, submission.assignment_id(), student.id()).await?;
+    let mut progress =
+        StudentAssignmentProgress::new(&context.assignment, &student, extra_attempts)?;
+    progress.return_attempt(submission, &context.assignment, &context.course, reviewer)?;
+    db::attempts::update(tx, &progress).await?;
+
+    Ok(())
+}
+
+async fn load_history(
+    connection: &mut PgConnection,
+    submission: &Submission,
+) -> AppResult<SubmissionHistory> {
+    let assignment_id = submission.assignment_id();
+    Ok(db::submissions::load_histories(
+        &mut *connection,
+        &[assignment_id.as_uuid()],
+        submission.student_id(),
+    )
+    .await?
+    .remove(&assignment_id)
+    .unwrap_or_default())
+}
+
 async fn record_review(
     connection: &mut PgConnection,
     submission: &Submission,
@@ -350,6 +454,7 @@ async fn load_queue_item(
     let earlier_attempts_hidden = previous_attempts.len() > usize::from(PREVIOUS_ATTEMPTS_SHOWN);
     previous_attempts.truncate(usize::from(PREVIOUS_ATTEMPTS_SHOWN));
     previous_attempts.reverse();
+    let history = load_history(&mut *connection, &submission).await?;
     let makeup = match submission.kind() {
         SubmissionKind::Makeup => {
             active_makeup_pool(&mut *connection, context.course.id(), student.id(), now).await?
@@ -365,5 +470,6 @@ async fn load_queue_item(
         previous_attempts,
         earlier_attempts_hidden,
         makeup,
+        history,
     })
 }

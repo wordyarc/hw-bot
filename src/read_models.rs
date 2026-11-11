@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::{
-    Assignment, AssignmentId, Grading, StoredFileMetadata, StudentGroup, Subject,
+    Assignment, AssignmentId, Grading, StoredFileMetadata, StudentGroup, Subject, SubjectId,
     SubmissionHistory, SubmissionId, SubmissionKind, TeachingCourse, User, UserId,
 };
 
@@ -67,12 +67,20 @@ pub struct QueuePlace {
 }
 
 #[derive(Clone, Debug)]
-pub struct SandboxSubmission {
+pub struct PendingSubmission {
     pub submission_id: SubmissionId,
     pub kind: SubmissionKind,
+    pub subject_name: String,
     pub assignment_title: String,
     pub student_name: String,
     pub submitted_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubjectQueue {
+    pub subject_id: SubjectId,
+    pub subject_name: String,
+    pub pending: u32,
 }
 
 #[derive(Clone, Debug)]

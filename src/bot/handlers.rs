@@ -16,7 +16,7 @@ use super::callbacks::{
 };
 use super::context::{BotContext, Chat, Deps, Screen, TextStep};
 use super::errors::{BotError, finish_handler};
-use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ScreenState};
+use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ReviewOrigin, ScreenState};
 use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button};
 use crate::domain::{Role, TelegramUserId};
@@ -250,15 +250,25 @@ pub(super) async fn handle_message(
                 submission_id,
                 max_score,
                 late,
+                origin,
             }) => {
-                review::submit_score_text(step, submission_id, max_score, late).await?;
+                review::submit_score_text(step, submission_id, max_score, late, origin).await?;
             }
             BotState::Flow(FlowState::AwaitingReviewComment {
                 submission_id,
                 decision,
                 score,
+                return_attempt,
+                origin,
             }) => {
-                review::submit_comment(step, submission_id, decision, score).await?;
+                let pending = review::PendingComment {
+                    submission_id,
+                    decision,
+                    score,
+                    return_attempt,
+                    origin,
+                };
+                review::submit_comment(step, pending).await?;
             }
             BotState::Flow(FlowState::AwaitingBulkReviewComment { decision, cutoff }) => {
                 sandbox::submit_comment(step, decision, cutoff).await?;
@@ -460,6 +470,7 @@ async fn handle_replayable_action(
                 PageTarget::Queue => student::show_queue_page(screen, page).await,
                 PageTarget::Courses => teacher::show_courses_page(screen, page).await,
                 PageTarget::Sandbox => sandbox::show_page(screen, page).await,
+                PageTarget::ReviewQueue => review::show_list(screen, page).await,
                 PageTarget::Course(id) => {
                     teacher::show_course_assignments_page(screen, id, page).await
                 }
@@ -479,7 +490,9 @@ async fn handle_replayable_action(
         }
         ReplayableAction::Profile => show_profile(screen).await,
         ReplayableAction::ReviewHub => review::show_hub(screen).await,
-        ReplayableAction::NextReview => review::show_next(screen, review::Queue::Main).await,
+        ReplayableAction::NextReview(subject) => {
+            review::show_next(screen, review::Queue::Main(subject)).await
+        }
         ReplayableAction::NextMakeupReview => {
             review::show_next(screen, review::Queue::Makeup).await
         }
@@ -512,7 +525,10 @@ async fn handle_replayable_action(
             teacher::show_gradebook_groups(screen, course_id).await
         }
         ReplayableAction::ReviewSubmission(submission_id) => {
-            review::open(screen, submission_id).await
+            review::open(screen, submission_id, ReviewOrigin::Sandbox).await
+        }
+        ReplayableAction::PickReview(submission_id) => {
+            review::open(screen, submission_id, ReviewOrigin::List).await
         }
     }
 }
@@ -584,6 +600,9 @@ async fn handle_flow_action(
         }
         FlowAction::ChangeReviewDecision(submission_id) => {
             review::change_decision(screen, telegram_user_id, submission_id, &state).await?;
+        }
+        FlowAction::ReturnForRework(submission_id) => {
+            review::handle_rework(screen, submission_id, &state).await?;
         }
         FlowAction::Grading(choice) => {
             teacher::handle_grading(screen, message_id, choice, state).await?;
@@ -759,13 +778,14 @@ mod tests {
             confirm_invite_rotation_keyboard, contact_keyboard, course_assignments_keyboard,
             course_invite_keyboard, courses_keyboard, deadline_options_keyboard,
             gradebook_groups_keyboard, gradebook_students_keyboard, grading_keyboard,
-            late_policy_keyboard, makeup_answer_keyboard, makeup_attempts_keyboard,
-            makeup_followup_keyboard, makeup_form_view, paginated_keyboard, penalty_keyboard,
+            late_policy_keyboard, list_followup_keyboard, makeup_answer_keyboard,
+            makeup_attempts_keyboard, makeup_followup_keyboard, makeup_form_view,
+            paginated_keyboard, penalty_keyboard, queue_followup_keyboard,
             registration_groups_keyboard, reopen_assignment_keyboard, review_decision_keyboard,
-            review_hub_keyboard, review_score_keyboard, roster_keyboard, sandbox_keyboard,
-            student_assignment_keyboard, student_assignments_keyboard, student_grades_keyboard,
-            student_keyboard, submission_history_keyboard, teacher_keyboard, terms_exit_keyboard,
-            terms_form_view, terms_keyboard,
+            review_hub_keyboard, review_list_keyboard, review_score_keyboard, roster_keyboard,
+            sandbox_keyboard, student_assignment_keyboard, student_assignments_keyboard,
+            student_grades_keyboard, student_keyboard, submission_history_keyboard,
+            teacher_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
@@ -842,13 +862,27 @@ mod tests {
                 },
             )
         };
-        let sandbox_submission = crate::app::SandboxSubmission {
+        let sandbox_submission = crate::app::PendingSubmission {
             submission_id: SubmissionId::new(),
             kind: crate::domain::SubmissionKind::Makeup,
+            subject_name: "Backend".to_owned(),
             assignment_title: "Trial".to_owned(),
             student_name: "Student".to_owned(),
             submitted_at: Utc::now(),
         };
+
+        let subject_queues = [
+            crate::app::SubjectQueue {
+                subject_id: crate::domain::SubjectId::new(),
+                subject_name: "Backend".to_owned(),
+                pending: 12,
+            },
+            crate::app::SubjectQueue {
+                subject_id: crate::domain::SubjectId::new(),
+                subject_name: "Frontend".to_owned(),
+                pending: 5,
+            },
+        ];
 
         let mut keyboards = vec![
             student_menu(),
@@ -870,10 +904,15 @@ mod tests {
                 course.id(),
                 student_id,
                 Some(texts::BUTTON_ACCEPT.to_owned()),
+                true,
             ),
-            review_keyboard(SubmissionId::new(), course.id(), student_id, None),
+            review_keyboard(SubmissionId::new(), course.id(), student_id, None, false),
             review_decision_keyboard(SubmissionId::new()),
-            review_hub_keyboard(12, 5),
+            review_hub_keyboard(&subject_queues, 5),
+            queue_followup_keyboard(Some(subject_queues[0].subject_id), true),
+            queue_followup_keyboard(None, false),
+            list_followup_keyboard(),
+            review_list_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
             makeup_followup_keyboard(true, true),
             student_grades_keyboard(course.id(), group.id(), student_id, true),
             contact_keyboard(
@@ -1074,6 +1113,7 @@ mod tests {
             TeachingCourseId::new(),
             UserId::new(),
             Some(texts::BUTTON_ACCEPT.to_owned()),
+            true,
         );
         let json = serde_json::to_value(keyboard).unwrap();
         let accept = json["inline_keyboard"][0][0]["callback_data"]
@@ -1082,6 +1122,15 @@ mod tests {
         let reject = json["inline_keyboard"][0][1]["callback_data"]
             .as_str()
             .unwrap();
+        let rework = json["inline_keyboard"][1][0]["callback_data"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            callbacks::parse(rework),
+            Some(CallbackAction::Flow(FlowAction::ReturnForRework(
+                submission_id
+            )))
+        );
 
         assert_eq!(
             callbacks::parse(accept),

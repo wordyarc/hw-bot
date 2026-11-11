@@ -113,7 +113,7 @@ async fn queue_is_ordered_by_submitted_at_not_by_insertion_order() -> anyhow::Re
 
     let mut tx = app.pool.begin().await?;
     let next =
-        submissions::lock_next_for_reviewer(&mut tx, &app.fixture.teacher, ReviewStream::Main)
+        submissions::lock_next_for_reviewer(&mut tx, &app.fixture.teacher, ReviewStream::ALL_MAIN)
             .await?
             .expect("the queue is not empty");
     tx.rollback().await?;
@@ -135,7 +135,7 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
     let head = submissions::lock_next_for_reviewer(
         &mut first_tx,
         &app.fixture.teacher,
-        ReviewStream::Main,
+        ReviewStream::ALL_MAIN,
     )
     .await?
     .expect("the queue is not empty");
@@ -146,7 +146,7 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
         submissions::lock_next_for_reviewer(
             &mut second_tx,
             &app.fixture.teacher,
-            ReviewStream::Main,
+            ReviewStream::ALL_MAIN,
         ),
     )
     .await
@@ -165,7 +165,7 @@ async fn concurrent_reviewers_take_different_submissions() -> anyhow::Result<()>
     let repeated = submissions::lock_next_for_reviewer(
         &mut repeated_tx,
         &app.fixture.teacher,
-        ReviewStream::Main,
+        ReviewStream::ALL_MAIN,
     )
     .await?
     .expect("the committed queue read must not reserve its submission");

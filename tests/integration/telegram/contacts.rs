@@ -126,7 +126,7 @@ fn urls(message: &Value) -> Vec<&str> {
 }
 
 async fn review_contact(app: &TestApp, telegram: &TelegramScenario) -> Button {
-    telegram.message(app.teacher(), "/review");
+    telegram.open_review_queue(app.teacher()).await;
     telegram
         .button_with_text(app.teacher(), texts::BUTTON_STUDENT_CONTACT)
         .await
@@ -863,9 +863,11 @@ async fn the_review_card_puts_the_contact_under_the_decisions() {
     stop_bot(cancellation, &mut task).await;
 
     let card = telegram.message_by_id(app.teacher(), button.message_id);
-    let keyboard = &card["reply_markup"]["inline_keyboard"];
+    let keyboard = card["reply_markup"]["inline_keyboard"].as_array().unwrap();
+    let last = keyboard.last().unwrap().as_array().unwrap();
     assert_eq!(keyboard[0].as_array().unwrap().len(), 2);
-    assert_eq!(keyboard[1][0]["text"], texts::BUTTON_STUDENT_CONTACT);
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0]["text"], texts::BUTTON_STUDENT_CONTACT);
 }
 
 #[tokio::test]

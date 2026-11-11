@@ -3,10 +3,12 @@ use proptest::prelude::*;
 
 use super::{Fixture, fixture};
 use crate::domain::{
-    AssignmentStatus, DeductedFrom, DomainError, MAX_ATTEMPTS, StudentAssignmentProgress,
-    SubmissionHistory, SubmissionStatus,
+    AssignmentStatus, CourseMakeup, DeductedFrom, DomainError, MAX_ATTEMPTS, MakeupRequest,
+    StudentAssignmentProgress, SubmissionHistory, SubmissionStatus,
 };
-use crate::test_support::{admin, assignment, course_for, history, submission, t0, teacher};
+use crate::test_support::{
+    ReviewShortcuts, admin, assignment, course_for, history, submission, t0, teacher,
+};
 
 #[test]
 fn student_can_submit_published_assignment_until_attempts_are_exhausted() {
@@ -383,4 +385,179 @@ fn extra_attempts_cannot_exceed_the_storage_limit() {
             max: MAX_ATTEMPTS,
         }
     );
+}
+
+fn rejected(
+    assignment: &crate::domain::Assignment,
+    course: &crate::domain::TeachingCourse,
+    teacher: &crate::domain::User,
+    student: &crate::domain::User,
+) -> crate::domain::Submission {
+    let mut sent = submission(assignment, student).build();
+    sent.reject(
+        assignment,
+        course,
+        teacher,
+        "Оформите PR",
+        t0() + Duration::hours(2),
+    )
+    .unwrap();
+    sent
+}
+
+#[test]
+fn a_rejected_regular_submission_returns_one_attempt() {
+    let Fixture {
+        teacher,
+        course,
+        student,
+        ..
+    } = fixture();
+    let assignment = assignment(&course, &teacher).published().build();
+    let sent = rejected(&assignment, &course, &teacher, &student);
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 1).unwrap();
+
+    progress
+        .return_attempt(&sent, &assignment, &course, &teacher)
+        .unwrap();
+
+    assert_eq!(progress.extra_attempts(), 2);
+}
+
+#[test]
+fn a_pending_or_accepted_submission_returns_no_attempt() {
+    let Fixture {
+        teacher,
+        course,
+        student,
+        ..
+    } = fixture();
+    let assignment = assignment(&course, &teacher).published().build();
+    let pending = submission(&assignment, &student).build();
+    let mut accepted = submission(&assignment, &student).build();
+    accepted
+        .accept(
+            &assignment,
+            &course,
+            &teacher,
+            None,
+            "Принято",
+            t0() + Duration::hours(2),
+        )
+        .unwrap();
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+
+    for sent in [pending, accepted] {
+        assert_eq!(
+            progress.return_attempt(&sent, &assignment, &course, &teacher),
+            Err(DomainError::AttemptNotReturnable),
+            "{:?}",
+            sent.status()
+        );
+    }
+    assert_eq!(progress.extra_attempts(), 0);
+}
+
+#[test]
+fn a_rejected_makeup_returns_no_attempt() {
+    let Fixture {
+        teacher,
+        course,
+        student,
+        ..
+    } = fixture();
+    let assignment = assignment(&course, &teacher)
+        .scored(10)
+        .makeup_credit(6)
+        .published()
+        .build();
+    let window = CourseMakeup::open(t0() + Duration::days(60), 3, t0()).unwrap();
+    let mut makeup = submission(&assignment, &student)
+        .submitted_at(assignment.closes_at() + Duration::days(1))
+        .makeup(MakeupRequest {
+            course: Some(window),
+            consent: true,
+            balance: window.balance(0, 0),
+        })
+        .build();
+    makeup
+        .reject(
+            &assignment,
+            &course,
+            &teacher,
+            "Нет",
+            t0() + Duration::days(9),
+        )
+        .unwrap();
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+
+    assert_eq!(
+        progress.return_attempt(&makeup, &assignment, &course, &teacher),
+        Err(DomainError::AttemptNotReturnable)
+    );
+}
+
+#[test]
+fn an_attempt_is_returned_only_to_the_author_of_the_submission() {
+    let Fixture {
+        teacher,
+        course,
+        student,
+        group,
+    } = fixture();
+    let other = assignment(&course, &teacher).published().build();
+    let assignment = assignment(&course, &teacher).published().build();
+    let sent = rejected(&assignment, &course, &teacher, &student);
+    let classmate = crate::test_support::student(3, &group);
+
+    for mut progress in [
+        StudentAssignmentProgress::new(&assignment, &classmate, 0).unwrap(),
+        StudentAssignmentProgress::new(&other, &student, 0).unwrap(),
+    ] {
+        assert_eq!(
+            progress.return_attempt(&sent, &assignment, &course, &teacher),
+            Err(DomainError::StudentProgressDoesNotBelongToAssignment)
+        );
+    }
+}
+
+#[test]
+fn a_returned_attempt_respects_the_storage_limit() {
+    let Fixture {
+        teacher,
+        course,
+        student,
+        ..
+    } = fixture();
+    let assignment = assignment(&course, &teacher)
+        .max_attempts(MAX_ATTEMPTS)
+        .published()
+        .build();
+    let sent = rejected(&assignment, &course, &teacher, &student);
+    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+
+    assert_eq!(
+        progress.return_attempt(&sent, &assignment, &course, &teacher),
+        Err(DomainError::AttemptLimitExceeded {
+            value: u32::from(MAX_ATTEMPTS) + 1,
+            max: MAX_ATTEMPTS,
+        })
+    );
+}
+
+#[test]
+fn only_a_published_assignment_before_closing_is_open_for_regular_work() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let draft = assignment(&course, &teacher).build();
+    let published = assignment(&course, &teacher).published().build();
+    let mut archived = assignment(&course, &teacher).published().build();
+    archived.archive(&course, &teacher).unwrap();
+    let before = published.closes_at() - Duration::seconds(1);
+
+    assert!(published.is_open_for_regular_at(before));
+    assert!(!published.is_open_for_regular_at(published.closes_at()));
+    assert!(!draft.is_open_for_regular_at(before));
+    assert!(!archived.is_open_for_regular_at(before));
 }

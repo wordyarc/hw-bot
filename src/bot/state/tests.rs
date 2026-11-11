@@ -4,6 +4,8 @@ use crate::bot::assignment_form::AssignmentTerms;
 use crate::domain::{DeductedFrom, SubmissionKind};
 use crate::test_support::{invite_codec, t0};
 
+const ORIGIN: ReviewOrigin = ReviewOrigin::Queue { subject: None };
+
 fn invite() -> VerifiedInvite {
     let codec = invite_codec();
     codec
@@ -100,20 +102,24 @@ fn changing_a_decision_requires_the_comment_step_of_the_same_submission() {
             value: 4,
             max_score: 5,
         }),
+        return_attempt: false,
+        origin: ORIGIN,
     });
 
-    assert!(state.is_awaiting_review_comment(current));
-    assert!(!state.is_awaiting_review_comment(other));
-    assert!(!BotState::Idle.is_awaiting_review_comment(current));
+    assert_eq!(state.awaiting_review_comment(current), Some(ORIGIN));
+    assert!(state.awaiting_review_comment(other).is_none());
+    assert!(BotState::Idle.awaiting_review_comment(current).is_none());
     assert!(
-        !BotState::Flow(FlowState::AwaitingReviewDecision {
+        BotState::Flow(FlowState::AwaitingReviewDecision {
             submission_id: current,
             target: ReviewTarget::Regular {
                 grading: Grading::PassFail,
                 late: None,
             },
+            origin: ORIGIN,
         })
-        .is_awaiting_review_comment(current)
+        .awaiting_review_comment(current)
+        .is_none()
     );
 }
 
@@ -394,11 +400,12 @@ fn the_decision_step_keeps_its_target_for_the_same_submission() {
     let state = BotState::Flow(FlowState::AwaitingReviewDecision {
         submission_id,
         target: ReviewTarget::Makeup,
+        origin: ORIGIN,
     });
 
     assert_eq!(
         state.review_decision_target(submission_id),
-        Some(ReviewTarget::Makeup)
+        Some((ReviewTarget::Makeup, ORIGIN))
     );
     assert!(state.review_decision_target(SubmissionId::new()).is_none());
     assert!(
@@ -406,10 +413,38 @@ fn the_decision_step_keeps_its_target_for_the_same_submission() {
             submission_id,
             decision: ReviewDecision::Reject,
             score: None,
+            return_attempt: false,
+            origin: ORIGIN,
         })
         .review_decision_target(submission_id)
         .is_none()
     );
+}
+
+#[test]
+fn rework_is_chosen_only_on_the_regular_decision_step_of_the_same_submission() {
+    let submission_id = SubmissionId::new();
+    let origin = ReviewOrigin::Queue {
+        subject: Some(crate::domain::SubjectId::new()),
+    };
+    let regular = BotState::Flow(FlowState::AwaitingReviewDecision {
+        submission_id,
+        target: ReviewTarget::Regular {
+            grading: Grading::PassFail,
+            late: None,
+        },
+        origin,
+    });
+    let makeup = BotState::Flow(FlowState::AwaitingReviewDecision {
+        submission_id,
+        target: ReviewTarget::Makeup,
+        origin,
+    });
+
+    assert_eq!(regular.rework_origin(submission_id), Some(origin));
+    assert!(regular.rework_origin(SubmissionId::new()).is_none());
+    assert!(makeup.rework_origin(submission_id).is_none());
+    assert!(BotState::Idle.rework_origin(submission_id).is_none());
 }
 
 #[test]
@@ -420,14 +455,18 @@ fn a_decision_changed_while_the_score_is_awaited_keeps_the_scale_and_lateness() 
         submission_id,
         max_score,
         late: Some(late()),
+        origin: ORIGIN,
     });
 
     assert_eq!(
         state.review_decision_target(submission_id),
-        Some(ReviewTarget::Regular {
-            grading: Grading::Score { max_score },
-            late: Some(late()),
-        })
+        Some((
+            ReviewTarget::Regular {
+                grading: Grading::Score { max_score },
+                late: Some(late()),
+            },
+            ORIGIN
+        ))
     );
     assert!(state.review_decision_target(SubmissionId::new()).is_none());
 }
@@ -440,6 +479,7 @@ fn a_score_is_taken_only_while_the_same_submission_awaits_it() {
         submission_id,
         max_score,
         late: Some(late()),
+        origin: ORIGIN,
     });
     let deciding = BotState::Flow(FlowState::AwaitingReviewDecision {
         submission_id,
@@ -447,11 +487,12 @@ fn a_score_is_taken_only_while_the_same_submission_awaits_it() {
             grading: Grading::Score { max_score },
             late: None,
         },
+        origin: ORIGIN,
     });
 
     assert_eq!(
         state.awaiting_review_score(submission_id),
-        Some((max_score, Some(late())))
+        Some((max_score, Some(late()), ORIGIN))
     );
     assert!(state.awaiting_review_score(SubmissionId::new()).is_none());
     assert!(deciding.awaiting_review_score(submission_id).is_none());
@@ -749,11 +790,14 @@ fn abandoning_a_teacher_text_step_cancels_it_with_the_teacher_menu() {
             submission_id: SubmissionId::new(),
             max_score: MaxScore::new(10).unwrap(),
             late: None,
+            origin: ORIGIN,
         },
         FlowState::AwaitingReviewComment {
             submission_id: SubmissionId::new(),
             decision: ReviewDecision::Reject,
             score: None,
+            return_attempt: false,
+            origin: ORIGIN,
         },
         FlowState::AwaitingBulkReviewComment {
             decision: ReviewDecision::Accept,
@@ -799,6 +843,7 @@ fn registration_review_decisions_confirmations_and_forms_are_abandoned_silently(
         FlowState::AwaitingReviewDecision {
             submission_id: SubmissionId::new(),
             target: ReviewTarget::Makeup,
+            origin: ORIGIN,
         },
         FlowState::ConfirmingAssignmentFileDeletion {
             message_id: MessageId(10),
@@ -833,6 +878,7 @@ fn typed_text_on_a_button_screen_is_answered_with_a_hint_naming_its_buttons() {
             BotState::Flow(FlowState::AwaitingReviewDecision {
                 submission_id: SubmissionId::new(),
                 target: ReviewTarget::Makeup,
+                origin: ORIGIN,
             }),
             texts::CHOOSE_REVIEW_DECISION,
         ),
@@ -957,11 +1003,14 @@ fn idle_and_typed_input_states_have_no_button_hint() {
             submission_id: SubmissionId::new(),
             max_score: MaxScore::new(10).unwrap(),
             late: None,
+            origin: ORIGIN,
         }),
         BotState::Flow(FlowState::AwaitingReviewComment {
             submission_id: SubmissionId::new(),
             decision: ReviewDecision::Accept,
             score: None,
+            return_attempt: false,
+            origin: ORIGIN,
         }),
         BotState::Flow(FlowState::AwaitingBulkReviewComment {
             decision: ReviewDecision::Reject,

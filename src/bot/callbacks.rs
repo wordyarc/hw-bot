@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::handlers::input::parse_u16;
 use crate::domain::{
     AssignmentId, DeductedFrom, DomainResult, Grading, MakeupTerms, ReviewDecision, StudentGroupId,
-    SubmissionId, SubmissionKind, TeachingCourseId, UserId,
+    SubjectId, SubmissionId, SubmissionKind, TeachingCourseId, UserId,
 };
 
 use CallbackAction::{Flow, Informational, Replayable, Screen};
@@ -18,6 +18,7 @@ pub const MENU_PROFILE: &str = "menu:profile";
 pub const MENU_COURSES: &str = "menu:courses";
 pub const MENU_SANDBOX: &str = "menu:sandbox";
 pub const NEXT_REVIEW: &str = "review:next";
+pub const NEXT_SUBJECT_REVIEW_PREFIX: &str = "review:next:";
 pub const REVIEW_HUB: &str = "review:hub";
 pub const NEXT_MAKEUP_REVIEW: &str = "review:makeup";
 
@@ -95,6 +96,8 @@ pub const ASSIGNMENT_GROUPS_DONE: &str = "agroup:done";
 pub const REVIEW_ACCEPT_PREFIX: &str = "review:accept:";
 pub const REVIEW_REJECT_PREFIX: &str = "review:reject:";
 pub const REVIEW_OPEN_PREFIX: &str = "review:open:";
+pub const REVIEW_PICK_PREFIX: &str = "review:pick:";
+pub const REVIEW_REWORK_PREFIX: &str = "review:rework:";
 pub const REVIEW_CHANGE_PREFIX: &str = "review:change:";
 pub const SANDBOX_ACCEPT_ALL: &str = "sandbox:accept-all";
 pub const SANDBOX_REJECT_ALL: &str = "sandbox:reject-all";
@@ -174,7 +177,7 @@ pub(super) enum ReplayableAction {
     Page(PageTarget, u32),
     Profile,
     ReviewHub,
-    NextReview,
+    NextReview(Option<SubjectId>),
     NextMakeupReview,
     CourseMakeup(TeachingCourseId),
     Assignment(AssignmentId),
@@ -185,6 +188,7 @@ pub(super) enum ReplayableAction {
     CourseInvite(TeachingCourseId),
     GradebookGroups(TeachingCourseId),
     ReviewSubmission(SubmissionId),
+    PickReview(SubmissionId),
 }
 
 impl ReplayableAction {
@@ -200,7 +204,10 @@ impl ReplayableAction {
             Self::Page(target, page) => target.callback(page),
             Self::Profile => MENU_PROFILE.to_owned(),
             Self::ReviewHub => REVIEW_HUB.to_owned(),
-            Self::NextReview => NEXT_REVIEW.to_owned(),
+            Self::NextReview(None) => NEXT_REVIEW.to_owned(),
+            Self::NextReview(Some(subject)) => {
+                format!("{NEXT_SUBJECT_REVIEW_PREFIX}{}", subject.as_uuid())
+            }
             Self::NextMakeupReview => NEXT_MAKEUP_REVIEW.to_owned(),
             Self::CourseMakeup(id) => format!("{MAKEUP_PREFIX}{}", id.as_uuid()),
             Self::Assignment(id) => format!("{ASSIGNMENT_PREFIX}{}", id.as_uuid()),
@@ -216,6 +223,7 @@ impl ReplayableAction {
             Self::CourseInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
             Self::GradebookGroups(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::ReviewSubmission(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
+            Self::PickReview(id) => format!("{REVIEW_PICK_PREFIX}{}", id.as_uuid()),
         }
     }
 }
@@ -227,6 +235,7 @@ pub(super) enum PageTarget {
     Queue,
     Courses,
     Sandbox,
+    ReviewQueue,
     Course(TeachingCourseId),
     Students(AssignmentId),
     Gradebook(TeachingCourseId, StudentGroupId),
@@ -244,6 +253,7 @@ impl PageTarget {
             Self::Queue => "q".to_owned(),
             Self::Courses => "c".to_owned(),
             Self::Sandbox => "sb".to_owned(),
+            Self::ReviewQueue => "rq".to_owned(),
             Self::Course(course) => format!("ca:{}", id(course.as_uuid())),
             Self::Students(assignment) => format!("s:{}", id(assignment.as_uuid())),
             Self::Gradebook(course, group) => {
@@ -275,6 +285,7 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
         "q" => PageTarget::Queue,
         "c" => PageTarget::Courses,
         "sb" => PageTarget::Sandbox,
+        "rq" => PageTarget::ReviewQueue,
         "ca" => PageTarget::Course(TeachingCourseId::from_uuid(id()?)),
         "s" => PageTarget::Students(AssignmentId::from_uuid(id()?)),
         "g" => PageTarget::Gradebook(
@@ -333,6 +344,7 @@ pub(super) enum FlowAction {
         submission_id: SubmissionId,
     },
     ChangeReviewDecision(SubmissionId),
+    ReturnForRework(SubmissionId),
     MaxAttempts(AmountChoice),
     Grading(GradingChoice),
     LatePolicy(LatePolicyChoice),
@@ -372,6 +384,7 @@ impl FlowAction {
                 submission_id,
             } => format!("{REVIEW_REJECT_PREFIX}{}", submission_id.as_uuid()),
             Self::ChangeReviewDecision(id) => format!("{REVIEW_CHANGE_PREFIX}{}", id.as_uuid()),
+            Self::ReturnForRework(id) => format!("{REVIEW_REWORK_PREFIX}{}", id.as_uuid()),
             Self::MaxAttempts(choice) => choice.callback(MAX_ATTEMPTS_PREFIX),
             Self::Grading(choice) => choice.callback(),
             Self::LatePolicy(choice) => choice.callback(),
@@ -580,7 +593,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         MENU_COURSES => Replayable(ReplayableAction::Page(PageTarget::Courses, 0)),
         MENU_SANDBOX => Replayable(ReplayableAction::Page(PageTarget::Sandbox, 0)),
         REVIEW_HUB => Replayable(ReplayableAction::ReviewHub),
-        NEXT_REVIEW => Replayable(ReplayableAction::NextReview),
+        NEXT_REVIEW => Replayable(ReplayableAction::NextReview(None)),
         NEXT_MAKEUP_REVIEW => Replayable(ReplayableAction::NextMakeupReview),
         FILE_ADD => Screen(ScreenAction::AddFile),
         FILE_FINISH => Screen(ScreenAction::FinishFileCreation),
@@ -687,6 +700,12 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
             id,
         )))
     }),
+    (NEXT_SUBJECT_REVIEW_PREFIX, |id| {
+        Replayable(ReplayableAction::NextReview(Some(SubjectId::from_uuid(id))))
+    }),
+    (REVIEW_PICK_PREFIX, |id| {
+        Replayable(ReplayableAction::PickReview(SubmissionId::from_uuid(id)))
+    }),
     (PUBLISH_PREFIX, |id| {
         Screen(ScreenAction::Publish(AssignmentId::from_uuid(id)))
     }),
@@ -712,6 +731,9 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         Flow(FlowAction::ChangeReviewDecision(SubmissionId::from_uuid(
             id,
         )))
+    }),
+    (REVIEW_REWORK_PREFIX, |id| {
+        Flow(FlowAction::ReturnForRework(SubmissionId::from_uuid(id)))
     }),
     (STUDENT_PREFIX, |id| {
         Flow(FlowAction::SelectStudent(UserId::from_uuid(id)))
@@ -897,6 +919,7 @@ mod tests {
             PageTarget::Queue,
             PageTarget::Courses,
             PageTarget::Sandbox,
+            PageTarget::ReviewQueue,
             PageTarget::Course(TeachingCourseId::new()),
             PageTarget::Students(AssignmentId::new()),
             PageTarget::Gradebook(TeachingCourseId::new(), StudentGroupId::new()),
@@ -953,6 +976,8 @@ mod tests {
         let student = UserId::from_uuid(Uuid::from_u128(0x0192_6f3a_7b1c_7d2e_bc63_84d5_e6f7_0819));
         let group =
             StudentGroupId::from_uuid(Uuid::from_u128(0x3f2a_1b0c_9d8e_4f70_a162_5344_2635_1708));
+        let subject =
+            SubjectId::from_uuid(Uuid::from_u128(0x4e3b_2c1d_0e9f_4a81_b273_6455_3746_2819));
         let day = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
         let month = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
         let last = u32::MAX;
@@ -992,6 +1017,8 @@ mod tests {
                 page(PageTarget::Sandbox, 0),
             Replayable(ReplayableAction::Page(PageTarget::Sandbox, 1..=u32::MAX)) =>
                 page(PageTarget::Sandbox, last),
+            Replayable(ReplayableAction::Page(PageTarget::ReviewQueue, _)) =>
+                page(PageTarget::ReviewQueue, last),
             Replayable(ReplayableAction::Page(PageTarget::Course(_), 0)) =>
                 page(PageTarget::Course(course), 0),
             Replayable(ReplayableAction::Page(PageTarget::Course(_), 1..=u32::MAX)) =>
@@ -1010,7 +1037,10 @@ mod tests {
                 page(PageTarget::Roster(course), last),
             Replayable(ReplayableAction::Profile) => Replayable(ReplayableAction::Profile),
             Replayable(ReplayableAction::ReviewHub) => Replayable(ReplayableAction::ReviewHub),
-            Replayable(ReplayableAction::NextReview) => Replayable(ReplayableAction::NextReview),
+            Replayable(ReplayableAction::NextReview(None)) =>
+                Replayable(ReplayableAction::NextReview(None)),
+            Replayable(ReplayableAction::NextReview(Some(_))) =>
+                Replayable(ReplayableAction::NextReview(Some(subject))),
             Replayable(ReplayableAction::NextMakeupReview) =>
                 Replayable(ReplayableAction::NextMakeupReview),
             Replayable(ReplayableAction::CourseMakeup(_)) =>
@@ -1033,6 +1063,8 @@ mod tests {
                 Replayable(ReplayableAction::GradebookGroups(course)),
             Replayable(ReplayableAction::ReviewSubmission(_)) =>
                 Replayable(ReplayableAction::ReviewSubmission(submission)),
+            Replayable(ReplayableAction::PickReview(_)) =>
+                Replayable(ReplayableAction::PickReview(submission)),
             Screen(ScreenAction::Publish(_)) => Screen(ScreenAction::Publish(assignment)),
             Screen(ScreenAction::Archive(_)) => Screen(ScreenAction::Archive(assignment)),
             Screen(ScreenAction::ChangeDeadline(_)) =>
@@ -1053,6 +1085,7 @@ mod tests {
                 review(ReviewDecision::Reject),
             Flow(FlowAction::ChangeReviewDecision(_)) =>
                 Flow(FlowAction::ChangeReviewDecision(submission)),
+            Flow(FlowAction::ReturnForRework(_)) => Flow(FlowAction::ReturnForRework(submission)),
             Flow(FlowAction::MaxAttempts(AmountChoice::Preset(_))) =>
                 Flow(FlowAction::MaxAttempts(AmountChoice::Preset(most))),
             Flow(FlowAction::MaxAttempts(AmountChoice::Manual)) =>
@@ -1336,6 +1369,14 @@ mod tests {
                 }),
                 "contact:AAAAAAAAAAAAAAAAAAAAAQ:AAAAAAAAAAAAAAAAAAAAAg",
             ),
+            (
+                Replayable(ReplayableAction::NextReview(Some(SubjectId::from_uuid(id)))),
+                "review:next:00000000-0000-0000-0000-000000000001",
+            ),
+            (
+                Flow(FlowAction::ReturnForRework(submission)),
+                "review:rework:00000000-0000-0000-0000-000000000001",
+            ),
             (CallbackAction::Noop, "cal:noop"),
         ] {
             assert_eq!(action.callback(), data);
@@ -1354,6 +1395,10 @@ mod tests {
             "reviewscore:0",
             "reviewscore:not-a-uuid:0",
             "review:change:not-a-uuid",
+            "review:next:",
+            "review:next:not-a-uuid",
+            "review:pick:not-a-uuid",
+            "review:rework:not-a-uuid",
             "late:penalty",
             "late:manual",
             "late:7:1",

@@ -102,7 +102,7 @@ pub async fn queue_size(
     State(state): State<AppState>,
     reviewer: Actor,
 ) -> Result<Json<ReviewQueueSizeResponse>, ApiError> {
-    let pending = state.application.reviews.queue_size(reviewer).await?;
+    let pending = state.application.reviews.queue_size(reviewer, None).await?;
 
     Ok(Json(ReviewQueueSizeResponse { pending }))
 }
@@ -114,7 +114,7 @@ pub async fn take_next_from_queue(
     let Some(item) = state
         .application
         .reviews
-        .take_next_from_queue(reviewer, Utc::now())
+        .take_next_from_queue(reviewer, None, Utc::now())
         .await?
     else {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -136,6 +136,7 @@ pub async fn review_submission(
         score: request.score()?,
         comment: request.comment,
         reviewed_at: Utc::now(),
+        return_attempt: false,
     };
 
     let reviewed = state.application.reviews.review_submission(command).await?;
