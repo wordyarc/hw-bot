@@ -1,5 +1,4 @@
-![HW·bot Logo (Light)](docs/logo/svg/hw-bot-lockup-en.svg#gh-light-mode-only)
-![HW·bot Logo (Dark)](docs/logo/svg/hw-bot-lockup-en-dark.svg#gh-dark-mode-only)
+![hw-bot](docs/images/banner-en.svg)
 
 # hw-bot
 
