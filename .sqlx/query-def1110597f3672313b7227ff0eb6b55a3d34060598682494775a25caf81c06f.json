@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select\n                id, assignment_id, student_id, kind, attempt_number, content, status,\n                submitted_at, reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score,\n                late_periods, penalty, penalty_deducted_from, work_score, course_total_penalty\n            from submissions\n            where assignment_id = $1 and student_id = $2 order by attempt_number desc limit 1",
+  "query": "\n            select\n                id, assignment_id, student_id, kind, attempt_number, content, status,\n                submitted_at, reviewed_by, reviewed_at, review_comment, withdrawn_at, raw_score,\n                grade_max_score, late_periods, penalty, penalty_deducted_from, work_score,\n                course_total_penalty\n            from submissions\n            where assignment_id = $1 and student_id = $2 and attempt_number < $3 and status <> 'withdrawn' order by attempt_number desc limit $4",
   "describe": {
     "columns": [
       {
@@ -126,6 +126,17 @@
       },
       {
         "ordinal": 11,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "withdrawn_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "raw_score",
         "type_info": "Int2",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "grade_max_score",
         "type_info": "Int2",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "late_periods",
         "type_info": "Int4",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "penalty",
         "type_info": "Int2",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "penalty_deducted_from",
         "type_info": "Text",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "work_score",
         "type_info": "Int2",
         "origin": {
@@ -191,7 +202,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "course_total_penalty",
         "type_info": "Int2",
         "origin": {
@@ -205,7 +216,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid"
+        "Uuid",
+        "Int2",
+        "Int8"
       ]
     },
     "nullable": [
@@ -226,8 +239,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "5014cd2eee100e18f9031411d02a6bcf0e7c670e2d00c15e157a884421427e23"
+  "hash": "def1110597f3672313b7227ff0eb6b55a3d34060598682494775a25caf81c06f"
 }

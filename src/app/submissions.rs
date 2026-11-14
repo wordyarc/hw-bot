@@ -2,11 +2,12 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::app::access::load_student;
+use crate::app::assignments::load_student_assignment;
 use crate::app::users::load_actor;
-use crate::app::{Actor, AppResult, Required};
+use crate::app::{Actor, AppResult, Required, StudentAssignment};
 use crate::db;
 use crate::domain::{
-    Acceptance, AssignmentId, MakeupBalance, MakeupRequest, Submission, SubmissionId,
+    Acceptance, AssignmentId, MakeupBalance, MakeupRequest, Resubmission, Submission, SubmissionId,
     SubmissionKind,
 };
 use crate::pagination::{Page, PageRequest};
@@ -25,6 +26,30 @@ pub struct SubmitHomework {
 pub struct SubmittedHomework {
     pub submission: Submission,
     pub makeup_balance: Option<MakeupBalance>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WithdrawSubmission {
+    pub submission_id: SubmissionId,
+    pub actor: Actor,
+    pub withdrawn_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingWithdrawal {
+    pub submission: Submission,
+    pub assignment: StudentAssignment,
+}
+
+impl PendingWithdrawal {
+    pub fn resubmission_at(&self, at: DateTime<Utc>) -> Resubmission {
+        self.submission.resubmission_at(
+            &self.assignment.assignment,
+            self.assignment.history,
+            self.assignment.pool,
+            at,
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +111,39 @@ impl SubmissionService {
                 .then(|| makeup.balance.spend()),
             submission,
         })
+    }
+
+    pub async fn find_for_withdrawal(
+        &self,
+        actor: Actor,
+        submission_id: SubmissionId,
+    ) -> AppResult<PendingWithdrawal> {
+        let author = load_actor(&self.pool, actor, "student").await?;
+        let submission = db::submissions::find_by_id(&self.pool, submission_id)
+            .await?
+            .required("submission")?;
+        submission.ensure_authored_by(&author, "prepare submission withdrawal")?;
+        let assignment = db::assignments::find_by_id(&self.pool, submission.assignment_id())
+            .await?
+            .required("assignment")?;
+
+        Ok(PendingWithdrawal {
+            assignment: load_student_assignment(&self.pool, &author, assignment).await?,
+            submission,
+        })
+    }
+
+    pub async fn withdraw(&self, command: WithdrawSubmission) -> AppResult<Submission> {
+        let mut connection = self.pool.acquire().await?;
+        let author = load_actor(&mut *connection, command.actor, "student").await?;
+        let mut submission = db::submissions::find_by_id(&mut *connection, command.submission_id)
+            .await?
+            .required("submission")?;
+
+        submission.withdraw(&author, command.withdrawn_at)?;
+        db::submissions::withdraw(&mut connection, &submission).await?;
+
+        Ok(submission)
     }
 
     pub async fn pending_queue(

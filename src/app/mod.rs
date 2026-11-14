@@ -29,7 +29,9 @@ pub use review::{
     RemainingAttempts, ReviewQueueItem, ReviewSandbox, ReviewService, ReviewSubmission,
     ReviewedSubmission,
 };
-pub use submissions::{SubmissionService, SubmitHomework, SubmittedHomework};
+pub use submissions::{
+    PendingWithdrawal, SubmissionService, SubmitHomework, SubmittedHomework, WithdrawSubmission,
+};
 pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser, UserService};
 
 use crate::db::{DbError, DbResult};

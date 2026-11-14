@@ -98,6 +98,10 @@ pub fn router(state: AppState, request_timeout: Duration) -> Router {
             "/submissions/{submission_id}/review",
             post(review::review_submission),
         )
+        .route(
+            "/submissions/{submission_id}/withdraw",
+            post(submissions::withdraw_submission),
+        )
         .fallback(|| async { ApiError::from_code(ErrorCode::NotFound, "route not found") })
         .method_not_allowed_fallback(|| async {
             ApiError::new(

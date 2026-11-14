@@ -70,15 +70,19 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
     }
 
     for (attempt, status) in SubmissionStatus::ALL.iter().enumerate() {
-        let reviewed = *status != SubmissionStatus::PendingReview;
+        let reviewed = matches!(
+            status,
+            SubmissionStatus::Accepted | SubmissionStatus::Rejected
+        );
+        let withdrawn = *status == SubmissionStatus::Withdrawn;
 
         sqlx::query(
             r#"
             insert into submissions (
                 assignment_id, student_id, kind, attempt_number, content, status,
-                reviewed_by, reviewed_at, review_comment
+                reviewed_by, reviewed_at, review_comment, withdrawn_at
             )
-            values ($1, $2, 'regular', $3, 'https://example.test/pr', $4, $5, $6, $7)
+            values ($1, $2, 'regular', $3, 'https://example.test/pr', $4, $5, $6, $7, $8)
             "#,
         )
         .bind(fixture.assignment.id().as_uuid())
@@ -88,6 +92,7 @@ async fn check_constraints_accept_every_domain_enum_variant() -> anyhow::Result<
         .bind(reviewed.then(|| fixture.teacher.id().as_uuid()))
         .bind(reviewed.then(Utc::now))
         .bind(reviewed.then_some("comment"))
+        .bind(withdrawn.then(Utc::now))
         .execute(&app.pool)
         .await
         .unwrap_or_else(|error| panic!("submission status {} rejected: {error}", status.as_str()));
@@ -205,6 +210,64 @@ async fn completed_review_requires_a_comment() {
             "status: {}",
             status.as_str()
         );
+    }
+}
+
+const REVIEW_STATE: &str = "submissions_review_state_follows_status";
+
+#[tokio::test]
+async fn a_withdrawn_submission_requires_its_withdrawal_moment() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+
+    let error = sqlx::query("update submissions set status = 'withdrawn' where id = $1")
+        .bind(submission)
+        .execute(&app.pool)
+        .await
+        .unwrap_err();
+
+    assert_check(error, Some(REVIEW_STATE));
+}
+
+#[tokio::test]
+async fn a_withdrawn_submission_has_no_review() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+
+    let error = sqlx::query(
+        r#"
+        update submissions
+        set status = 'withdrawn', withdrawn_at = now(),
+            reviewed_by = $2, reviewed_at = now(), review_comment = 'ok'
+        where id = $1
+        "#,
+    )
+    .bind(submission)
+    .bind(app.fixture.teacher.id().as_uuid())
+    .execute(&app.pool)
+    .await
+    .unwrap_err();
+
+    assert_check(error, Some(REVIEW_STATE));
+}
+
+#[tokio::test]
+async fn only_a_withdrawn_submission_has_a_withdrawal_moment() {
+    let app = TestApp::start().await;
+    let accepted = accepted_submission(&app).await;
+    let second = app.add_student("Second student").await;
+    let pending = app
+        .queued_submission(second.telegram_user_id().as_i64(), "pull/1")
+        .await;
+
+    for submission in [pending, accepted] {
+        let error = sqlx::query("update submissions set withdrawn_at = now() where id = $1")
+            .bind(submission)
+            .execute(&app.pool)
+            .await
+            .unwrap_err();
+
+        assert_check(error, Some(REVIEW_STATE));
     }
 }
 

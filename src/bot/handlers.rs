@@ -340,19 +340,38 @@ async fn run_menu_action(
     let Some(target) = menu_target(action) else {
         return send_help(chat, telegram_user_id).await;
     };
-    replay(chat, telegram_user_id, target, chat.now()).await
+    replay(chat, telegram_user_id, target, Shown::at(chat.now())).await
+}
+
+#[derive(Clone, Copy)]
+struct Shown<'a> {
+    at: DateTime<Utc>,
+    text: Option<&'a str>,
+}
+
+impl<'a> Shown<'a> {
+    fn at(at: DateTime<Utc>) -> Self {
+        Self { at, text: None }
+    }
+
+    fn of(message: &'a Message) -> Self {
+        Self {
+            at: message.date,
+            text: message.text(),
+        }
+    }
 }
 
 async fn replay(
     chat: Chat<'_>,
     telegram_user_id: TelegramUserId,
     action: ReplayableAction,
-    shown_at: DateTime<Utc>,
+    shown: Shown<'_>,
 ) -> HandlerResult {
     let Some(screen) = chat.resolve(telegram_user_id).await? else {
         return Ok(());
     };
-    handle_replayable_action(screen, action, shown_at).await
+    handle_replayable_action(screen, action, shown).await
 }
 
 fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
@@ -420,7 +439,8 @@ pub(super) async fn handle_callback(
         if let CallbackAction::Replayable(replayable) = action {
             reset_dialogue(&dialogue).await?;
             if state.is_restarted_by(replayable) {
-                let restarted = replay(chat, telegram_user_id, replayable, message.date).await;
+                let restarted =
+                    replay(chat, telegram_user_id, replayable, Shown::of(message)).await;
                 if let Err(BotError::App(_)) = restarted {
                     abandon_flow(&bot, chat_id, &state).await?;
                 }
@@ -437,7 +457,7 @@ pub(super) async fn handle_callback(
 
         match action {
             CallbackAction::Replayable(action) => {
-                handle_replayable_action(screen, action, message.date).await
+                handle_replayable_action(screen, action, Shown::of(message)).await
             }
             CallbackAction::Screen(action) => {
                 handle_screen_action(screen, message.id, action, state).await
@@ -459,7 +479,7 @@ pub(super) async fn handle_callback(
 async fn handle_replayable_action(
     screen: Screen<'_>,
     action: ReplayableAction,
-    shown_at: DateTime<Utc>,
+    shown: Shown<'_>,
 ) -> HandlerResult {
     match action {
         ReplayableAction::Page(target, number) => {
@@ -513,7 +533,7 @@ async fn handle_replayable_action(
             screen.ask(texts::ASSIGNMENT_TITLE_PROMPT).await
         }
         ReplayableAction::StartSubmission(assignment_id, button) => {
-            student::start_submission(screen, assignment_id, button, shown_at).await
+            student::start_submission(screen, assignment_id, button, shown.at).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await
@@ -526,6 +546,12 @@ async fn handle_replayable_action(
         }
         ReplayableAction::OpenSandboxReview(submission_id) => {
             review::open(screen, submission_id, ReviewOrigin::Sandbox).await
+        }
+        ReplayableAction::StartWithdrawal(submission_id) => {
+            student::withdrawal_step(screen, submission_id, None).await
+        }
+        ReplayableAction::ConfirmWithdrawal(submission_id) => {
+            student::withdrawal_step(screen, submission_id, shown.text).await
         }
         ReplayableAction::PickReview(submission_id) => {
             review::open(screen, submission_id, ReviewOrigin::List).await
@@ -774,7 +800,7 @@ mod tests {
         use crate::bot::callbacks::MakeupFormAction;
         use crate::bot::makeup_form::{MakeupForm, MakeupStep};
         use crate::bot::views::{
-            ReviewButtons, assignment_files_keyboard, assignment_groups_keyboard,
+            AssignmentAction, ReviewButtons, assignment_files_keyboard, assignment_groups_keyboard,
             assignment_students_keyboard, attempts_keyboard, calendar_keyboard,
             confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard, contact_keyboard,
             course_assignments_keyboard, course_invite_keyboard, courses_keyboard,
@@ -787,6 +813,7 @@ mod tests {
             sandbox_keyboard, student_assignment_keyboard, student_assignments_keyboard,
             student_grades_keyboard, student_keyboard, submission_history_keyboard,
             teacher_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
+            withdrawal_confirmation_keyboard, withdrawal_hint_keyboard,
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
@@ -894,9 +921,24 @@ mod tests {
                 1,
                 Some(2),
             ),
-            student_assignment_keyboard(&assignment, true, Some(SubmissionKind::Regular)),
-            student_assignment_keyboard(&assignment, false, Some(SubmissionKind::Makeup)),
+            student_assignment_keyboard(
+                &assignment,
+                true,
+                Some(AssignmentAction::Submit(SubmissionKind::Regular)),
+            ),
+            student_assignment_keyboard(
+                &assignment,
+                false,
+                Some(AssignmentAction::Submit(SubmissionKind::Makeup)),
+            ),
+            student_assignment_keyboard(
+                &assignment,
+                true,
+                Some(AssignmentAction::Withdraw(SubmissionId::new())),
+            ),
             student_assignment_keyboard(&archived, false, None),
+            withdrawal_hint_keyboard(SubmissionId::new()),
+            withdrawal_confirmation_keyboard(SubmissionId::new(), assignment.id()),
             reopen_assignment_keyboard(assignment.id()),
             submission_history_keyboard(assignment.id(), 1, Some(2)),
             courses_keyboard(&[single, stream.clone()]),

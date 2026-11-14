@@ -7,13 +7,13 @@ use crate::app::access::{
     ManagedAssignment, load_managed_assignment_on, load_managed_versioned_assignment,
     load_managing_teacher, load_managing_teacher_on, load_student,
 };
-use crate::app::{Actor, AppError, AppResult, Required};
+use crate::app::{Actor, AppError, AppResult, OpenedFile, Required};
 use crate::db;
 use crate::domain::{
     Assignment, AssignmentId, AssignmentStatus, DomainError, DomainResult, Grading, LatePolicy,
-    MakeupOffer, MakeupPool, MakeupTerms, NewAssignment, StoredFileMetadata,
-    StudentAssignmentProgress, StudentGroupId, Subject, Submission, SubmissionHistory,
-    SubmissionKind, SubmissionStart, TeachingCourse, TeachingCourseId, User, UserId,
+    MakeupOffer, MakeupPool, MakeupTerms, NewAssignment, StudentAssignmentProgress, StudentGroupId,
+    Subject, Submission, SubmissionHistory, SubmissionKind, SubmissionStart, TeachingCourse,
+    TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{AssignmentStudentSummary, VersionedAssignment};
@@ -98,7 +98,7 @@ impl StudentAssignment {
 #[derive(Clone, Debug)]
 pub struct StudentAssignmentDetails {
     pub assignment: StudentAssignment,
-    pub files: Vec<StoredFileMetadata>,
+    pub files: Vec<OpenedFile>,
     pub latest_submission: Option<Submission>,
 }
 
@@ -337,29 +337,16 @@ impl AssignmentService {
         let (student, assignment) =
             load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
 
-        let history =
-            db::submissions::load_histories(&self.pool, &[assignment.id().as_uuid()], student.id())
-                .await?
-                .remove(&assignment.id())
-                .unwrap_or_default();
         let latest_submission =
             db::submissions::latest_for_student(&self.pool, assignment.id(), student.id()).await?;
-        let files = db::files::list_for_assignment(&self.pool, assignment.id()).await?;
-        let (subject, _) =
-            db::academic::find_subject_with_sandbox(&self.pool, assignment.subject_id())
-                .await?
-                .required("subject")?;
-        let pool =
-            db::makeup::pool_for_student(&self.pool, assignment.teaching_course_id(), student.id())
-                .await?;
+        let files = db::files::list_stored_for_assignment(&self.pool, assignment.id())
+            .await?
+            .into_iter()
+            .map(OpenedFile::authorized)
+            .collect();
 
         Ok(StudentAssignmentDetails {
-            assignment: StudentAssignment {
-                pool,
-                assignment,
-                subject,
-                history,
-            },
+            assignment: load_student_assignment(&self.pool, &student, assignment).await?,
             files,
             latest_submission,
         })
@@ -499,6 +486,29 @@ impl AssignmentService {
 
         Ok(assignment)
     }
+}
+
+pub(crate) async fn load_student_assignment(
+    pool: &PgPool,
+    student: &User,
+    assignment: Assignment,
+) -> AppResult<StudentAssignment> {
+    let history = db::submissions::load_histories(pool, &[assignment.id().as_uuid()], student.id())
+        .await?
+        .remove(&assignment.id())
+        .unwrap_or_default();
+    let (subject, _) = db::academic::find_subject_with_sandbox(pool, assignment.subject_id())
+        .await?
+        .required("subject")?;
+    let makeup =
+        db::makeup::pool_for_student(pool, assignment.teaching_course_id(), student.id()).await?;
+
+    Ok(StudentAssignment {
+        assignment,
+        subject,
+        history,
+        pool: makeup,
+    })
 }
 
 pub(crate) async fn load_visible_assignment_for_student(

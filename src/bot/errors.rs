@@ -113,7 +113,8 @@ pub fn app_error_message(code: ErrorCode) -> &'static str {
         }
         ErrorCode::SubmissionAlreadyAccepted => "Работа уже принята.",
         ErrorCode::SubmissionPendingReview => "Предыдущая работа ещё на проверке.",
-        ErrorCode::SubmissionAlreadyReviewed => "Эту сдачу уже проверил другой преподаватель.",
+        ErrorCode::SubmissionAlreadyReviewed => "Эту работу уже проверили.",
+        ErrorCode::SubmissionAlreadyWithdrawn => "Эту работу отозвал её автор.",
         ErrorCode::AlreadyRegistered => "Вы уже зарегистрированы.",
         ErrorCode::ConcurrentModification => "Данные успели измениться. Повторите действие.",
         ErrorCode::InviteInvalid => {

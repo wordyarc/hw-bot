@@ -219,6 +219,7 @@ pub async fn pools_for_student(
                 where assignments.teaching_course_id = courses.id
                   and submissions.student_id = $2
                   and submissions.kind = 'makeup'
+                  and submissions.status <> 'withdrawn'
                   and submissions.submitted_at >= courses.makeup_opened_at
             ) as "spent!"
         from teaching_courses courses

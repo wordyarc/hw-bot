@@ -20,6 +20,7 @@ str_enum! {
         SubmissionAlreadyAccepted => "submission_already_accepted",
         SubmissionPendingReview => "submission_pending_review",
         SubmissionAlreadyReviewed => "submission_already_reviewed",
+        SubmissionAlreadyWithdrawn => "submission_already_withdrawn",
         MakeupAttemptsExhausted => "makeup_attempts_exhausted",
         AlreadyRegistered => "already_registered",
         ConcurrentModification => "concurrent_modification",
@@ -115,6 +116,7 @@ impl AppError {
                 DomainError::SubmissionAlreadyAccepted => ErrorCode::SubmissionAlreadyAccepted,
                 DomainError::SubmissionAlreadyPendingReview => ErrorCode::SubmissionPendingReview,
                 DomainError::SubmissionIsNotPendingReview => ErrorCode::SubmissionAlreadyReviewed,
+                DomainError::SubmissionAlreadyWithdrawn => ErrorCode::SubmissionAlreadyWithdrawn,
                 DomainError::StudentDoesNotBelongToAssignmentGroup
                 | DomainError::PermissionDenied { .. } => ErrorCode::PermissionDenied,
                 DomainError::UserAlreadyRegistered => ErrorCode::AlreadyRegistered,

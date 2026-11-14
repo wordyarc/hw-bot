@@ -26,6 +26,7 @@ mod student_contacts;
 mod student_read_api;
 mod student_review_queue;
 mod submission_repository;
+mod submission_withdrawal;
 mod submit_homework_api;
 mod teacher_read_api;
 mod telegram;

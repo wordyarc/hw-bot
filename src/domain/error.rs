@@ -136,6 +136,9 @@ pub enum DomainError {
     #[error("assignment already has a pending submission")]
     SubmissionAlreadyPendingReview,
 
+    #[error("submission is already withdrawn")]
+    SubmissionAlreadyWithdrawn,
+
     #[error("submission does not belong to assignment")]
     SubmissionDoesNotBelongToAssignment,
 

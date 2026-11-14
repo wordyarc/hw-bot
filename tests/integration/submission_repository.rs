@@ -67,6 +67,27 @@ async fn pending_submission_blocks_but_does_not_spend_an_attempt() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn only_a_reviewed_submission_is_saved_as_a_review_result() -> anyhow::Result<()> {
+    let app = TestApp::start().await;
+    let pending = submission(&app.fixture.assignment, &app.fixture.student).build();
+    submissions::insert(&app.pool, &pending).await?;
+    let mut withdrawn = pending.clone();
+    withdrawn.withdraw(&app.fixture.student, Utc::now())?;
+
+    for submission in [pending, withdrawn] {
+        let result =
+            submissions::save_review_result(&mut *app.pool.acquire().await?, &submission).await;
+
+        assert!(
+            matches!(result, Err(DbError::Precondition { .. })),
+            "{result:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn accepted_review_is_persisted_and_spends_an_attempt() -> anyhow::Result<()> {
     let app = TestApp::start().await;
     let mut submission = submission(&app.fixture.assignment, &app.fixture.student).build();
@@ -80,7 +101,7 @@ async fn accepted_review_is_persisted_and_spends_an_attempt() -> anyhow::Result<
         "95/100",
         reviewed_at(&app.fixture.assignment),
     )?;
-    submissions::save_review_result(&app.pool, &submission).await?;
+    submissions::save_review_result(&mut *app.pool.acquire().await?, &submission).await?;
 
     let loaded = submissions::find_by_id(&app.pool, submission.id())
         .await?
@@ -215,10 +236,10 @@ async fn the_loser_of_a_review_race_is_rejected_by_the_conditional_update() -> a
         reviewed_at(&app.fixture.assignment),
     )?;
 
-    submissions::save_review_result(&mut *winner_tx, &winner).await?;
+    submissions::save_review_result(&mut winner_tx, &winner).await?;
     winner_tx.commit().await?;
 
-    let lost = submissions::save_review_result(&mut *loser_tx, &loser).await;
+    let lost = submissions::save_review_result(&mut loser_tx, &loser).await;
     loser_tx.rollback().await?;
 
     assert!(

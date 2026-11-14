@@ -272,7 +272,11 @@ impl From<&StudentAssignmentDetails> for StudentAssignmentDetailsResponse {
     fn from(details: &StudentAssignmentDetails) -> Self {
         Self {
             assignment: StudentAssignmentResponse::from(&details.assignment),
-            files: details.files.iter().map(Into::into).collect(),
+            files: details
+                .files
+                .iter()
+                .map(|file| file.metadata().into())
+                .collect(),
             latest_submission: details.latest_submission.as_ref().map(Into::into),
         }
     }

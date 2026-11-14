@@ -67,7 +67,8 @@ async fn a_reviewed_submission_leaves_the_queue() {
             Utc::now(),
         )
         .expect("a course teacher may accept");
-    db::submissions::save_review_result(&app.pool, &ahead)
+    let mut connection = app.pool.acquire().await.expect("a connection");
+    db::submissions::save_review_result(&mut connection, &ahead)
         .await
         .expect("the review is stored");
 

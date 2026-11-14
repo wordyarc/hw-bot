@@ -92,11 +92,23 @@ async fn stored_file_keeps_exact_fixture_bytes_and_computed_metadata() {
     );
 }
 
+async fn student_card_files(
+    app: &TestApp,
+    application: &ApplicationContainer,
+) -> Vec<hw_bot::app::OpenedFile> {
+    application
+        .assignments
+        .find_for_student(app.student_actor(), app.fixture.assignment.id())
+        .await
+        .unwrap()
+        .files
+}
+
 #[tokio::test]
-async fn student_opens_a_published_assignment_file() {
+async fn a_student_receives_the_files_of_a_published_assignment_with_its_card() {
     let app = TestApp::start().await;
     let application = application(&app);
-    let added = add(
+    add(
         &app,
         &application,
         card(&app, &application).await.revision,
@@ -104,27 +116,20 @@ async fn student_opens_a_published_assignment_file() {
     )
     .await;
 
-    let opened = application
-        .files
-        .open_assignment_file_for_student(
-            app.student_actor(),
-            app.fixture.assignment.id(),
-            added.files[0].id(),
-        )
-        .await
-        .unwrap();
+    let files = student_card_files(&app, &application).await;
 
+    assert_eq!(files.len(), 1);
     assert_eq!(
-        application.files.read_content(&opened).await.unwrap(),
+        application.files.read_content(&files[0]).await.unwrap(),
         DOCUMENT
     );
 }
 
 #[tokio::test]
-async fn student_keeps_access_to_an_archived_assignment_file() {
+async fn a_student_keeps_the_files_of_an_archived_assignment() {
     let app = TestApp::start().await;
     let application = application(&app);
-    let added = add(
+    add(
         &app,
         &application,
         card(&app, &application).await.revision,
@@ -137,121 +142,12 @@ async fn student_keeps_access_to_an_archived_assignment_file() {
         .await
         .unwrap();
 
-    let opened = application
-        .files
-        .open_assignment_file_for_student(
-            app.student_actor(),
-            app.fixture.assignment.id(),
-            added.files[0].id(),
-        )
-        .await
-        .unwrap();
+    let files = student_card_files(&app, &application).await;
 
     assert_eq!(
-        application.files.read_content(&opened).await.unwrap(),
+        application.files.read_content(&files[0]).await.unwrap(),
         DOCUMENT
     );
-}
-
-#[tokio::test]
-async fn a_draft_assignment_file_does_not_exist_for_a_student() {
-    let app = TestApp::start().await;
-    let application = application(&app);
-    let draft = app.add_draft_assignment().await;
-    let card = application
-        .files
-        .list_assignment_files_for_teacher(app.teacher_actor(), draft.id())
-        .await
-        .unwrap();
-    let added = application
-        .files
-        .add_assignment_file(AddAssignmentFile {
-            assignment_id: draft.id(),
-            actor: app.teacher_actor(),
-            expected_revision: card.revision,
-            presentation: FilePresentation::Document,
-            filename: "assignment-note.txt".to_owned(),
-            mime_type: Some("text/plain".to_owned()),
-            telegram_file_id: None,
-            content: DOCUMENT.to_vec(),
-            created_at: Utc::now(),
-        })
-        .await
-        .unwrap();
-
-    let error = application
-        .files
-        .open_assignment_file_for_student(app.student_actor(), draft.id(), added.files[0].id())
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.code(), ErrorCode::NotFound);
-}
-
-#[tokio::test]
-async fn a_never_published_archived_file_does_not_exist_for_a_student() {
-    let app = TestApp::start().await;
-    let application = application(&app);
-    let draft = app.add_draft_assignment().await;
-    let card = application
-        .files
-        .list_assignment_files_for_teacher(app.teacher_actor(), draft.id())
-        .await
-        .unwrap();
-    let added = application
-        .files
-        .add_assignment_file(AddAssignmentFile {
-            assignment_id: draft.id(),
-            actor: app.teacher_actor(),
-            expected_revision: card.revision,
-            presentation: FilePresentation::Document,
-            filename: "assignment-note.txt".to_owned(),
-            mime_type: Some("text/plain".to_owned()),
-            telegram_file_id: None,
-            content: DOCUMENT.to_vec(),
-            created_at: Utc::now(),
-        })
-        .await
-        .unwrap();
-    application
-        .assignments
-        .archive(draft.id(), app.teacher_actor())
-        .await
-        .unwrap();
-
-    let error = application
-        .files
-        .open_assignment_file_for_student(app.student_actor(), draft.id(), added.files[0].id())
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.code(), ErrorCode::NotFound);
-}
-
-#[tokio::test]
-async fn another_group_cannot_open_an_assignment_file() {
-    let app = TestApp::start().await;
-    let application = application(&app);
-    let outsider = app.add_outsider_student().await;
-    let added = add(
-        &app,
-        &application,
-        card(&app, &application).await.revision,
-        DOCUMENT,
-    )
-    .await;
-
-    let error = application
-        .files
-        .open_assignment_file_for_student(
-            hw_bot::app::Actor::new(outsider.id()),
-            app.fixture.assignment.id(),
-            added.files[0].id(),
-        )
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.code(), ErrorCode::PermissionDenied);
 }
 
 #[tokio::test]

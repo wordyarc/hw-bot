@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select status from submissions where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "15f26ecdcfe4b7d91b5b6118f34af839ad622d2f932d7324e44296203cc310b5"
+}

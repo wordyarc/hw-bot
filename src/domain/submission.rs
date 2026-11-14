@@ -183,6 +183,13 @@ impl SubmissionHistory {
         }
     }
 
+    fn without_pending(self) -> Self {
+        Self {
+            has_pending_submission: false,
+            ..self
+        }
+    }
+
     fn next_attempt_number(self) -> DomainResult<u16> {
         self.submission_count
             .checked_add(1)
@@ -200,12 +207,23 @@ pub enum SubmissionStart {
     Makeup { offer: MakeupOffer, consented: bool },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Resubmission {
+    Regular {
+        closes_at: DateTime<Utc>,
+        late: bool,
+    },
+    Makeup(MakeupOffer),
+    Refused(DomainError),
+}
+
 str_enum! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum SubmissionStatus {
         PendingReview => "pending_review",
         Accepted => "accepted",
         Rejected => "rejected",
+        Withdrawn => "withdrawn",
     }
 }
 
@@ -491,6 +509,7 @@ pub struct Submission {
     reviewed_by: Option<UserId>,
     reviewed_at: Option<DateTime<Utc>>,
     review_comment: Option<NonEmptyString>,
+    withdrawn_at: Option<DateTime<Utc>>,
     grade: Option<Grade>,
 }
 
@@ -506,6 +525,7 @@ pub(crate) struct SubmissionParts {
     pub reviewed_by: Option<UserId>,
     pub reviewed_at: Option<DateTime<Utc>>,
     pub review_comment: Option<String>,
+    pub withdrawn_at: Option<DateTime<Utc>>,
     pub grade: GradeParts,
 }
 
@@ -517,22 +537,21 @@ impl Submission {
             });
         }
 
-        match parts.status {
-            SubmissionStatus::PendingReview
-                if parts.reviewed_by.is_some()
-                    || parts.reviewed_at.is_some()
-                    || parts.review_comment.is_some() =>
-            {
-                return Err(DomainError::InvalidSubmissionReviewState);
+        let review_fields = [
+            parts.reviewed_by.is_some(),
+            parts.reviewed_at.is_some(),
+            parts.review_comment.is_some(),
+        ];
+        let withdrawn = parts.withdrawn_at.is_some();
+        let consistent = match parts.status {
+            SubmissionStatus::PendingReview => review_fields == [false; 3] && !withdrawn,
+            SubmissionStatus::Withdrawn => review_fields == [false; 3] && withdrawn,
+            SubmissionStatus::Accepted | SubmissionStatus::Rejected => {
+                review_fields == [true; 3] && !withdrawn
             }
-            SubmissionStatus::Accepted | SubmissionStatus::Rejected
-                if parts.reviewed_by.is_none()
-                    || parts.reviewed_at.is_none()
-                    || parts.review_comment.is_none() =>
-            {
-                return Err(DomainError::InvalidSubmissionReviewState);
-            }
-            _ => {}
+        };
+        if !consistent {
+            return Err(DomainError::InvalidSubmissionReviewState);
         }
 
         let grade = Grade::restore(parts.grade)?;
@@ -568,6 +587,7 @@ impl Submission {
                     )
                 })
                 .transpose()?,
+            withdrawn_at: parts.withdrawn_at,
             grade,
         })
     }
@@ -626,6 +646,7 @@ impl Submission {
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
+            withdrawn_at: None,
             grade: GradeParts::default(),
         })
     }
@@ -649,9 +670,7 @@ impl Submission {
             });
         }
 
-        if self.status != SubmissionStatus::PendingReview {
-            return Err(DomainError::SubmissionIsNotPendingReview);
-        }
+        self.ensure_pending_review()?;
 
         let grade = match (review.decision, review.score, self.kind) {
             (ReviewDecision::Accept, score, SubmissionKind::Regular) => {
@@ -680,6 +699,74 @@ impl Submission {
         self.grade = grade;
 
         Ok(())
+    }
+
+    pub fn withdraw(&mut self, student: &User, at: DateTime<Utc>) -> DomainResult<()> {
+        self.ensure_authored_by(student, "withdraw submission")?;
+        self.ensure_pending_review()?;
+
+        self.status = SubmissionStatus::Withdrawn;
+        self.withdrawn_at = Some(at);
+
+        Ok(())
+    }
+
+    pub fn resubmission_at(
+        &self,
+        assignment: &Assignment,
+        history: SubmissionHistory,
+        pool: Option<MakeupPool>,
+        at: DateTime<Utc>,
+    ) -> Resubmission {
+        let pool = pool.map(|pool| self.returned_to(pool));
+        let start = history.without_pending().submission_start(
+            assignment,
+            pool,
+            SubmissionKind::Makeup,
+            at,
+            at,
+        );
+
+        match start {
+            Ok(SubmissionStart::Regular) => Resubmission::Regular {
+                closes_at: assignment.closes_at(),
+                late: at >= assignment.deadline_at(),
+            },
+            Ok(SubmissionStart::Makeup { offer, .. }) => Resubmission::Makeup(offer),
+            Err(refused) => Resubmission::Refused(refused),
+        }
+    }
+
+    fn returned_to(&self, pool: MakeupPool) -> MakeupPool {
+        let counted = self.status == SubmissionStatus::PendingReview
+            && self.kind == SubmissionKind::Makeup
+            && self.submitted_at >= pool.course.opened_at();
+        if !counted {
+            return pool;
+        }
+
+        MakeupPool {
+            balance: pool.balance.returned(),
+            ..pool
+        }
+    }
+
+    pub fn ensure_authored_by(&self, student: &User, action: &'static str) -> DomainResult<()> {
+        if student.id() != self.student_id {
+            return Err(DomainError::PermissionDenied { action });
+        }
+
+        Ok(())
+    }
+
+    pub fn ensure_pending_review(&self) -> DomainResult<()> {
+        match self.status {
+            SubmissionStatus::PendingReview => Ok(()),
+            SubmissionStatus::Withdrawn => Err(DomainError::SubmissionAlreadyWithdrawn),
+            SubmissionStatus::Accepted | SubmissionStatus::Rejected => {
+                Err(DomainError::SubmissionIsNotPendingReview)
+            }
+        }
     }
 
     pub fn id(&self) -> SubmissionId {
@@ -726,6 +813,10 @@ impl Submission {
         self.review_comment.as_ref()
     }
 
+    pub fn withdrawn_at(&self) -> Option<DateTime<Utc>> {
+        self.withdrawn_at
+    }
+
     pub fn grade(&self) -> Option<Grade> {
         self.grade
     }
@@ -753,6 +844,7 @@ mod tests {
             reviewed_by: None,
             reviewed_at: None,
             review_comment: None,
+            withdrawn_at: None,
             grade: GradeParts::default(),
         }
     }
@@ -907,5 +999,73 @@ mod tests {
             .unwrap_err(),
             DomainError::InvalidSubmissionReviewState
         );
+    }
+
+    fn withdrawn_parts() -> SubmissionParts {
+        SubmissionParts {
+            status: SubmissionStatus::Withdrawn,
+            withdrawn_at: Some(t0()),
+            ..pending_parts()
+        }
+    }
+
+    #[test]
+    fn restore_accepts_a_withdrawn_submission_with_its_withdrawal_moment() {
+        let submission = Submission::restore(withdrawn_parts()).unwrap();
+
+        assert_eq!(submission.status(), SubmissionStatus::Withdrawn);
+        assert_eq!(submission.withdrawn_at(), Some(t0()));
+    }
+
+    #[test]
+    fn restore_rejects_a_withdrawn_submission_without_its_withdrawal_moment() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                withdrawn_at: None,
+                ..withdrawn_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionReviewState
+        );
+    }
+
+    #[test]
+    fn restore_rejects_review_fields_for_withdrawn_submission() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                reviewed_by: Some(UserId::new()),
+                reviewed_at: Some(t0()),
+                review_comment: Some("review".to_owned()),
+                ..withdrawn_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionReviewState
+        );
+    }
+
+    #[test]
+    fn restore_rejects_a_grade_on_a_withdrawn_submission() {
+        assert_eq!(
+            Submission::restore(SubmissionParts {
+                grade: grade(4, 5),
+                ..withdrawn_parts()
+            })
+            .unwrap_err(),
+            DomainError::InvalidSubmissionGradeState
+        );
+    }
+
+    #[test]
+    fn restore_rejects_a_withdrawal_moment_on_a_submission_that_is_not_withdrawn() {
+        for parts in [pending_parts(), accepted_parts()] {
+            assert_eq!(
+                Submission::restore(SubmissionParts {
+                    withdrawn_at: Some(t0()),
+                    ..parts
+                })
+                .unwrap_err(),
+                DomainError::InvalidSubmissionReviewState
+            );
+        }
     }
 }

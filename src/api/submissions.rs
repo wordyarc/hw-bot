@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use super::ApiPath as Path;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
-use crate::app::SubmitHomework;
+use crate::app::{SubmitHomework, WithdrawSubmission};
 use crate::domain::{
-    AssignmentId, DeductedFrom, Grade, Submission, SubmissionKind, SubmissionStatus, UserId,
+    AssignmentId, DeductedFrom, Grade, Submission, SubmissionId, SubmissionKind, SubmissionStatus,
+    UserId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +32,7 @@ pub struct SubmissionResponse {
     reviewed_by: Option<Uuid>,
     reviewed_at: Option<DateTime<Utc>>,
     review_comment: Option<String>,
+    withdrawn_at: Option<DateTime<Utc>>,
     raw_score: Option<u16>,
     max_score: Option<u16>,
     late_periods: Option<u32>,
@@ -56,6 +58,7 @@ impl From<&Submission> for SubmissionResponse {
             review_comment: submission
                 .review_comment()
                 .map(|comment| comment.as_str().to_owned()),
+            withdrawn_at: submission.withdrawn_at(),
             raw_score: submission.grade().map(Grade::raw_score),
             max_score: submission.grade().map(Grade::max_score),
             late_periods: submission.grade().map(Grade::late_periods),
@@ -91,4 +94,20 @@ pub async fn submit_homework(
         StatusCode::CREATED,
         Json(SubmissionResponse::from(&submitted.submission)),
     ))
+}
+
+pub async fn withdraw_submission(
+    State(state): State<AppState>,
+    actor: Actor,
+    Path(submission_id): Path<SubmissionId>,
+) -> Result<Json<SubmissionResponse>, ApiError> {
+    let command = WithdrawSubmission {
+        submission_id,
+        actor,
+        withdrawn_at: Utc::now(),
+    };
+
+    let withdrawn = state.application.submissions.withdraw(command).await?;
+
+    Ok(Json(SubmissionResponse::from(&withdrawn)))
 }

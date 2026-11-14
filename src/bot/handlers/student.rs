@@ -3,20 +3,25 @@ use teloxide::payloads::SendMessageSetters;
 
 use super::input::require_text_within;
 use super::reset_dialogue;
-use crate::app::{ErrorCode, StudentAssignment, SubmitHomework};
+use crate::app::{
+    AppError, ErrorCode, OpenedFile, PendingWithdrawal, StudentAssignment, SubmitHomework,
+    WithdrawSubmission,
+};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::{Chat, Screen, TextStep};
-use crate::bot::errors::{app_error_message, log_handler_error, optional_stat};
+use crate::bot::errors::{BotError, app_error_message, log_handler_error, optional_stat};
 use crate::bot::state::{BotState, FlowState, MakeupConsent};
 use crate::bot::texts;
 use crate::bot::views::{
-    list_text, makeup_credit_terms, paginated_keyboard, reopen_assignment_keyboard,
-    send_message_chunks, student_assignment_keyboard, student_assignments_keyboard,
-    student_grading_lines, student_keyboard, student_menu, submission_history_keyboard,
+    AssignmentAction, list_text, makeup_credit_terms, paginated_keyboard,
+    reopen_assignment_keyboard, resubmission_line, send_message_chunks,
+    student_assignment_keyboard, student_assignments_keyboard, student_grading_lines,
+    student_keyboard, student_menu, submission_history_keyboard, withdrawal_confirmation_keyboard,
+    withdrawal_hint_keyboard,
 };
 use crate::domain::{
-    AssignmentId, MakeupOffer, StoredFileMetadata, Submission, SubmissionKind, SubmissionStart,
+    AssignmentId, MakeupOffer, Submission, SubmissionId, SubmissionKind, SubmissionStart,
     USER_TEXT_MAX_LEN,
 };
 use crate::pagination::{Page, PageRequest};
@@ -223,8 +228,14 @@ pub(super) async fn show_assignment(
             .filter(MakeupOffer::has_attempts)
             .map(|_| SubmissionKind::Makeup)
     };
+    let action = details
+        .latest_submission
+        .as_ref()
+        .filter(|latest| latest.is_pending_review())
+        .map(|pending| AssignmentAction::Withdraw(pending.id()))
+        .or(submit.map(AssignmentAction::Submit));
     let keyboard =
-        student_assignment_keyboard(assignment, details.latest_submission.is_some(), submit);
+        student_assignment_keyboard(assignment, details.latest_submission.is_some(), action);
 
     bot.send_message(chat_id, summary).await?;
     bot.send_message(chat_id, texts::ASSIGNMENT_BODY_HEADER)
@@ -236,7 +247,7 @@ pub(super) async fn show_assignment(
     bot.send_message(chat_id, texts::CHOOSE_ACTION)
         .reply_markup(keyboard)
         .await?;
-    if let Err(error) = send_assignment_files(screen, assignment_id, &details.files).await {
+    if let Err(error) = send_assignment_files(screen, &details.files).await {
         if error.is_invalid_token() {
             return Err(error);
         }
@@ -248,11 +259,7 @@ pub(super) async fn show_assignment(
     Ok(())
 }
 
-async fn send_assignment_files(
-    screen: Screen<'_>,
-    assignment_id: AssignmentId,
-    files: &[StoredFileMetadata],
-) -> HandlerResult {
+async fn send_assignment_files(screen: Screen<'_>, files: &[OpenedFile]) -> HandlerResult {
     if files.is_empty() {
         return Ok(());
     }
@@ -260,15 +267,10 @@ async fn send_assignment_files(
         .bot()
         .send_message(screen.chat_id(), texts::FILES_ATTACHED_HEADER)
         .await?;
-    for metadata in files {
-        let file = screen
-            .services()
-            .files
-            .open_assignment_file_for_student(screen.actor(), assignment_id, metadata.id())
-            .await?;
+    for file in files {
         screen
             .transfers()
-            .send(screen.chat_id(), &screen.services().files, &file)
+            .send(screen.chat_id(), &screen.services().files, file)
             .await?;
     }
     Ok(())
@@ -276,9 +278,13 @@ async fn send_assignment_files(
 
 async fn send_submission(screen: Screen<'_>, submission: &Submission) -> HandlerResult {
     let grade = texts::grade_line(submission.kind(), submission.grade());
+    let status = match submission.withdrawn_at() {
+        Some(at) => texts::withdrawn_status(&screen.timezone().format_moment(at)),
+        None => texts::submission_status(submission.status()).to_owned(),
+    };
     let text = texts::attempt(
         submission.attempt_number(),
-        texts::submission_status(submission.status()),
+        &status,
         grade.as_deref(),
         submission.content().as_str(),
         submission.review_comment().map(|comment| comment.as_str()),
@@ -426,7 +432,20 @@ pub(super) async fn submit_homework_text(
                 Some(balance) => texts::makeup_queued(balance.remaining()),
                 None => texts::submission_queued(),
             };
-            send_with_menu(screen.chat(), confirmation).await
+            send_with_menu(screen.chat(), confirmation).await?;
+            let hint = screen
+                .bot()
+                .send_message(screen.chat_id(), texts::WITHDRAWAL_HINT)
+                .reply_markup(withdrawal_hint_keyboard(submitted.submission.id()))
+                .await;
+            if let Err(error) = hint {
+                let error = BotError::from(error);
+                if error.is_invalid_token() {
+                    return Err(error);
+                }
+                log_handler_error(&error);
+            }
+            Ok(())
         }
         Err(error) => {
             send_with_menu(screen.chat(), app_error_message(error.code())).await?;
@@ -439,6 +458,84 @@ pub(super) async fn submit_homework_text(
             Ok(())
         }
     }
+}
+
+pub(super) async fn withdrawal_step(
+    screen: Screen<'_>,
+    submission_id: SubmissionId,
+    shown_confirmation: Option<&str>,
+) -> HandlerResult {
+    let pending = screen
+        .services()
+        .submissions
+        .find_for_withdrawal(screen.actor(), submission_id)
+        .await?;
+    if let Err(refused) = pending.submission.ensure_pending_review() {
+        return refuse_withdrawal(screen, &pending, refused.into()).await;
+    }
+    let confirmation = withdrawal_confirmation(screen, &pending);
+    if shown_confirmation != Some(confirmation.as_str()) {
+        return send_withdrawal_confirmation(screen, &pending, confirmation).await;
+    }
+
+    let withdrawn = screen
+        .services()
+        .submissions
+        .withdraw(WithdrawSubmission {
+            submission_id,
+            actor: screen.actor(),
+            withdrawn_at: screen.now(),
+        })
+        .await;
+    match withdrawn {
+        Ok(_) => {
+            screen
+                .bot()
+                .send_message(screen.chat_id(), texts::WITHDRAWN)
+                .await?;
+        }
+        Err(error) if error.code().is_server_failure() => return Err(error.into()),
+        Err(error) => return refuse_withdrawal(screen, &pending, error).await,
+    }
+    show_assignment(screen, pending.submission.assignment_id()).await
+}
+
+async fn refuse_withdrawal(
+    screen: Screen<'_>,
+    pending: &PendingWithdrawal,
+    refusal: AppError,
+) -> HandlerResult {
+    screen.fail(refusal).await?;
+    show_assignment(screen, pending.submission.assignment_id()).await
+}
+
+fn withdrawal_confirmation(screen: Screen<'_>, pending: &PendingWithdrawal) -> String {
+    let assignment = &pending.assignment.assignment;
+    texts::withdrawal_confirmation(
+        pending.assignment.subject.name().as_str(),
+        assignment.title().as_str(),
+        &resubmission_line(
+            &pending.resubmission_at(screen.now()),
+            assignment,
+            screen.timezone(),
+        ),
+    )
+}
+
+async fn send_withdrawal_confirmation(
+    screen: Screen<'_>,
+    pending: &PendingWithdrawal,
+    confirmation: String,
+) -> HandlerResult {
+    screen
+        .bot()
+        .send_message(screen.chat_id(), confirmation)
+        .reply_markup(withdrawal_confirmation_keyboard(
+            pending.submission.id(),
+            pending.submission.assignment_id(),
+        ))
+        .await?;
+    Ok(())
 }
 
 async fn send_with_menu(chat: Chat<'_>, text: impl Into<String>) -> HandlerResult {

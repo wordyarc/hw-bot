@@ -99,6 +99,27 @@ pub async fn list_for_assignment(
     .collect()
 }
 
+pub async fn list_stored_for_assignment(
+    executor: impl PgExecutor<'_>,
+    assignment_id: AssignmentId,
+) -> DbResult<Vec<StoredFile>> {
+    select_stored_files!(
+        ", telegram_file_id ",
+        " from stored_files where assignment_id = $1 order by position",
+        assignment_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(StoredFile {
+            metadata: StoredFileMetadata::try_from(stored_file_row!(row))?,
+            telegram_file_id: row.telegram_file_id,
+        })
+    })
+    .collect()
+}
+
 pub async fn find_assignment_file(
     executor: impl PgExecutor<'_>,
     assignment_id: AssignmentId,

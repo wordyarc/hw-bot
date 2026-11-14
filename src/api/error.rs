@@ -103,6 +103,7 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         | ErrorCode::SubmissionAlreadyAccepted
         | ErrorCode::SubmissionPendingReview
         | ErrorCode::SubmissionAlreadyReviewed
+        | ErrorCode::SubmissionAlreadyWithdrawn
         | ErrorCode::AlreadyRegistered
         | ErrorCode::ConcurrentModification
         | ErrorCode::FileLimitReached => StatusCode::CONFLICT,
@@ -160,6 +161,16 @@ mod tests {
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
         assert_eq!(error.code(), "makeup_attempts_exhausted");
+    }
+
+    #[test]
+    fn a_withdrawn_submission_is_a_conflict_distinct_from_a_reviewed_one() {
+        let withdrawn = api_error(DomainError::SubmissionAlreadyWithdrawn);
+        let reviewed = api_error(DomainError::SubmissionIsNotPendingReview);
+
+        assert_eq!(withdrawn.status(), StatusCode::CONFLICT);
+        assert_eq!(withdrawn.code(), "submission_already_withdrawn");
+        assert_ne!(withdrawn.code(), reviewed.code());
     }
 
     #[test]

@@ -3,7 +3,6 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use crate::app::access::{load_managed_assignment_on, load_managed_versioned_assignment};
-use crate::app::assignments::load_visible_assignment_for_student;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
@@ -51,6 +50,10 @@ pub struct DeleteAssignmentFile {
 pub struct OpenedFile(StoredFile);
 
 impl OpenedFile {
+    pub(super) fn authorized(file: StoredFile) -> Self {
+        Self(file)
+    }
+
     pub fn metadata(&self) -> &StoredFileMetadata {
         &self.0.metadata
     }
@@ -203,16 +206,6 @@ impl FileService {
     ) -> AppResult<OpenedFile> {
         load_managed_versioned_assignment(&self.pool, actor, assignment_id, "open assignment file")
             .await?;
-        self.open_assignment_file(assignment_id, file_id).await
-    }
-
-    pub async fn open_assignment_file_for_student(
-        &self,
-        actor: Actor,
-        assignment_id: AssignmentId,
-        file_id: StoredFileId,
-    ) -> AppResult<OpenedFile> {
-        load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
         self.open_assignment_file(assignment_id, file_id).await
     }
 

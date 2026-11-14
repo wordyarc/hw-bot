@@ -230,6 +230,13 @@ impl MakeupBalance {
         }
     }
 
+    pub(crate) fn returned(self) -> Self {
+        Self {
+            used: self.used.saturating_sub(1),
+            ..self
+        }
+    }
+
     pub(crate) fn ensure_available(self) -> DomainResult<()> {
         if self.remaining() == 0 {
             return Err(DomainError::MakeupAttemptsExhausted {

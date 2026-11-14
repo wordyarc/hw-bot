@@ -69,9 +69,9 @@ pub async fn enqueue_review_result(
     let outcome = match submission.status() {
         SubmissionStatus::Accepted => ReviewOutcome::Accepted,
         SubmissionStatus::Rejected => ReviewOutcome::Rejected,
-        SubmissionStatus::PendingReview => {
+        SubmissionStatus::PendingReview | SubmissionStatus::Withdrawn => {
             return Err(DbError::Precondition {
-                message: "pending submission cannot produce a review notification",
+                message: "only a reviewed submission produces a review notification",
             });
         }
     };

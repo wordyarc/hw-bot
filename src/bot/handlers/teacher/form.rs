@@ -10,7 +10,7 @@ use crate::bot::callbacks::{AmountChoice, DeadlineAction, ReplayableAction};
 use crate::bot::context::{Chat, Screen, TextStep};
 use crate::bot::form::{Form, InputMode};
 use crate::bot::handlers::input::require_text;
-use crate::bot::handlers::{handle_replayable_action, reset_dialogue};
+use crate::bot::handlers::{Shown, handle_replayable_action, reset_dialogue};
 use crate::bot::state::BotState;
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::teacher_keyboard;
@@ -159,7 +159,7 @@ pub(super) async fn cancel<F: FormScreen>(screen: Screen<'_>, form: F) -> Handle
     reset_dialogue(screen.dialogue()).await?;
     abandon(screen.bot(), screen.chat_id(), &form).await?;
     match form.cancelled_to() {
-        Some(action) => handle_replayable_action(screen, action, screen.now()).await,
+        Some(action) => handle_replayable_action(screen, action, Shown::at(screen.now())).await,
         None => Ok(()),
     }
 }

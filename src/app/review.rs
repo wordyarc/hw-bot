@@ -338,9 +338,7 @@ impl ReviewService {
         context
             .assignment
             .ensure_managed_by(&context.course, &reviewer, "review homework")?;
-        if !submission.is_pending_review() {
-            return Err(DomainError::SubmissionIsNotPendingReview.into());
-        }
+        submission.ensure_pending_review()?;
         load_queue_item(&mut connection, submission, context, now).await
     }
 }

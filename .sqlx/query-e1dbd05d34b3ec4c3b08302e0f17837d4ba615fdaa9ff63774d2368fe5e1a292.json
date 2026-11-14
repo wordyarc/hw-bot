@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            courses.id,\n            courses.makeup_until,\n            courses.makeup_attempts,\n            courses.makeup_opened_at,\n            coalesce(progress.extra_makeup_attempts, 0)::smallint as \"extra!\",\n            (\n                select count(*)\n                from submissions\n                join assignments\n                  on assignments.id = submissions.assignment_id\n                where assignments.teaching_course_id = courses.id\n                  and submissions.student_id = $2\n                  and submissions.kind = 'makeup'\n                  and submissions.submitted_at >= courses.makeup_opened_at\n            ) as \"spent!\"\n        from teaching_courses courses\n        left join student_course_progress progress\n          on progress.teaching_course_id = courses.id\n         and progress.student_id = $2\n        where courses.id = any($1)\n          and courses.makeup_opened_at is not null\n        ",
+  "query": "\n        select\n            courses.id,\n            courses.makeup_until,\n            courses.makeup_attempts,\n            courses.makeup_opened_at,\n            coalesce(progress.extra_makeup_attempts, 0)::smallint as \"extra!\",\n            (\n                select count(*)\n                from submissions\n                join assignments\n                  on assignments.id = submissions.assignment_id\n                where assignments.teaching_course_id = courses.id\n                  and submissions.student_id = $2\n                  and submissions.kind = 'makeup'\n                  and submissions.status <> 'withdrawn'\n                  and submissions.submitted_at >= courses.makeup_opened_at\n            ) as \"spent!\"\n        from teaching_courses courses\n        left join student_course_progress progress\n          on progress.teaching_course_id = courses.id\n         and progress.student_id = $2\n        where courses.id = any($1)\n          and courses.makeup_opened_at is not null\n        ",
   "describe": {
     "columns": [
       {
@@ -75,5 +75,5 @@
       null
     ]
   },
-  "hash": "5e0147849b41ea065f30d0d072bf8ba6e8caa62a91be8cfd22278620dae2e846"
+  "hash": "e1dbd05d34b3ec4c3b08302e0f17837d4ba615fdaa9ff63774d2368fe5e1a292"
 }

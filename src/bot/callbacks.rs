@@ -28,6 +28,8 @@ pub const MANAGE_PREFIX: &str = "manage:";
 pub const CREATE_PREFIX: &str = "create:";
 pub const SUBMIT_PREFIX: &str = "submit:";
 pub const SUBMIT_MAKEUP_PREFIX: &str = "submit-makeup:";
+pub const WITHDRAW_PREFIX: &str = "withdraw:";
+pub const WITHDRAW_CONFIRM_PREFIX: &str = "withdraw-yes:";
 pub const FILES_PREFIX: &str = "files:";
 pub const ATTEMPTS_PREFIX: &str = "attempts:";
 pub const INVITE_PREFIX: &str = "invite:";
@@ -189,6 +191,8 @@ pub(super) enum ReplayableAction {
     GradebookGroups(TeachingCourseId),
     OpenSandboxReview(SubmissionId),
     PickReview(SubmissionId),
+    StartWithdrawal(SubmissionId),
+    ConfirmWithdrawal(SubmissionId),
 }
 
 impl ReplayableAction {
@@ -224,6 +228,8 @@ impl ReplayableAction {
             Self::GradebookGroups(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::OpenSandboxReview(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
             Self::PickReview(id) => format!("{REVIEW_PICK_PREFIX}{}", id.as_uuid()),
+            Self::StartWithdrawal(id) => format!("{WITHDRAW_PREFIX}{}", id.as_uuid()),
+            Self::ConfirmWithdrawal(id) => format!("{WITHDRAW_CONFIRM_PREFIX}{}", id.as_uuid()),
         }
     }
 }
@@ -706,6 +712,16 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
     (REVIEW_PICK_PREFIX, |id| {
         Replayable(ReplayableAction::PickReview(SubmissionId::from_uuid(id)))
     }),
+    (WITHDRAW_PREFIX, |id| {
+        Replayable(ReplayableAction::StartWithdrawal(SubmissionId::from_uuid(
+            id,
+        )))
+    }),
+    (WITHDRAW_CONFIRM_PREFIX, |id| {
+        Replayable(ReplayableAction::ConfirmWithdrawal(
+            SubmissionId::from_uuid(id),
+        ))
+    }),
     (PUBLISH_PREFIX, |id| {
         Screen(ScreenAction::Publish(AssignmentId::from_uuid(id)))
     }),
@@ -1065,6 +1081,10 @@ mod tests {
                 Replayable(ReplayableAction::OpenSandboxReview(submission)),
             Replayable(ReplayableAction::PickReview(_)) =>
                 Replayable(ReplayableAction::PickReview(submission)),
+            Replayable(ReplayableAction::StartWithdrawal(_)) =>
+                Replayable(ReplayableAction::StartWithdrawal(submission)),
+            Replayable(ReplayableAction::ConfirmWithdrawal(_)) =>
+                Replayable(ReplayableAction::ConfirmWithdrawal(submission)),
             Screen(ScreenAction::Publish(_)) => Screen(ScreenAction::Publish(assignment)),
             Screen(ScreenAction::Archive(_)) => Screen(ScreenAction::Archive(assignment)),
             Screen(ScreenAction::ChangeDeadline(_)) =>

@@ -174,10 +174,16 @@ pub(crate) fn student_assignments_keyboard(
     paginated_keyboard(InlineKeyboardMarkup::new(rows), target, page, next)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AssignmentAction {
+    Submit(SubmissionKind),
+    Withdraw(SubmissionId),
+}
+
 pub(crate) fn student_assignment_keyboard(
     assignment: &Assignment,
     history: bool,
-    submit: Option<SubmissionKind>,
+    action: Option<AssignmentAction>,
 ) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     if history {
@@ -186,15 +192,22 @@ pub(crate) fn student_assignment_keyboard(
             PageTarget::History(assignment.id()).callback(0),
         ));
     }
-    if let Some(button) = submit {
-        let label = match button {
-            SubmissionKind::Regular => texts::BUTTON_SUBMIT,
-            SubmissionKind::Makeup => texts::BUTTON_SUBMIT_MAKEUP,
-        };
-        rows.push(row(
-            label,
-            ReplayableAction::StartSubmission(assignment.id(), button).callback(),
-        ));
+    match action {
+        Some(AssignmentAction::Submit(button)) => {
+            let label = match button {
+                SubmissionKind::Regular => texts::BUTTON_SUBMIT,
+                SubmissionKind::Makeup => texts::BUTTON_SUBMIT_MAKEUP,
+            };
+            rows.push(row(
+                label,
+                ReplayableAction::StartSubmission(assignment.id(), button).callback(),
+            ));
+        }
+        Some(AssignmentAction::Withdraw(submission_id)) => rows.push(row(
+            texts::BUTTON_WITHDRAW,
+            ReplayableAction::StartWithdrawal(submission_id).callback(),
+        )),
+        None => {}
     }
     let (back_label, back_target) = if assignment.status() == AssignmentStatus::Archived {
         (texts::BUTTON_BACK_TO_ARCHIVE, PageTarget::Archive)
@@ -206,6 +219,29 @@ pub(crate) fn student_assignment_keyboard(
         ReplayableAction::Page(back_target, 0).callback(),
     ));
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn withdrawal_hint_keyboard(submission_id: SubmissionId) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([row(
+        texts::BUTTON_WITHDRAW,
+        ReplayableAction::StartWithdrawal(submission_id).callback(),
+    )])
+}
+
+pub(crate) fn withdrawal_confirmation_keyboard(
+    submission_id: SubmissionId,
+    assignment_id: AssignmentId,
+) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([
+        row(
+            texts::BUTTON_CONFIRM_WITHDRAWAL,
+            ReplayableAction::ConfirmWithdrawal(submission_id).callback(),
+        ),
+        row(
+            texts::BUTTON_KEEP_SUBMISSION,
+            ReplayableAction::Assignment(assignment_id).callback(),
+        ),
+    ])
 }
 
 pub(crate) fn reopen_assignment_keyboard(assignment_id: AssignmentId) -> InlineKeyboardMarkup {

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        update submissions\n        set status = 'withdrawn', withdrawn_at = $2\n        where id = $1\n          and status = 'pending_review'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d4a11260ee0928c71681f184e707870dc2e2623a615fb869fd7b46d50a38570"
+}

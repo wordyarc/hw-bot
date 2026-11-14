@@ -647,7 +647,10 @@ pub(super) async fn grant_makeup_attempt(
 fn review_closed(error: &AppError) -> bool {
     matches!(
         error.code(),
-        ErrorCode::SubmissionAlreadyReviewed | ErrorCode::NotFound | ErrorCode::PermissionDenied
+        ErrorCode::SubmissionAlreadyReviewed
+            | ErrorCode::SubmissionAlreadyWithdrawn
+            | ErrorCode::NotFound
+            | ErrorCode::PermissionDenied
     )
 }
 
@@ -1132,6 +1135,7 @@ mod tests {
     fn a_decided_missing_or_forbidden_submission_closes_the_review() {
         for error in [
             AppError::Domain(DomainError::SubmissionIsNotPendingReview),
+            AppError::Domain(DomainError::SubmissionAlreadyWithdrawn),
             AppError::NotFound {
                 resource: "submission",
             },

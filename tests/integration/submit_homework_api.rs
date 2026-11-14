@@ -87,3 +87,33 @@ async fn an_empty_makeup_pool_is_a_conflict_with_its_own_code() {
         .await
         .error(StatusCode::CONFLICT, "makeup_attempts_exhausted");
 }
+
+#[tokio::test]
+async fn a_student_withdraws_a_submission_through_http() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+
+    let body = app
+        .post_empty_as(
+            &format!("/submissions/{submission}/withdraw"),
+            app.student(),
+        )
+        .await
+        .ok();
+
+    assert_eq!(body["status"], json!("withdrawn"));
+    assert!(body["withdrawn_at"].is_string());
+    assert_eq!(body["reviewed_at"], json!(null));
+}
+
+#[tokio::test]
+async fn withdrawing_a_withdrawn_submission_again_is_a_conflict() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let path = format!("/submissions/{submission}/withdraw");
+    app.post_empty_as(&path, app.student()).await.ok();
+
+    app.post_empty_as(&path, app.student())
+        .await
+        .error(StatusCode::CONFLICT, "submission_already_withdrawn");
+}

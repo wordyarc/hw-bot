@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use sqlx::postgres::PgExecutor;
+use sqlx::postgres::{PgConnection, PgExecutor, PgQueryResult};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{
     AssignmentId, DeductedFrom, DomainError, GradeParts, StudentGroupId, SubjectId, Submission,
@@ -182,8 +181,9 @@ macro_rules! select_submissions {
             r#"
             select
                 id, assignment_id, student_id, kind, attempt_number, content, status,
-                submitted_at, reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score,
-                late_periods, penalty, penalty_deducted_from, work_score, course_total_penalty
+                submitted_at, reviewed_by, reviewed_at, review_comment, withdrawn_at, raw_score,
+                grade_max_score, late_periods, penalty, penalty_deducted_from, work_score,
+                course_total_penalty
             from submissions
             "# + $tail
             $(, $arg)*
@@ -209,11 +209,11 @@ pub async fn insert(executor: impl PgExecutor<'_>, submission: &Submission) -> D
         r#"
         insert into submissions (
             id, assignment_id, student_id, kind, attempt_number, content, status, submitted_at,
-            reviewed_by, reviewed_at, review_comment, raw_score, grade_max_score, late_periods,
-            penalty, penalty_deducted_from, work_score, course_total_penalty
+            reviewed_by, reviewed_at, review_comment, withdrawn_at, raw_score, grade_max_score,
+            late_periods, penalty, penalty_deducted_from, work_score, course_total_penalty
         )
         values (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
         )
         "#,
         submission.id().as_uuid(),
@@ -227,6 +227,7 @@ pub async fn insert(executor: impl PgExecutor<'_>, submission: &Submission) -> D
         submission.reviewed_by().map(UserId::as_uuid),
         submission.reviewed_at(),
         submission.review_comment().map(|comment| comment.as_str()),
+        submission.withdrawn_at(),
         grade.raw_score,
         grade.max_score,
         grade.late_periods,
@@ -242,12 +243,15 @@ pub async fn insert(executor: impl PgExecutor<'_>, submission: &Submission) -> D
 }
 
 pub async fn save_review_result(
-    executor: impl PgExecutor<'_>,
+    connection: &mut PgConnection,
     submission: &Submission,
 ) -> DbResult<()> {
-    if submission.status() == SubmissionStatus::PendingReview {
+    if !matches!(
+        submission.status(),
+        SubmissionStatus::Accepted | SubmissionStatus::Rejected
+    ) {
         return Err(DbError::Precondition {
-            message: "pending submission cannot be saved as a review result",
+            message: "only a reviewed submission can be saved as a review result",
         });
     }
 
@@ -284,13 +288,53 @@ pub async fn save_review_result(
         grade.work_score,
         grade.course_total_penalty,
     )
-    .execute(executor)
+    .execute(&mut *connection)
     .await?;
 
-    ensure_updated(
-        result,
-        DbError::RuleViolation(DomainError::SubmissionIsNotPendingReview),
+    ensure_left_pending_review(connection, submission.id(), result).await
+}
+
+pub async fn withdraw(connection: &mut PgConnection, submission: &Submission) -> DbResult<()> {
+    let Some(withdrawn_at) = submission.withdrawn_at() else {
+        return Err(DbError::Precondition {
+            message: "only a withdrawn submission can be saved as a withdrawal",
+        });
+    };
+
+    let result = sqlx::query!(
+        r#"
+        update submissions
+        set status = 'withdrawn', withdrawn_at = $2
+        where id = $1
+          and status = 'pending_review'
+        "#,
+        submission.id().as_uuid(),
+        withdrawn_at,
     )
+    .execute(&mut *connection)
+    .await?;
+
+    ensure_left_pending_review(connection, submission.id(), result).await
+}
+
+async fn ensure_left_pending_review(
+    connection: &mut PgConnection,
+    id: SubmissionId,
+    result: PgQueryResult,
+) -> DbResult<()> {
+    if result.rows_affected() > 0 {
+        return Ok(());
+    }
+
+    let status = sqlx::query_scalar!("select status from submissions where id = $1", id.as_uuid())
+        .fetch_optional(&mut *connection)
+        .await?;
+    let lost = match status.as_deref().and_then(SubmissionStatus::parse_str) {
+        Some(SubmissionStatus::Withdrawn) => DomainError::SubmissionAlreadyWithdrawn,
+        _ => DomainError::SubmissionIsNotPendingReview,
+    };
+
+    Err(DbError::RuleViolation(lost))
 }
 
 pub async fn load_histories(
@@ -368,7 +412,7 @@ pub async fn list_previous_attempts(
     limit: u16,
 ) -> DbResult<Vec<Submission>> {
     select_submissions!(
-        "where assignment_id = $1 and student_id = $2 and attempt_number < $3 order by attempt_number desc limit $4",
+        "where assignment_id = $1 and student_id = $2 and attempt_number < $3 and status <> 'withdrawn' order by attempt_number desc limit $4",
         submission.assignment_id().as_uuid(),
         submission.student_id().as_uuid(),
         checked_num_cast::<_, i16>(ATTEMPT_NUMBER, submission.attempt_number())?,
@@ -746,9 +790,9 @@ pub async fn lock_next_for_reviewer(
             submissions.id, submissions.assignment_id, submissions.student_id,
             submissions.kind, submissions.attempt_number, submissions.content,
             submissions.status, submissions.submitted_at, submissions.reviewed_by,
-            submissions.reviewed_at, submissions.review_comment, submissions.raw_score,
-            submissions.grade_max_score, submissions.late_periods, submissions.penalty,
-            submissions.penalty_deducted_from, submissions.work_score,
+            submissions.reviewed_at, submissions.review_comment, submissions.withdrawn_at,
+            submissions.raw_score, submissions.grade_max_score, submissions.late_periods,
+            submissions.penalty, submissions.penalty_deducted_from, submissions.work_score,
             submissions.course_total_penalty
         "#,
         r#"
@@ -854,9 +898,9 @@ pub async fn lock_sandbox_for_reviewer(
             submissions.id, submissions.assignment_id, submissions.student_id,
             submissions.kind, submissions.attempt_number, submissions.content,
             submissions.status, submissions.submitted_at, submissions.reviewed_by,
-            submissions.reviewed_at, submissions.review_comment, submissions.raw_score,
-            submissions.grade_max_score, submissions.late_periods, submissions.penalty,
-            submissions.penalty_deducted_from, submissions.work_score,
+            submissions.reviewed_at, submissions.review_comment, submissions.withdrawn_at,
+            submissions.raw_score, submissions.grade_max_score, submissions.late_periods,
+            submissions.penalty, submissions.penalty_deducted_from, submissions.work_score,
             submissions.course_total_penalty
         "#,
         r#"
@@ -887,6 +931,7 @@ struct SubmissionRow {
     reviewed_by: Option<Uuid>,
     reviewed_at: Option<DateTime<Utc>>,
     review_comment: Option<String>,
+    withdrawn_at: Option<DateTime<Utc>>,
     raw_score: Option<i16>,
     grade_max_score: Option<i16>,
     late_periods: Option<i32>,
@@ -926,6 +971,7 @@ impl TryFrom<SubmissionRow> for Submission {
             reviewed_by: row.reviewed_by.map(UserId::from_uuid),
             reviewed_at: row.reviewed_at,
             review_comment: row.review_comment,
+            withdrawn_at: row.withdrawn_at,
             grade: GradeColumns {
                 raw_score: row.raw_score,
                 max_score: row.grade_max_score,
@@ -937,30 +983,5 @@ impl TryFrom<SubmissionRow> for Submission {
             }
             .parts()?,
         })?)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{
-        assignment, closed_pool, course_for, student, student_group, submission, teacher,
-    };
-
-    #[tokio::test]
-    async fn pending_review_is_rejected_before_accessing_the_database() {
-        let pool = closed_pool().await;
-        let group = student_group("test");
-        let teacher = teacher(1);
-        let course = course_for(&group, &teacher);
-        let assignment = assignment(&course, &teacher).published().build();
-        let submission = submission(&assignment, &student(2, &group)).build();
-
-        let result = save_review_result(&pool, &submission).await;
-
-        assert!(
-            matches!(result, Err(DbError::Precondition { .. })),
-            "{result:?}"
-        );
     }
 }

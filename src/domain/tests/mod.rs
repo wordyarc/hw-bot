@@ -13,6 +13,7 @@ mod review;
 mod staff;
 mod submission;
 mod terms;
+mod withdrawal;
 
 struct Fixture {
     teacher: User,

@@ -2,13 +2,15 @@ use chrono::{DateTime, Utc};
 use teloxide::types::InlineKeyboardMarkup;
 
 use super::keyboards::{makeup_form_keyboard, terms_form_keyboard};
+use crate::app::AppError;
 use crate::bot::assignment_form::{CompleteTerms, TermsForm, TermsStep, TermsTarget};
+use crate::bot::errors::app_error_message;
 use crate::bot::form::InputMode;
 use crate::bot::makeup_form::{MakeupForm, MakeupStep};
 use crate::bot::{texts, timezone::BotTimezone};
 use crate::domain::{
     Assignment, AssignmentStatus, DeductedFrom, Grading, LatePolicy, MakeupCredit, MakeupOffer,
-    MaxScore,
+    MaxScore, Resubmission,
 };
 use crate::telegram::text::truncate;
 
@@ -290,6 +292,36 @@ pub(crate) fn student_makeup_lines(
     format!("{offer}\n{attempts}")
 }
 
+pub(crate) fn resubmission_line(
+    resubmission: &Resubmission,
+    assignment: &Assignment,
+    timezone: &BotTimezone,
+) -> String {
+    match resubmission {
+        Resubmission::Regular {
+            closes_at,
+            late: true,
+        } => texts::resubmit_late(&timezone.format(*closes_at)),
+        Resubmission::Regular { closes_at, .. } if assignment.deadline_at() < *closes_at => {
+            texts::resubmit_on_time_or_late(
+                &timezone.format(assignment.deadline_at()),
+                &timezone.format(*closes_at),
+            )
+        }
+        Resubmission::Regular { closes_at, .. } => {
+            texts::resubmit_until(&timezone.format(*closes_at))
+        }
+        Resubmission::Makeup(offer) => texts::resubmit_as_makeup(
+            &timezone.format(offer.until),
+            &makeup_credit_terms(offer.credit, assignment.grading()),
+            offer.balance.remaining(),
+        ),
+        Resubmission::Refused(reason) => {
+            texts::resubmission_refused(app_error_message(AppError::from(reason.clone()).code()))
+        }
+    }
+}
+
 pub(crate) fn makeup_credit_terms(credit: Option<MakeupCredit>, grading: Grading) -> String {
     texts::makeup_credit_text(credit.map(MakeupCredit::get).zip(grading.max_score()))
 }
@@ -422,7 +454,7 @@ mod tests {
     use crate::app::MakeupQuestion;
     use crate::bot::assignment_form::AssignmentTerms;
     use crate::bot::callbacks::TermsAction;
-    use crate::domain::DeductedFrom;
+    use crate::domain::{CourseMakeup, DeductedFrom, DomainError};
     use crate::test_support::{assignment, course_for, student_group, t0, teacher, vladivostok};
 
     #[test]
@@ -695,5 +727,112 @@ mod tests {
         let none = student_grading_lines(&work, None, closed, &timezone);
         assert!(none.contains(texts::CLOSED_ON), "{none}");
         assert!(!none.contains(texts::MAKEUP_MARK), "{none}");
+    }
+
+    fn resubmission_fixture() -> (Assignment, Assignment, BotTimezone) {
+        let teacher = teacher(1);
+        let course = course_for(&student_group("test"), &teacher);
+        let strict = assignment(&course, &teacher).scored(10).published().build();
+        let late = assignment(&course, &teacher)
+            .scored(10)
+            .late_policy(7, 1, 4, DeductedFrom::WorkScore)
+            .published()
+            .build();
+
+        (strict, late, vladivostok())
+    }
+
+    #[test]
+    fn a_resubmission_on_time_names_the_moment_it_closes() {
+        let (strict, _, timezone) = resubmission_fixture();
+        let line = resubmission_line(
+            &Resubmission::Regular {
+                closes_at: strict.deadline_at(),
+                late: false,
+            },
+            &strict,
+            &timezone,
+        );
+
+        assert!(
+            line.contains(&timezone.format(strict.deadline_at())),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_resubmission_before_a_lenient_deadline_names_the_deadline_and_the_closing() {
+        let (_, late, timezone) = resubmission_fixture();
+        let line = resubmission_line(
+            &Resubmission::Regular {
+                closes_at: late.closes_at(),
+                late: false,
+            },
+            &late,
+            &timezone,
+        );
+
+        assert!(
+            line.contains(&timezone.format(late.deadline_at())),
+            "{line}"
+        );
+        assert!(line.contains(&timezone.format(late.closes_at())), "{line}");
+    }
+
+    #[test]
+    fn a_late_resubmission_names_only_the_closing() {
+        let (_, late, timezone) = resubmission_fixture();
+        let line = resubmission_line(
+            &Resubmission::Regular {
+                closes_at: late.closes_at(),
+                late: true,
+            },
+            &late,
+            &timezone,
+        );
+
+        assert!(line.contains(&timezone.format(late.closes_at())), "{line}");
+        assert!(
+            !line.contains(&timezone.format(late.deadline_at())),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_makeup_resubmission_names_its_end_credit_and_remaining_attempts() {
+        let (strict, _, timezone) = resubmission_fixture();
+        let course = CourseMakeup::open(t0() + Duration::days(60), 3, t0()).unwrap();
+        let offer = MakeupOffer {
+            until: course.until(),
+            credit: Some(MakeupCredit::new(6, MaxScore::new(10).unwrap()).unwrap()),
+            balance: course.balance(0, 1),
+        };
+
+        let line = resubmission_line(&Resubmission::Makeup(offer), &strict, &timezone);
+
+        assert_eq!(
+            line,
+            texts::resubmit_as_makeup(
+                &timezone.format(course.until()),
+                &texts::makeup_credit_text(Some((6, 10))),
+                2,
+            )
+        );
+    }
+
+    #[test]
+    fn a_refused_resubmission_names_the_reason_of_the_refusal() {
+        let (strict, _, timezone) = resubmission_fixture();
+        let refusal = DomainError::SubmissionWindowClosed {
+            closes_at: strict.closes_at(),
+            submitted_at: strict.closes_at(),
+        };
+
+        let line = resubmission_line(&Resubmission::Refused(refusal.clone()), &strict, &timezone);
+
+        assert!(
+            line.contains(app_error_message(AppError::from(refusal).code())),
+            "{line}"
+        );
     }
 }
