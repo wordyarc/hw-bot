@@ -225,7 +225,7 @@ impl LatePolicy {
         })
     }
 
-    pub fn periods_until(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u32 {
+    pub fn late_periods_at(self, deadline_at: DateTime<Utc>, at: DateTime<Utc>) -> u32 {
         if at < deadline_at {
             return 0;
         }
@@ -554,7 +554,7 @@ impl Assignment {
         if terms.late_policy.is_some() && !terms.grading.is_scored() {
             return Err(DomainError::LatePolicyRequiresScoredGrading);
         }
-        Self::closing_for(terms.deadline_at, terms.late_policy)?;
+        Self::closes_at_for(terms.deadline_at, terms.late_policy)?;
         if let Some(makeup) = terms.makeup {
             makeup.ensure_fits(terms.grading)?;
         }
@@ -671,11 +671,12 @@ impl Assignment {
     }
 
     pub fn closes_at(&self) -> DateTime<Utc> {
-        Self::closing_for(self.deadline_at, self.late_policy).expect("validated assignment horizon")
+        Self::closes_at_for(self.deadline_at, self.late_policy)
+            .expect("validated assignment horizon")
     }
 
     /// Без политики опозданий приём закрывает сам дедлайн.
-    pub fn closing_for(
+    pub fn closes_at_for(
         deadline_at: DateTime<Utc>,
         late_policy: Option<LatePolicy>,
     ) -> DomainResult<DateTime<Utc>> {
@@ -687,7 +688,7 @@ impl Assignment {
 
     pub fn late_penalty_at(&self, at: DateTime<Utc>) -> Option<LatePenalty> {
         self.late_policy
-            .and_then(|policy| policy.late_penalty(policy.periods_until(self.deadline_at, at)))
+            .and_then(|policy| policy.late_penalty(policy.late_periods_at(self.deadline_at, at)))
     }
 
     pub fn ensure_open_for_submission(&self, at: DateTime<Utc>) -> DomainResult<()> {
@@ -902,7 +903,7 @@ mod tests {
             policy.periods_to_close_at(deadline, deadline + week + Duration::milliseconds(500)),
             2
         );
-        assert_eq!(policy.periods_until(deadline, deadline + week), 2);
+        assert_eq!(policy.late_periods_at(deadline, deadline + week), 2);
     }
 
     #[test]
@@ -1165,7 +1166,7 @@ mod tests {
             let start = deadline + period(policy) * k as i32;
             let at = start + nanoseconds_into(period(policy), share);
 
-            prop_assert_eq!(policy.periods_until(deadline, at), k + 1);
+            prop_assert_eq!(policy.late_periods_at(deadline, at), k + 1);
         }
 
         #[test]
@@ -1174,7 +1175,7 @@ mod tests {
             deadline in deadline(),
             early in 1..=400 * NANOS_PER_DAY,
         ) {
-            prop_assert_eq!(policy.periods_until(deadline, deadline - Duration::nanoseconds(early)), 0);
+            prop_assert_eq!(policy.late_periods_at(deadline, deadline - Duration::nanoseconds(early)), 0);
         }
 
         #[test]
@@ -1199,7 +1200,7 @@ mod tests {
             let closes_at = policy.closes_at(deadline).unwrap();
 
             prop_assert_eq!(
-                policy.periods_until(deadline, closes_at - Duration::nanoseconds(1)),
+                policy.late_periods_at(deadline, closes_at - Duration::nanoseconds(1)),
                 u32::from(policy.max_periods())
             );
         }

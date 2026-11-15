@@ -1,7 +1,7 @@
 use crate::app::{CourseRoster, RosterGroup};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
-use crate::bot::context::Screen;
+use crate::bot::context::ActorChat;
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::texts;
 use crate::bot::views::{list_text, paginated_keyboard, roster_keyboard, send_screen};
@@ -9,7 +9,7 @@ use crate::domain::TeachingCourseId;
 use crate::pagination::PageRequest;
 
 pub(crate) async fn show_roster_page(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     page: PageRequest,
 ) -> HandlerResult {

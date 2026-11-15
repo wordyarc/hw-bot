@@ -6,7 +6,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
 use super::render::button_label;
 use crate::app::{
     AssignmentStudentSummary, CourseStudent, PendingSubmission, StudentAssignment, SubjectQueue,
-    TeachingCourseSummary,
+    TeachingCourseDetails,
 };
 use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, TermsForm, TermsStep, TermsTarget,
@@ -132,7 +132,7 @@ pub(crate) fn student_menu() -> InlineKeyboardMarkup {
         vec![
             button(
                 texts::BUTTON_QUEUE,
-                ReplayableAction::Page(PageTarget::Queue, 0).callback(),
+                ReplayableAction::Page(PageTarget::QueuePlaces, 0).callback(),
             ),
             button(
                 texts::BUTTON_ARCHIVE,
@@ -332,7 +332,7 @@ pub(crate) fn review_hub_keyboard(
     if queue > 0 {
         rows.push(row(
             texts::BUTTON_REVIEW_LIST,
-            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+            ReplayableAction::Page(PageTarget::ReviewList, 0).callback(),
         ));
     }
     InlineKeyboardMarkup::new(rows)
@@ -360,7 +360,7 @@ pub(crate) fn list_followup_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         row(
             texts::BUTTON_BACK_TO_REVIEW_LIST,
-            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+            ReplayableAction::Page(PageTarget::ReviewList, 0).callback(),
         ),
         row(
             texts::BUTTON_IN_ORDER,
@@ -385,21 +385,26 @@ pub(crate) fn review_list_keyboard(
     });
     paginated_keyboard(
         InlineKeyboardMarkup::new(rows),
-        PageTarget::ReviewQueue,
+        PageTarget::ReviewList,
         page,
         next,
     )
 }
 
-pub(crate) fn makeup_followup_keyboard(next: bool, grant: bool) -> InlineKeyboardMarkup {
+pub(crate) struct MakeupFollowupButtons {
+    pub(crate) next_makeup: bool,
+    pub(crate) grant_attempt: bool,
+}
+
+pub(crate) fn makeup_followup_keyboard(buttons: MakeupFollowupButtons) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
-    if next {
+    if buttons.next_makeup {
         rows.push(row(
             texts::BUTTON_NEXT_MAKEUP,
             ReplayableAction::NextMakeupReview.callback(),
         ));
     }
-    if grant {
+    if buttons.grant_attempt {
         rows.push(row(
             texts::BUTTON_GRANT_MAKEUP,
             ScreenAction::GrantMakeupAttempt.callback(),
@@ -492,7 +497,7 @@ pub(crate) fn sandbox_keyboard(
     keyboard
 }
 
-pub(crate) fn courses_keyboard(courses: &[TeachingCourseSummary]) -> InlineKeyboardMarkup {
+pub(crate) fn courses_keyboard(courses: &[TeachingCourseDetails]) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(courses.iter().map(|course| {
         let subject = course.subject.name().as_str();
         let label = match course.groups.as_slice() {
@@ -531,7 +536,7 @@ pub(crate) fn course_assignments_keyboard(
         ),
         row(
             texts::BUTTON_GRADEBOOK,
-            ReplayableAction::GradebookGroups(course_id).callback(),
+            ReplayableAction::Gradebook(course_id).callback(),
         ),
         row(
             texts::BUTTON_ROSTER,
@@ -1116,11 +1121,15 @@ pub(crate) fn review_score_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
+pub(crate) struct AssignmentFilesButtons {
+    pub(crate) add: bool,
+    pub(crate) creation_flow: bool,
+}
+
 pub(crate) fn assignment_files_keyboard(
     assignment: &Assignment,
     files: &[StoredFileMetadata],
-    can_add: bool,
-    creation_flow: bool,
+    buttons: AssignmentFilesButtons,
 ) -> InlineKeyboardMarkup {
     let mut rows: Vec<Row> = files
         .iter()
@@ -1135,13 +1144,13 @@ pub(crate) fn assignment_files_keyboard(
             ]
         })
         .collect();
-    if can_add {
+    if buttons.add {
         rows.push(row(
             texts::BUTTON_ADD_FILE,
             ScreenAction::AddFile.callback(),
         ));
     }
-    rows.push(if creation_flow {
+    rows.push(if buttons.creation_flow {
         row(
             texts::BUTTON_FINISH_CREATION,
             ScreenAction::FinishFileCreation.callback(),
@@ -1231,7 +1240,7 @@ pub(crate) fn roster_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(vec![
         row(
             texts::BUTTON_GRADEBOOK,
-            ReplayableAction::GradebookGroups(course_id).callback(),
+            ReplayableAction::Gradebook(course_id).callback(),
         ),
         row(
             texts::BUTTON_COURSE_INVITE,

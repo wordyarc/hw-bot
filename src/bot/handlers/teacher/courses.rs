@@ -4,7 +4,7 @@ use teloxide::types::MessageId;
 use crate::app::{CoursePage, TeacherAssignment};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
-use crate::bot::context::Screen;
+use crate::bot::context::ActorChat;
 use crate::bot::handlers::reset_dialogue;
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
@@ -15,7 +15,7 @@ use crate::bot::views::{
 use crate::domain::{AssignmentId, TeachingCourseId};
 use crate::pagination::PageRequest;
 
-pub(crate) async fn show_courses_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+pub(crate) async fn show_courses_page(screen: ActorChat<'_>, page: PageRequest) -> HandlerResult {
     let actor = screen.actor();
     let bot = screen.bot();
     let chat_id = screen.chat_id();
@@ -42,7 +42,7 @@ pub(crate) async fn show_courses_page(screen: Screen<'_>, page: PageRequest) -> 
 }
 
 pub(crate) async fn show_course_assignments_page(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     page: PageRequest,
 ) -> HandlerResult {
@@ -55,7 +55,7 @@ pub(crate) async fn show_course_assignments_page(
     let CoursePage {
         course,
         assignments,
-        makeup,
+        course_makeup,
     } = services
         .courses
         .course_page(actor, course_id, page, screen.now())
@@ -86,7 +86,7 @@ pub(crate) async fn show_course_assignments_page(
 
     bot.send_message(chat_id, texts::CHOOSE_ASSIGNMENT)
         .reply_markup(paginated_keyboard(
-            course_assignments_keyboard(course_id, &assignments.items, makeup, timezone),
+            course_assignments_keyboard(course_id, &assignments.items, course_makeup, timezone),
             PageTarget::Course(course_id),
             assignments.page,
             assignments.next_page,
@@ -96,7 +96,7 @@ pub(crate) async fn show_course_assignments_page(
 }
 
 pub(crate) async fn show_assignment(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     assignment_id: AssignmentId,
 ) -> HandlerResult {
     let actor = screen.actor();
@@ -145,7 +145,7 @@ pub(crate) async fn show_assignment(
 }
 
 pub(crate) async fn publish_assignment(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
     state: &BotState,
@@ -156,7 +156,7 @@ pub(crate) async fn publish_assignment(
     screen
         .services()
         .assignments
-        .publish(assignment_id, screen.actor(), screen.now())
+        .publish(screen.actor(), assignment_id, screen.now())
         .await?;
     screen
         .bot()
@@ -166,7 +166,7 @@ pub(crate) async fn publish_assignment(
 }
 
 pub(crate) async fn archive_assignment(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
     state: &BotState,
@@ -177,7 +177,7 @@ pub(crate) async fn archive_assignment(
     screen
         .services()
         .assignments
-        .archive(assignment_id, screen.actor())
+        .archive(screen.actor(), assignment_id)
         .await?;
     screen
         .bot()

@@ -6,7 +6,7 @@ use crate::domain::{
 };
 
 #[derive(Clone, Debug)]
-pub struct TeachingCourseSummary {
+pub struct TeachingCourseDetails {
     pub course: TeachingCourse,
     pub subject: Subject,
     pub groups: Vec<StudentGroup>,
@@ -94,6 +94,12 @@ pub struct AssignmentStudentSummary {
 pub struct VersionedAssignment {
     pub assignment: Assignment,
     pub revision: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StoredSubject {
+    pub subject: Subject,
+    pub sandbox: bool,
 }
 
 #[derive(Clone, Debug)]

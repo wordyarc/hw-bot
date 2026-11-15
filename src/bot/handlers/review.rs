@@ -6,11 +6,11 @@ use super::home::show_home;
 use super::input::{parse_number, require_text, require_text_within};
 use super::reset_dialogue;
 use super::teacher::send_student_grades;
-use crate::app::{AppError, ErrorCode, ReviewQueueItem, ReviewSubmission, ReviewedSubmission};
+use crate::app::{AppError, ErrorCode, ReviewCard, ReviewSubmission, ReviewedSubmission};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::AmountChoice;
-use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::context::{ActorChat, Chat, TextStep};
 use crate::bot::errors::{log_handler_error, optional_stat, send_app_error};
 use crate::bot::state::{
     BotState, FlowState, GrantOrigin, ReviewOrigin, ReviewTarget, ScreenState,
@@ -18,7 +18,7 @@ use crate::bot::state::{
 use crate::bot::texts;
 use crate::bot::timezone::BotTimezone;
 use crate::bot::views::{
-    ReviewButtons, SCORE_BUTTONS_LIMIT, list_followup_keyboard, list_text,
+    MakeupFollowupButtons, ReviewButtons, SCORE_BUTTONS_LIMIT, list_followup_keyboard, list_text,
     makeup_followup_keyboard, queue_followup_keyboard, review_decision_keyboard,
     review_hub_keyboard, review_keyboard, review_list_keyboard, review_score_keyboard,
     send_message_chunks, teacher_keyboard, teacher_menu,
@@ -30,7 +30,7 @@ use crate::domain::{
 };
 use crate::pagination::PageRequest;
 
-pub(super) async fn show_hub(screen: Screen<'_>) -> HandlerResult {
+pub(super) async fn show_hub(screen: ActorChat<'_>) -> HandlerResult {
     let reviews = &screen.services().reviews;
     let subjects = reviews.queue_by_subject(screen.actor()).await?;
     let makeups = reviews.makeup_size(screen.actor()).await?;
@@ -58,7 +58,7 @@ pub(super) enum Queue {
     Makeup,
 }
 
-pub(super) async fn show_next(screen: Screen<'_>, queue: Queue) -> HandlerResult {
+pub(super) async fn show_next(screen: ActorChat<'_>, queue: Queue) -> HandlerResult {
     let actor = screen.actor();
     let reviews = &screen.services().reviews;
     let (next, origin) = match queue {
@@ -117,13 +117,13 @@ pub(super) async fn show_next(screen: Screen<'_>, queue: Queue) -> HandlerResult
     Ok(())
 }
 
-pub(super) async fn show_list(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+pub(super) async fn show_list(screen: ActorChat<'_>, page: PageRequest) -> HandlerResult {
     let actor = screen.actor();
     let bot = screen.bot();
     let chat_id = screen.chat_id();
     let reviews = &screen.services().reviews;
     let timezone = screen.timezone();
-    let submissions = reviews.queue_page(actor, page).await?;
+    let submissions = reviews.list_page(actor, page).await?;
     reset_dialogue(screen.dialogue()).await?;
     if submissions.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, texts::REVIEW_QUEUE_EMPTY)
@@ -154,7 +154,7 @@ pub(super) async fn show_list(screen: Screen<'_>, page: PageRequest) -> HandlerR
 }
 
 pub(super) async fn open(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     submission_id: SubmissionId,
     origin: ReviewOrigin,
 ) -> HandlerResult {
@@ -167,7 +167,7 @@ pub(super) async fn open(
     show_item(screen, item, origin).await
 }
 
-fn review_target(item: &ReviewQueueItem) -> ReviewTarget {
+fn review_target(item: &ReviewCard) -> ReviewTarget {
     match item.submission.kind() {
         SubmissionKind::Regular => ReviewTarget::Regular {
             grading: item.assignment.grading(),
@@ -179,7 +179,7 @@ fn review_target(item: &ReviewQueueItem) -> ReviewTarget {
     }
 }
 
-fn accept_label(item: &ReviewQueueItem) -> Option<String> {
+fn accept_label(item: &ReviewCard) -> Option<String> {
     match item.submission.kind() {
         SubmissionKind::Regular => Some(texts::BUTTON_ACCEPT.to_owned()),
         SubmissionKind::Makeup => item
@@ -193,11 +193,11 @@ fn accept_label(item: &ReviewQueueItem) -> Option<String> {
     }
 }
 
-fn offers_rework(item: &ReviewQueueItem, now: DateTime<Utc>) -> bool {
+fn offers_rework(item: &ReviewCard, now: DateTime<Utc>) -> bool {
     item.submission.kind() == SubmissionKind::Regular && item.assignment.is_open_for_regular_at(now)
 }
 
-fn item_keyboard(item: &ReviewQueueItem, now: DateTime<Utc>) -> InlineKeyboardMarkup {
+fn item_keyboard(item: &ReviewCard, now: DateTime<Utc>) -> InlineKeyboardMarkup {
     review_keyboard(
         item.submission.id(),
         item.assignment.teaching_course_id(),
@@ -209,17 +209,13 @@ fn item_keyboard(item: &ReviewQueueItem, now: DateTime<Utc>) -> InlineKeyboardMa
     )
 }
 
-async fn show_item(
-    screen: Screen<'_>,
-    item: ReviewQueueItem,
-    origin: ReviewOrigin,
-) -> HandlerResult {
+async fn show_item(screen: ActorChat<'_>, item: ReviewCard, origin: ReviewOrigin) -> HandlerResult {
     let bot = screen.bot();
     let chat_id = screen.chat_id();
     let target = review_target(&item);
     screen
         .dialogue()
-        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
+        .update(BotState::Flow(FlowState::ChoosingReviewDecision {
             submission_id: item.submission.id(),
             target,
             origin,
@@ -255,7 +251,7 @@ async fn show_item(
     .await
 }
 
-fn attempt_line(item: &ReviewQueueItem) -> String {
+fn attempt_line(item: &ReviewCard) -> String {
     match item.submission.kind() {
         SubmissionKind::Regular => texts::regular_attempt(
             item.history.used_attempts() + 1,
@@ -265,11 +261,7 @@ fn attempt_line(item: &ReviewQueueItem) -> String {
     }
 }
 
-fn review_card_summary(
-    item: &ReviewQueueItem,
-    target: ReviewTarget,
-    timezone: &BotTimezone,
-) -> String {
+fn review_card_summary(item: &ReviewCard, target: ReviewTarget, timezone: &BotTimezone) -> String {
     let mut lines = vec![texts::review_summary(
         item.subject.name().as_str(),
         item.assignment.title().as_str(),
@@ -289,7 +281,7 @@ fn review_card_summary(
                 item.assignment.makeup(),
                 item.assignment.grading(),
             ));
-            if let Some(pool) = item.makeup {
+            if let Some(pool) = item.makeup_pool {
                 lines.push(texts::review_makeup_attempts(
                     pool.balance.remaining(),
                     pool.balance.allowed(),
@@ -300,11 +292,7 @@ fn review_card_summary(
     lines.join("\n")
 }
 
-async fn send_previous_attempts(
-    bot: &Bot,
-    chat_id: ChatId,
-    item: &ReviewQueueItem,
-) -> HandlerResult {
+async fn send_previous_attempts(bot: &Bot, chat_id: ChatId, item: &ReviewCard) -> HandlerResult {
     if item.earlier_attempts_hidden {
         bot.send_message(
             chat_id,
@@ -468,7 +456,7 @@ fn saved_text(reviewed: &ReviewedSubmission) -> String {
 }
 
 async fn send_queue_followup(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     origin: ReviewOrigin,
     subject_name: &str,
 ) -> HandlerResult {
@@ -522,7 +510,7 @@ struct MakeupFollowup {
     sandbox: bool,
 }
 
-async fn send_makeup_followup(screen: Screen<'_>, followup: MakeupFollowup) -> HandlerResult {
+async fn send_makeup_followup(screen: ActorChat<'_>, followup: MakeupFollowup) -> HandlerResult {
     let services = screen.services();
     let makeups = if followup.sandbox {
         None
@@ -565,12 +553,15 @@ async fn send_makeup_followup(screen: Screen<'_>, followup: MakeupFollowup) -> H
     let sent = screen
         .bot()
         .send_message(screen.chat_id(), text)
-        .reply_markup(makeup_followup_keyboard(next, pool.is_some()))
+        .reply_markup(makeup_followup_keyboard(MakeupFollowupButtons {
+            next_makeup: next,
+            grant_attempt: pool.is_some(),
+        }))
         .await?;
     if pool.is_some() {
         screen
             .dialogue()
-            .update(BotState::Screen(ScreenState::MakeupReviewed {
+            .update(BotState::Screen(ScreenState::MakeupFollowup {
                 message_id: sent.id,
                 course_id: followup.course_id,
                 student_id: followup.student_id,
@@ -582,7 +573,7 @@ async fn send_makeup_followup(screen: Screen<'_>, followup: MakeupFollowup) -> H
 }
 
 pub(super) async fn grant_makeup_attempt(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
@@ -655,7 +646,7 @@ fn review_closed(error: &AppError) -> bool {
 }
 
 async fn close_review(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     telegram_user_id: TelegramUserId,
     error: AppError,
 ) -> HandlerResult {
@@ -665,10 +656,10 @@ async fn close_review(
 }
 
 async fn reload_item(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     telegram_user_id: TelegramUserId,
     submission_id: SubmissionId,
-) -> HandlerResult<Option<ReviewQueueItem>> {
+) -> HandlerResult<Option<ReviewCard>> {
     match screen
         .services()
         .reviews
@@ -685,7 +676,7 @@ async fn reload_item(
 }
 
 async fn restart_review(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     telegram_user_id: TelegramUserId,
     submission_id: SubmissionId,
     reason: &str,
@@ -698,7 +689,7 @@ async fn restart_review(
 }
 
 pub(super) async fn handle_decision(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     telegram_user_id: TelegramUserId,
     callback_submission_id: SubmissionId,
     decision: ReviewDecision,
@@ -744,7 +735,7 @@ pub(super) async fn handle_decision(
 }
 
 pub(super) async fn handle_rework(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     submission_id: SubmissionId,
     state: &BotState,
 ) -> HandlerResult {
@@ -766,8 +757,8 @@ pub(super) async fn handle_rework(
 }
 
 async fn restart_with(
-    screen: Screen<'_>,
-    item: ReviewQueueItem,
+    screen: ActorChat<'_>,
+    item: ReviewCard,
     reason: &str,
     origin: ReviewOrigin,
 ) -> HandlerResult {
@@ -846,7 +837,7 @@ async fn ask_review_comment(chat: Chat<'_>, step: CommentStep) -> HandlerResult 
 }
 
 pub(super) async fn change_decision(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     telegram_user_id: TelegramUserId,
     submission_id: SubmissionId,
     state: &BotState,
@@ -860,7 +851,7 @@ pub(super) async fn change_decision(
     let target = review_target(&item);
     screen
         .dialogue()
-        .update(BotState::Flow(FlowState::AwaitingReviewDecision {
+        .update(BotState::Flow(FlowState::ChoosingReviewDecision {
             submission_id,
             target,
             origin,
@@ -883,7 +874,7 @@ pub(super) async fn change_decision(
 }
 
 pub(super) async fn handle_review_score(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     submission_id: SubmissionId,
     choice: AmountChoice,
     state: BotState,
@@ -952,8 +943,8 @@ mod tests {
         (course_for(&group, &teacher), teacher, student(2, &group))
     }
 
-    fn item(assignment: Assignment, submission: Submission, student: User) -> ReviewQueueItem {
-        ReviewQueueItem {
+    fn item(assignment: Assignment, submission: Submission, student: User) -> ReviewCard {
+        ReviewCard {
             submission,
             assignment,
             subject: subject(SUBJECT_NAME),
@@ -961,7 +952,7 @@ mod tests {
             group_code: GROUP_CODE.to_owned(),
             previous_attempts: Vec::new(),
             earlier_attempts_hidden: false,
-            makeup: None,
+            makeup_pool: None,
             history: Default::default(),
         }
     }

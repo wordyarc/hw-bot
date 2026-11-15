@@ -5,7 +5,7 @@ use super::form::handle_date;
 use crate::bot::HandlerResult;
 use crate::bot::assignment_form::TermsStep;
 use crate::bot::callbacks::DeadlineAction;
-use crate::bot::context::Screen;
+use crate::bot::context::ActorChat;
 use crate::bot::form::InputMode;
 use crate::bot::makeup_form::MakeupStep;
 use crate::bot::state::BotState;
@@ -31,7 +31,7 @@ pub(super) fn choose_date(
 }
 
 pub(crate) async fn handle_deadline(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     action: DeadlineAction,
     state: BotState,

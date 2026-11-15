@@ -100,7 +100,7 @@ async fn disable_makeup(app: &TestApp) {
         )
         .await
         .expect("the makeup is readable")
-        .makeup;
+        .course_makeup;
     app.application
         .courses
         .configure_makeup(ConfigureMakeup {

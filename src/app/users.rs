@@ -123,7 +123,7 @@ impl UserService {
         })
     }
 
-    pub async fn find_by_telegram_user_id(
+    pub async fn find_registered(
         &self,
         telegram_user_id: TelegramUserId,
     ) -> AppResult<RegisteredUser> {
@@ -143,7 +143,7 @@ impl UserService {
         Ok(Actor::new(user.id()))
     }
 
-    pub async fn find_by_actor(&self, actor: Actor) -> AppResult<RegisteredUser> {
+    pub async fn find_registered_by_actor(&self, actor: Actor) -> AppResult<RegisteredUser> {
         let user = load_actor(&self.pool, actor, "user").await?;
         self.registered_user(user).await
     }
@@ -174,7 +174,7 @@ impl UserService {
             return Err(AppError::InviteInvalid);
         }
 
-        let course = db::academic::find_teaching_course_summary(&self.pool, invite.course_id())
+        let course = db::academic::find_teaching_course_details(&self.pool, invite.course_id())
             .await?
             .ok_or(AppError::InviteInvalid)?;
 

@@ -117,7 +117,7 @@ pub async fn me(
     let registered = state
         .application
         .users
-        .find_by_telegram_user_id(telegram_user_id)
+        .find_registered(telegram_user_id)
         .await?;
 
     Ok(Json(UserResponse::from(&registered)))

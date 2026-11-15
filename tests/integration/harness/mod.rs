@@ -602,10 +602,10 @@ impl TestApp {
     }
 
     pub async fn add_foreign_course(&self) -> CourseFixture {
-        self.add_foreign_course_on(&self.fixture.subject).await
+        self.add_foreign_course_for(&self.fixture.subject).await
     }
 
-    pub async fn add_foreign_course_on(&self, subject: &Subject) -> CourseFixture {
+    pub async fn add_foreign_course_for(&self, subject: &Subject) -> CourseFixture {
         let group = student_group_in(
             &format!("TEST-GROUP-{}", self.next_telegram_id()),
             EducationLevel::Bachelor,
@@ -640,7 +640,7 @@ impl TestApp {
         subject
     }
 
-    pub async fn add_course_on(&self, subject: &Subject) -> TeachingCourse {
+    pub async fn add_course_for(&self, subject: &Subject) -> TeachingCourse {
         let course = teaching_course(subject, &[&self.fixture.group], &self.fixture.teacher);
         insert_course(&self.pool, &course).await;
 
@@ -650,7 +650,7 @@ impl TestApp {
     pub async fn add_sandbox_course(&self) -> TeachingCourse {
         let subject = self.add_sandbox_subject().await;
 
-        self.add_course_on(&subject).await
+        self.add_course_for(&subject).await
     }
 
     pub async fn add_subject_course(&self, subject_name: &str) -> TeachingCourse {
@@ -666,10 +666,10 @@ impl TestApp {
     }
 
     pub async fn enable_makeup(&self, attempts: u16) -> CourseMakeup {
-        self.enable_makeup_on(&self.fixture.course, attempts).await
+        self.enable_makeup_in(&self.fixture.course, attempts).await
     }
 
-    pub async fn enable_makeup_on(&self, course: &TeachingCourse, attempts: u16) -> CourseMakeup {
+    pub async fn enable_makeup_in(&self, course: &TeachingCourse, attempts: u16) -> CourseMakeup {
         self.open_makeup(course, attempts, Utc::now()).await
     }
 
@@ -704,11 +704,11 @@ impl TestApp {
         makeup: MakeupTerms,
         deadline_at: DateTime<Utc>,
     ) -> Assignment {
-        self.add_makeup_assignment_on(&self.fixture.course, title, grading, makeup, deadline_at)
+        self.add_makeup_assignment_in(&self.fixture.course, title, grading, makeup, deadline_at)
             .await
     }
 
-    pub async fn add_makeup_assignment_on(
+    pub async fn add_makeup_assignment_in(
         &self,
         course: &TeachingCourse,
         title: &str,

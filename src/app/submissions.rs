@@ -36,17 +36,17 @@ pub struct WithdrawSubmission {
 }
 
 #[derive(Clone, Debug)]
-pub struct PendingWithdrawal {
+pub struct WithdrawalPreview {
     pub submission: Submission,
     pub assignment: StudentAssignment,
 }
 
-impl PendingWithdrawal {
+impl WithdrawalPreview {
     pub fn resubmission_at(&self, at: DateTime<Utc>) -> Resubmission {
         self.submission.resubmission_at(
             &self.assignment.assignment,
             self.assignment.history,
-            self.assignment.pool,
+            self.assignment.makeup_pool,
             at,
         )
     }
@@ -71,11 +71,10 @@ impl SubmissionService {
             .await?
             .required("assignment")?;
 
-        let history =
-            db::submissions::load_histories(&mut *tx, &[assignment.id().as_uuid()], student.id())
-                .await?
-                .remove(&assignment.id())
-                .unwrap_or_default();
+        let history = db::submissions::load_histories(&mut *tx, &[assignment.id()], student.id())
+            .await?
+            .remove(&assignment.id())
+            .unwrap_or_default();
 
         let course_id = assignment.teaching_course_id();
         let mut makeup = MakeupRequest {
@@ -86,7 +85,7 @@ impl SubmissionService {
         let acceptance =
             Submission::admit(&assignment, &student, history, command.submitted_at, makeup)?;
         if acceptance != Acceptance::Regular {
-            db::makeup::lock_pool(&mut tx, course_id, student.id()).await?;
+            db::makeup::lock_or_create_pool(&mut tx, course_id, student.id()).await?;
             let pool = db::makeup::pool_for_student(&mut *tx, course_id, student.id()).await?;
             makeup.course = pool.map(|pool| pool.course);
             makeup.balance = pool.map(|pool| pool.balance).unwrap_or_default();
@@ -117,7 +116,7 @@ impl SubmissionService {
         &self,
         actor: Actor,
         submission_id: SubmissionId,
-    ) -> AppResult<PendingWithdrawal> {
+    ) -> AppResult<WithdrawalPreview> {
         let author = load_actor(&self.pool, actor, "student").await?;
         let submission = db::submissions::find_by_id(&self.pool, submission_id)
             .await?
@@ -127,7 +126,7 @@ impl SubmissionService {
             .await?
             .required("assignment")?;
 
-        Ok(PendingWithdrawal {
+        Ok(WithdrawalPreview {
             assignment: load_student_assignment(&self.pool, &author, assignment).await?,
             submission,
         })
@@ -146,7 +145,7 @@ impl SubmissionService {
         Ok(submission)
     }
 
-    pub async fn pending_queue(
+    pub async fn queue_places(
         &self,
         actor: Actor,
         page: PageRequest,
@@ -165,6 +164,6 @@ impl SubmissionService {
         assignment_id: AssignmentId,
     ) -> AppResult<Option<QueuePlace>> {
         let student = load_student(&self.pool, actor, "read own review queue").await?;
-        Ok(db::submissions::queue_place_for(&self.pool, student.id(), assignment_id).await?)
+        Ok(db::submissions::queue_place_for(&self.pool, assignment_id, student.id()).await?)
     }
 }

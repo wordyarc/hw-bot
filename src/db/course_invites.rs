@@ -1,11 +1,11 @@
 use sqlx::PgConnection;
 use sqlx::postgres::PgExecutor;
 
-use crate::db::academic::find_teaching_course_summary;
+use crate::db::academic::find_teaching_course_details;
 use crate::db::ensure_updated;
 use crate::db::{DbError, DbResult, checked_num_cast};
 use crate::domain::{InviteGeneration, TeachingCourseId};
-use crate::read_models::TeachingCourseSummary;
+use crate::read_models::TeachingCourseDetails;
 
 const GENERATION: &str = "teaching_course_invites.generation";
 
@@ -75,7 +75,7 @@ pub async fn lock_course_for_registration(
     conn: &mut PgConnection,
     course_id: TeachingCourseId,
     generation: InviteGeneration,
-) -> DbResult<Option<TeachingCourseSummary>> {
+) -> DbResult<Option<TeachingCourseDetails>> {
     let locked = sqlx::query_scalar!(
         r#"
         select teaching_course_id
@@ -91,7 +91,7 @@ pub async fn lock_course_for_registration(
     .await?;
 
     match locked {
-        Some(_) => find_teaching_course_summary(conn, course_id).await,
+        Some(_) => find_teaching_course_details(conn, course_id).await,
         None => Ok(None),
     }
 }

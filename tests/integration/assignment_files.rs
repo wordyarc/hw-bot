@@ -138,7 +138,7 @@ async fn a_student_keeps_the_files_of_an_archived_assignment() {
     .await;
     application
         .assignments
-        .archive(app.fixture.assignment.id(), app.teacher_actor())
+        .archive(app.teacher_actor(), app.fixture.assignment.id())
         .await
         .unwrap();
 

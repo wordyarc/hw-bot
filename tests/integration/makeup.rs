@@ -62,7 +62,7 @@ async fn current_settings(app: &TestApp) -> Option<CourseMakeup> {
         )
         .await
         .unwrap()
-        .makeup
+        .course_makeup
 }
 
 async fn student_pool(app: &TestApp) -> Option<MakeupPool> {
@@ -233,7 +233,7 @@ async fn a_scale_decision_skips_changed_archived_and_other_scale_assignments() {
         .unwrap();
     app.application
         .assignments
-        .archive(archived.id(), app.teacher_actor())
+        .archive(app.teacher_actor(), archived.id())
         .await
         .unwrap();
 
@@ -412,7 +412,7 @@ async fn two_simultaneous_makeups_on_the_last_attempt_create_one_submission() {
         .fetch_one(&mut *concurrent)
         .await
         .expect("read backend pid");
-    db::makeup::lock_pool(
+    db::makeup::lock_or_create_pool(
         &mut concurrent,
         app.fixture.course.id(),
         app.fixture.student.id(),
@@ -741,7 +741,10 @@ async fn the_makeup_queue_hands_makeups_out_in_order_and_counts_what_it_hands_ou
         .unwrap()
         .expect("a makeup is waiting");
     assert_eq!(next.submission.id().as_uuid(), first);
-    assert_eq!(next.makeup.map(|pool| pool.balance.remaining()), Some(2));
+    assert_eq!(
+        next.makeup_pool.map(|pool| pool.balance.remaining()),
+        Some(2)
+    );
     app.review(first, app.teacher(), "reject", "Не то")
         .await
         .ok();
@@ -771,7 +774,7 @@ async fn a_sandbox_makeup_stays_in_the_sandbox_list() {
     let app = TestApp::start().await;
     let sandbox = app.add_sandbox_course().await;
     let trial = app
-        .add_makeup_assignment_on(
+        .add_makeup_assignment_in(
             &sandbox,
             "Trial",
             ten(),
@@ -779,7 +782,7 @@ async fn a_sandbox_makeup_stays_in_the_sandbox_list() {
             Utc::now() - Duration::days(1),
         )
         .await;
-    app.enable_makeup_on(&sandbox, 3).await;
+    app.enable_makeup_in(&sandbox, 3).await;
     let makeup = makeup_of(&app, &trial, &app.fixture.student).await;
     let reviews = &app.application.reviews;
 

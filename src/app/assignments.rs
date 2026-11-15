@@ -4,9 +4,8 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::app::access::{
-    ManagedAssignment, load_managed_assignment_on, load_managed_summary,
-    load_managed_versioned_assignment, load_managing_teacher, load_managing_teacher_on,
-    load_student,
+    ManagedAssignment, load_managed_assignment, load_managed_assignment_on, load_managed_course,
+    load_managed_course_details, load_managed_course_on, load_student,
 };
 use crate::app::{Actor, AppError, AppResult, OpenedFile, Required};
 use crate::db;
@@ -17,7 +16,7 @@ use crate::domain::{
     TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::{AssignmentStudentSummary, TeachingCourseSummary, VersionedAssignment};
+use crate::read_models::{AssignmentStudentSummary, TeachingCourseDetails, VersionedAssignment};
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
@@ -74,12 +73,12 @@ pub struct StudentAssignment {
     pub assignment: Assignment,
     pub subject: Subject,
     pub history: SubmissionHistory,
-    pub pool: Option<MakeupPool>,
+    pub makeup_pool: Option<MakeupPool>,
 }
 
 impl StudentAssignment {
     pub fn makeup_offer_at(&self, at: DateTime<Utc>) -> Option<MakeupOffer> {
-        let pool = self.pool?;
+        let pool = self.makeup_pool?;
         self.history
             .makeup_offer_at(&self.assignment, at, pool.course, pool.balance)
     }
@@ -90,9 +89,13 @@ impl StudentAssignment {
         shown_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> AppResult<SubmissionStart> {
-        Ok(self
-            .history
-            .submission_start(&self.assignment, self.pool, button, shown_at, now)?)
+        Ok(self.history.submission_start(
+            &self.assignment,
+            self.makeup_pool,
+            button,
+            shown_at,
+            now,
+        )?)
     }
 }
 
@@ -106,7 +109,7 @@ pub struct StudentAssignmentDetails {
 #[derive(Clone, Debug)]
 pub struct TeacherAssignment {
     pub assignment: Assignment,
-    pub course: TeachingCourseSummary,
+    pub course: TeachingCourseDetails,
 }
 
 #[derive(Clone, Debug)]
@@ -135,7 +138,7 @@ impl AssignmentService {
     pub async fn create(&self, command: CreateAssignment) -> AppResult<Assignment> {
         let mut tx = self.pool.begin().await?;
 
-        let (author, teaching_course) = load_managing_teacher_on(
+        let (author, teaching_course) = load_managed_course_on(
             &mut tx,
             command.actor,
             command.teaching_course_id,
@@ -169,11 +172,11 @@ impl AssignmentService {
 
     pub async fn publish(
         &self,
-        assignment_id: AssignmentId,
         actor: Actor,
+        assignment_id: AssignmentId,
         published_at: DateTime<Utc>,
     ) -> AppResult<Assignment> {
-        self.change(assignment_id, actor, None, |assignment, course, actor| {
+        self.change(actor, assignment_id, None, |assignment, course, actor| {
             assignment.publish(course, actor, published_at)
         })
         .await
@@ -181,17 +184,17 @@ impl AssignmentService {
 
     pub async fn archive(
         &self,
-        assignment_id: AssignmentId,
         actor: Actor,
+        assignment_id: AssignmentId,
     ) -> AppResult<Assignment> {
-        self.change(assignment_id, actor, None, Assignment::archive)
+        self.change(actor, assignment_id, None, Assignment::archive)
             .await
     }
 
     pub async fn change_deadline(&self, command: ChangeDeadline) -> AppResult<Assignment> {
         self.change(
-            command.assignment_id,
             command.actor,
+            command.assignment_id,
             command.expected_revision,
             |assignment, course, actor| {
                 assignment.change_deadline(course, actor, command.deadline_at)
@@ -202,8 +205,8 @@ impl AssignmentService {
 
     pub async fn change_grading(&self, command: ChangeGrading) -> AppResult<Assignment> {
         self.change(
-            command.assignment_id,
             command.actor,
+            command.assignment_id,
             command.expected_revision,
             |assignment, course, actor| {
                 assignment.change_grading(course, actor, command.grading, command.late_policy)
@@ -214,8 +217,8 @@ impl AssignmentService {
 
     pub async fn change_terms(&self, command: ChangeTerms) -> AppResult<Assignment> {
         self.change(
-            command.assignment_id,
             command.actor,
+            command.assignment_id,
             Some(command.expected_revision),
             |assignment, course, actor| {
                 assignment.change_terms(
@@ -309,13 +312,10 @@ impl AssignmentService {
         cards: Vec<db::assignments::StudentAssignmentCard>,
         student_id: UserId,
     ) -> AppResult<Vec<StudentAssignment>> {
-        let ids: Vec<_> = cards
-            .iter()
-            .map(|card| card.assignment.id().as_uuid())
-            .collect();
+        let ids: Vec<_> = cards.iter().map(|card| card.assignment.id()).collect();
         let mut courses: Vec<_> = cards
             .iter()
-            .map(|card| card.assignment.teaching_course_id().as_uuid())
+            .map(|card| card.assignment.teaching_course_id())
             .collect();
         courses.sort_unstable();
         courses.dedup();
@@ -327,7 +327,7 @@ impl AssignmentService {
             .map(|card| {
                 let history = histories.remove(&card.assignment.id()).unwrap_or_default();
                 StudentAssignment {
-                    pool: pools.get(&card.assignment.teaching_course_id()).copied(),
+                    makeup_pool: pools.get(&card.assignment.teaching_course_id()).copied(),
                     history,
                     assignment: card.assignment,
                     subject: card.subject,
@@ -359,7 +359,7 @@ impl AssignmentService {
         })
     }
 
-    pub async fn find_student_assignment(
+    pub async fn find_for_submission(
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
@@ -378,7 +378,7 @@ impl AssignmentService {
         let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
             .await?
             .required("assignment")?;
-        let course = load_managed_summary(
+        let course = load_managed_course_details(
             &self.pool,
             actor,
             assignment.teaching_course_id(),
@@ -397,10 +397,10 @@ impl AssignmentService {
     ) -> AppResult<AssignmentSubmissionHistory> {
         let (student, assignment) =
             load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
-        let (subject, _) =
-            db::academic::find_subject_with_sandbox(&self.pool, assignment.subject_id())
-                .await?
-                .required("subject")?;
+        let subject = db::academic::find_subject(&self.pool, assignment.subject_id())
+            .await?
+            .required("subject")?
+            .subject;
         let submissions = Page::from_rows(
             db::submissions::list_for_student(&self.pool, assignment.id(), student.id(), page)
                 .await?,
@@ -419,9 +419,11 @@ impl AssignmentService {
         assignment_id: AssignmentId,
         page: PageRequest,
     ) -> AppResult<AssignmentStudents> {
-        let assignment = self
-            .load_managed_assignment(actor, assignment_id, "list assignment students")
-            .await?;
+        let assignment =
+            load_managed_assignment(&self.pool, actor, assignment_id, "list assignment students")
+                .await?
+                .stored
+                .assignment;
         let students = Page::from_rows(
             db::users::list_students_with_assignment_history(&self.pool, assignment.id(), page)
                 .await?,
@@ -441,7 +443,7 @@ impl AssignmentService {
         teaching_course_id: TeachingCourseId,
         page: PageRequest,
     ) -> AppResult<Page<Assignment>> {
-        load_managing_teacher(
+        load_managed_course(
             &self.pool,
             actor,
             teaching_course_id,
@@ -459,29 +461,22 @@ impl AssignmentService {
         load_student(&self.pool, actor, "list student assignments").await
     }
 
-    async fn load_managed_assignment(
-        &self,
-        actor: Actor,
-        assignment_id: AssignmentId,
-        action: &'static str,
-    ) -> AppResult<Assignment> {
-        load_managed_versioned_assignment(&self.pool, actor, assignment_id, action)
-            .await
-            .map(|stored| stored.assignment)
-    }
-
     pub async fn find_versioned_for_teacher(
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
     ) -> AppResult<VersionedAssignment> {
-        load_managed_versioned_assignment(&self.pool, actor, assignment_id, "read assignment").await
+        Ok(
+            load_managed_assignment(&self.pool, actor, assignment_id, "read assignment")
+                .await?
+                .stored,
+        )
     }
 
     async fn change<F>(
         &self,
-        assignment_id: AssignmentId,
         actor: Actor,
+        assignment_id: AssignmentId,
         expected_revision: Option<i64>,
         apply: F,
     ) -> AppResult<Assignment>
@@ -521,21 +516,22 @@ pub(crate) async fn load_student_assignment(
     student: &User,
     assignment: Assignment,
 ) -> AppResult<StudentAssignment> {
-    let history = db::submissions::load_histories(pool, &[assignment.id().as_uuid()], student.id())
+    let history = db::submissions::load_histories(pool, &[assignment.id()], student.id())
         .await?
         .remove(&assignment.id())
         .unwrap_or_default();
-    let (subject, _) = db::academic::find_subject_with_sandbox(pool, assignment.subject_id())
+    let subject = db::academic::find_subject(pool, assignment.subject_id())
         .await?
-        .required("subject")?;
-    let makeup =
+        .required("subject")?
+        .subject;
+    let makeup_pool =
         db::makeup::pool_for_student(pool, assignment.teaching_course_id(), student.id()).await?;
 
     Ok(StudentAssignment {
         assignment,
         subject,
         history,
-        pool: makeup,
+        makeup_pool,
     })
 }
 

@@ -52,7 +52,7 @@ async fn settings(app: &TestApp) -> Option<CourseMakeup> {
         )
         .await
         .unwrap()
-        .makeup
+        .course_makeup
 }
 
 async fn terms_of(app: &TestApp, assignment: AssignmentId) -> Option<MakeupTerms> {
@@ -1276,7 +1276,7 @@ async fn rejecting_a_sandbox_makeup_offers_a_grant_without_the_makeup_queue() {
     let app = TestApp::start().await;
     let sandbox = app.add_sandbox_course().await;
     let trial = app
-        .add_makeup_assignment_on(
+        .add_makeup_assignment_in(
             &sandbox,
             "Trial",
             ten(),

@@ -10,7 +10,7 @@ use crate::bot::assignment_form::{
     AssignmentTerms, AssignmentText, DraftAssignment, IssuedGroups, TermsForm,
 };
 use crate::bot::callbacks::{AmountChoice, FlowAction, GradingChoice};
-use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::context::{ActorChat, Chat, TextStep};
 use crate::bot::handlers::input::{
     parse_max_score, require_attempts, require_text, require_text_within,
 };
@@ -23,7 +23,7 @@ use crate::domain::{
 };
 
 pub(crate) async fn handle_max_attempts(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: AmountChoice,
     state: BotState,
@@ -59,7 +59,7 @@ async fn ask_grading(chat: Chat<'_>, draft: DraftAssignment) -> HandlerResult {
 }
 
 pub(crate) async fn handle_grading(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: GradingChoice,
     state: BotState,
@@ -78,7 +78,7 @@ pub(crate) async fn handle_grading(
             detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
             screen
                 .dialogue()
-                .update(BotState::Flow(FlowState::AwaitingGradingText { draft }))
+                .update(BotState::Flow(FlowState::AwaitingMaxScore { draft }))
                 .await?;
             return screen.ask(&texts::max_score_prompt(MAX_SCORE)).await;
         }
@@ -88,7 +88,7 @@ pub(crate) async fn handle_grading(
 }
 
 async fn apply_grading(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     draft: DraftAssignment,
     grading: Grading,
     message_id: Option<MessageId>,
@@ -156,7 +156,7 @@ async fn ask_groups(
 }
 
 pub(crate) async fn toggle_assignment_group(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     group_id: StudentGroupId,
     state: BotState,
@@ -192,7 +192,7 @@ pub(crate) async fn toggle_assignment_group(
 }
 
 pub(crate) async fn finish_assignment_groups(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: BotState,
 ) -> HandlerResult {
@@ -300,7 +300,7 @@ pub(crate) async fn submit_max_attempts(
     .await
 }
 
-pub(crate) async fn submit_grading_text(
+pub(crate) async fn submit_max_score(
     step: TextStep<'_>,
     message_id: Option<MessageId>,
     draft: DraftAssignment,

@@ -73,9 +73,9 @@ impl<'a> Chat<'a> {
     pub async fn resolve(
         self,
         telegram_user_id: TelegramUserId,
-    ) -> HandlerResult<Option<Screen<'a>>> {
+    ) -> HandlerResult<Option<ActorChat<'a>>> {
         match self.services().users.resolve_actor(telegram_user_id).await {
-            Ok(actor) => Ok(Some(Screen { chat: self, actor })),
+            Ok(actor) => Ok(Some(ActorChat { chat: self, actor })),
             Err(error) if error.code() == ErrorCode::NotFound => {
                 super::handlers::home::open_guest(self).await?;
                 Ok(None)
@@ -102,12 +102,12 @@ impl<'a> Chat<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Screen<'a> {
+pub(super) struct ActorChat<'a> {
     chat: Chat<'a>,
     actor: Actor,
 }
 
-impl<'a> Screen<'a> {
+impl<'a> ActorChat<'a> {
     pub fn chat(&self) -> Chat<'a> {
         self.chat
     }
@@ -220,7 +220,7 @@ impl<'a> TextStep<'a> {
         Chat::new(self.bot, self.message.chat.id, self.deps)
     }
 
-    pub async fn resolve(self) -> HandlerResult<Option<Screen<'a>>> {
+    pub async fn resolve(self) -> HandlerResult<Option<ActorChat<'a>>> {
         self.chat().resolve(self.telegram_user_id).await
     }
 }

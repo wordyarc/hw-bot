@@ -7,7 +7,7 @@ use teloxide::{ApiError, RequestError};
 
 use super::deadline::{DateChoice, choose_date};
 use crate::bot::callbacks::{AmountChoice, DeadlineAction, ReplayableAction};
-use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::context::{ActorChat, Chat, TextStep};
 use crate::bot::form::{Form, InputMode};
 use crate::bot::handlers::input::require_text;
 use crate::bot::handlers::{Shown, handle_replayable_action, reset_dialogue};
@@ -47,7 +47,7 @@ pub(super) async fn render<F: FormScreen>(
 }
 
 pub(super) async fn render_input_result<F: FormScreen>(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     form: F,
     result: Result<(), F::InputError>,
 ) -> HandlerResult {
@@ -66,7 +66,7 @@ pub(super) async fn input_manually<F: FormScreen>(chat: Chat<'_>, mut form: F) -
 }
 
 pub(super) async fn choose_amount<F: FormScreen>(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     mut form: F,
     choice: AmountChoice,
     apply: impl FnOnce(&mut F, u16) -> Result<(), F::InputError>,
@@ -101,7 +101,7 @@ pub(super) fn form_error(error: &DomainError) -> String {
 pub(super) async fn take_text<'a, F: FormScreen>(
     step: TextStep<'a>,
     mut form: F,
-) -> HandlerResult<Option<(Screen<'a>, F, Cow<'a, str>)>> {
+) -> HandlerResult<Option<(ActorChat<'a>, F, Cow<'a, str>)>> {
     let Some(text) = require_text(step.bot(), step.message()).await? else {
         return Ok(None);
     };
@@ -117,7 +117,7 @@ pub(super) async fn take_text<'a, F: FormScreen>(
 }
 
 pub(super) async fn handle_date<F: FormScreen>(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     mut form: F,
     action: DeadlineAction,
     calendar_from: NaiveDate,
@@ -133,7 +133,7 @@ pub(super) async fn handle_date<F: FormScreen>(
 }
 
 pub(super) async fn apply_date<F: FormScreen>(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     mut form: F,
     at: DateTime<Utc>,
 ) -> HandlerResult {
@@ -141,21 +141,21 @@ pub(super) async fn apply_date<F: FormScreen>(
     render_input_result(screen, form, result).await
 }
 
-pub(super) async fn step_back<F: FormScreen>(screen: Screen<'_>, mut form: F) -> HandlerResult {
+pub(super) async fn step_back<F: FormScreen>(screen: ActorChat<'_>, mut form: F) -> HandlerResult {
     if !form.step_back() {
         return screen.stale().await;
     }
     render(screen.chat(), form, None).await
 }
 
-pub(super) async fn back<F: FormScreen>(screen: Screen<'_>, mut form: F) -> HandlerResult {
+pub(super) async fn back<F: FormScreen>(screen: ActorChat<'_>, mut form: F) -> HandlerResult {
     if !form.back() {
         return cancel(screen, form).await;
     }
     render(screen.chat(), form, None).await
 }
 
-pub(super) async fn cancel<F: FormScreen>(screen: Screen<'_>, form: F) -> HandlerResult {
+pub(super) async fn cancel<F: FormScreen>(screen: ActorChat<'_>, form: F) -> HandlerResult {
     reset_dialogue(screen.dialogue()).await?;
     abandon(screen.bot(), screen.chat_id(), &form).await?;
     match form.cancelled_to() {
@@ -181,7 +181,7 @@ pub(super) async fn discard<F: FormScreen>(chat: Chat<'_>, form: F) -> HandlerRe
 }
 
 pub(super) async fn finish(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: Option<MessageId>,
     notice: &str,
 ) -> HandlerResult {

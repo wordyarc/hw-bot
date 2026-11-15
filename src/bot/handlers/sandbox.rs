@@ -6,7 +6,7 @@ use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::ReviewSandbox;
 use crate::bot::HandlerResult;
-use crate::bot::context::{Screen, TextStep};
+use crate::bot::context::{ActorChat, TextStep};
 use crate::bot::errors::optional_stat;
 use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::texts;
@@ -16,7 +16,7 @@ use crate::bot::views::{
 use crate::domain::{ReviewDecision, USER_TEXT_MAX_LEN};
 use crate::pagination::PageRequest;
 
-pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+pub(super) async fn show_page(screen: ActorChat<'_>, page: PageRequest) -> HandlerResult {
     let shown_at = screen.now();
     let actor = screen.actor();
     let bot = screen.bot();
@@ -65,7 +65,7 @@ pub(super) async fn show_page(screen: Screen<'_>, page: PageRequest) -> HandlerR
 }
 
 pub(super) async fn ask_comment(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     decision: ReviewDecision,
     state: &BotState,

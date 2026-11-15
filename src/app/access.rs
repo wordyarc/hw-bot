@@ -7,19 +7,15 @@ use crate::db;
 use crate::domain::{
     AssignmentId, DomainError, StudentGroupId, TeachingCourse, TeachingCourseId, User, UserId,
 };
-use crate::read_models::{TeachingCourseSummary, VersionedAssignment};
+use crate::read_models::{TeachingCourseDetails, VersionedAssignment};
 
-pub(crate) async fn load_managed_versioned_assignment(
+pub(crate) async fn load_managed_assignment(
     pool: &PgPool,
     actor: Actor,
     assignment_id: AssignmentId,
     action: &'static str,
-) -> AppResult<VersionedAssignment> {
-    Ok(
-        load_managed_assignment_on(&mut *pool.acquire().await?, actor, assignment_id, action)
-            .await?
-            .stored,
-    )
+) -> AppResult<ManagedAssignment> {
+    load_managed_assignment_on(&mut *pool.acquire().await?, actor, assignment_id, action).await
 }
 
 pub(crate) struct ManagedAssignment {
@@ -37,7 +33,7 @@ pub(crate) async fn load_managed_assignment_on(
     let stored = db::assignments::find_versioned_by_id(&mut *connection, assignment_id)
         .await?
         .required("assignment")?;
-    let (actor, course) = load_managing_teacher_on(
+    let (actor, course) = load_managed_course_on(
         connection,
         actor,
         stored.assignment.teaching_course_id(),
@@ -51,16 +47,16 @@ pub(crate) async fn load_managed_assignment_on(
     })
 }
 
-pub(crate) async fn load_managing_teacher(
+pub(crate) async fn load_managed_course(
     pool: &PgPool,
     actor: Actor,
     course_id: TeachingCourseId,
     action: &'static str,
 ) -> AppResult<(User, TeachingCourse)> {
-    load_managing_teacher_on(&mut *pool.acquire().await?, actor, course_id, action).await
+    load_managed_course_on(&mut *pool.acquire().await?, actor, course_id, action).await
 }
 
-pub(crate) async fn load_managing_teacher_on(
+pub(crate) async fn load_managed_course_on(
     connection: &mut PgConnection,
     actor: Actor,
     course_id: TeachingCourseId,
@@ -76,19 +72,19 @@ pub(crate) async fn load_managing_teacher_on(
     Ok((actor, course))
 }
 
-pub(crate) async fn load_managed_summary(
+pub(crate) async fn load_managed_course_details(
     pool: &PgPool,
     actor: Actor,
     course_id: TeachingCourseId,
     action: &'static str,
-) -> AppResult<TeachingCourseSummary> {
+) -> AppResult<TeachingCourseDetails> {
     let teacher = load_actor(pool, actor, "teacher").await?;
-    let summary = db::academic::find_teaching_course_summary(pool, course_id)
+    let details = db::academic::find_teaching_course_details(pool, course_id)
         .await?
         .required("teaching course")?;
-    ensure_manages(&summary.course, &teacher, action)?;
+    ensure_manages(&details.course, &teacher, action)?;
 
-    Ok(summary)
+    Ok(details)
 }
 
 pub(crate) fn ensure_manages(

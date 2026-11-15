@@ -26,18 +26,18 @@ pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
 };
 pub use review::{
-    RemainingAttempts, ReviewCounters, ReviewQueueItem, ReviewSandbox, ReviewService,
-    ReviewSubmission, ReviewedSubmission,
+    RemainingAttempts, ReviewCard, ReviewCounters, ReviewSandbox, ReviewService, ReviewSubmission,
+    ReviewedSubmission,
 };
 pub use submissions::{
-    PendingWithdrawal, SubmissionService, SubmitHomework, SubmittedHomework, WithdrawSubmission,
+    SubmissionService, SubmitHomework, SubmittedHomework, WithdrawSubmission, WithdrawalPreview,
 };
 pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser, UserService};
 
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
     AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradebookScore,
-    PendingSubmission, QueuePlace, RosterGroup, RosterStudent, SubjectQueue, TeachingCourseSummary,
+    PendingSubmission, QueuePlace, RosterGroup, RosterStudent, SubjectQueue, TeachingCourseDetails,
     UndecidedAssignment, UserStatistics, VersionedAssignment,
 };
 

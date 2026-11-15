@@ -3,8 +3,8 @@ use teloxide::payloads::SendMessageSetters;
 use crate::app::{CourseStudent, GradebookEntry, StudentGradesCard};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
-use crate::bot::context::Screen;
-use crate::bot::state::{BotState, FlowState, ScreenState, StudentChoice, StudentList};
+use crate::bot::context::ActorChat;
+use crate::bot::state::{BotState, FlowState, ScreenState, StudentList, StudentListPurpose};
 use crate::bot::texts;
 use crate::bot::views::{
     gradebook_groups_keyboard, gradebook_students_keyboard, paginated_keyboard, send_screen,
@@ -13,8 +13,8 @@ use crate::bot::views::{
 use crate::domain::{StudentGroupId, TeachingCourseId, UserId};
 use crate::pagination::{Page, PageRequest};
 
-pub(crate) async fn show_gradebook_groups(
-    screen: Screen<'_>,
+pub(crate) async fn show_gradebook(
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
 ) -> HandlerResult {
     let groups = match screen
@@ -38,7 +38,7 @@ pub(crate) async fn show_gradebook_groups(
 }
 
 pub(crate) async fn show_gradebook_page(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     group_id: StudentGroupId,
     page: PageRequest,
@@ -46,14 +46,14 @@ pub(crate) async fn show_gradebook_page(
     let students = screen
         .services()
         .courses
-        .list_students(screen.actor(), course_id, group_id, page)
+        .gradebook_students(screen.actor(), course_id, group_id, page)
         .await?;
 
     render_gradebook(screen, course_id, group_id, &students).await
 }
 
 async fn render_gradebook(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     group_id: StudentGroupId,
     students: &Page<CourseStudent>,
@@ -80,7 +80,7 @@ async fn render_gradebook(
         .dialogue()
         .update(BotState::Flow(FlowState::ChoosingStudent {
             message_id: message.id,
-            purpose: StudentChoice::Grades { course_id },
+            purpose: StudentListPurpose::Grades { course_id },
             student_ids: students
                 .items
                 .iter()
@@ -92,7 +92,7 @@ async fn render_gradebook(
 }
 
 pub(crate) async fn show_student_grades_page(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     student_id: UserId,
     page: PageRequest,
@@ -107,7 +107,7 @@ pub(crate) async fn show_student_grades_page(
 }
 
 pub(crate) async fn send_student_grades(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     card: StudentGradesCard,
     list: Option<StudentList>,
@@ -115,7 +115,7 @@ pub(crate) async fn send_student_grades(
     let StudentGradesCard {
         grades: student,
         group_id,
-        makeup,
+        makeup_pool,
     } = card;
     let student_id = student.student_id;
 
@@ -126,7 +126,7 @@ pub(crate) async fn send_student_grades(
         student.total(),
         student.max_total(),
     )];
-    if let Some(pool) = makeup {
+    if let Some(pool) = makeup_pool {
         lines.push(texts::gradebook_makeup_attempts(
             pool.balance.remaining(),
             pool.balance.allowed(),
@@ -151,7 +151,7 @@ pub(crate) async fn send_student_grades(
     let text = lines.join("\n");
 
     let keyboard = paginated_keyboard(
-        student_grades_keyboard(course_id, group_id, student_id, makeup.is_some()),
+        student_grades_keyboard(course_id, group_id, student_id, makeup_pool.is_some()),
         PageTarget::StudentGrades(course_id, student_id),
         student.grade_page,
         student.next_grade_page,

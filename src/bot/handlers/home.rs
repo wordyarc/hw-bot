@@ -6,7 +6,7 @@ use super::Command;
 use crate::app::{Actor, ErrorCode};
 use crate::bot::Bot;
 use crate::bot::HandlerResult;
-use crate::bot::context::{Chat, Screen};
+use crate::bot::context::{ActorChat, Chat};
 use crate::bot::errors::{log_request_error, optional_stat};
 use crate::bot::state::{BotState, ScreenState};
 use crate::bot::texts;
@@ -54,14 +54,14 @@ async fn sync_commands(bot: &Bot, chat_id: ChatId, role: Option<Role>) {
 pub(crate) async fn open_guest(chat: Chat<'_>) -> HandlerResult {
     let bot = chat.bot();
     let chat_id = chat.chat_id();
-    show_guest(bot, chat_id).await?;
+    send_guest(bot, chat_id).await?;
     chat.dialogue()
         .update(BotState::Screen(ScreenState::Guest))
         .await?;
     Ok(())
 }
 
-async fn show_guest(bot: &Bot, chat_id: ChatId) -> HandlerResult {
+async fn send_guest(bot: &Bot, chat_id: ChatId) -> HandlerResult {
     sync_commands(bot, chat_id, None).await;
     send_guest_hint(bot, chat_id).await
 }
@@ -81,7 +81,7 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
     let role = match services.users.find_user(telegram_user_id).await {
         Ok(user) => Some(user.role()),
         Err(error) if error.code() == ErrorCode::NotFound => {
-            return show_guest(bot, chat_id).await;
+            return send_guest(bot, chat_id).await;
         }
         Err(error) => return Err(error.into()),
     };
@@ -175,13 +175,13 @@ pub(super) async fn send_home(chat: Chat<'_>, user: &User) -> HandlerResult {
     Ok(())
 }
 
-pub(super) async fn show_profile(screen: Screen<'_>) -> HandlerResult {
+pub(super) async fn show_profile(screen: ActorChat<'_>) -> HandlerResult {
     let actor = screen.actor();
     let bot = screen.bot();
     let chat_id = screen.chat_id();
     let services = screen.services();
     let timezone = screen.timezone();
-    let registered = services.users.find_by_actor(actor).await?;
+    let registered = services.users.find_registered_by_actor(actor).await?;
     let role = registered.user.role();
     let mut lines = vec![texts::profile_header(
         registered.user.display_name().as_str(),

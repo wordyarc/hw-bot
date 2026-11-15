@@ -51,7 +51,7 @@ async fn listing_the_review_queue_does_not_query_per_submission() {
     let list = || {
         app.application
             .reviews
-            .queue_page(app.teacher_actor(), PageRequest::new(0))
+            .list_page(app.teacher_actor(), PageRequest::new(0))
     };
     let (listed, one) = log.during(list()).await;
     assert_eq!(listed.unwrap().items.len(), 1);
@@ -71,7 +71,7 @@ async fn listing_queue_places_does_not_query_per_submission() {
     let list = || {
         app.application
             .submissions
-            .pending_queue(app.student_actor(), PageRequest::new(0))
+            .queue_places(app.student_actor(), PageRequest::new(0))
     };
     let (listed, one) = log.during(list()).await;
     assert_eq!(listed.unwrap().items.len(), 1);

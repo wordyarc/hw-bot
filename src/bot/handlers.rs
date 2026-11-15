@@ -14,7 +14,7 @@ use super::callbacks::{
     self, CallbackAction, FlowAction, InformationalAction, PageTarget, ReplayableAction,
     ScreenAction,
 };
-use super::context::{BotContext, Chat, Deps, Screen, TextStep};
+use super::context::{ActorChat, BotContext, Chat, Deps, TextStep};
 use super::errors::{BotError, finish_handler};
 use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ReviewOrigin, ScreenState};
 use super::texts;
@@ -300,10 +300,10 @@ pub(super) async fn handle_message(
                 teacher::submit_max_attempts(step, message_id, text, groups).await?;
             }
             BotState::Flow(FlowState::ChoosingGrading { message_id, draft }) => {
-                teacher::submit_grading_text(step, Some(message_id), draft).await?;
+                teacher::submit_max_score(step, Some(message_id), draft).await?;
             }
-            BotState::Flow(FlowState::AwaitingGradingText { draft }) => {
-                teacher::submit_grading_text(step, None, draft).await?;
+            BotState::Flow(FlowState::AwaitingMaxScore { draft }) => {
+                teacher::submit_max_score(step, None, draft).await?;
             }
             BotState::Flow(FlowState::ConfiguringTerms(form)) => {
                 teacher::submit_terms(step, form).await?;
@@ -378,7 +378,7 @@ fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
     Some(match action {
         MenuAction::Assignments => ReplayableAction::Page(PageTarget::Assignments, 0),
         MenuAction::Archive => ReplayableAction::Page(PageTarget::Archive, 0),
-        MenuAction::Queue => ReplayableAction::Page(PageTarget::Queue, 0),
+        MenuAction::Queue => ReplayableAction::Page(PageTarget::QueuePlaces, 0),
         MenuAction::Review => ReplayableAction::ReviewHub,
         MenuAction::Courses => ReplayableAction::Page(PageTarget::Courses, 0),
         MenuAction::Sandbox => ReplayableAction::Page(PageTarget::Sandbox, 0),
@@ -477,7 +477,7 @@ pub(super) async fn handle_callback(
 }
 
 async fn handle_replayable_action(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     action: ReplayableAction,
     shown: Shown<'_>,
 ) -> HandlerResult {
@@ -487,10 +487,10 @@ async fn handle_replayable_action(
             match target {
                 PageTarget::Assignments => student::show_assignments_page(screen, page).await,
                 PageTarget::Archive => student::show_archive_page(screen, page).await,
-                PageTarget::Queue => student::show_queue_page(screen, page).await,
+                PageTarget::QueuePlaces => student::show_queue_page(screen, page).await,
                 PageTarget::Courses => teacher::show_courses_page(screen, page).await,
                 PageTarget::Sandbox => sandbox::show_page(screen, page).await,
-                PageTarget::ReviewQueue => review::show_list(screen, page).await,
+                PageTarget::ReviewList => review::show_list(screen, page).await,
                 PageTarget::Course(id) => {
                     teacher::show_course_assignments_page(screen, id, page).await
                 }
@@ -541,9 +541,7 @@ async fn handle_replayable_action(
         ReplayableAction::CourseInvite(course_id) => {
             teacher::show_course_invite(screen, course_id).await
         }
-        ReplayableAction::GradebookGroups(course_id) => {
-            teacher::show_gradebook_groups(screen, course_id).await
-        }
+        ReplayableAction::Gradebook(course_id) => teacher::show_gradebook(screen, course_id).await,
         ReplayableAction::OpenSandboxReview(submission_id) => {
             review::open(screen, submission_id, ReviewOrigin::Sandbox).await
         }
@@ -560,7 +558,7 @@ async fn handle_replayable_action(
 }
 
 async fn handle_screen_action(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     action: ScreenAction,
     state: BotState,
@@ -604,7 +602,7 @@ async fn handle_screen_action(
 }
 
 async fn handle_flow_action(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     telegram_user_id: TelegramUserId,
     message_id: MessageId,
     action: FlowAction,
@@ -779,7 +777,7 @@ mod tests {
                 PageTarget::Assignments,
             ),
             ("/archive", callbacks::MENU_ARCHIVE, PageTarget::Archive),
-            ("/queue", callbacks::MENU_QUEUE, PageTarget::Queue),
+            ("/queue", callbacks::MENU_QUEUE, PageTarget::QueuePlaces),
             ("/courses", callbacks::MENU_COURSES, PageTarget::Courses),
         ] {
             let menu = menu_action_for(&Command::parse(command, "test_bot").unwrap()).unwrap();
@@ -794,18 +792,19 @@ mod tests {
     fn every_button_the_bot_sends_is_routable() {
         use crate::app::{
             AssignmentStudentSummary, CourseStudent, MakeupQuestion, StudentAssignment,
-            TeachingCourseSummary, UndecidedAssignment,
+            TeachingCourseDetails, UndecidedAssignment,
         };
         use crate::bot::assignment_form::{AssignmentTerms, TermsForm, TermsStep};
         use crate::bot::callbacks::MakeupFormAction;
         use crate::bot::makeup_form::{MakeupForm, MakeupStep};
         use crate::bot::views::{
-            AssignmentAction, ReviewButtons, assignment_files_keyboard, assignment_groups_keyboard,
-            assignment_students_keyboard, attempts_keyboard, calendar_keyboard,
-            confirm_file_deletion_keyboard, confirm_invite_rotation_keyboard, contact_keyboard,
-            course_assignments_keyboard, course_invite_keyboard, courses_keyboard,
-            deadline_options_keyboard, gradebook_groups_keyboard, gradebook_students_keyboard,
-            grading_keyboard, late_policy_keyboard, list_followup_keyboard, makeup_answer_keyboard,
+            AssignmentAction, AssignmentFilesButtons, MakeupFollowupButtons, ReviewButtons,
+            assignment_files_keyboard, assignment_groups_keyboard, assignment_students_keyboard,
+            attempts_keyboard, calendar_keyboard, confirm_file_deletion_keyboard,
+            confirm_invite_rotation_keyboard, contact_keyboard, course_assignments_keyboard,
+            course_invite_keyboard, courses_keyboard, deadline_options_keyboard,
+            gradebook_groups_keyboard, gradebook_students_keyboard, grading_keyboard,
+            late_policy_keyboard, list_followup_keyboard, makeup_answer_keyboard,
             makeup_attempts_keyboard, makeup_followup_keyboard, makeup_form_view,
             paginated_keyboard, penalty_keyboard, queue_followup_keyboard,
             registration_groups_keyboard, reopen_assignment_keyboard, review_decision_keyboard,
@@ -828,7 +827,7 @@ mod tests {
         let group = student_group("test-group");
         let other_group = student_group("other-group");
         let course = course_for(&group, &teacher);
-        let stream = TeachingCourseSummary {
+        let stream = TeachingCourseDetails {
             course: teaching_course(&subject("Stream"), &[&group, &other_group], &teacher),
             subject: subject("Stream"),
             groups: vec![group.clone(), other_group.clone()],
@@ -837,7 +836,7 @@ mod tests {
         let assignment = assignment(&course, &teacher).scored(5).published().build();
         let mut archived = assignment.clone();
         archived.archive(&course, &teacher).unwrap();
-        let single = TeachingCourseSummary {
+        let single = TeachingCourseDetails {
             course: course.clone(),
             subject: subject("Single"),
             groups: vec![group.clone()],
@@ -846,7 +845,7 @@ mod tests {
             assignment: assignment.clone(),
             subject: subject("Single"),
             history: history().build(),
-            pool: None,
+            makeup_pool: None,
         };
         let course_student = CourseStudent {
             student_id: UserId::new(),
@@ -966,7 +965,10 @@ mod tests {
             queue_followup_keyboard(None, Some(0)),
             list_followup_keyboard(),
             review_list_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
-            makeup_followup_keyboard(true, true),
+            makeup_followup_keyboard(MakeupFollowupButtons {
+                next_makeup: true,
+                grant_attempt: true,
+            }),
             student_grades_keyboard(course.id(), group.id(), student_id, true),
             contact_keyboard(
                 contact,
@@ -1016,8 +1018,22 @@ mod tests {
             review_score_keyboard(SubmissionId::new(), 10),
             deadline_options_keyboard(&timezone, crate::test_support::t0()),
             calendar_keyboard(today, today),
-            assignment_files_keyboard(&assignment, &[file], true, true),
-            assignment_files_keyboard(&assignment, &[], true, false),
+            assignment_files_keyboard(
+                &assignment,
+                &[file],
+                AssignmentFilesButtons {
+                    add: true,
+                    creation_flow: true,
+                },
+            ),
+            assignment_files_keyboard(
+                &assignment,
+                &[],
+                AssignmentFilesButtons {
+                    add: true,
+                    creation_flow: false,
+                },
+            ),
             confirm_file_deletion_keyboard(),
             assignment_students_keyboard(assignment.id(), &[assignment_student], true),
             gradebook_students_keyboard(course.id(), &[course_student]),

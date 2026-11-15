@@ -11,12 +11,12 @@ use crate::domain::{
     TeachingCourseId, User, UserId,
 };
 use crate::pagination::PageRequest;
-use crate::read_models::TeachingCourseSummary;
+use crate::read_models::{StoredSubject, TeachingCourseDetails};
 
 const EDUCATION_LEVEL: &str = "student_groups.education_level";
 const STUDY_YEAR: &str = "student_groups.study_year";
 
-macro_rules! select_course_summaries {
+macro_rules! select_course_details {
     ($tail:literal $(, $arg:expr)* $(,)?) => {
         sqlx::query_as!(
             TeachingCourseSummaryRow,
@@ -118,10 +118,10 @@ pub async fn insert_subject(executor: impl PgExecutor<'_>, subject: &Subject) ->
     Ok(())
 }
 
-pub async fn find_subject_with_sandbox(
+pub async fn find_subject(
     executor: impl PgExecutor<'_>,
     id: SubjectId,
-) -> DbResult<Option<(Subject, bool)>> {
+) -> DbResult<Option<StoredSubject>> {
     let row = sqlx::query!(
         r#"
         select id, name, sandbox
@@ -134,8 +134,10 @@ pub async fn find_subject_with_sandbox(
     .await?;
 
     row.map(|row| {
-        let subject = Subject::new(SubjectId::from_uuid(row.id), row.name)?;
-        Ok((subject, row.sandbox))
+        Ok(StoredSubject {
+            subject: Subject::new(SubjectId::from_uuid(row.id), row.name)?,
+            sandbox: row.sandbox,
+        })
     })
     .transpose()
 }
@@ -243,14 +245,14 @@ pub async fn find_teaching_course_by_id(
     row.map(TeachingCourse::try_from).transpose()
 }
 
-pub(crate) async fn find_teaching_course_summary(
+pub(crate) async fn find_teaching_course_details(
     executor: impl PgExecutor<'_>,
     id: TeachingCourseId,
-) -> DbResult<Option<TeachingCourseSummary>> {
-    select_course_summaries!(" where teaching_courses.id = $1", id.as_uuid())
+) -> DbResult<Option<TeachingCourseDetails>> {
+    select_course_details!(" where teaching_courses.id = $1", id.as_uuid())
         .fetch_optional(executor)
         .await?
-        .map(TeachingCourseSummary::try_from)
+        .map(TeachingCourseDetails::try_from)
         .transpose()
 }
 
@@ -258,10 +260,10 @@ pub(crate) async fn list_teaching_courses_for_teacher(
     executor: impl PgExecutor<'_>,
     teacher: &User,
     page: PageRequest,
-) -> DbResult<Vec<TeachingCourseSummary>> {
+) -> DbResult<Vec<TeachingCourseDetails>> {
     let sees_every_course = teacher.role().can_manage_all_teaching_courses();
 
-    select_course_summaries!(
+    select_course_details!(
         r#"
         where $1 or exists (
             select 1
@@ -280,7 +282,7 @@ pub(crate) async fn list_teaching_courses_for_teacher(
     .fetch_all(executor)
     .await?
     .into_iter()
-    .map(TeachingCourseSummary::try_from)
+    .map(TeachingCourseDetails::try_from)
     .collect()
 }
 
@@ -352,7 +354,7 @@ struct TeachingCourseSummaryRow {
     group_study_years: Vec<i16>,
 }
 
-impl TryFrom<TeachingCourseSummaryRow> for TeachingCourseSummary {
+impl TryFrom<TeachingCourseSummaryRow> for TeachingCourseDetails {
     type Error = DbError;
 
     fn try_from(row: TeachingCourseSummaryRow) -> Result<Self, Self::Error> {

@@ -21,8 +21,8 @@ struct TwoSandboxCourses {
 
 async fn two_sandbox_courses(app: &TestApp) -> TwoSandboxCourses {
     let sandbox = app.add_sandbox_subject().await;
-    let own = app.add_course_on(&sandbox).await;
-    let foreign = app.add_foreign_course_on(&sandbox).await;
+    let own = app.add_course_for(&sandbox).await;
+    let foreign = app.add_foreign_course_for(&sandbox).await;
     let foreign_student = app.add_student_to_group("Foreign", &foreign.group).await;
 
     TwoSandboxCourses {
@@ -329,7 +329,7 @@ async fn sandbox_makeup(app: &TestApp) -> (TeachingCourse, Assignment, Uuid) {
     let sandbox = app.add_sandbox_course().await;
     let ten = Grading::scored(10).unwrap();
     let trial = app
-        .add_makeup_assignment_on(
+        .add_makeup_assignment_in(
             &sandbox,
             "Closed trial",
             ten,
@@ -337,7 +337,7 @@ async fn sandbox_makeup(app: &TestApp) -> (TeachingCourse, Assignment, Uuid) {
             Utc::now() - Duration::days(1),
         )
         .await;
-    app.enable_makeup_on(&sandbox, 3).await;
+    app.enable_makeup_in(&sandbox, 3).await;
     let makeup = submit(app, &trial, &app.fixture.student).await;
 
     (sandbox, trial, makeup)

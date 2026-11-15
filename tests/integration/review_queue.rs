@@ -71,7 +71,7 @@ async fn by_subject(app: &TestApp) -> Vec<SubjectQueue> {
 async fn list_ids(app: &TestApp) -> Vec<Uuid> {
     app.application
         .reviews
-        .queue_page(app.teacher_actor(), Default::default())
+        .list_page(app.teacher_actor(), Default::default())
         .await
         .expect("the queue list is readable")
         .items
@@ -163,7 +163,7 @@ async fn a_foreign_subject_hands_out_nothing() {
     db::academic::insert_subject(&app.pool, &android)
         .await
         .expect("insert subject");
-    let foreign = app.add_foreign_course_on(&android).await;
+    let foreign = app.add_foreign_course_for(&android).await;
     let student = app.add_student_to_group("Foreign", &foreign.group).await;
     let work = app
         .add_published_assignment(&foreign.course, &foreign.teacher, "Foreign")
@@ -214,7 +214,7 @@ fn decide(
 }
 
 async fn extra_attempts(app: &TestApp, assignment: &Assignment, student: &User) -> u16 {
-    db::submissions::load_histories(&app.pool, &[assignment.id().as_uuid()], student.id())
+    db::submissions::load_histories(&app.pool, &[assignment.id()], student.id())
         .await
         .expect("read history")
         .remove(&assignment.id())

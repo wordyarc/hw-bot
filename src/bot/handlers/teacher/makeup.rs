@@ -11,7 +11,7 @@ use crate::bot::HandlerResult;
 use crate::bot::callbacks::{
     AmountChoice, MakeupChoice, MakeupFormAction, PageTarget, ReplayableAction,
 };
-use crate::bot::context::{Screen, TextStep};
+use crate::bot::context::{ActorChat, TextStep};
 use crate::bot::handlers::input::parse_step_number;
 use crate::bot::makeup_form::{MakeupForm, MakeupInputError, MakeupStep};
 use crate::bot::state::{BotState, FlowState};
@@ -53,7 +53,7 @@ impl FormScreen for MakeupForm {
     }
 }
 
-pub(crate) async fn open(screen: Screen<'_>, course_id: TeachingCourseId) -> HandlerResult {
+pub(crate) async fn open(screen: ActorChat<'_>, course_id: TeachingCourseId) -> HandlerResult {
     let state = screen
         .services()
         .courses
@@ -64,7 +64,7 @@ pub(crate) async fn open(screen: Screen<'_>, course_id: TeachingCourseId) -> Han
 }
 
 pub(crate) async fn handle_answer(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: MakeupChoice,
     state: BotState,
@@ -88,7 +88,7 @@ pub(crate) async fn handle_answer(
 }
 
 pub(crate) async fn handle_attempts(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: AmountChoice,
     state: BotState,
@@ -100,7 +100,7 @@ pub(crate) async fn handle_attempts(
 }
 
 pub(crate) async fn handle_form(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     action: MakeupFormAction,
     state: BotState,
@@ -149,7 +149,7 @@ pub(crate) async fn submit_text(step: TextStep<'_>, form: MakeupForm) -> Handler
     render_input_result(screen, form, result).await
 }
 
-async fn save(screen: Screen<'_>, mut form: MakeupForm) -> HandlerResult {
+async fn save(screen: ActorChat<'_>, mut form: MakeupForm) -> HandlerResult {
     let now = screen.now();
     if form.notice_end(now) {
         return render(screen.chat(), form, Some(texts::MAKEUP_ENDED_BEFORE_SAVE)).await;

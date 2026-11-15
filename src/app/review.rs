@@ -16,7 +16,7 @@ use crate::domain::{
     SubmissionKind, TeachingCourse, TeachingCourseId, User,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::{PendingSubmission, SubjectQueue};
+use crate::read_models::{PendingSubmission, StoredSubject, SubjectQueue};
 
 const PREVIOUS_ATTEMPTS_SHOWN: u16 = 10;
 
@@ -76,7 +76,7 @@ pub struct RemainingAttempts {
 }
 
 #[derive(Clone, Debug)]
-pub struct ReviewQueueItem {
+pub struct ReviewCard {
     pub submission: Submission,
     pub assignment: Assignment,
     pub subject: Subject,
@@ -84,7 +84,7 @@ pub struct ReviewQueueItem {
     pub group_code: String,
     pub previous_attempts: Vec<Submission>,
     pub earlier_attempts_hidden: bool,
-    pub makeup: Option<MakeupPool>,
+    pub makeup_pool: Option<MakeupPool>,
     pub history: SubmissionHistory,
 }
 
@@ -106,7 +106,7 @@ impl ReviewService {
         actor: Actor,
         subject: Option<SubjectId>,
         now: DateTime<Utc>,
-    ) -> AppResult<Option<ReviewQueueItem>> {
+    ) -> AppResult<Option<ReviewCard>> {
         self.take_next(actor, ReviewStream::Main { subject }, now)
             .await
     }
@@ -115,7 +115,7 @@ impl ReviewService {
         &self,
         actor: Actor,
         now: DateTime<Utc>,
-    ) -> AppResult<Option<ReviewQueueItem>> {
+    ) -> AppResult<Option<ReviewCard>> {
         self.take_next(actor, ReviewStream::Makeup, now).await
     }
 
@@ -147,14 +147,15 @@ impl ReviewService {
 
     pub async fn subject_name(&self, actor: Actor, subject_id: SubjectId) -> AppResult<String> {
         load_reviewer(&self.pool, actor).await?;
-        let (subject, _) = db::academic::find_subject_with_sandbox(&self.pool, subject_id)
+        let subject = db::academic::find_subject(&self.pool, subject_id)
             .await?
-            .required("subject")?;
+            .required("subject")?
+            .subject;
 
         Ok(subject.name().as_str().to_owned())
     }
 
-    pub async fn queue_page(
+    pub async fn list_page(
         &self,
         actor: Actor,
         page: PageRequest,
@@ -190,7 +191,7 @@ impl ReviewService {
         actor: Actor,
         stream: ReviewStream,
         now: DateTime<Utc>,
-    ) -> AppResult<Option<ReviewQueueItem>> {
+    ) -> AppResult<Option<ReviewCard>> {
         let mut tx = self.pool.begin().await?;
 
         let reviewer = load_reviewer(&mut *tx, actor).await?;
@@ -349,7 +350,7 @@ impl ReviewService {
         actor: Actor,
         submission_id: SubmissionId,
         now: DateTime<Utc>,
-    ) -> AppResult<ReviewQueueItem> {
+    ) -> AppResult<ReviewCard> {
         let mut connection = self.pool.acquire().await?;
         let reviewer = load_reviewer(&mut *connection, actor).await?;
         let submission = db::submissions::find_by_id(&mut *connection, submission_id)
@@ -382,8 +383,8 @@ async fn load_review_context(
         db::academic::find_teaching_course_by_id(&mut *connection, assignment.teaching_course_id())
             .await?
             .required("teaching course")?;
-    let (subject, sandbox) =
-        db::academic::find_subject_with_sandbox(&mut *connection, assignment.subject_id())
+    let StoredSubject { subject, sandbox } =
+        db::academic::find_subject(&mut *connection, assignment.subject_id())
             .await?
             .required("subject")?;
 
@@ -419,14 +420,16 @@ async fn load_history(
     submission: &Submission,
 ) -> AppResult<SubmissionHistory> {
     let assignment_id = submission.assignment_id();
-    Ok(db::submissions::load_histories(
-        &mut *connection,
-        &[assignment_id.as_uuid()],
-        submission.student_id(),
+    Ok(
+        db::submissions::load_histories(
+            &mut *connection,
+            &[assignment_id],
+            submission.student_id(),
+        )
+        .await?
+        .remove(&assignment_id)
+        .unwrap_or_default(),
     )
-    .await?
-    .remove(&assignment_id)
-    .unwrap_or_default())
 }
 
 async fn record_review(
@@ -456,7 +459,7 @@ async fn load_queue_item(
     submission: Submission,
     context: ReviewContext,
     now: DateTime<Utc>,
-) -> AppResult<ReviewQueueItem> {
+) -> AppResult<ReviewCard> {
     let student = db::users::find_by_id(&mut *connection, submission.student_id())
         .await?
         .required("student")?;
@@ -474,13 +477,13 @@ async fn load_queue_item(
     previous_attempts.truncate(usize::from(PREVIOUS_ATTEMPTS_SHOWN));
     previous_attempts.reverse();
     let history = load_history(&mut *connection, &submission).await?;
-    let makeup = match submission.kind() {
+    let makeup_pool = match submission.kind() {
         SubmissionKind::Makeup => {
             active_makeup_pool(&mut *connection, context.course.id(), student.id(), now).await?
         }
         SubmissionKind::Regular => None,
     };
-    Ok(ReviewQueueItem {
+    Ok(ReviewCard {
         submission,
         assignment: context.assignment,
         subject: context.subject,
@@ -488,7 +491,7 @@ async fn load_queue_item(
         group_code: group.code().as_str().to_owned(),
         previous_attempts,
         earlier_attempts_hidden,
-        makeup,
+        makeup_pool,
         history,
     })
 }

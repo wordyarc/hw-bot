@@ -14,7 +14,7 @@ use crate::bot::assignment_form::{
 use crate::bot::callbacks::{
     AmountChoice, LatePolicyChoice, MakeupChoice, ReplayableAction, TermsAction,
 };
-use crate::bot::context::{Screen, TextStep};
+use crate::bot::context::{ActorChat, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::handlers::input::parse_step_number;
 use crate::bot::handlers::{reset_dialogue, run_menu_action};
@@ -65,7 +65,7 @@ impl FormScreen for TermsForm {
 }
 
 pub(crate) async fn begin_terms_edit(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
     state: &BotState,
@@ -109,7 +109,7 @@ pub(crate) async fn begin_terms_edit(
 }
 
 pub(crate) async fn handle_makeup(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: MakeupChoice,
     state: BotState,
@@ -127,7 +127,7 @@ pub(crate) async fn handle_makeup(
 }
 
 pub(crate) async fn handle_late_policy(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: LatePolicyChoice,
     state: BotState,
@@ -140,7 +140,7 @@ pub(crate) async fn handle_late_policy(
 }
 
 pub(crate) async fn handle_amount(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: AmountChoice,
     state: BotState,
@@ -153,7 +153,7 @@ pub(crate) async fn handle_amount(
 }
 
 pub(crate) async fn handle_duration_periods(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     periods: u16,
     state: BotState,
@@ -166,7 +166,7 @@ pub(crate) async fn handle_duration_periods(
 }
 
 pub(crate) async fn handle_period(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: BotState,
 ) -> HandlerResult {
@@ -177,7 +177,7 @@ pub(crate) async fn handle_period(
     render(screen.chat(), form, None).await
 }
 
-async fn apply_number(screen: Screen<'_>, mut form: TermsForm, value: u16) -> HandlerResult {
+async fn apply_number(screen: ActorChat<'_>, mut form: TermsForm, value: u16) -> HandlerResult {
     let result = form.apply_number(value);
     render_input_result(screen, form, result).await
 }
@@ -210,7 +210,7 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, form: TermsForm) -> Handler
 }
 
 pub(crate) async fn handle_terms(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     action: TermsAction,
     state: BotState,
@@ -265,12 +265,12 @@ pub(crate) async fn handle_terms(
     render(screen.chat(), form, None).await
 }
 
-pub(crate) async fn stay_in_terms(screen: Screen<'_>, form: TermsForm) -> HandlerResult {
+pub(crate) async fn stay_in_terms(screen: ActorChat<'_>, form: TermsForm) -> HandlerResult {
     render(screen.chat(), form, None).await
 }
 
 pub(crate) async fn confirm_exit(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     mut form: TermsForm,
     action: MenuAction,
     telegram_user_id: TelegramUserId,
@@ -293,7 +293,7 @@ pub(crate) async fn confirm_exit(
     Ok(())
 }
 
-async fn save(screen: Screen<'_>, form: TermsForm, complete: CompleteTerms) -> HandlerResult {
+async fn save(screen: ActorChat<'_>, form: TermsForm, complete: CompleteTerms) -> HandlerResult {
     if let Err(error) = form.validate_for_save(screen.now()) {
         let message = TermsForm::input_message(error);
         return render(screen.chat(), form, message.as_deref()).await;

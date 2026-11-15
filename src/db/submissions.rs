@@ -339,9 +339,10 @@ async fn ensure_left_pending_review(
 
 pub async fn load_histories(
     executor: impl PgExecutor<'_>,
-    assignment_ids: &[Uuid],
+    assignment_ids: &[AssignmentId],
     student_id: UserId,
 ) -> DbResult<HashMap<AssignmentId, SubmissionHistory>> {
+    let assignment_ids: Vec<Uuid> = assignment_ids.iter().map(|id| id.as_uuid()).collect();
     let rows = with_submission_history!(
         query;
         "assignment_id",
@@ -355,7 +356,7 @@ pub async fn load_histories(
           on progress.assignment_id = requested.assignment_id
          and progress.student_id = $2
         "#,
-        assignment_ids,
+        assignment_ids.as_slice(),
         student_id.as_uuid(),
     )
     .fetch_all(executor)
@@ -600,8 +601,8 @@ pub async fn pending_queue_page(
 
 pub async fn queue_place_for(
     executor: impl PgExecutor<'_>,
-    student_id: UserId,
     assignment_id: AssignmentId,
+    student_id: UserId,
 ) -> DbResult<Option<QueuePlace>> {
     Ok(pending_queue_places(
         executor,

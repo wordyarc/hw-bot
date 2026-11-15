@@ -110,7 +110,7 @@ fn changing_a_decision_requires_the_comment_step_of_the_same_submission() {
     assert!(state.awaiting_review_comment(other).is_none());
     assert!(BotState::Idle.awaiting_review_comment(current).is_none());
     assert!(
-        BotState::Flow(FlowState::AwaitingReviewDecision {
+        BotState::Flow(FlowState::ChoosingReviewDecision {
             submission_id: current,
             target: ReviewTarget::Regular {
                 grading: Grading::PassFail,
@@ -133,7 +133,7 @@ fn a_makeup_grant_requires_the_current_screen_of_either_origin() {
     };
     for (state, origin) in [
         (
-            ScreenState::MakeupReviewed {
+            ScreenState::MakeupFollowup {
                 message_id: MessageId(10),
                 course_id,
                 student_id,
@@ -182,7 +182,7 @@ fn the_student_list_stays_usable_under_an_opened_grades_card() {
         list: Some(list.clone()),
     });
 
-    let Some((StudentChoice::Grades { course_id: chosen }, kept)) =
+    let Some((StudentListPurpose::Grades { course_id: chosen }, kept)) =
         card.choosing_student(MessageId(9), other)
     else {
         panic!("the list under the card must stay usable");
@@ -397,7 +397,7 @@ fn a_file_deletion_is_confirmed_only_from_its_current_question() {
 #[test]
 fn the_decision_step_keeps_its_target_for_the_same_submission() {
     let submission_id = SubmissionId::new();
-    let state = BotState::Flow(FlowState::AwaitingReviewDecision {
+    let state = BotState::Flow(FlowState::ChoosingReviewDecision {
         submission_id,
         target: ReviewTarget::Makeup,
         origin: ORIGIN,
@@ -427,7 +427,7 @@ fn rework_is_chosen_only_on_the_regular_decision_step_of_the_same_submission() {
     let origin = ReviewOrigin::Queue {
         subject: Some(crate::domain::SubjectId::new()),
     };
-    let regular = BotState::Flow(FlowState::AwaitingReviewDecision {
+    let regular = BotState::Flow(FlowState::ChoosingReviewDecision {
         submission_id,
         target: ReviewTarget::Regular {
             grading: Grading::PassFail,
@@ -435,7 +435,7 @@ fn rework_is_chosen_only_on_the_regular_decision_step_of_the_same_submission() {
         },
         origin,
     });
-    let makeup = BotState::Flow(FlowState::AwaitingReviewDecision {
+    let makeup = BotState::Flow(FlowState::ChoosingReviewDecision {
         submission_id,
         target: ReviewTarget::Makeup,
         origin,
@@ -481,7 +481,7 @@ fn a_score_is_taken_only_while_the_same_submission_awaits_it() {
         late: Some(late()),
         origin: ORIGIN,
     });
-    let deciding = BotState::Flow(FlowState::AwaitingReviewDecision {
+    let deciding = BotState::Flow(FlowState::ChoosingReviewDecision {
         submission_id,
         target: ReviewTarget::Regular {
             grading: Grading::Score { max_score },
@@ -504,12 +504,12 @@ fn an_extra_attempt_student_must_come_from_the_shown_list() {
     let (shown, other) = (UserId::new(), UserId::new());
     let state = BotState::Flow(FlowState::ChoosingStudent {
         message_id: MessageId(10),
-        purpose: StudentChoice::ExtraAttempts { assignment_id },
+        purpose: StudentListPurpose::ExtraAttempts { assignment_id },
         student_ids: vec![shown],
     });
 
     let Some((
-        StudentChoice::ExtraAttempts {
+        StudentListPurpose::ExtraAttempts {
             assignment_id: chosen,
         },
         list,
@@ -541,7 +541,7 @@ fn an_attempt_amount_requires_the_current_amount_question() {
     });
     let choosing = BotState::Flow(FlowState::ChoosingStudent {
         message_id: MessageId(10),
-        purpose: StudentChoice::ExtraAttempts { assignment_id },
+        purpose: StudentListPurpose::ExtraAttempts { assignment_id },
         student_ids: vec![student_id],
     });
 
@@ -593,7 +593,7 @@ fn a_grading_is_chosen_only_on_the_current_grading_question() {
     assert_eq!(chosen.text.title, "Title");
     assert!(state().choosing_grading(MessageId(11)).is_none());
     assert!(
-        BotState::Flow(FlowState::AwaitingGradingText { draft: draft() })
+        BotState::Flow(FlowState::AwaitingMaxScore { draft: draft() })
             .choosing_grading(MessageId(10))
             .is_none()
     );
@@ -771,7 +771,7 @@ fn abandoning_assignment_creation_discards_the_draft() {
             message_id: MessageId(10),
             draft: draft(),
         },
-        FlowState::AwaitingGradingText { draft: draft() },
+        FlowState::AwaitingMaxScore { draft: draft() },
     ];
 
     for (index, flow) in flows.iter().enumerate() {
@@ -840,7 +840,7 @@ fn registration_review_decisions_confirmations_and_forms_are_abandoned_silently(
             course_id: TeachingCourseId::new(),
             generation: InviteGeneration::FIRST,
         },
-        FlowState::AwaitingReviewDecision {
+        FlowState::ChoosingReviewDecision {
             submission_id: SubmissionId::new(),
             target: ReviewTarget::Makeup,
             origin: ORIGIN,
@@ -858,7 +858,7 @@ fn registration_review_decisions_confirmations_and_forms_are_abandoned_silently(
         },
         FlowState::ChoosingStudent {
             message_id: MessageId(10),
-            purpose: StudentChoice::ExtraAttempts {
+            purpose: StudentListPurpose::ExtraAttempts {
                 assignment_id: AssignmentId::new(),
             },
             student_ids: Vec::new(),
@@ -875,7 +875,7 @@ fn typed_text_on_a_button_screen_is_answered_with_a_hint_naming_its_buttons() {
     let course_id = TeachingCourseId::new();
     let cases = [
         (
-            BotState::Flow(FlowState::AwaitingReviewDecision {
+            BotState::Flow(FlowState::ChoosingReviewDecision {
                 submission_id: SubmissionId::new(),
                 target: ReviewTarget::Makeup,
                 origin: ORIGIN,
@@ -905,7 +905,7 @@ fn typed_text_on_a_button_screen_is_answered_with_a_hint_naming_its_buttons() {
             texts::CHOOSE_ACTION_ABOVE,
         ),
         (
-            BotState::Screen(ScreenState::MakeupReviewed {
+            BotState::Screen(ScreenState::MakeupFollowup {
                 message_id: MessageId(10),
                 course_id,
                 student_id: UserId::new(),
@@ -974,7 +974,7 @@ fn typed_text_on_a_button_screen_is_answered_with_a_hint_naming_its_buttons() {
         (
             BotState::Flow(FlowState::ChoosingStudent {
                 message_id: MessageId(10),
-                purpose: StudentChoice::Grades { course_id },
+                purpose: StudentListPurpose::Grades { course_id },
                 student_ids: Vec::new(),
             }),
             texts::CHOOSE_STUDENT,
@@ -1037,7 +1037,7 @@ fn idle_and_typed_input_states_have_no_button_hint() {
             message_id: MessageId(10),
             draft: draft(),
         }),
-        BotState::Flow(FlowState::AwaitingGradingText { draft: draft() }),
+        BotState::Flow(FlowState::AwaitingMaxScore { draft: draft() }),
         BotState::Flow(FlowState::ConfiguringTerms(terms_form(TermsStep::Deadline))),
         BotState::Flow(FlowState::ConfiguringMakeup(makeup_form(MakeupStep::Date))),
         BotState::Flow(FlowState::AwaitingAttemptAmount {

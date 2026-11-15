@@ -1,6 +1,6 @@
 use teloxide::types::ChatId;
 
-use crate::bot::context::Screen;
+use crate::bot::context::ActorChat;
 use crate::bot::state::ActiveForm;
 use crate::bot::{Bot, HandlerResult};
 
@@ -25,13 +25,13 @@ pub(super) use courses::{show_course_assignments_page, show_courses_page};
 pub(super) use creation::handle_grading;
 pub(super) use creation::handle_max_attempts;
 pub(super) use creation::submit_body;
-pub(super) use creation::submit_grading_text;
 pub(super) use creation::submit_max_attempts;
+pub(super) use creation::submit_max_score;
 pub(super) use creation::submit_title;
 pub(super) use creation::{finish_assignment_groups, toggle_assignment_group};
 pub(super) use deadline::handle_deadline;
 pub(super) use gradebook::{
-    send_student_grades, show_gradebook_groups, show_gradebook_page, show_student_grades_page,
+    send_student_grades, show_gradebook, show_gradebook_page, show_student_grades_page,
 };
 pub(super) use invites::show_course_invite;
 pub(super) use invites::{ask_invite_rotation, cancel_invite_rotation, confirm_invite_rotation};
@@ -56,7 +56,7 @@ pub(super) async fn abandon_form(
     }
 }
 
-pub(super) async fn form_back(screen: Screen<'_>, form: ActiveForm<'_>) -> HandlerResult {
+pub(super) async fn form_back(screen: ActorChat<'_>, form: ActiveForm<'_>) -> HandlerResult {
     match form {
         ActiveForm::Terms(form) => form::back(screen, form.clone()).await,
         ActiveForm::Makeup(form) => form::back(screen, form.clone()).await,

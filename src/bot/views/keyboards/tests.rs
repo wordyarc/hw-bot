@@ -480,7 +480,7 @@ fn the_review_hub_offers_the_queue_and_its_list_only_when_it_has_work() {
         vec![
             ReplayableAction::NextReview(None).callback(),
             ReplayableAction::NextMakeupReview.callback(),
-            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+            ReplayableAction::Page(PageTarget::ReviewList, 0).callback(),
         ]
     );
 }
@@ -500,7 +500,7 @@ fn the_review_hub_offers_subjects_only_when_two_of_them_wait() {
             ReplayableAction::NextReview(None).callback(),
             ReplayableAction::NextReview(Some(backend.subject_id)).callback(),
             ReplayableAction::NextReview(Some(frontend.subject_id)).callback(),
-            ReplayableAction::Page(PageTarget::ReviewQueue, 0).callback(),
+            ReplayableAction::Page(PageTarget::ReviewList, 0).callback(),
         ]
     );
     let labels: Vec<String> = review_hub_keyboard(17, &[backend, frontend], 0)

@@ -255,7 +255,7 @@ impl From<&StudentAssignment> for ProgressResponse {
             assignment,
             subject: _,
             history,
-            pool: _,
+            makeup_pool: _,
         } = view;
 
         Self {
@@ -390,7 +390,7 @@ pub async fn publish_assignment(
     let assignment = state
         .application
         .assignments
-        .publish(assignment_id, actor, Utc::now())
+        .publish(actor, assignment_id, Utc::now())
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))
@@ -404,7 +404,7 @@ pub async fn archive_assignment(
     let assignment = state
         .application
         .assignments
-        .archive(assignment_id, actor)
+        .archive(actor, assignment_id)
         .await?;
 
     Ok(Json(AssignmentResponse::from(&assignment)))

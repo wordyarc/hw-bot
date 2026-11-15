@@ -4,12 +4,12 @@ use teloxide::payloads::SendMessageSetters;
 use super::input::require_text_within;
 use super::reset_dialogue;
 use crate::app::{
-    AppError, ErrorCode, OpenedFile, PendingWithdrawal, StudentAssignment, SubmitHomework,
-    WithdrawSubmission,
+    AppError, ErrorCode, OpenedFile, StudentAssignment, SubmitHomework, WithdrawSubmission,
+    WithdrawalPreview,
 };
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
-use crate::bot::context::{Chat, Screen, TextStep};
+use crate::bot::context::{ActorChat, Chat, TextStep};
 use crate::bot::errors::{BotError, app_error_message, log_handler_error, optional_stat};
 use crate::bot::state::{BotState, FlowState, MakeupConsent};
 use crate::bot::texts;
@@ -26,13 +26,13 @@ use crate::domain::{
 };
 use crate::pagination::{Page, PageRequest};
 
-pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+pub(super) async fn show_queue_page(screen: ActorChat<'_>, page: PageRequest) -> HandlerResult {
     let actor = screen.actor();
     let bot = screen.bot();
     let chat_id = screen.chat_id();
     let services = screen.services();
     let timezone = screen.timezone();
-    let places = services.submissions.pending_queue(actor, page).await?;
+    let places = services.submissions.queue_places(actor, page).await?;
 
     if places.items.is_empty() && page.page == 0 {
         bot.send_message(chat_id, texts::STUDENT_QUEUE_EMPTY)
@@ -57,7 +57,7 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
         &text,
         Some(paginated_keyboard(
             student_menu(),
-            PageTarget::Queue,
+            PageTarget::QueuePlaces,
             places.page,
             places.next_page,
         )),
@@ -65,7 +65,10 @@ pub(super) async fn show_queue_page(screen: Screen<'_>, page: PageRequest) -> Ha
     .await
 }
 
-pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+pub(super) async fn show_assignments_page(
+    screen: ActorChat<'_>,
+    page: PageRequest,
+) -> HandlerResult {
     let actor = screen.actor();
     let services = screen.services();
     let timezone = screen.timezone();
@@ -117,7 +120,7 @@ pub(super) async fn show_assignments_page(screen: Screen<'_>, page: PageRequest)
     .await
 }
 
-pub(super) async fn show_archive_page(screen: Screen<'_>, page: PageRequest) -> HandlerResult {
+pub(super) async fn show_archive_page(screen: ActorChat<'_>, page: PageRequest) -> HandlerResult {
     let actor = screen.actor();
     let services = screen.services();
     let assignments = services
@@ -186,7 +189,7 @@ async fn show_assignment_list(
 }
 
 pub(super) async fn show_assignment(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     assignment_id: AssignmentId,
 ) -> HandlerResult {
     let actor = screen.actor();
@@ -259,7 +262,7 @@ pub(super) async fn show_assignment(
     Ok(())
 }
 
-async fn send_assignment_files(screen: Screen<'_>, files: &[OpenedFile]) -> HandlerResult {
+async fn send_assignment_files(screen: ActorChat<'_>, files: &[OpenedFile]) -> HandlerResult {
     if files.is_empty() {
         return Ok(());
     }
@@ -276,7 +279,7 @@ async fn send_assignment_files(screen: Screen<'_>, files: &[OpenedFile]) -> Hand
     Ok(())
 }
 
-async fn send_submission(screen: Screen<'_>, submission: &Submission) -> HandlerResult {
+async fn send_submission(screen: ActorChat<'_>, submission: &Submission) -> HandlerResult {
     let grade = texts::grade_line(submission.kind(), submission.grade());
     let status = match submission.withdrawn_at() {
         Some(at) => texts::withdrawn_status(&screen.timezone().format_moment(at)),
@@ -293,7 +296,7 @@ async fn send_submission(screen: Screen<'_>, submission: &Submission) -> Handler
 }
 
 pub(super) async fn show_history(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     assignment_id: AssignmentId,
     page: PageRequest,
 ) -> HandlerResult {
@@ -326,7 +329,7 @@ pub(super) async fn show_history(
 }
 
 pub(super) async fn start_submission(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     assignment_id: AssignmentId,
     button: SubmissionKind,
     shown_at: DateTime<Utc>,
@@ -335,7 +338,7 @@ pub(super) async fn start_submission(
     let started = screen
         .services()
         .assignments
-        .find_student_assignment(screen.actor(), assignment_id)
+        .find_for_submission(screen.actor(), assignment_id)
         .await
         .and_then(|item| {
             item.submission_start(button, shown_at, now)
@@ -460,7 +463,7 @@ pub(super) async fn submit_homework_text(
 }
 
 pub(super) async fn withdrawal_step(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     submission_id: SubmissionId,
     shown_confirmation: Option<&str>,
 ) -> HandlerResult {
@@ -500,15 +503,15 @@ pub(super) async fn withdrawal_step(
 }
 
 async fn refuse_withdrawal(
-    screen: Screen<'_>,
-    pending: &PendingWithdrawal,
+    screen: ActorChat<'_>,
+    pending: &WithdrawalPreview,
     refusal: AppError,
 ) -> HandlerResult {
     screen.fail(refusal).await?;
     show_assignment(screen, pending.submission.assignment_id()).await
 }
 
-fn withdrawal_confirmation(screen: Screen<'_>, pending: &PendingWithdrawal) -> String {
+fn withdrawal_confirmation(screen: ActorChat<'_>, pending: &WithdrawalPreview) -> String {
     let assignment = &pending.assignment.assignment;
     texts::withdrawal_confirmation(
         pending.assignment.subject.name().as_str(),
@@ -522,8 +525,8 @@ fn withdrawal_confirmation(screen: Screen<'_>, pending: &PendingWithdrawal) -> S
 }
 
 async fn send_withdrawal_confirmation(
-    screen: Screen<'_>,
-    pending: &PendingWithdrawal,
+    screen: ActorChat<'_>,
+    pending: &WithdrawalPreview,
     confirmation: String,
 ) -> HandlerResult {
     screen

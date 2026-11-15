@@ -1694,7 +1694,10 @@ async fn a_stream_assignment_names_its_groups_on_the_card_and_in_the_attempts_li
 async fn open_attempts(app: &TestApp, telegram: &TelegramScenario, assignment: uuid::Uuid) {
     manage_assignment(app, telegram, assignment).await;
     telegram
-        .click_button(app.teacher(), &cb(callbacks::ATTEMPTS_PREFIX, assignment))
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::ASSIGNMENT_STUDENTS_PREFIX, assignment),
+        )
         .await;
 }
 
@@ -1773,7 +1776,10 @@ async fn granted_attempts_leave_no_live_amount_buttons() {
         .await;
 
     let amount = telegram
-        .click_button(app.teacher(), &cb(callbacks::EXTRA_ATTEMPTS_PREFIX, 1))
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::EXTRA_ATTEMPTS_AMOUNT_PREFIX, 1),
+        )
         .await;
     stop_bot(cancellation, &mut task).await;
 
@@ -1800,7 +1806,10 @@ async fn typed_attempts_leave_no_live_amount_buttons() {
         )
         .await;
     let amount = telegram
-        .button(app.teacher(), &cb(callbacks::EXTRA_ATTEMPTS_PREFIX, 1))
+        .button(
+            app.teacher(),
+            &cb(callbacks::EXTRA_ATTEMPTS_AMOUNT_PREFIX, 1),
+        )
         .await;
 
     telegram.message(app.teacher(), "1");

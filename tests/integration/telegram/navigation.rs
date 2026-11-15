@@ -140,7 +140,10 @@ async fn navigation_from_an_older_message_still_opens_the_screen() {
         .click_button(app.teacher(), &cb(callbacks::MANAGE_PREFIX, assignment))
         .await;
     let attempts = telegram
-        .button(app.teacher(), &cb(callbacks::ATTEMPTS_PREFIX, assignment))
+        .button(
+            app.teacher(),
+            &cb(callbacks::ASSIGNMENT_STUDENTS_PREFIX, assignment),
+        )
         .await;
     let files = telegram
         .button(app.teacher(), &cb(callbacks::FILES_PREFIX, assignment))

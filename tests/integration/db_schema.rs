@@ -902,7 +902,10 @@ fn assert_check(error: sqlx::Error, constraint: Option<&str>) {
 #[tokio::test]
 async fn a_group_belongs_to_at_most_one_course_of_a_subject() {
     let app = TestApp::start().await;
-    let second = app.add_foreign_course_on(&app.fixture.subject).await.course;
+    let second = app
+        .add_foreign_course_for(&app.fixture.subject)
+        .await
+        .course;
 
     let error =
         db::academic::add_teaching_course_group(&app.pool, second.id(), app.fixture.group.id())

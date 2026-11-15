@@ -4,27 +4,27 @@ use teloxide::types::MessageId;
 use super::form::detach;
 use crate::app::{CourseInviteState, ErrorCode};
 use crate::bot::HandlerResult;
-use crate::bot::context::Screen;
+use crate::bot::context::ActorChat;
 use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::texts;
 use crate::bot::views::{confirm_invite_rotation_keyboard, course_invite_keyboard};
 use crate::domain::TeachingCourseId;
 
 pub(crate) async fn show_course_invite(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
 ) -> HandlerResult {
     let invite = screen
         .services()
         .courses
-        .get_course_invite(screen.actor(), course_id)
+        .course_invite(screen.actor(), course_id)
         .await?;
 
     send_course_invite(screen, course_id, &invite).await
 }
 
 async fn send_course_invite(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     course_id: TeachingCourseId,
     invite: &CourseInviteState,
 ) -> HandlerResult {
@@ -65,7 +65,7 @@ async fn send_course_invite(
 }
 
 pub(crate) async fn ask_invite_rotation(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
@@ -89,7 +89,7 @@ pub(crate) async fn ask_invite_rotation(
 }
 
 pub(crate) async fn cancel_invite_rotation(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
@@ -101,7 +101,7 @@ pub(crate) async fn cancel_invite_rotation(
 }
 
 pub(crate) async fn confirm_invite_rotation(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {

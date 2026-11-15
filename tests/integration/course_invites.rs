@@ -161,7 +161,7 @@ async fn a_course_has_one_link_for_all_of_its_groups() {
     let invite = app
         .application
         .courses
-        .get_course_invite(app.teacher_actor(), app.fixture.course.id())
+        .course_invite(app.teacher_actor(), app.fixture.course.id())
         .await
         .unwrap();
 
@@ -196,7 +196,7 @@ async fn rotating_the_link_of_one_course_keeps_the_link_of_another_course_of_the
     let invite = app
         .application
         .courses
-        .get_course_invite(app.teacher_actor(), second.id())
+        .course_invite(app.teacher_actor(), second.id())
         .await
         .unwrap();
     assert_eq!(invite.generation, InviteGeneration::FIRST);
@@ -213,7 +213,7 @@ async fn a_teacher_of_another_course_cannot_read_the_link() {
     let error = app
         .application
         .courses
-        .get_course_invite(Actor::new(foreign.teacher.id()), app.fixture.course.id())
+        .course_invite(Actor::new(foreign.teacher.id()), app.fixture.course.id())
         .await
         .unwrap_err();
 

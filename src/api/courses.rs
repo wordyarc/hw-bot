@@ -9,7 +9,7 @@ use super::ApiPath as Path;
 use super::pagination::{Pagination, page_headers, page_json};
 use crate::api::users::StudentGroupResponse;
 use crate::api::{Actor, ApiError, AppState};
-use crate::app::{StudentGrades, TeachingCourseSummary};
+use crate::app::{StudentGrades, TeachingCourseDetails};
 use crate::domain::{StudentGroupId, TeachingCourseId, UserId};
 use crate::pagination::Page;
 
@@ -28,8 +28,8 @@ struct SubjectResponse {
     name: String,
 }
 
-impl From<&TeachingCourseSummary> for TeachingCourseResponse {
-    fn from(card: &TeachingCourseSummary) -> Self {
+impl From<&TeachingCourseDetails> for TeachingCourseResponse {
+    fn from(card: &TeachingCourseDetails) -> Self {
         Self {
             id: card.course.id().as_uuid(),
             subject: SubjectResponse {

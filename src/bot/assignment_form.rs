@@ -165,7 +165,7 @@ impl AssignmentTerms {
             ),
             None => None,
         };
-        let closes_at = Assignment::closing_for(deadline_at, late_policy).ok()?;
+        let closes_at = Assignment::closes_at_for(deadline_at, late_policy).ok()?;
 
         Some(CompleteTerms {
             deadline_at,
@@ -208,7 +208,7 @@ impl AssignmentTerms {
         match self.preview_policy(self.max_periods.unwrap_or(1)) {
             Some(policy) => policy.validate_horizon(deadline)?,
             None => {
-                Assignment::closing_for(deadline, None)?;
+                Assignment::closes_at_for(deadline, None)?;
             }
         }
 

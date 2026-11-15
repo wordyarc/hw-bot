@@ -197,14 +197,11 @@ async fn concurrent_grants_are_not_lost() {
 
     granted.ok();
 
-    let history = db::submissions::load_histories(
-        &app.pool,
-        &[app.fixture.assignment.id().as_uuid()],
-        student_id,
-    )
-    .await
-    .expect("load submission history")
-    .remove(&app.fixture.assignment.id())
-    .expect("requested assignment history");
+    let history =
+        db::submissions::load_histories(&app.pool, &[app.fixture.assignment.id()], student_id)
+            .await
+            .expect("load submission history")
+            .remove(&app.fixture.assignment.id())
+            .expect("requested assignment history");
     assert_eq!(history.extra_attempts(), 2);
 }

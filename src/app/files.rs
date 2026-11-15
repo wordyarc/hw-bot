@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-use crate::app::access::{load_managed_assignment_on, load_managed_versioned_assignment};
+use crate::app::access::{load_managed_assignment, load_managed_assignment_on};
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
@@ -86,13 +86,9 @@ impl FileService {
         let VersionedAssignment {
             assignment,
             revision,
-        } = load_managed_versioned_assignment(
-            &self.pool,
-            actor,
-            assignment_id,
-            "view assignment files",
-        )
-        .await?;
+        } = load_managed_assignment(&self.pool, actor, assignment_id, "view assignment files")
+            .await?
+            .stored;
         let files = db::files::list_for_assignment(&self.pool, assignment_id).await?;
 
         Ok(AssignmentFiles {
@@ -204,8 +200,7 @@ impl FileService {
         assignment_id: AssignmentId,
         file_id: StoredFileId,
     ) -> AppResult<OpenedFile> {
-        load_managed_versioned_assignment(&self.pool, actor, assignment_id, "open assignment file")
-            .await?;
+        load_managed_assignment(&self.pool, actor, assignment_id, "open assignment file").await?;
         self.open_assignment_file(assignment_id, file_id).await
     }
 

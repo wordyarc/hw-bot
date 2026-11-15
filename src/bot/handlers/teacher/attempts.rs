@@ -6,10 +6,10 @@ use super::gradebook::show_student_grades_page;
 use crate::app::{AssignmentStudents, GrantExtraAttempts};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::{AmountChoice, FlowAction, PageTarget};
-use crate::bot::context::{Screen, TextStep};
+use crate::bot::context::{ActorChat, TextStep};
 use crate::bot::handlers::input::require_attempts;
 use crate::bot::handlers::reset_dialogue;
-use crate::bot::state::{BotState, FlowState, StudentChoice};
+use crate::bot::state::{BotState, FlowState, StudentListPurpose};
 use crate::bot::texts;
 use crate::bot::views::{
     assignment_students_keyboard, attempts_keyboard, list_text, paginated_keyboard,
@@ -19,7 +19,7 @@ use crate::domain::{AssignmentId, MAX_ATTEMPTS, UserId};
 use crate::pagination::PageRequest;
 
 pub(crate) async fn show_students_page(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     assignment_id: AssignmentId,
     page: PageRequest,
 ) -> HandlerResult {
@@ -81,7 +81,7 @@ pub(crate) async fn show_students_page(
     dialogue
         .update(BotState::Flow(FlowState::ChoosingStudent {
             message_id: message.id,
-            purpose: StudentChoice::ExtraAttempts { assignment_id },
+            purpose: StudentListPurpose::ExtraAttempts { assignment_id },
             student_ids: students
                 .items
                 .iter()
@@ -93,7 +93,7 @@ pub(crate) async fn show_students_page(
 }
 
 pub(crate) async fn select_student(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     student_id: UserId,
     state: BotState,
@@ -102,7 +102,7 @@ pub(crate) async fn select_student(
         return screen.stale().await;
     };
     let assignment_id = match purpose {
-        StudentChoice::Grades { course_id } => {
+        StudentListPurpose::Grades { course_id } => {
             return show_student_grades_page(
                 screen,
                 course_id,
@@ -112,7 +112,7 @@ pub(crate) async fn select_student(
             )
             .await;
         }
-        StudentChoice::ExtraAttempts { assignment_id } => assignment_id,
+        StudentListPurpose::ExtraAttempts { assignment_id } => assignment_id,
     };
 
     let sent = screen
@@ -132,7 +132,7 @@ pub(crate) async fn select_student(
 }
 
 pub(crate) async fn handle_extra_attempts(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     choice: AmountChoice,
     state: BotState,
@@ -154,7 +154,7 @@ pub(super) fn chosen_amount(choice: AmountChoice) -> Option<u16> {
 }
 
 async fn grant_attempts(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     assignment_id: AssignmentId,
     student_id: UserId,

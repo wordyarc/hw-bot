@@ -17,7 +17,7 @@ async fn history_is_empty_for_a_student_without_submissions() -> anyhow::Result<
 
     let history = submissions::load_histories(
         &app.pool,
-        &[app.fixture.assignment.id().as_uuid()],
+        &[app.fixture.assignment.id()],
         app.fixture.student.id(),
     )
     .await?
@@ -54,7 +54,7 @@ async fn pending_submission_blocks_but_does_not_spend_an_attempt() -> anyhow::Re
 
     let stored = submissions::load_histories(
         &app.pool,
-        &[app.fixture.assignment.id().as_uuid()],
+        &[app.fixture.assignment.id()],
         app.fixture.student.id(),
     )
     .await?
@@ -112,7 +112,7 @@ async fn accepted_review_is_persisted_and_spends_an_attempt() -> anyhow::Result<
 
     let stored = submissions::load_histories(
         &app.pool,
-        &[app.fixture.assignment.id().as_uuid()],
+        &[app.fixture.assignment.id()],
         app.fixture.student.id(),
     )
     .await?

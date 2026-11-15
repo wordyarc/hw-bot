@@ -634,7 +634,7 @@ async fn failed_confirmation_does_not_grant_attempts_twice() {
     telegram
         .click_button(
             app.teacher(),
-            &cb(callbacks::ATTEMPTS_PREFIX, app.assignment()),
+            &cb(callbacks::ASSIGNMENT_STUDENTS_PREFIX, app.assignment()),
         )
         .await;
     telegram
@@ -647,7 +647,10 @@ async fn failed_confirmation_does_not_grant_attempts_twice() {
         )
         .await;
     let amount = telegram
-        .button(app.teacher(), &cb(callbacks::EXTRA_ATTEMPTS_PREFIX, 1))
+        .button(
+            app.teacher(),
+            &cb(callbacks::EXTRA_ATTEMPTS_AMOUNT_PREFIX, 1),
+        )
         .await;
     fail_next(&telegram, "SendMessage").await;
     telegram.click(app.teacher(), &amount);

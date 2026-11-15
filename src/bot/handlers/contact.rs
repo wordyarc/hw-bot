@@ -6,13 +6,13 @@ use teloxide::{ApiError, RequestError};
 use crate::app::StudentContact;
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::InformationalAction;
-use crate::bot::context::Screen;
+use crate::bot::context::ActorChat;
 use crate::bot::errors::log_request_error;
 use crate::bot::{texts, views};
 use crate::domain::{TeachingCourseId, TelegramUserId, UserId};
 
 pub(super) async fn show(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     source: MessageId,
     course_id: TeachingCourseId,
     student_id: UserId,
@@ -68,7 +68,7 @@ pub(super) async fn show(
 }
 
 async fn send_card(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     source: MessageId,
     student: &StudentContact,
     target: InformationalAction,

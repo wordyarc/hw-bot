@@ -172,7 +172,7 @@ impl BotState {
         submission_id: SubmissionId,
     ) -> Option<(ReviewTarget, ReviewOrigin)> {
         match self {
-            Self::Flow(FlowState::AwaitingReviewDecision {
+            Self::Flow(FlowState::ChoosingReviewDecision {
                 submission_id: current,
                 target,
                 origin,
@@ -236,7 +236,7 @@ impl BotState {
         &self,
         message_id: MessageId,
         student_id: UserId,
-    ) -> Option<(StudentChoice, StudentList)> {
+    ) -> Option<(StudentListPurpose, StudentList)> {
         let (purpose, list) = match self {
             Self::Flow(FlowState::ChoosingStudent {
                 message_id,
@@ -254,7 +254,7 @@ impl BotState {
                 list: Some(list),
                 ..
             }) => (
-                StudentChoice::Grades {
+                StudentListPurpose::Grades {
                     course_id: *course_id,
                 },
                 list.clone(),
@@ -354,7 +354,7 @@ impl BotState {
 
     pub(super) fn makeup_grant(&self, message_id: MessageId) -> Option<MakeupGrant> {
         let (current, course_id, student_id, origin) = match self {
-            Self::Screen(ScreenState::MakeupReviewed {
+            Self::Screen(ScreenState::MakeupFollowup {
                 message_id,
                 course_id,
                 student_id,
@@ -423,7 +423,7 @@ pub(super) enum ReviewOrigin {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum StudentChoice {
+pub(super) enum StudentListPurpose {
     Grades { course_id: TeachingCourseId },
     ExtraAttempts { assignment_id: AssignmentId },
 }
@@ -460,7 +460,7 @@ pub(super) enum ScreenState {
         message_id: MessageId,
         shown_at: DateTime<Utc>,
     },
-    MakeupReviewed {
+    MakeupFollowup {
         message_id: MessageId,
         course_id: TeachingCourseId,
         student_id: UserId,
@@ -511,7 +511,7 @@ pub(super) enum FlowState {
         assignment_id: AssignmentId,
         makeup: MakeupConsent,
     },
-    AwaitingReviewDecision {
+    ChoosingReviewDecision {
         submission_id: SubmissionId,
         target: ReviewTarget,
         origin: ReviewOrigin,
@@ -563,7 +563,7 @@ pub(super) enum FlowState {
         message_id: MessageId,
         draft: DraftAssignment,
     },
-    AwaitingGradingText {
+    AwaitingMaxScore {
         draft: DraftAssignment,
     },
     ConfiguringTerms(TermsForm),
@@ -575,7 +575,7 @@ pub(super) enum FlowState {
     },
     ChoosingStudent {
         message_id: MessageId,
-        purpose: StudentChoice,
+        purpose: StudentListPurpose,
         student_ids: Vec<UserId>,
     },
     AwaitingAttemptAmount {
@@ -594,7 +594,7 @@ impl FlowState {
             | Self::ChoosingAssignmentGroups { .. }
             | Self::AwaitingAssignmentMaxAttempts { .. }
             | Self::ChoosingGrading { .. }
-            | Self::AwaitingGradingText { .. } => (texts::DRAFT_DISCARDED, teacher_keyboard()),
+            | Self::AwaitingMaxScore { .. } => (texts::DRAFT_DISCARDED, teacher_keyboard()),
             Self::AwaitingReviewScore { .. }
             | Self::AwaitingReviewComment { .. }
             | Self::AwaitingBulkReviewComment { .. }
@@ -603,7 +603,7 @@ impl FlowState {
             Self::ChoosingRegistrationGroup { .. }
             | Self::AwaitingRegistrationName { .. }
             | Self::ConfirmingInviteRotation { .. }
-            | Self::AwaitingReviewDecision { .. }
+            | Self::ChoosingReviewDecision { .. }
             | Self::ConfirmingAssignmentFileDeletion { .. }
             | Self::ConfiguringTerms(_)
             | Self::ConfiguringMakeup(_)
@@ -617,7 +617,7 @@ impl FlowState {
 impl BotState {
     pub(super) fn button_hint(&self) -> Option<&'static str> {
         match self {
-            Self::Flow(FlowState::AwaitingReviewDecision { .. }) => {
+            Self::Flow(FlowState::ChoosingReviewDecision { .. }) => {
                 Some(texts::CHOOSE_REVIEW_DECISION)
             }
             Self::Screen(ScreenState::ManagingAssignment { .. }) => {
@@ -626,7 +626,7 @@ impl BotState {
             Self::Screen(
                 ScreenState::CourseInvite { .. }
                 | ScreenState::SandboxSubmissions { .. }
-                | ScreenState::MakeupReviewed { .. }
+                | ScreenState::MakeupFollowup { .. }
                 | ScreenState::StudentGrades { .. },
             )
             | Self::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
@@ -657,7 +657,7 @@ impl BotState {
                 | FlowState::AwaitingAssignmentBody { .. }
                 | FlowState::AwaitingAssignmentMaxAttempts { .. }
                 | FlowState::ChoosingGrading { .. }
-                | FlowState::AwaitingGradingText { .. }
+                | FlowState::AwaitingMaxScore { .. }
                 | FlowState::ConfiguringTerms(_)
                 | FlowState::ConfiguringMakeup(_)
                 | FlowState::AwaitingAttemptAmount { .. },

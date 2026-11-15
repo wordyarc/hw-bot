@@ -136,7 +136,7 @@ pub async fn clear_pool(
     Ok(())
 }
 
-pub async fn lock_pool(
+pub async fn lock_or_create_pool(
     tx: &mut Transaction<'_, Postgres>,
     course_id: TeachingCourseId,
     student_id: UserId,
@@ -191,18 +191,17 @@ pub async fn pool_for_student(
     course_id: TeachingCourseId,
     student_id: UserId,
 ) -> DbResult<Option<MakeupPool>> {
-    Ok(
-        pools_for_student(executor, &[course_id.as_uuid()], student_id)
-            .await?
-            .remove(&course_id),
-    )
+    Ok(pools_for_student(executor, &[course_id], student_id)
+        .await?
+        .remove(&course_id))
 }
 
 pub async fn pools_for_student(
     executor: impl PgExecutor<'_>,
-    course_ids: &[Uuid],
+    course_ids: &[TeachingCourseId],
     student_id: UserId,
 ) -> DbResult<HashMap<TeachingCourseId, MakeupPool>> {
+    let course_ids: Vec<Uuid> = course_ids.iter().map(|id| id.as_uuid()).collect();
     let rows = sqlx::query!(
         r#"
         select
@@ -229,7 +228,7 @@ pub async fn pools_for_student(
         where courses.id = any($1)
           and courses.makeup_opened_at is not null
         "#,
-        course_ids,
+        course_ids.as_slice(),
         student_id.as_uuid(),
     )
     .fetch_all(executor)
@@ -295,7 +294,7 @@ pub async fn common_credit(
     executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,
     max_score: MaxScore,
-    except: Option<AssignmentId>,
+    excluding: Option<AssignmentId>,
 ) -> DbResult<Option<u16>> {
     let row = sqlx::query!(
         r#"
@@ -309,7 +308,7 @@ pub async fn common_credit(
         "#,
         course_id.as_uuid(),
         checked_num_cast::<_, i16>(MAX_SCORE, max_score.get())?,
-        except.map(AssignmentId::as_uuid),
+        excluding.map(AssignmentId::as_uuid),
     )
     .fetch_one(executor)
     .await?;

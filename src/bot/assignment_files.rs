@@ -2,14 +2,14 @@ use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
 use super::HandlerResult;
-use super::context::{Screen, TextStep};
+use super::context::{ActorChat, TextStep};
 use super::errors::{BotError, app_error_message, log_handler_error, send_error_code};
 use super::files::{TransferError, incoming_file};
 use super::state::{BotState, FileDeletion, FlowState, ScreenState};
 use super::texts;
 use super::views::{
-    assignment_files_keyboard, confirm_file_deletion_keyboard, send_message_chunks,
-    teacher_keyboard,
+    AssignmentFilesButtons, assignment_files_keyboard, confirm_file_deletion_keyboard,
+    send_message_chunks, teacher_keyboard,
 };
 use crate::app::{AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, ErrorCode};
 use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata};
@@ -107,7 +107,7 @@ pub(super) async fn submit_file(
 }
 
 pub(super) async fn ask_upload(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
@@ -126,7 +126,7 @@ pub(super) async fn ask_upload(
 }
 
 pub(super) async fn open(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
     index: usize,
@@ -160,7 +160,7 @@ pub(super) async fn open(
 }
 
 pub(super) async fn request_deletion(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
     index: usize,
@@ -199,7 +199,7 @@ pub(super) async fn request_deletion(
 }
 
 pub(super) async fn confirm_deletion(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
@@ -210,7 +210,7 @@ pub(super) async fn confirm_deletion(
 }
 
 pub(super) async fn cancel_deletion(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     message_id: MessageId,
     state: &BotState,
 ) -> HandlerResult {
@@ -221,7 +221,7 @@ pub(super) async fn cancel_deletion(
 }
 
 pub(super) async fn show(
-    screen: Screen<'_>,
+    screen: ActorChat<'_>,
     assignment_id: AssignmentId,
     creation_flow: bool,
 ) -> HandlerResult {
@@ -233,7 +233,11 @@ pub(super) async fn show(
     render(screen, &card, creation_flow).await
 }
 
-async fn render(screen: Screen<'_>, card: &AssignmentFiles, creation_flow: bool) -> HandlerResult {
+async fn render(
+    screen: ActorChat<'_>,
+    card: &AssignmentFiles,
+    creation_flow: bool,
+) -> HandlerResult {
     let bot = screen.bot();
     let chat_id = screen.chat_id();
     let policy = screen.services().files.policy();
@@ -263,8 +267,10 @@ async fn render(screen: Screen<'_>, card: &AssignmentFiles, creation_flow: bool)
         .reply_markup(assignment_files_keyboard(
             &card.assignment,
             &card.files,
-            can_add,
-            creation_flow,
+            AssignmentFilesButtons {
+                add: can_add,
+                creation_flow,
+            },
         ))
         .await?;
     screen
@@ -281,7 +287,7 @@ async fn render(screen: Screen<'_>, card: &AssignmentFiles, creation_flow: bool)
     Ok(())
 }
 
-async fn delete(screen: Screen<'_>, deletion: FileDeletion) -> HandlerResult {
+async fn delete(screen: ActorChat<'_>, deletion: FileDeletion) -> HandlerResult {
     let FileDeletion {
         assignment_id,
         file_id,

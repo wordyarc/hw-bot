@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::ApiPath as Path;
 use crate::api::submissions::SubmissionResponse;
 use crate::api::{Actor, ApiError, AppState, JsonBody};
-use crate::app::{ErrorCode, ReviewQueueItem, ReviewSubmission};
+use crate::app::{ErrorCode, ReviewCard, ReviewSubmission};
 use crate::domain::{Assignment, ReviewDecision, ReviewScore, SubmissionId, User};
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +37,7 @@ impl ReviewSubmissionRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ReviewQueueItemResponse {
+pub struct ReviewCardResponse {
     submission: SubmissionResponse,
     assignment: QueuedAssignmentResponse,
     student: QueuedStudentResponse,
@@ -60,8 +60,8 @@ struct QueuedStudentResponse {
     display_name: String,
 }
 
-impl From<&ReviewQueueItem> for ReviewQueueItemResponse {
-    fn from(item: &ReviewQueueItem) -> Self {
+impl From<&ReviewCard> for ReviewCardResponse {
+    fn from(item: &ReviewCard) -> Self {
         Self {
             submission: SubmissionResponse::from(&item.submission),
             assignment: QueuedAssignmentResponse::from(&item.assignment),
@@ -120,7 +120,7 @@ pub async fn take_next_from_queue(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
-    Ok(Json(ReviewQueueItemResponse::from(&item)).into_response())
+    Ok(Json(ReviewCardResponse::from(&item)).into_response())
 }
 
 pub async fn review_submission(

@@ -31,7 +31,7 @@ pub const SUBMIT_MAKEUP_PREFIX: &str = "submit-makeup:";
 pub const WITHDRAW_PREFIX: &str = "withdraw:";
 pub const WITHDRAW_CONFIRM_PREFIX: &str = "withdraw-yes:";
 pub const FILES_PREFIX: &str = "files:";
-pub const ATTEMPTS_PREFIX: &str = "attempts:";
+pub const ASSIGNMENT_STUDENTS_PREFIX: &str = "attempts:";
 pub const INVITE_PREFIX: &str = "invite:";
 pub const GRADES_PREFIX: &str = "grades:";
 pub const CONTACT_PREFIX: &str = "contact:";
@@ -41,7 +41,7 @@ pub const ARCHIVE_PREFIX: &str = "archive:";
 pub const DEADLINE_PREFIX: &str = "deadline:";
 pub const STUDENT_PREFIX: &str = "student:";
 pub const MAX_ATTEMPTS_PREFIX: &str = "maxattempts:";
-pub const EXTRA_ATTEMPTS_PREFIX: &str = "attempt:";
+pub const EXTRA_ATTEMPTS_AMOUNT_PREFIX: &str = "attempt:";
 pub const GRADING_PREFIX: &str = "grading:";
 pub const REVIEW_SCORE_PREFIX: &str = "reviewscore:";
 pub const LATE_POLICY_PREFIX: &str = "late:";
@@ -188,7 +188,7 @@ pub(super) enum ReplayableAction {
     StartSubmission(AssignmentId, SubmissionKind),
     AssignmentFiles(AssignmentId),
     CourseInvite(TeachingCourseId),
-    GradebookGroups(TeachingCourseId),
+    Gradebook(TeachingCourseId),
     OpenSandboxReview(SubmissionId),
     PickReview(SubmissionId),
     StartWithdrawal(SubmissionId),
@@ -200,11 +200,13 @@ impl ReplayableAction {
         match self {
             Self::Page(PageTarget::Assignments, 0) => MENU_ASSIGNMENTS.to_owned(),
             Self::Page(PageTarget::Archive, 0) => MENU_ARCHIVE.to_owned(),
-            Self::Page(PageTarget::Queue, 0) => MENU_QUEUE.to_owned(),
+            Self::Page(PageTarget::QueuePlaces, 0) => MENU_QUEUE.to_owned(),
             Self::Page(PageTarget::Courses, 0) => MENU_COURSES.to_owned(),
             Self::Page(PageTarget::Sandbox, 0) => MENU_SANDBOX.to_owned(),
             Self::Page(PageTarget::Course(id), 0) => format!("{COURSE_PREFIX}{}", id.as_uuid()),
-            Self::Page(PageTarget::Students(id), 0) => format!("{ATTEMPTS_PREFIX}{}", id.as_uuid()),
+            Self::Page(PageTarget::Students(id), 0) => {
+                format!("{ASSIGNMENT_STUDENTS_PREFIX}{}", id.as_uuid())
+            }
             Self::Page(target, page) => target.callback(page),
             Self::Profile => MENU_PROFILE.to_owned(),
             Self::ReviewHub => REVIEW_HUB.to_owned(),
@@ -225,7 +227,7 @@ impl ReplayableAction {
             }
             Self::AssignmentFiles(id) => format!("{FILES_PREFIX}{}", id.as_uuid()),
             Self::CourseInvite(id) => format!("{INVITE_PREFIX}{}", id.as_uuid()),
-            Self::GradebookGroups(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
+            Self::Gradebook(id) => format!("{GRADES_PREFIX}{}", id.as_uuid()),
             Self::OpenSandboxReview(id) => format!("{REVIEW_OPEN_PREFIX}{}", id.as_uuid()),
             Self::PickReview(id) => format!("{REVIEW_PICK_PREFIX}{}", id.as_uuid()),
             Self::StartWithdrawal(id) => format!("{WITHDRAW_PREFIX}{}", id.as_uuid()),
@@ -238,10 +240,10 @@ impl ReplayableAction {
 pub(super) enum PageTarget {
     Assignments,
     Archive,
-    Queue,
+    QueuePlaces,
     Courses,
     Sandbox,
-    ReviewQueue,
+    ReviewList,
     Course(TeachingCourseId),
     Students(AssignmentId),
     Gradebook(TeachingCourseId, StudentGroupId),
@@ -256,10 +258,10 @@ impl PageTarget {
         let target = match self {
             Self::Assignments => "a".to_owned(),
             Self::Archive => "ar".to_owned(),
-            Self::Queue => "q".to_owned(),
+            Self::QueuePlaces => "q".to_owned(),
             Self::Courses => "c".to_owned(),
             Self::Sandbox => "sb".to_owned(),
-            Self::ReviewQueue => "rq".to_owned(),
+            Self::ReviewList => "rq".to_owned(),
             Self::Course(course) => format!("ca:{}", id(course.as_uuid())),
             Self::Students(assignment) => format!("s:{}", id(assignment.as_uuid())),
             Self::Gradebook(course, group) => {
@@ -288,10 +290,10 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
     let target = match kind {
         "a" => PageTarget::Assignments,
         "ar" => PageTarget::Archive,
-        "q" => PageTarget::Queue,
+        "q" => PageTarget::QueuePlaces,
         "c" => PageTarget::Courses,
         "sb" => PageTarget::Sandbox,
-        "rq" => PageTarget::ReviewQueue,
+        "rq" => PageTarget::ReviewList,
         "ca" => PageTarget::Course(TeachingCourseId::from_uuid(id()?)),
         "s" => PageTarget::Students(AssignmentId::from_uuid(id()?)),
         "g" => PageTarget::Gradebook(
@@ -408,7 +410,7 @@ impl FlowAction {
             )),
             Self::Deadline(action) => action.callback(),
             Self::SelectStudent(id) => format!("{STUDENT_PREFIX}{}", id.as_uuid()),
-            Self::ExtraAttempts(choice) => choice.callback(EXTRA_ATTEMPTS_PREFIX),
+            Self::ExtraAttempts(choice) => choice.callback(EXTRA_ATTEMPTS_AMOUNT_PREFIX),
             Self::ConfirmFileDeletion => FILE_CONFIRM_DELETE.to_owned(),
             Self::CancelFileDeletion => FILE_CANCEL_DELETE.to_owned(),
             Self::ConfirmInviteRotation => INVITE_CONFIRM_ROTATE.to_owned(),
@@ -594,7 +596,7 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
     let literal = match data {
         MENU_ASSIGNMENTS => Replayable(ReplayableAction::Page(PageTarget::Assignments, 0)),
         MENU_ARCHIVE => Replayable(ReplayableAction::Page(PageTarget::Archive, 0)),
-        MENU_QUEUE => Replayable(ReplayableAction::Page(PageTarget::Queue, 0)),
+        MENU_QUEUE => Replayable(ReplayableAction::Page(PageTarget::QueuePlaces, 0)),
         MENU_PROFILE => Replayable(ReplayableAction::Profile),
         MENU_COURSES => Replayable(ReplayableAction::Page(PageTarget::Courses, 0)),
         MENU_SANDBOX => Replayable(ReplayableAction::Page(PageTarget::Sandbox, 0)),
@@ -685,7 +687,7 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
             id,
         )))
     }),
-    (ATTEMPTS_PREFIX, |id| {
+    (ASSIGNMENT_STUDENTS_PREFIX, |id| {
         Replayable(ReplayableAction::Page(
             PageTarget::Students(AssignmentId::from_uuid(id)),
             0,
@@ -697,9 +699,7 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
         )))
     }),
     (GRADES_PREFIX, |id| {
-        Replayable(ReplayableAction::GradebookGroups(
-            TeachingCourseId::from_uuid(id),
-        ))
+        Replayable(ReplayableAction::Gradebook(TeachingCourseId::from_uuid(id)))
     }),
     (REVIEW_OPEN_PREFIX, |id| {
         Replayable(ReplayableAction::OpenSandboxReview(
@@ -764,7 +764,7 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
 
 const AMOUNT_ROUTES: &[Route<AmountChoice, FlowAction>] = &[
     (MAX_ATTEMPTS_PREFIX, FlowAction::MaxAttempts),
-    (EXTRA_ATTEMPTS_PREFIX, FlowAction::ExtraAttempts),
+    (EXTRA_ATTEMPTS_AMOUNT_PREFIX, FlowAction::ExtraAttempts),
     (PENALTY_PREFIX, FlowAction::Penalty),
     (LATE_PERIODS_PREFIX, FlowAction::Periods),
     (MAKEUP_ATTEMPTS_PREFIX, FlowAction::MakeupAttempts),
@@ -910,7 +910,7 @@ mod tests {
         for target in [
             PageTarget::Assignments,
             PageTarget::Archive,
-            PageTarget::Queue,
+            PageTarget::QueuePlaces,
             PageTarget::Courses,
             PageTarget::Sandbox,
             PageTarget::Course(TeachingCourseId::new()),
@@ -932,10 +932,10 @@ mod tests {
         for target in [
             PageTarget::Assignments,
             PageTarget::Archive,
-            PageTarget::Queue,
+            PageTarget::QueuePlaces,
             PageTarget::Courses,
             PageTarget::Sandbox,
-            PageTarget::ReviewQueue,
+            PageTarget::ReviewList,
             PageTarget::Course(TeachingCourseId::new()),
             PageTarget::Students(AssignmentId::new()),
             PageTarget::Gradebook(TeachingCourseId::new(), StudentGroupId::new()),
@@ -1021,10 +1021,10 @@ mod tests {
                 page(PageTarget::Archive, 0),
             Replayable(ReplayableAction::Page(PageTarget::Archive, 1..=u32::MAX)) =>
                 page(PageTarget::Archive, last),
-            Replayable(ReplayableAction::Page(PageTarget::Queue, 0)) =>
-                page(PageTarget::Queue, 0),
-            Replayable(ReplayableAction::Page(PageTarget::Queue, 1..=u32::MAX)) =>
-                page(PageTarget::Queue, last),
+            Replayable(ReplayableAction::Page(PageTarget::QueuePlaces, 0)) =>
+                page(PageTarget::QueuePlaces, 0),
+            Replayable(ReplayableAction::Page(PageTarget::QueuePlaces, 1..=u32::MAX)) =>
+                page(PageTarget::QueuePlaces, last),
             Replayable(ReplayableAction::Page(PageTarget::Courses, 0)) =>
                 page(PageTarget::Courses, 0),
             Replayable(ReplayableAction::Page(PageTarget::Courses, 1..=u32::MAX)) =>
@@ -1033,8 +1033,8 @@ mod tests {
                 page(PageTarget::Sandbox, 0),
             Replayable(ReplayableAction::Page(PageTarget::Sandbox, 1..=u32::MAX)) =>
                 page(PageTarget::Sandbox, last),
-            Replayable(ReplayableAction::Page(PageTarget::ReviewQueue, _)) =>
-                page(PageTarget::ReviewQueue, last),
+            Replayable(ReplayableAction::Page(PageTarget::ReviewList, _)) =>
+                page(PageTarget::ReviewList, last),
             Replayable(ReplayableAction::Page(PageTarget::Course(_), 0)) =>
                 page(PageTarget::Course(course), 0),
             Replayable(ReplayableAction::Page(PageTarget::Course(_), 1..=u32::MAX)) =>
@@ -1075,8 +1075,8 @@ mod tests {
                 Replayable(ReplayableAction::AssignmentFiles(assignment)),
             Replayable(ReplayableAction::CourseInvite(_)) =>
                 Replayable(ReplayableAction::CourseInvite(course)),
-            Replayable(ReplayableAction::GradebookGroups(_)) =>
-                Replayable(ReplayableAction::GradebookGroups(course)),
+            Replayable(ReplayableAction::Gradebook(_)) =>
+                Replayable(ReplayableAction::Gradebook(course)),
             Replayable(ReplayableAction::OpenSandboxReview(_)) =>
                 Replayable(ReplayableAction::OpenSandboxReview(submission)),
             Replayable(ReplayableAction::PickReview(_)) =>

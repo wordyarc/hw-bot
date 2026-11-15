@@ -19,7 +19,7 @@ async fn a_student_sees_their_place_in_the_submit_order() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(first.id()), Default::default())
+        .queue_places(Actor::new(first.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -33,7 +33,7 @@ async fn a_student_sees_their_place_in_the_submit_order() {
     let last = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -75,7 +75,7 @@ async fn a_reviewed_submission_leaves_the_queue() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -101,7 +101,7 @@ async fn the_queue_spans_every_course_of_the_same_teachers() {
     let alone = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -114,7 +114,7 @@ async fn the_queue_spans_every_course_of_the_same_teachers() {
     let shared = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -140,7 +140,7 @@ async fn earlier_sandbox_submissions_do_not_delay_a_real_one() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -165,7 +165,7 @@ async fn a_sandbox_submission_is_placed_among_sandbox_submissions_only() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -184,7 +184,7 @@ async fn a_course_without_a_reviewer_reports_no_position() {
     let places = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.student.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
         .await
         .expect("the queue is readable")
         .items;
@@ -201,7 +201,7 @@ async fn a_teacher_has_no_student_queue() {
     let error = app
         .application
         .submissions
-        .pending_queue(Actor::new(app.fixture.teacher.id()), Default::default())
+        .queue_places(Actor::new(app.fixture.teacher.id()), Default::default())
         .await
         .expect_err("a teacher reads the review queue, not the student one");
 
