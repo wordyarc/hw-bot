@@ -127,16 +127,18 @@ impl UserService {
         &self,
         telegram_user_id: TelegramUserId,
     ) -> AppResult<RegisteredUser> {
-        let user = db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
-            .await?
-            .required("user")?;
+        let user = self.find_user(telegram_user_id).await?;
         self.registered_user(user).await
     }
 
-    pub async fn resolve_actor(&self, telegram_user_id: TelegramUserId) -> AppResult<Actor> {
-        let user = db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
+    pub async fn find_user(&self, telegram_user_id: TelegramUserId) -> AppResult<User> {
+        db::users::find_by_telegram_user_id(&self.pool, telegram_user_id)
             .await?
-            .required("user")?;
+            .required("user")
+    }
+
+    pub async fn resolve_actor(&self, telegram_user_id: TelegramUserId) -> AppResult<Actor> {
+        let user = self.find_user(telegram_user_id).await?;
 
         Ok(Actor::new(user.id()))
     }

@@ -6,6 +6,7 @@ use hw_bot::domain::{
     Assignment, AssignmentId, CourseMakeup, Grading, MakeupTerms, Submission, SubmissionId,
     SubmissionKind, SubmissionStatus, User,
 };
+use hw_bot::pagination::PageRequest;
 use serde_json::json;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
@@ -43,9 +44,15 @@ async fn open_makeup(app: &TestApp, attempts: u16) -> CourseMakeup {
 async fn settings(app: &TestApp) -> Option<CourseMakeup> {
     app.application
         .courses
-        .active_makeup(app.teacher_actor(), app.fixture.course.id(), Utc::now())
+        .course_page(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            PageRequest::default(),
+            Utc::now(),
+        )
         .await
         .unwrap()
+        .makeup
 }
 
 async fn terms_of(app: &TestApp, assignment: AssignmentId) -> Option<MakeupTerms> {

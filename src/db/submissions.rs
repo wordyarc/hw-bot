@@ -742,11 +742,14 @@ macro_rules! reviewer_scope {
               on assignments.id = submissions.assignment_id
             join subjects
               on subjects.id = assignments.subject_id
-            left join teaching_course_teachers
-              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id
-             and teaching_course_teachers.teacher_id = $2
             where submissions.status = 'pending_review'
-              and ($1 or teaching_course_teachers.teacher_id is not null)
+              and ($1 or exists (
+                  select 1
+                  from teaching_course_teachers
+                  where teaching_course_teachers.teaching_course_id
+                        = assignments.teaching_course_id
+                    and teaching_course_teachers.teacher_id = $2
+              ))
               and subjects.sandbox = $3
               and ($4::text is null or submissions.kind = $4)
               and ($5::timestamptz is null or submissions.submitted_at <= $5)

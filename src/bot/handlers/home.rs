@@ -78,12 +78,8 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
     let chat_id = chat.chat_id();
     let services = chat.services();
     let timezone = chat.timezone();
-    let role = match services
-        .users
-        .find_by_telegram_user_id(telegram_user_id)
-        .await
-    {
-        Ok(registered) => Some(registered.user.role()),
+    let role = match services.users.find_user(telegram_user_id).await {
+        Ok(user) => Some(user.role()),
         Err(error) if error.code() == ErrorCode::NotFound => {
             return show_guest(bot, chat_id).await;
         }
@@ -120,13 +116,8 @@ fn help_commands(role: Option<Role>) -> String {
 }
 
 pub(super) async fn show_home(chat: Chat<'_>, telegram_user_id: TelegramUserId) -> HandlerResult {
-    match chat
-        .services()
-        .users
-        .find_by_telegram_user_id(telegram_user_id)
-        .await
-    {
-        Ok(registered) => send_home(chat, &registered.user).await,
+    match chat.services().users.find_user(telegram_user_id).await {
+        Ok(user) => send_home(chat, &user).await,
         Err(error) if error.code() == ErrorCode::NotFound => open_guest(chat).await,
         Err(error) => Err(error.into()),
     }
@@ -158,24 +149,17 @@ pub(super) async fn send_home(chat: Chat<'_>, user: &User) -> HandlerResult {
         }
         Role::Teacher | Role::Admin => {
             let mut lines = Vec::new();
-            let pending = optional_stat(
-                services.reviews.queue_size(actor, None).await,
-                "teacher_pending_queue",
-            );
-            if let Some(pending) = pending {
-                lines.push(texts::review_queue_line(pending));
-            }
-            let makeups =
-                optional_stat(services.reviews.makeup_size(actor).await, "teacher_makeups");
-            if let Some(makeups) = makeups.filter(|&count| count > 0) {
-                lines.push(texts::makeup_queue_line(makeups));
-            }
-            let sandbox = optional_stat(
-                services.reviews.sandbox_size(actor, None).await,
-                "teacher_sandbox",
-            );
-            if let Some(sandbox) = sandbox.filter(|&count| count > 0) {
-                lines.push(texts::home_sandbox_line(sandbox));
+            if let Some(counters) = optional_stat(
+                services.reviews.counters(actor).await,
+                "teacher_review_counters",
+            ) {
+                lines.push(texts::review_queue_line(counters.queue));
+                if counters.makeups > 0 {
+                    lines.push(texts::makeup_queue_line(counters.makeups));
+                }
+                if counters.sandbox > 0 {
+                    lines.push(texts::home_sandbox_line(counters.sandbox));
+                }
             }
             let greeting = texts::home_greeting(name);
             if lines.is_empty() {

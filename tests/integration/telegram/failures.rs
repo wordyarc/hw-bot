@@ -246,7 +246,8 @@ async fn unavailable_terms_screen_is_replaced_without_losing_input() {
             .assignments
             .find_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
             .await
-            .unwrap();
+            .unwrap()
+            .assignment;
         assert!(
             [first, preset_deadline(days)].contains(&assignment.deadline_at()),
             "{days} days"
@@ -357,7 +358,8 @@ async fn already_removed_markup_does_not_block_manual_deadline_input() {
         .assignments
         .find_for_teacher(app.teacher_actor(), app.fixture.assignment.id())
         .await
-        .unwrap();
+        .unwrap()
+        .assignment;
     assert_eq!(assignment.deadline_at(), expected_deadline(&date));
 }
 

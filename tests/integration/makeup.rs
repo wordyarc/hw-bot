@@ -54,9 +54,15 @@ async fn configure(
 async fn current_settings(app: &TestApp) -> Option<CourseMakeup> {
     app.application
         .courses
-        .active_makeup(app.teacher_actor(), app.fixture.course.id(), Utc::now())
+        .course_page(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            PageRequest::default(),
+            Utc::now(),
+        )
         .await
         .unwrap()
+        .makeup
 }
 
 async fn student_pool(app: &TestApp) -> Option<MakeupPool> {

@@ -63,6 +63,13 @@ pub struct ReviewedSubmission {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewCounters {
+    pub queue: u32,
+    pub makeups: u32,
+    pub sandbox: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemainingAttempts {
     pub remaining: u16,
     pub allowed: u16,
@@ -116,6 +123,20 @@ impl ReviewService {
     pub async fn queue_size(&self, actor: Actor, subject: Option<SubjectId>) -> AppResult<u32> {
         self.count(actor, ReviewStream::Main { subject }, None)
             .await
+    }
+
+    pub async fn counters(&self, actor: Actor) -> AppResult<ReviewCounters> {
+        let mut connection = self.pool.acquire().await?;
+        let reviewer = load_reviewer(&mut *connection, actor).await?;
+        let mut count = async |stream| {
+            db::submissions::count_for_reviewer(&mut *connection, &reviewer, stream, None).await
+        };
+
+        Ok(ReviewCounters {
+            queue: count(ReviewStream::ALL_MAIN).await?,
+            makeups: count(ReviewStream::Makeup).await?,
+            sandbox: count(ReviewStream::Sandbox).await?,
+        })
     }
 
     pub async fn queue_by_subject(&self, actor: Actor) -> AppResult<Vec<SubjectQueue>> {

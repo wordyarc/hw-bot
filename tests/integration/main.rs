@@ -18,6 +18,7 @@ mod makeup;
 mod notification_outbox;
 mod notification_worker;
 mod pagination;
+mod query_budget;
 mod resilience;
 mod review_api;
 mod review_queue;

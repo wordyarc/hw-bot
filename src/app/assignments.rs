@@ -4,8 +4,9 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::app::access::{
-    ManagedAssignment, load_managed_assignment_on, load_managed_versioned_assignment,
-    load_managing_teacher, load_managing_teacher_on, load_student,
+    ManagedAssignment, load_managed_assignment_on, load_managed_summary,
+    load_managed_versioned_assignment, load_managing_teacher, load_managing_teacher_on,
+    load_student,
 };
 use crate::app::{Actor, AppError, AppResult, OpenedFile, Required};
 use crate::db;
@@ -16,7 +17,7 @@ use crate::domain::{
     TeachingCourseId, User, UserId,
 };
 use crate::pagination::{Page, PageRequest};
-use crate::read_models::{AssignmentStudentSummary, VersionedAssignment};
+use crate::read_models::{AssignmentStudentSummary, TeachingCourseSummary, VersionedAssignment};
 
 #[derive(Clone, Debug)]
 pub struct CreateAssignment {
@@ -100,6 +101,12 @@ pub struct StudentAssignmentDetails {
     pub assignment: StudentAssignment,
     pub files: Vec<OpenedFile>,
     pub latest_submission: Option<Submission>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TeacherAssignment {
+    pub assignment: Assignment,
+    pub course: TeachingCourseSummary,
 }
 
 #[derive(Clone, Debug)]
@@ -352,13 +359,34 @@ impl AssignmentService {
         })
     }
 
+    pub async fn find_student_assignment(
+        &self,
+        actor: Actor,
+        assignment_id: AssignmentId,
+    ) -> AppResult<StudentAssignment> {
+        let (student, assignment) =
+            load_visible_assignment_for_student(&self.pool, actor, assignment_id).await?;
+
+        load_student_assignment(&self.pool, &student, assignment).await
+    }
+
     pub async fn find_for_teacher(
         &self,
         actor: Actor,
         assignment_id: AssignmentId,
-    ) -> AppResult<Assignment> {
-        self.load_managed_assignment(actor, assignment_id, "view assignment")
-            .await
+    ) -> AppResult<TeacherAssignment> {
+        let assignment = db::assignments::find_by_id(&self.pool, assignment_id)
+            .await?
+            .required("assignment")?;
+        let course = load_managed_summary(
+            &self.pool,
+            actor,
+            assignment.teaching_course_id(),
+            "view assignment",
+        )
+        .await?;
+
+        Ok(TeacherAssignment { assignment, course })
     }
 
     pub async fn submission_history(

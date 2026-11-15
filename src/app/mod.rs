@@ -13,12 +13,12 @@ pub use actor::Actor;
 pub use assignments::{
     AssignmentService, AssignmentStudents, AssignmentSubmissionHistory, ChangeDeadline,
     ChangeGrading, ChangeTerms, CreateAssignment, GrantExtraAttempts, StudentAssignment,
-    StudentAssignmentDetails,
+    StudentAssignmentDetails, TeacherAssignment,
 };
 pub use container::ApplicationContainer;
 pub use courses::{
-    ConfigureMakeup, CourseInviteState, CourseMakeupState, CourseService, GradebookEntry,
-    MakeupDecision, MakeupQuestion, MakeupSettings, StudentContact, StudentGrades,
+    ConfigureMakeup, CourseInviteState, CourseMakeupState, CoursePage, CourseService,
+    GradebookEntry, MakeupDecision, MakeupQuestion, MakeupSettings, StudentContact, StudentGrades,
     StudentGradesCard,
 };
 pub use error::{AppError, AppResult, ErrorCode, Required};
@@ -26,8 +26,8 @@ pub use files::{
     AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, FilePolicy, FileService, OpenedFile,
 };
 pub use review::{
-    RemainingAttempts, ReviewQueueItem, ReviewSandbox, ReviewService, ReviewSubmission,
-    ReviewedSubmission,
+    RemainingAttempts, ReviewCounters, ReviewQueueItem, ReviewSandbox, ReviewService,
+    ReviewSubmission, ReviewedSubmission,
 };
 pub use submissions::{
     PendingWithdrawal, SubmissionService, SubmitHomework, SubmittedHomework, WithdrawSubmission,

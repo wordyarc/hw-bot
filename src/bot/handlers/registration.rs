@@ -23,12 +23,8 @@ pub(super) async fn start_registration(
     let chat_id = chat.chat_id();
     let services = chat.services();
     let invites = chat.invites();
-    match services
-        .users
-        .find_by_telegram_user_id(telegram_user_id)
-        .await
-    {
-        Ok(registered) => return send_home(chat, &registered.user).await,
+    match services.users.find_user(telegram_user_id).await {
+        Ok(user) => return send_home(chat, &user).await,
         Err(error) if error.code() == ErrorCode::NotFound => {}
         Err(error) => return Err(error.into()),
     }

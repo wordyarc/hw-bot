@@ -7,7 +7,7 @@ use crate::db;
 use crate::domain::{
     AssignmentId, DomainError, StudentGroupId, TeachingCourse, TeachingCourseId, User, UserId,
 };
-use crate::read_models::VersionedAssignment;
+use crate::read_models::{TeachingCourseSummary, VersionedAssignment};
 
 pub(crate) async fn load_managed_versioned_assignment(
     pool: &PgPool,
@@ -74,6 +74,21 @@ pub(crate) async fn load_managing_teacher_on(
     ensure_manages(&course, &actor, action)?;
 
     Ok((actor, course))
+}
+
+pub(crate) async fn load_managed_summary(
+    pool: &PgPool,
+    actor: Actor,
+    course_id: TeachingCourseId,
+    action: &'static str,
+) -> AppResult<TeachingCourseSummary> {
+    let teacher = load_actor(pool, actor, "teacher").await?;
+    let summary = db::academic::find_teaching_course_summary(pool, course_id)
+        .await?
+        .required("teaching course")?;
+    ensure_manages(&summary.course, &teacher, action)?;
+
+    Ok(summary)
 }
 
 pub(crate) fn ensure_manages(

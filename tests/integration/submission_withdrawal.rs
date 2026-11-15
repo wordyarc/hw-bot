@@ -8,6 +8,7 @@ use hw_bot::domain::{
     Assignment, MakeupPool, Resubmission, ReviewDecision, Submission, SubmissionHistory,
     SubmissionId, SubmissionStatus,
 };
+use hw_bot::pagination::PageRequest;
 use uuid::Uuid;
 
 use crate::harness::{TestApp, submission_id, wait_for_blocked_connection};
@@ -91,9 +92,15 @@ async fn disable_makeup(app: &TestApp) {
     let enabled = app
         .application
         .courses
-        .active_makeup(app.teacher_actor(), app.fixture.course.id(), Utc::now())
+        .course_page(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            PageRequest::default(),
+            Utc::now(),
+        )
         .await
-        .expect("the makeup is readable");
+        .expect("the makeup is readable")
+        .makeup;
     app.application
         .courses
         .configure_makeup(ConfigureMakeup {

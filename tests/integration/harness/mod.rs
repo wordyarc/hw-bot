@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 mod database;
 mod fixture;
+pub mod query_log;
 mod response;
 mod response_gate;
 pub mod telegram;

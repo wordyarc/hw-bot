@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select\n            submissions.id,\n            submissions.kind,\n            submissions.submitted_at,\n            subjects.name as subject_name,\n            assignments.title as assignment_title,\n            (select display_name from users where users.id = submissions.student_id)\n                as \"student_name!\"\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            left join teaching_course_teachers\n              on teaching_course_teachers.teaching_course_id = assignments.teaching_course_id\n             and teaching_course_teachers.teacher_id = $2\n            where submissions.status = 'pending_review'\n              and ($1 or teaching_course_teachers.teacher_id is not null)\n              and subjects.sandbox = $3\n              and ($4::text is null or submissions.kind = $4)\n              and ($5::timestamptz is null or submissions.submitted_at <= $5)\n              and ($6::uuid is null or assignments.subject_id = $6)\n            \n        order by submissions.submitted_at, submissions.id\n        limit $7 offset $8\n        ",
+  "query": "\n        select\n            submissions.id,\n            submissions.kind,\n            submissions.submitted_at,\n            subjects.name as subject_name,\n            assignments.title as assignment_title,\n            (select display_name from users where users.id = submissions.student_id)\n                as \"student_name!\"\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            where submissions.status = 'pending_review'\n              and ($1 or exists (\n                  select 1\n                  from teaching_course_teachers\n                  where teaching_course_teachers.teaching_course_id\n                        = assignments.teaching_course_id\n                    and teaching_course_teachers.teacher_id = $2\n              ))\n              and subjects.sandbox = $3\n              and ($4::text is null or submissions.kind = $4)\n              and ($5::timestamptz is null or submissions.submitted_at <= $5)\n              and ($6::uuid is null or assignments.subject_id = $6)\n            \n        order by submissions.submitted_at, submissions.id\n        limit $7 offset $8\n        ",
   "describe": {
     "columns": [
       {
@@ -86,5 +86,5 @@
       null
     ]
   },
-  "hash": "d3b01ad0294f6edd922dbba4a2e6de1d4ad74dc9c7cb2cf1014f80dc5d493937"
+  "hash": "6a9b7bf8d6b9e3f557e190d85fbb717b4d7f0cc0549910de1713f569997e0c4a"
 }

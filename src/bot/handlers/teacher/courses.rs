@@ -1,6 +1,7 @@
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::MessageId;
 
+use crate::app::{CoursePage, TeacherAssignment};
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::PageTarget;
 use crate::bot::context::Screen;
@@ -51,14 +52,13 @@ pub(crate) async fn show_course_assignments_page(
     let dialogue = screen.dialogue();
     let services = screen.services();
     let timezone = screen.timezone();
-    let course = services.courses.find_for_teacher(actor, course_id).await?;
-    let assignments = services
-        .assignments
-        .list_for_course(actor, course_id, page)
-        .await?;
-    let makeup = services
+    let CoursePage {
+        course,
+        assignments,
+        makeup,
+    } = services
         .courses
-        .active_makeup(actor, course_id, screen.now())
+        .course_page(actor, course_id, page, screen.now())
         .await?;
 
     let codes: Vec<&str> = course
@@ -105,13 +105,9 @@ pub(crate) async fn show_assignment(
     let dialogue = screen.dialogue();
     let services = screen.services();
     let timezone = screen.timezone();
-    let assignment = services
+    let TeacherAssignment { assignment, course } = services
         .assignments
         .find_for_teacher(actor, assignment_id)
-        .await?;
-    let course = services
-        .courses
-        .find_for_teacher(actor, assignment.teaching_course_id())
         .await?;
     let groups = (course.groups.len() > 1).then(|| {
         let codes: Vec<&str> = course

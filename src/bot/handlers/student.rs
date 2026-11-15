@@ -335,10 +335,9 @@ pub(super) async fn start_submission(
     let started = screen
         .services()
         .assignments
-        .find_for_student(screen.actor(), assignment_id)
+        .find_student_assignment(screen.actor(), assignment_id)
         .await
-        .and_then(|details| {
-            let item = details.assignment;
+        .and_then(|item| {
             item.submission_start(button, shown_at, now)
                 .map(|start| (item, start))
         });

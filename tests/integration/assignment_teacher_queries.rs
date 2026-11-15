@@ -12,7 +12,8 @@ async fn course_teacher_can_open_a_draft_assignment_card() {
         .assignments
         .find_for_teacher(app.teacher_actor(), draft.id())
         .await
-        .unwrap();
+        .unwrap()
+        .assignment;
 
     assert_eq!(assignment, draft);
 }
