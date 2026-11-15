@@ -59,6 +59,39 @@ async fn expired_notification_lease_can_be_reclaimed() {
 }
 
 #[tokio::test]
+async fn notifications_are_claimed_in_the_order_they_were_enqueued() {
+    let app = TestApp::start().await;
+    let second_student = app.add_student("Second student").await;
+    let first = app.queued_submission(app.student(), "pull/1").await;
+    let second = app
+        .queued_submission(second_student.telegram_user_id().as_i64(), "pull/2")
+        .await;
+    app.review(first, app.teacher(), "accept", "good")
+        .await
+        .ok();
+    app.review(second, app.teacher(), "reject", "fix it")
+        .await
+        .ok();
+    let now = Utc::now();
+    let mut claimed = Vec::new();
+
+    for _ in 0..2 {
+        let notification = db::notifications::claim_next(
+            &app.pool,
+            now,
+            Uuid::new_v4(),
+            now + Duration::seconds(10),
+        )
+        .await
+        .expect("claim notification")
+        .expect("a notification is ready");
+        claimed.push(notification.submission_id.as_uuid());
+    }
+
+    assert_eq!(claimed, [first, second]);
+}
+
+#[tokio::test]
 async fn a_worker_skips_a_notification_locked_by_another_worker() {
     let app = TestApp::start().await;
     let second_student = app.add_student("Second student").await;

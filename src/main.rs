@@ -1,21 +1,20 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::net::SocketAddr;
-use std::num::NonZeroU64;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::Context;
 use hw_bot::api::{self, AppState};
 use hw_bot::app::{ApplicationContainer, FilePolicy};
-use hw_bot::bot::{BotTimezone, Clock, TelegramBot, TelegramBotSettings};
+use hw_bot::bot::{BotTimezone, Clock, TelegramBot};
 use hw_bot::config::{
     AppConfig, DatabaseConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig,
+    millis,
 };
 use hw_bot::db;
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::invites::CourseInviteCodec;
 use hw_bot::supervision::{CriticalTask, Supervisor};
-use hw_bot::telegram::{NotificationWorker, NotificationWorkerSettings, new_bot};
+use hw_bot::telegram::{NotificationWorker, new_bot};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -61,7 +60,7 @@ async fn run(config: ValidatedAppConfig) -> anyhow::Result<()> {
     let worker = build_notification_worker(&config, db_pool.clone())?;
     let app = api::router(
         AppState::new(db_pool.clone(), application, invites, health.clone()),
-        ms(server.request_timeout_ms),
+        millis(server.request_timeout_ms),
     );
 
     let addr = SocketAddr::new(server.host, server.port.get());
@@ -147,8 +146,8 @@ async fn prepare_database(database: &DatabaseConfig) -> anyhow::Result<PgPool> {
     db::connect_runtime(
         &database.url,
         database.max_connections.get(),
-        ms(database.acquire_timeout_ms),
-        ms(database.statement_timeout_ms),
+        millis(database.acquire_timeout_ms),
+        millis(database.statement_timeout_ms),
     )
     .await
     .context("failed to initialize runtime database pool")
@@ -177,22 +176,12 @@ fn build_telegram_bot(
         tracing::info!("Telegram bot disabled");
         return Ok(None);
     };
-    let telegram = &config.telegram;
-    let files = &config.files;
 
     let bot = TelegramBot::new(
         application,
         token,
-        &telegram.api_base_url,
-        TelegramBotSettings {
-            request_timeout: ms(telegram.request_timeout_ms),
-            polling_timeout: ms(telegram.polling_timeout_ms),
-            rate_limit_replenish: ms(telegram.rate_limit_replenish_ms),
-            rate_limit_burst: telegram.rate_limit_burst,
-            max_concurrent_updates: telegram.max_concurrent_updates,
-            file_transfer_timeout: ms(files.transfer_timeout_ms),
-            max_concurrent_file_transfers: files.max_concurrent_transfers,
-        },
+        &config.telegram.api_base_url,
+        config.telegram_bot_settings(),
         BotTimezone::new(config.ui.timezone),
         Clock::system(),
         invites,
@@ -210,30 +199,18 @@ fn build_notification_worker(
         tracing::info!("review notification worker disabled");
         return Ok(None);
     };
-    let worker = &config.notification_worker;
-    let request_timeout = ms(config.telegram.request_timeout_ms);
+    let settings = config.notification_worker_settings();
 
-    let telegram = new_bot(token, &config.telegram.api_base_url, request_timeout)
-        .context("failed to initialize Telegram client")?;
-    let worker = NotificationWorker::new(
-        pool,
-        telegram,
-        NotificationWorkerSettings {
-            request_timeout,
-            poll_interval: ms(worker.poll_interval_ms),
-            lease_duration: ms(worker.lease_duration_ms),
-            max_attempts: worker.max_attempts.get(),
-            retry_initial: ms(worker.retry_initial_ms),
-            retry_max: ms(worker.retry_max_ms),
-        },
-    );
+    let telegram = new_bot(
+        token,
+        &config.telegram.api_base_url,
+        settings.request_timeout,
+    )
+    .context("failed to initialize Telegram client")?;
+    let worker = NotificationWorker::new(pool, telegram, settings);
 
     tracing::info!("review notification worker enabled");
     Ok(Some(worker))
-}
-
-fn ms(value: NonZeroU64) -> Duration {
-    Duration::from_millis(value.get())
 }
 
 async fn shutdown_signal() -> anyhow::Result<()> {

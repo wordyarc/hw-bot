@@ -521,6 +521,34 @@ async fn the_profile_button_of_the_menu_opens_the_profile() {
 }
 
 #[tokio::test]
+async fn the_profile_of_a_teacher_counts_their_subjects_and_the_review_queue() {
+    let app = TestApp::start().await;
+    app.add_subject_course("Algorithms").await;
+    app.queued_submission(app.student(), "pull/1").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/profile");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let header = texts::profile_header(
+        app.fixture.teacher.display_name().as_str(),
+        texts::role_name(app.fixture.teacher.role()),
+    );
+    let sent = telegram.texts(app.teacher());
+    let profile = sent
+        .iter()
+        .find(|text| text.starts_with(&header))
+        .unwrap_or_else(|| panic!("the profile is not shown: {sent:#?}"));
+    assert!(profile.contains(&texts::profile_courses(2)), "{profile}");
+    assert!(
+        profile.contains(&texts::profile_review_queue(1)),
+        "{profile}"
+    );
+}
+
+#[tokio::test]
 async fn a_profile_whose_statistics_cannot_be_read_is_still_shown() {
     let app = TestApp::start().await;
     sqlx::query("alter table submissions rename to submissions_unavailable")

@@ -2,6 +2,7 @@
 set -eu
 
 summary=${1:?usage: sh tools/actions/coverage-summary.sh SUMMARY_JSON}
+low_file_percent=90
 
 jq -r --arg root "$(pwd)/" '
     .data[0]
@@ -52,4 +53,29 @@ $1 == "total" {
         module, bar($2, $3), percent($2, $3), $2, $3, percent($4, $5), percent($6, $7)
 }
 END { print total }
+'
+
+jq -r --arg root "$(pwd)/" --argjson low "$low_file_percent" '
+    .data[0].files
+    | map({
+        file: (.filename | ltrimstr($root) | ltrimstr("src/")),
+        covered: .summary.lines.covered,
+        count: .summary.lines.count
+    })
+    | map(select(.covered * 100 < .count * $low))
+    | sort_by(.covered - .count)
+    | .[]
+    | [.file, .covered, .count]
+    | @tsv
+' "$summary" | awk -F '\t' -v low="$low_file_percent" '
+NR == 1 {
+    print ""
+    printf "### Files below %d%% line coverage\n", low
+    print ""
+    print "| File | Lines | Missed |"
+    print "|---|--:|--:|"
+}
+{
+    printf "| `%s` | %.1f%% | %d |\n", $1, 100 * $2 / $3, $3 - $2
+}
 '

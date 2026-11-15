@@ -1,7 +1,8 @@
 use axum::http::StatusCode;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use hw_bot::app::{Actor, AddAssignmentFile};
 use hw_bot::domain::FilePresentation;
+use hw_bot::test_support::ASSIGNMENT_TITLE;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -90,6 +91,33 @@ async fn the_student_list_names_the_subject_and_groups_assignments_by_it() {
             ("Backend development", "Rust ownership"),
         ]
     );
+}
+
+#[tokio::test]
+async fn assignments_of_one_subject_run_from_the_nearest_deadline() {
+    let app = TestApp::start().await;
+    for (title, days) in [("In three weeks", 21), ("In a week", 7)] {
+        let assignment = wall_clock_assignment(&app.fixture.course, &app.fixture.teacher)
+            .title(title)
+            .deadline_in(Duration::days(days))
+            .published()
+            .build();
+        insert_assignment(&app.pool, &assignment).await;
+    }
+
+    let assignments = app
+        .application
+        .assignments
+        .list_for_student(app.student_actor(), Default::default())
+        .await
+        .expect("the student list is readable")
+        .items;
+
+    let titles: Vec<_> = assignments
+        .iter()
+        .map(|item| item.assignment.title().as_str())
+        .collect();
+    assert_eq!(titles, ["In a week", "In three weeks", ASSIGNMENT_TITLE]);
 }
 
 #[tokio::test]

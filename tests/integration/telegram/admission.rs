@@ -216,6 +216,39 @@ async fn invalid_token_stops_the_telegram_bot() {
 }
 
 #[tokio::test]
+async fn a_token_revoked_while_polling_stops_the_telegram_bot() {
+    let app = TestApp::start().await;
+    let telegram = MockServer::start().await;
+    mount_startup_mocks(&telegram).await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetMe"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(telegram_me_body()))
+        .mount(&telegram)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/GetUpdates"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "ok": false,
+            "error_code": 401,
+            "description": "Unauthorized"
+        })))
+        .mount(&telegram)
+        .await;
+    let (cancellation, task) = start_bot(&app, &telegram);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("a revoked token stops the bot")
+        .expect("Telegram task does not panic");
+
+    assert!(matches!(
+        result,
+        Err(hw_bot::bot::TelegramBotError::InvalidCredentials)
+    ));
+    assert!(!cancellation.is_cancelled());
+}
+
+#[tokio::test]
 async fn startup_and_dispatcher_share_one_get_me_response() {
     let app = TestApp::start().await;
     let telegram =

@@ -1,5 +1,4 @@
 use std::ops::RangeInclusive;
-use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use hw_bot::app::ErrorCode;
@@ -242,45 +241,90 @@ fn score_callback(submission: Uuid, score: u16) -> String {
     format!("{}{submission}:{score}", callbacks::REVIEW_SCORE_PREFIX)
 }
 
-#[tokio::test]
-async fn reviewer_enters_a_score_before_the_comment() {
-    let app = TestApp::start().await;
-    let assignment = app.add_scored_assignment(5).await;
-    let submission = submission_id(
-        &app.submit(assignment.id().as_uuid(), app.student(), "pull/1")
-            .await
-            .created(),
-    );
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
-        callback_update(
-            3,
+async fn open_accepted_review(app: &TestApp, telegram: &TelegramScenario, max_score: u16) -> Uuid {
+    let assignment = app.add_scored_assignment(max_score).await;
+    let submission = submitted(app, &assignment).await;
+    telegram.open_review_queue(app.teacher()).await;
+    telegram
+        .click_button(
             app.teacher(),
-            &format!("{}{submission}", callbacks::REVIEW_ACCEPT_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        callback_update(
-            4,
-            app.teacher(),
-            &format!("{}{submission}:4", callbacks::REVIEW_SCORE_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        message_update(5, app.teacher(), 2, "Хорошо"),
-    ];
-    let telegram = telegram_server(updates).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
+            &cb(callbacks::REVIEW_ACCEPT_PREFIX, submission),
+        )
+        .await;
 
+    submission
+}
+
+#[tokio::test]
+async fn a_score_on_a_scale_without_buttons_is_typed_before_the_comment() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let submission = open_accepted_review(&app, &telegram, 100).await;
+
+    telegram.message(app.teacher(), "85");
+    telegram.message(app.teacher(), "Хорошо");
     let reviewed = wait_for_review_result(&app.pool, submission).await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-    telegram.verify().await;
 
-    let (status, raw_score, work_score) =
-        reviewed.unwrap_or_else(|| panic!("submission was not reviewed; requests:\n{requests}"));
-    assert_eq!(status, "accepted");
-    assert_eq!(raw_score, Some(4));
-    assert_eq!(work_score, Some(4));
+    assert_eq!(reviewed, Some(("accepted".to_owned(), Some(85), Some(85))));
+    let offered = sent_callbacks(&telegram.server).await;
+    assert!(
+        !offered
+            .iter()
+            .any(|data| data.starts_with(callbacks::REVIEW_SCORE_PREFIX)),
+        "{offered:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_typed_score_that_is_not_on_the_scale_repeats_the_range_and_keeps_the_step() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let submission = open_accepted_review(&app, &telegram, 100).await;
+
+    for refused in ["101", "восемь"] {
+        telegram.message(app.teacher(), refused);
+    }
+    telegram.flush(app.teacher()).await;
+    assert!(is_pending(&app, submission).await);
+    telegram.message(app.teacher(), "85");
+    telegram.message(app.teacher(), "Хорошо");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(reviewed, Some(("accepted".to_owned(), Some(85), Some(85))));
+    let sent = telegram.texts(app.teacher());
+    let repeated = sent
+        .iter()
+        .filter(|text| **text == texts::score_prompt(100))
+        .count();
+    assert_eq!(repeated, 2, "{sent:#?}");
+}
+
+#[tokio::test]
+async fn the_other_amount_button_under_the_scores_asks_for_a_typed_score() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let submission = open_accepted_review(&app, &telegram, 5).await;
+    let other = telegram
+        .button_with_text(app.teacher(), texts::BUTTON_OTHER_AMOUNT)
+        .await;
+
+    telegram.click(app.teacher(), &other);
+    telegram.message(app.teacher(), "3");
+    telegram.message(app.teacher(), "Неплохо");
+    let reviewed = wait_for_review_result(&app.pool, submission).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(reviewed, Some(("accepted".to_owned(), Some(3), Some(3))));
+    let sent = telegram.texts(app.teacher());
+    assert!(
+        sent.contains(&texts::input_prompt(&texts::score_prompt(5))),
+        "{sent:#?}"
+    );
 }
 
 #[tokio::test]
@@ -396,63 +440,19 @@ async fn review_confirmation_uses_the_grade_saved_after_a_deadline_change() {
 }
 
 #[tokio::test]
-async fn a_pass_fail_review_never_asks_for_a_score() {
-    let app = TestApp::start().await;
-    let submission = app.queued_submission(app.student(), "pull/1").await;
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        callback_update(2, app.teacher(), callbacks::NEXT_REVIEW, BOT_MESSAGE_ID),
-        callback_update(
-            3,
-            app.teacher(),
-            &format!("{}{submission}", callbacks::REVIEW_ACCEPT_PREFIX),
-            BOT_MESSAGE_ID,
-        ),
-        message_update(4, app.teacher(), 2, "Зачтено"),
-    ];
-    let telegram = telegram_server(updates).await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
-
-    let reviewed = wait_for_review_result(&app.pool, submission).await;
-    stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-    telegram.verify().await;
-
-    let (status, raw_score, _) =
-        reviewed.unwrap_or_else(|| panic!("submission was not reviewed; requests:\n{requests}"));
-    assert_eq!(status, "accepted");
-    assert_eq!(
-        raw_score, None,
-        "the comment followed the decision directly"
-    );
-}
-
-#[tokio::test]
 async fn an_empty_review_queue_answers_the_teacher_instead_of_failing() {
     let app = TestApp::start().await;
-    let updates = vec![
-        message_update(1, app.teacher(), 1, "/menu"),
-        message_update(2, app.teacher(), 2, texts::BUTTON_REVIEW),
-    ];
-    let telegram = telegram_server(updates).await;
-    let empty = Mock::given(method("POST"))
-        .and(path("/bottest-token/SendMessage"))
-        .and(body_partial_json(json!({
-            "chat_id": app.teacher(),
-            "text": texts::REVIEW_QUEUE_EMPTY
-        })))
-        .and(|request: &wiremock::Request| has_callback_button(request, callbacks::REVIEW_HUB))
-        .respond_with(telegram_message_response())
-        .expect(1)
-        .with_priority(1)
-        .mount_as_scoped(&telegram)
-        .await;
-    let (cancellation, mut task) = start_bot(&app, &telegram);
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
 
-    let observed = tokio::time::timeout(Duration::from_secs(5), empty.wait_until_satisfied()).await;
+    telegram.message(app.teacher(), texts::BUTTON_REVIEW);
+    let hub = telegram.button(app.teacher(), callbacks::REVIEW_HUB).await;
     stop_bot(cancellation, &mut task).await;
-    let requests = recorded_requests(&telegram).await;
-    observed.unwrap_or_else(|_| panic!("the teacher got no answer; requests:\n{requests}"));
+
+    assert_eq!(
+        message_text(&telegram, app.teacher(), hub.message_id),
+        texts::REVIEW_QUEUE_EMPTY
+    );
 }
 
 #[tokio::test]
@@ -1580,6 +1580,70 @@ async fn the_next_work_of_a_subject_stays_in_that_subject() {
             .await
             .contains(&cb(callbacks::REVIEW_REJECT_PREFIX, earlier)),
         "the earlier work of another subject is not handed out"
+    );
+}
+
+async fn one_work_in_each_of_two_subjects(app: &TestApp) -> (Uuid, String) {
+    let frontend = app.add_subject_course("Frontend").await;
+    let layout = app
+        .add_published_assignment(&frontend, &app.fixture.teacher, "Layout")
+        .await;
+    submit_as(app, &layout, &app.fixture.student, "pull/layout").await;
+    let own = submit_as(app, &app.fixture.assignment, &app.fixture.student, "pull/1").await;
+    let subject_next = cb(
+        callbacks::NEXT_SUBJECT_REVIEW_PREFIX,
+        app.fixture.subject.id().as_uuid(),
+    );
+
+    (own, subject_next)
+}
+
+#[tokio::test]
+async fn the_last_work_of_a_subject_names_the_rest_of_the_queue() {
+    let app = TestApp::start().await;
+    let (own, subject_next) = one_work_in_each_of_two_subjects(&app).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/review");
+    telegram.click_button(app.teacher(), &subject_next).await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::REVIEW_REJECT_PREFIX, own))
+        .await;
+    telegram.message(app.teacher(), "Нужны тесты");
+    wait_for_review_result(&app.pool, own)
+        .await
+        .expect("the review is saved");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.teacher());
+    let done = texts::subject_done(app.fixture.subject.name().as_str(), Some(1));
+    assert!(sent.contains(&done), "{sent:#?}");
+}
+
+#[tokio::test]
+async fn a_next_button_of_an_emptied_subject_says_so_and_names_the_rest_of_the_queue() {
+    let app = TestApp::start().await;
+    let (own, subject_next) = one_work_in_each_of_two_subjects(&app).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), "/review");
+    let next = telegram.button(app.teacher(), &subject_next).await;
+    app.review(own, app.teacher(), "reject", "Вне бота")
+        .await
+        .ok();
+
+    telegram.click(app.teacher(), &next);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.teacher());
+    let empty = texts::subject_queue_empty(app.fixture.subject.name().as_str());
+    assert!(
+        sent.iter()
+            .any(|text| text.starts_with(&empty) && text.contains(&texts::review_queue_line(1))),
+        "{sent:#?}"
     );
 }
 

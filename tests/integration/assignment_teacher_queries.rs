@@ -91,6 +91,36 @@ async fn assignment_student_list_includes_only_its_group_with_default_progress()
 }
 
 #[tokio::test]
+async fn assignment_student_list_runs_by_name() {
+    let app = TestApp::start().await;
+    for name in ["Yana", "Anna"] {
+        app.add_student(name).await;
+    }
+
+    let students = app
+        .application
+        .assignments
+        .list_students_for_assignment(
+            app.teacher_actor(),
+            app.fixture.assignment.id(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .students
+        .items;
+
+    let names: Vec<_> = students
+        .iter()
+        .map(|item| item.student.display_name().as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["Anna", app.fixture.student.display_name().as_str(), "Yana"]
+    );
+}
+
+#[tokio::test]
 async fn assignment_student_list_spans_the_issued_groups_only_and_names_their_codes() {
     let app = TestApp::start().await;
     let issued = app.add_group_to_course(&app.fixture.course).await;

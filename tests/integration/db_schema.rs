@@ -4,10 +4,11 @@ use hw_bot::domain::{
     AssignmentStatus, DeductedFrom, EducationLevel, FilePresentation, SubmissionKind,
     SubmissionStatus,
 };
+use sqlx::migrate::MigrateError;
 use sqlx::postgres::PgQueryResult;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, fresh_database};
+use crate::harness::{TestApp, fresh_database, migrated_database};
 
 const INSERT_GROUP: &str = r#"
     insert into student_groups (code, education_level, study_year)
@@ -29,6 +30,71 @@ async fn database_without_migrations_is_not_ready() {
     let pool = fresh_database().await;
 
     assert!(db::validate_migrations(&pool).await.is_err());
+}
+
+async fn readiness_after(tampering: &'static str) -> (MigrateError, i64) {
+    let pool = migrated_database().await;
+    let latest: i64 = sqlx::query_scalar("select max(version) from _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("read the latest migration");
+    sqlx::query(tampering)
+        .bind(latest)
+        .execute(&pool)
+        .await
+        .expect("tamper with the migration history");
+
+    let error = db::validate_migrations(&pool)
+        .await
+        .expect_err("a diverged migration history must not be ready");
+
+    (error, latest)
+}
+
+#[tokio::test]
+async fn a_migration_edited_after_it_was_applied_is_not_ready() {
+    let (error, latest) =
+        readiness_after("update _sqlx_migrations set checksum = '\\x00' where version = $1").await;
+
+    assert!(
+        matches!(error, MigrateError::VersionMismatch(version) if version == latest),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_migration_the_database_has_not_applied_is_not_ready() {
+    let (error, latest) = readiness_after("delete from _sqlx_migrations where version = $1").await;
+
+    assert!(
+        matches!(error, MigrateError::VersionNotPresent(version) if version == latest),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_migration_applied_by_a_newer_build_is_not_ready() {
+    let (error, latest) = readiness_after(
+        "insert into _sqlx_migrations (version, description, success, checksum, execution_time)
+         values ($1 + 1, 'newer build', true, '\\x00', 0)",
+    )
+    .await;
+
+    assert!(
+        matches!(error, MigrateError::VersionMissing(version) if version == latest + 1),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_migration_that_failed_halfway_is_not_ready() {
+    let (error, latest) =
+        readiness_after("update _sqlx_migrations set success = false where version = $1").await;
+
+    assert!(
+        matches!(error, MigrateError::Dirty(version) if version == latest),
+        "{error}"
+    );
 }
 
 /// CHECK-ограничения миграции должны принимать те же имена, что заданы доменным `str_enum!`.
@@ -505,40 +571,6 @@ async fn stored_file_requires_exactly_one_owner() -> anyhow::Result<()> {
             .is_ok()
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn stored_file_schema_has_no_installation_size_or_count_limit() -> anyhow::Result<()> {
-    let app = TestApp::start().await;
-    let content = vec![0x5a_u8; 5 * 1024 * 1024 + 1];
-
-    for position in 1_i64..=6 {
-        sqlx::query(
-            r#"
-            insert into stored_files (
-                assignment_id, position, presentation, filename,
-                size_bytes, sha256, content
-            )
-            values ($1, $2, 'document', $3, $4, $5, $6)
-            "#,
-        )
-        .bind(app.fixture.assignment.id().as_uuid())
-        .bind(position)
-        .bind(format!("file-{position}.bin"))
-        .bind(content.len() as i64)
-        .bind([0_u8; 32].as_slice())
-        .bind(&content)
-        .execute(&app.pool)
-        .await?;
-    }
-
-    let count: i64 =
-        sqlx::query_scalar("select count(*) from stored_files where assignment_id = $1")
-            .bind(app.fixture.assignment.id().as_uuid())
-            .fetch_one(&app.pool)
-            .await?;
-    assert_eq!(count, 6);
     Ok(())
 }
 

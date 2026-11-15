@@ -70,7 +70,7 @@ pub struct TelegramBot {
     codec: CourseInviteCodec,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TelegramBotSettings {
     pub request_timeout: Duration,
     pub polling_timeout: Duration,

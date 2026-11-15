@@ -16,7 +16,7 @@ use crate::db::{self, DbError};
 use crate::domain::{Grade, SubmissionKind};
 use crate::health::ComponentHealth;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotificationWorkerSettings {
     pub request_timeout: Duration,
     pub poll_interval: Duration,

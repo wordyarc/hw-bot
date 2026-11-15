@@ -13,7 +13,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use super::flows::{
-    manage_assignment, open_assignment, open_course, open_fixture_student_grades,
+    manage_assignment, open_assignment, open_course, open_creation, open_fixture_student_grades,
     open_scored_creation, student_card_header,
 };
 use crate::harness::telegram::*;
@@ -145,6 +145,96 @@ async fn enabling_with_a_date_a_pool_and_two_scales_writes_only_on_save() {
             .any(|text| text.starts_with(texts::MAKEUP_SUMMARY_HEADER)
                 && text.contains(&texts::makeup_attempts_line(3))),
         "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_date_a_pool_size_and_a_credit_typed_instead_of_tapped_are_saved() {
+    let app = TestApp::start().await;
+    let wide = app.add_scored_assignment(100).await;
+    let until = deadline_input(Utc::now() + Duration::days(20));
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_form(&app, &telegram).await;
+    telegram.message(teacher, &until);
+    telegram.message(teacher, "7");
+    telegram.message(teacher, "60");
+    telegram.click_button(teacher, &answer("pass")).await;
+    telegram.click_button(teacher, callbacks::MAKEUP_SAVE).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let saved = settings(&app).await.expect("the makeup is enabled");
+    assert_eq!(
+        (saved.until(), saved.attempts()),
+        (expected_deadline(&until), 7)
+    );
+    assert_eq!(
+        terms_of(&app, wide.id()).await,
+        Some(MakeupTerms::scored(60, wide.grading()).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn a_typed_answer_the_form_cannot_read_repeats_the_question_with_a_hint() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_form(&app, &telegram).await;
+    telegram.message(teacher, "послезавтра");
+    telegram.flush(teacher).await;
+    let after_the_date = telegram.texts(teacher);
+    telegram.click_preset(teacher, texts::PRESET_MONTH).await;
+    telegram.message(teacher, "много");
+    telegram.flush(teacher).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let after_the_number = telegram.texts(teacher);
+    for (sent, hint) in [
+        (after_the_date, texts::DATE_FORMAT),
+        (after_the_number, texts::INTEGER_REQUIRED),
+    ] {
+        assert!(
+            sent.iter().any(|text| text.starts_with(hint)),
+            "{hint}: {sent:#?}"
+        );
+    }
+    assert_eq!(settings(&app).await, None);
+}
+
+#[tokio::test]
+async fn a_scale_without_credit_buttons_asks_for_a_typed_credit() {
+    let app = TestApp::start().await;
+    let wide = app.add_scored_assignment(100).await;
+    open_makeup(&app, 3).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_form(&app, &telegram).await;
+    let other = telegram
+        .button_with_text(teacher, texts::BUTTON_OTHER_AMOUNT)
+        .await;
+    telegram.click(teacher, &other);
+    telegram.message(teacher, "60");
+    telegram.click_button(teacher, &answer("pass")).await;
+    telegram.click_button(teacher, callbacks::MAKEUP_SAVE).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        terms_of(&app, wide.id()).await,
+        Some(MakeupTerms::scored(60, wide.grading()).unwrap())
+    );
+    let offered = sent_callbacks(&telegram.server).await;
+    assert!(
+        offered
+            .iter()
+            .filter_map(|data| data.strip_prefix(callbacks::MAKEUP_ANSWER_PREFIX))
+            .all(|choice| choice.parse::<u16>().is_err()),
+        "{offered:#?}"
     );
 }
 
@@ -282,6 +372,32 @@ async fn creating_on_a_course_with_makeup_saves_the_credit() {
     stop_bot(cancellation, &mut task).await;
 
     assert_eq!(terms_of(&app, id).await, Some(credit(6)));
+}
+
+#[tokio::test]
+async fn creating_on_a_typed_wide_scale_with_makeup_saves_a_typed_credit() {
+    let app = TestApp::start().await;
+    open_makeup(&app, 3).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let teacher = app.teacher();
+
+    open_creation(&app, &telegram, "Wide makeup draft").await;
+    telegram
+        .click_button(teacher, &cb(callbacks::MAX_ATTEMPTS_PREFIX, 2))
+        .await;
+    telegram.message(teacher, "100");
+    telegram.message(teacher, "60");
+    telegram.flush(teacher).await;
+    finish_strict_creation(&app, &telegram).await;
+    let id = created(&app, "Wide makeup draft").await;
+    stop_bot(cancellation, &mut task).await;
+
+    let wide = Grading::scored(100).unwrap();
+    assert_eq!(
+        terms_of(&app, id).await,
+        Some(MakeupTerms::scored(60, wide).unwrap())
+    );
 }
 
 #[tokio::test]
@@ -1225,6 +1341,36 @@ async fn an_emptied_queue_names_the_makeups_still_waiting() {
         sent.iter()
             .any(|text| text.starts_with(texts::REVIEW_QUEUE_EMPTY)
                 && text.contains(&texts::makeup_queue_line(1))),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_makeup_button_pressed_after_the_makeups_were_reviewed_names_the_queue_still_waiting() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    open_makeup(&app, 3).await;
+    let makeup = makeup_of(&app, &closed, &app.fixture.student).await;
+    app.queued_submission(app.student(), "pull/regular").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    telegram.message(app.teacher(), texts::BUTTON_REVIEW);
+    let makeups = telegram
+        .button(app.teacher(), callbacks::NEXT_MAKEUP_REVIEW)
+        .await;
+    app.review(makeup, app.teacher(), "reject", "Вне бота")
+        .await
+        .ok();
+
+    telegram.click(app.teacher(), &makeups);
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.teacher());
+    assert!(
+        sent.iter()
+            .any(|text| text.starts_with(texts::MAKEUP_QUEUE_EMPTY)
+                && text.contains(&texts::review_queue_line(1))),
         "{sent:#?}"
     );
 }

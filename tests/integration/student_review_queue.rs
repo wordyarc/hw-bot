@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use hw_bot::app::Actor;
 use hw_bot::db;
-use hw_bot::domain::{Assignment, User};
+use hw_bot::domain::{Assignment, Grading, MakeupTerms, User};
 use hw_bot::test_support::{ReviewShortcuts, submission};
 
 use crate::harness::TestApp;
@@ -173,6 +173,42 @@ async fn a_sandbox_submission_is_placed_among_sandbox_submissions_only() {
     assert_eq!(places[0].assignment_id, trial.id());
     assert_eq!(places[0].position, 2, "only the earlier trial is ahead");
     assert_eq!(places[0].total, 2);
+}
+
+#[tokio::test]
+async fn a_sandbox_makeup_is_placed_among_the_regular_sandbox_submissions() {
+    let app = TestApp::start().await;
+    let sandbox = app.add_sandbox_course().await;
+    let trial = app
+        .add_published_assignment(&sandbox, &app.fixture.teacher, "Trial")
+        .await;
+    let ten = Grading::scored(10).unwrap();
+    let closed_trial = app
+        .add_makeup_assignment_in(
+            &sandbox,
+            "Closed trial",
+            ten,
+            MakeupTerms::scored(6, ten).unwrap(),
+            Utc::now() - Duration::days(1),
+        )
+        .await;
+    app.enable_makeup_in(&sandbox, 3).await;
+    let trainee = app.add_student("Trainee").await;
+    submit(&app, &trial, &trainee, 2).await;
+    app.submit(closed_trial.id().as_uuid(), app.student(), "pull/makeup")
+        .await
+        .created();
+
+    let places = app
+        .application
+        .submissions
+        .queue_places(Actor::new(app.fixture.student.id()), Default::default())
+        .await
+        .expect("the queue is readable")
+        .items;
+
+    assert_eq!(places[0].assignment_id, closed_trial.id());
+    assert_eq!((places[0].position, places[0].total), (2, 2));
 }
 
 #[tokio::test]

@@ -264,6 +264,81 @@ async fn a_scale_decision_skips_changed_archived_and_other_scale_assignments() {
 }
 
 #[tokio::test]
+async fn a_scale_decision_skips_an_assignment_changed_while_the_decision_waits() {
+    let app = TestApp::start().await;
+    let undecided = app.add_scored_assignment(10).await;
+    let mut colleague = app.pool.begin().await.expect("begin a concurrent edit");
+    let blocker: i32 = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *colleague)
+        .await
+        .expect("read backend pid");
+    sqlx::query("update assignments set title = 'Renamed', revision = revision + 1 where id = $1")
+        .bind(undecided.id().as_uuid())
+        .execute(&mut *colleague)
+        .await
+        .expect("edit the assignment concurrently");
+
+    let saving = configure(
+        &app,
+        app.teacher_actor(),
+        None,
+        Some(for_days(30, 3)),
+        vec![MakeupDecision {
+            grading: ten(),
+            assignment_ids: vec![undecided.id()],
+            terms: credit(6),
+        }],
+    );
+    let (saved, ()) = tokio::join!(saving, async {
+        wait_for_blocked_connection(&app.pool, blocker).await;
+        colleague
+            .commit()
+            .await
+            .expect("commit the concurrent edit");
+    });
+
+    assert_eq!(saved.unwrap().map(|makeup| makeup.attempts()), Some(3));
+    assert_eq!(makeup_terms(&app, undecided.id()).await, (None, 1));
+}
+
+async fn makeup_hint(app: &TestApp) -> Option<u16> {
+    app.application
+        .courses
+        .makeup_question(
+            app.teacher_actor(),
+            app.fixture.course.id(),
+            ten(),
+            None,
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .hint
+}
+
+#[tokio::test]
+async fn the_makeup_question_hints_the_credit_shared_by_the_assignments_of_the_scale() {
+    let app = TestApp::start().await;
+    for title in ["First", "Second"] {
+        app.add_closed_assignment(title, 10, 6).await;
+    }
+    app.enable_makeup(3).await;
+
+    assert_eq!(makeup_hint(&app).await, Some(6));
+}
+
+#[tokio::test]
+async fn the_makeup_question_has_no_hint_while_the_credits_of_the_scale_differ() {
+    let app = TestApp::start().await;
+    for (title, credit) in [("First", 6), ("Second", 4)] {
+        app.add_closed_assignment(title, 10, credit).await;
+    }
+    app.enable_makeup(3).await;
+
+    assert_eq!(makeup_hint(&app).await, None);
+}
+
+#[tokio::test]
 async fn a_makeup_attempt_is_granted_only_on_a_course_with_makeup() {
     let app = TestApp::start().await;
 
@@ -901,12 +976,8 @@ async fn a_credited_makeup_replaces_a_work_with_a_penalty_to_the_total() {
     );
 }
 
-#[tokio::test]
-async fn a_makeup_credited_below_the_earlier_work_does_not_lower_the_gradebook() {
-    let app = TestApp::start().await;
-    let work = closed_with_accepted_work(&app, None, 5).await;
-    app.enable_makeup(3).await;
-    let makeup = makeup_of(&app, &work, &app.fixture.student).await;
+async fn credit_a_makeup_after_lowering_the_credit(app: &TestApp, work: &Assignment, lowered: u16) {
+    let makeup = makeup_of(app, work, &app.fixture.student).await;
     let stored = db::assignments::find_versioned_by_id(&app.pool, work.id())
         .await
         .unwrap()
@@ -918,7 +989,7 @@ async fn a_makeup_credited_below_the_earlier_work_does_not_lower_the_gradebook()
             actor: app.teacher_actor(),
             deadline_at: work.deadline_at(),
             late_policy: work.late_policy(),
-            makeup: Some(credit(4)),
+            makeup: Some(credit(lowered)),
             expected_revision: stored.revision,
         })
         .await
@@ -926,6 +997,29 @@ async fn a_makeup_credited_below_the_earlier_work_does_not_lower_the_gradebook()
     app.review(makeup, app.teacher(), "accept", "Досдано")
         .await
         .ok();
+}
+
+#[tokio::test]
+async fn a_makeup_credited_below_the_earlier_work_does_not_lower_the_gradebook() {
+    let app = TestApp::start().await;
+    let work = closed_with_accepted_work(&app, None, 5).await;
+    app.enable_makeup(3).await;
+    credit_a_makeup_after_lowering_the_credit(&app, &work, 4).await;
+
+    let score = gradebook_score(&app, &work).await.unwrap();
+
+    assert_eq!(
+        (score.work_score, score.course_total_penalty, score.makeup),
+        (5, 0, false)
+    );
+}
+
+#[tokio::test]
+async fn a_makeup_credited_equally_to_the_earlier_work_leaves_the_work_in_the_gradebook() {
+    let app = TestApp::start().await;
+    let work = closed_with_accepted_work(&app, None, 5).await;
+    app.enable_makeup(3).await;
+    credit_a_makeup_after_lowering_the_credit(&app, &work, 5).await;
 
     let score = gradebook_score(&app, &work).await.unwrap();
 

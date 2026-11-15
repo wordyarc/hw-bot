@@ -7,8 +7,9 @@ use std::time::Duration;
 use chrono_tz::Tz;
 use serde::{Deserialize, Deserializer};
 
-use crate::bot::MAX_CONCURRENT_UPDATES;
+use crate::bot::{MAX_CONCURRENT_UPDATES, TelegramBotSettings};
 use crate::invites::InviteSigningSecret;
+use crate::telegram::NotificationWorkerSettings;
 
 const MAX_RATE_LIMIT_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
@@ -172,15 +173,46 @@ impl TelegramConfig {
     }
 }
 
+pub fn millis(value: NonZeroU64) -> Duration {
+    Duration::from_millis(value.get())
+}
+
 impl AppConfig {
     pub fn shutdown_grace(&self) -> Duration {
-        Duration::from_millis(
+        millis(
             self.server
                 .request_timeout_ms
                 .max(self.telegram.shutdown_grace_ms)
-                .max(self.notification_worker.shutdown_grace_ms)
-                .get(),
+                .max(self.notification_worker.shutdown_grace_ms),
         )
+    }
+
+    pub fn telegram_bot_settings(&self) -> TelegramBotSettings {
+        let telegram = &self.telegram;
+        let files = &self.files;
+
+        TelegramBotSettings {
+            request_timeout: millis(telegram.request_timeout_ms),
+            polling_timeout: millis(telegram.polling_timeout_ms),
+            rate_limit_replenish: millis(telegram.rate_limit_replenish_ms),
+            rate_limit_burst: telegram.rate_limit_burst,
+            max_concurrent_updates: telegram.max_concurrent_updates,
+            file_transfer_timeout: millis(files.transfer_timeout_ms),
+            max_concurrent_file_transfers: files.max_concurrent_transfers,
+        }
+    }
+
+    pub fn notification_worker_settings(&self) -> NotificationWorkerSettings {
+        let worker = &self.notification_worker;
+
+        NotificationWorkerSettings {
+            request_timeout: millis(self.telegram.request_timeout_ms),
+            poll_interval: millis(worker.poll_interval_ms),
+            lease_duration: millis(worker.lease_duration_ms),
+            max_attempts: worker.max_attempts.get(),
+            retry_initial: millis(worker.retry_initial_ms),
+            retry_max: millis(worker.retry_max_ms),
+        }
     }
 
     pub fn load() -> Result<Self, ::config::ConfigError> {
@@ -654,6 +686,58 @@ mod tests {
         config.notification_worker.shutdown_grace_ms = NonZeroU64::new(3000).unwrap();
 
         assert_eq!(config.shutdown_grace(), Duration::from_millis(7000));
+    }
+
+    fn ms(value: u64) -> NonZeroU64 {
+        NonZeroU64::new(value).unwrap()
+    }
+
+    #[test]
+    fn bot_settings_take_every_limit_from_its_own_field() {
+        let mut config = app_config();
+        config.telegram.request_timeout_ms = ms(1001);
+        config.telegram.polling_timeout_ms = ms(2002);
+        config.telegram.rate_limit_replenish_ms = ms(3003);
+        config.telegram.rate_limit_burst = NonZeroU32::new(4).unwrap();
+        config.telegram.max_concurrent_updates = NonZeroUsize::new(5).unwrap();
+        config.files.transfer_timeout_ms = ms(6006);
+        config.files.max_concurrent_transfers = NonZeroUsize::new(7).unwrap();
+
+        assert_eq!(
+            config.telegram_bot_settings(),
+            TelegramBotSettings {
+                request_timeout: Duration::from_millis(1001),
+                polling_timeout: Duration::from_millis(2002),
+                rate_limit_replenish: Duration::from_millis(3003),
+                rate_limit_burst: NonZeroU32::new(4).unwrap(),
+                max_concurrent_updates: NonZeroUsize::new(5).unwrap(),
+                file_transfer_timeout: Duration::from_millis(6006),
+                max_concurrent_file_transfers: NonZeroUsize::new(7).unwrap(),
+            }
+        );
+    }
+
+    #[test]
+    fn worker_settings_take_every_limit_from_its_own_field() {
+        let mut config = app_config();
+        config.telegram.request_timeout_ms = ms(1001);
+        config.notification_worker.poll_interval_ms = ms(2002);
+        config.notification_worker.lease_duration_ms = ms(3003);
+        config.notification_worker.max_attempts = NonZeroU32::new(4).unwrap();
+        config.notification_worker.retry_initial_ms = ms(5005);
+        config.notification_worker.retry_max_ms = ms(6006);
+
+        assert_eq!(
+            config.notification_worker_settings(),
+            NotificationWorkerSettings {
+                request_timeout: Duration::from_millis(1001),
+                poll_interval: Duration::from_millis(2002),
+                lease_duration: Duration::from_millis(3003),
+                max_attempts: 4,
+                retry_initial: Duration::from_millis(5005),
+                retry_max: Duration::from_millis(6006),
+            }
+        );
     }
 
     #[test]

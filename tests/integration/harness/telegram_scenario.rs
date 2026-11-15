@@ -14,6 +14,26 @@ use super::telegram::{
 };
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
+const MESSAGE_TOO_LONG: &str = "Bad Request: message is too long";
+
+fn bad_request(description: &str) -> ResponseTemplate {
+    ResponseTemplate::new(400).set_body_json(json!({
+        "ok": false,
+        "error_code": 400,
+        "description": description
+    }))
+}
+
+fn exceeds_the_message_limit(text: &Value) -> bool {
+    text.as_str()
+        .is_some_and(|text| text.encode_utf16().count() > TELEGRAM_MESSAGE_LIMIT)
+}
+
+fn inline_rows(message: &Value) -> &[Value] {
+    message["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .map_or(&[], Vec::as_slice)
+}
 
 pub fn text_over_the_limit_once_its_link_is_revealed() -> Value {
     json!({
@@ -153,15 +173,8 @@ impl TelegramScenario {
             .and(path("/bottest-token/SendMessage"))
             .respond_with(move |request: &wiremock::Request| {
                 let body: Value = request.body_json().unwrap();
-                if body["text"]
-                    .as_str()
-                    .is_some_and(|text| text.encode_utf16().count() > TELEGRAM_MESSAGE_LIMIT)
-                {
-                    return ResponseTemplate::new(400).set_body_json(json!({
-                        "ok": false,
-                        "error_code": 400,
-                        "description": "Bad Request: message is too long"
-                    }));
+                if exceeds_the_message_limit(&body["text"]) {
+                    return bad_request(MESSAGE_TOO_LONG);
                 }
                 let mut state = messages.lock().unwrap();
                 let message = json!({
@@ -187,6 +200,9 @@ impl TelegramScenario {
                 .and(path(format!("/bottest-token/{endpoint}")))
                 .respond_with(move |request: &wiremock::Request| {
                     let body: Value = request.body_json().unwrap();
+                    if exceeds_the_message_limit(&body["text"]) {
+                        return bad_request(MESSAGE_TOO_LONG);
+                    }
                     let mut state = messages.lock().unwrap();
                     let message = state
                         .messages
@@ -196,6 +212,10 @@ impl TelegramScenario {
                                 && message["message_id"] == body["message_id"]
                         })
                         .expect("editing a message sent by the bot");
+                    let same_text = body["text"].is_null() || body["text"] == message["text"];
+                    if same_text && inline_rows(&body) == inline_rows(message) {
+                        return bad_request(&teloxide::ApiError::MessageNotModified.to_string());
+                    }
                     if body["reply_markup"].is_null() {
                         message.as_object_mut().unwrap().remove("reply_markup");
                     } else {

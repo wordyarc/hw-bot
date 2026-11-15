@@ -95,6 +95,27 @@ async fn profile_statistics_count_assignments_beyond_the_first_page() {
 }
 
 #[tokio::test]
+async fn profile_statistics_count_only_published_assignments() {
+    let app = TestApp::start().await;
+    app.add_draft_assignment().await;
+    let archived = app
+        .add_published_assignment(&app.fixture.course, &app.fixture.teacher, "Archived")
+        .await;
+    app.archive_assignment(archived.id().as_uuid(), app.teacher())
+        .await
+        .ok();
+
+    let stats = app
+        .application
+        .users
+        .statistics(app.student_actor())
+        .await
+        .unwrap();
+
+    assert_eq!(stats.assignments, 1);
+}
+
+#[tokio::test]
 async fn grade_totals_cover_all_pages() {
     let app = TestApp::start().await;
     for _ in 0..PAGE_SIZE + 1 {

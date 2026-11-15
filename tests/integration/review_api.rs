@@ -8,7 +8,9 @@ use hw_bot::domain::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::harness::{TestApp, submission_id, wait_for_blocked_connection};
+use crate::harness::{
+    TestApp, insert_assignment, submission_id, wait_for_blocked_connection, wall_clock_assignment,
+};
 
 #[tokio::test]
 async fn reloading_a_review_checks_access_to_its_course() {
@@ -49,6 +51,51 @@ async fn reloading_a_completed_review_does_not_restart_it() {
         error.code(),
         hw_bot::app::ErrorCode::SubmissionAlreadyReviewed
     );
+}
+
+async fn submit_to(app: &TestApp, assignment: &Assignment, content: &str) -> Uuid {
+    submission_id(
+        &app.submit(assignment.id().as_uuid(), app.student(), content)
+            .await
+            .created(),
+    )
+}
+
+#[tokio::test]
+async fn a_review_card_lists_previous_attempts_from_the_oldest() {
+    let app = TestApp::start().await;
+    let assignment = wall_clock_assignment(&app.fixture.course, &app.fixture.teacher)
+        .max_attempts(3)
+        .published()
+        .build();
+    insert_assignment(&app.pool, &assignment).await;
+    let mut rejected = Vec::new();
+    for content in ["pull/1", "pull/2"] {
+        let attempt = submit_to(&app, &assignment, content).await;
+        app.review(attempt, app.teacher(), "reject", "Ещё раз")
+            .await
+            .ok();
+        rejected.push(attempt);
+    }
+    let current = submit_to(&app, &assignment, "pull/3").await;
+
+    let card = app
+        .application
+        .reviews
+        .find_for_review(
+            app.teacher_actor(),
+            SubmissionId::from_uuid(current),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+    let previous: Vec<Uuid> = card
+        .previous_attempts
+        .iter()
+        .map(|attempt| attempt.id().as_uuid())
+        .collect();
+    assert_eq!(previous, rejected);
 }
 
 #[tokio::test]
