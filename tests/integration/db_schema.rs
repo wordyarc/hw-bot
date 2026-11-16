@@ -1028,3 +1028,56 @@ async fn the_invite_migration_backfills_courses_created_without_an_invite() {
     .unwrap();
     assert_eq!(generation, 1);
 }
+
+#[tokio::test]
+async fn the_enrollment_migration_enrolls_students_in_the_courses_of_their_group_but_the_sandbox() {
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+    let pool = fresh_database().await;
+    db::run_migrations(&pool).await.unwrap();
+    MIGRATOR.undo(&pool, 5).await.unwrap();
+    sqlx::query(
+        "with own as (
+             insert into student_groups (code, education_level, study_year)
+             values ('OWN', 'bachelor', 1) returning id
+         ), other as (
+             insert into student_groups (code, education_level, study_year)
+             values ('OTHER', 'bachelor', 1) returning id
+         ), subject as (
+             insert into subjects (name, sandbox)
+             values ('Backend', false), ('Android', false), ('Sandbox', true)
+             returning id, name
+         ), course as (
+             insert into teaching_courses (subject_id) select id from subject
+             returning id, subject_id
+         ), course_group as (
+             insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)
+             select course.id, course.subject_id,
+                    case when subject.name = 'Android' then (select id from other)
+                         else (select id from own) end
+             from course join subject on subject.id = course.subject_id
+         )
+         insert into users (telegram_user_id, role, display_name, student_group_id)
+         select 1, 'student', 'Student', id from own
+         union all
+         select 2, 'teacher', 'Teacher', null",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    db::run_migrations(&pool).await.unwrap();
+
+    let enrolled: Vec<(String, String)> = sqlx::query_as(
+        "select users.display_name, subjects.name
+         from teaching_course_students enrolled
+         join users on users.id = enrolled.student_id
+         join teaching_courses courses on courses.id = enrolled.teaching_course_id
+         join subjects on subjects.id = courses.subject_id
+         order by 1, 2",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(enrolled, [("Student".to_owned(), "Backend".to_owned())]);
+}

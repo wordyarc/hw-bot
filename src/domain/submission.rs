@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use crate::domain::{
     Acceptance, Assignment, AssignmentId, CourseMakeup, DeductedFrom, DomainError, DomainResult,
     LatePenalty, MAX_ATTEMPTS, MAX_SCORE, MakeupBalance, MakeupOffer, MakeupPool, MakeupRequest,
-    NonEmptyString, SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
+    NonEmptyString, Participation, SubmissionId, TeachingCourse, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -529,6 +529,12 @@ pub(crate) struct SubmissionParts {
     pub grade: GradeParts,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Submitter<'a> {
+    pub student: &'a User,
+    pub participation: Participation,
+}
+
 impl Submission {
     pub(crate) fn restore(parts: SubmissionParts) -> DomainResult<Self> {
         if parts.attempt_number == 0 {
@@ -594,18 +600,22 @@ impl Submission {
 
     pub fn admit(
         assignment: &Assignment,
-        student: &User,
+        submitter: Submitter<'_>,
         history: SubmissionHistory,
         submitted_at: DateTime<Utc>,
         makeup: MakeupRequest,
     ) -> DomainResult<Acceptance> {
+        let Submitter {
+            student,
+            participation,
+        } = submitter;
         if !student.role().can_submit_homework() {
             return Err(DomainError::PermissionDenied {
                 action: "submit homework",
             });
         }
 
-        if !assignment.is_issued_to(student) {
+        if !assignment.is_issued_to(student, participation) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
         }
 
@@ -623,13 +633,13 @@ impl Submission {
     pub fn submit(
         id: SubmissionId,
         assignment: &Assignment,
-        student: &User,
+        submitter: Submitter<'_>,
         history: SubmissionHistory,
         content: impl Into<String>,
         submitted_at: DateTime<Utc>,
         makeup: MakeupRequest,
     ) -> DomainResult<Self> {
-        let acceptance = Self::admit(assignment, student, history, submitted_at, makeup)?;
+        let acceptance = Self::admit(assignment, submitter, history, submitted_at, makeup)?;
         if acceptance != Acceptance::Regular {
             makeup.balance.ensure_available()?;
         }
@@ -637,7 +647,7 @@ impl Submission {
         Self::restore(SubmissionParts {
             id,
             assignment_id: assignment.id(),
-            student_id: student.id(),
+            student_id: submitter.student.id(),
             kind: acceptance.kind(),
             attempt_number: history.next_attempt_number()?,
             content: content.into(),

@@ -92,6 +92,10 @@ pub const INVITE_ROTATE: &str = "invite:rotate";
 pub const INVITE_CONFIRM_ROTATE: &str = "invite:confirm-rotate";
 pub const INVITE_CANCEL_ROTATE: &str = "invite:cancel-rotate";
 pub const REGISTRATION_GROUP_PREFIX: &str = "reg-group:";
+pub const REGISTRATION_SUBJECT_PREFIX: &str = "reg-subject:";
+pub const REGISTRATION_SUBJECTS_DONE: &str = "reg-subject:done";
+pub const ENROLL_SUBJECT_PREFIX: &str = "subject:";
+pub const ENROLL_SUBJECTS_DONE: &str = "subject:done";
 pub const ASSIGNMENT_GROUP_PREFIX: &str = "agroup:";
 pub const ASSIGNMENT_GROUPS_DONE: &str = "agroup:done";
 
@@ -373,6 +377,10 @@ pub(super) enum FlowAction {
     ConfirmInviteRotation,
     CancelInviteRotation,
     RegistrationGroup(StudentGroupId),
+    RegistrationSubject(TeachingCourseId),
+    RegistrationSubjectsDone,
+    EnrollSubject(TeachingCourseId),
+    EnrollSubjectsDone,
     AssignmentGroup(StudentGroupId),
     AssignmentGroupsDone,
     MakeupAnswer(MakeupChoice),
@@ -416,6 +424,12 @@ impl FlowAction {
             Self::ConfirmInviteRotation => INVITE_CONFIRM_ROTATE.to_owned(),
             Self::CancelInviteRotation => INVITE_CANCEL_ROTATE.to_owned(),
             Self::RegistrationGroup(id) => format!("{REGISTRATION_GROUP_PREFIX}{}", id.as_uuid()),
+            Self::RegistrationSubject(id) => {
+                format!("{REGISTRATION_SUBJECT_PREFIX}{}", id.as_uuid())
+            }
+            Self::RegistrationSubjectsDone => REGISTRATION_SUBJECTS_DONE.to_owned(),
+            Self::EnrollSubject(id) => format!("{ENROLL_SUBJECT_PREFIX}{}", id.as_uuid()),
+            Self::EnrollSubjectsDone => ENROLL_SUBJECTS_DONE.to_owned(),
             Self::AssignmentGroup(id) => format!("{ASSIGNMENT_GROUP_PREFIX}{}", id.as_uuid()),
             Self::AssignmentGroupsDone => ASSIGNMENT_GROUPS_DONE.to_owned(),
             Self::MakeupAnswer(choice) => choice.callback(),
@@ -614,6 +628,8 @@ pub(super) fn parse(data: &str) -> Option<CallbackAction> {
         INVITE_CONFIRM_ROTATE => Flow(FlowAction::ConfirmInviteRotation),
         INVITE_CANCEL_ROTATE => Flow(FlowAction::CancelInviteRotation),
         ASSIGNMENT_GROUPS_DONE => Flow(FlowAction::AssignmentGroupsDone),
+        REGISTRATION_SUBJECTS_DONE => Flow(FlowAction::RegistrationSubjectsDone),
+        ENROLL_SUBJECTS_DONE => Flow(FlowAction::EnrollSubjectsDone),
         PENALTY_PERIOD => Flow(FlowAction::PenaltyPeriod),
         TERMS_SAVE => Flow(FlowAction::Terms(TermsAction::Save)),
         TERMS_DEADLINE => Flow(FlowAction::Terms(TermsAction::Deadline)),
@@ -759,6 +775,14 @@ const ID_ROUTES: &[Route<Uuid, CallbackAction>] = &[
     }),
     (ASSIGNMENT_GROUP_PREFIX, |id| {
         Flow(FlowAction::AssignmentGroup(StudentGroupId::from_uuid(id)))
+    }),
+    (REGISTRATION_SUBJECT_PREFIX, |id| {
+        Flow(FlowAction::RegistrationSubject(
+            TeachingCourseId::from_uuid(id),
+        ))
+    }),
+    (ENROLL_SUBJECT_PREFIX, |id| {
+        Flow(FlowAction::EnrollSubject(TeachingCourseId::from_uuid(id)))
     }),
 ];
 
@@ -1182,6 +1206,12 @@ mod tests {
             Flow(FlowAction::ConfirmInviteRotation) => Flow(FlowAction::ConfirmInviteRotation),
             Flow(FlowAction::CancelInviteRotation) => Flow(FlowAction::CancelInviteRotation),
             Flow(FlowAction::RegistrationGroup(_)) => Flow(FlowAction::RegistrationGroup(group)),
+            Flow(FlowAction::RegistrationSubject(_)) =>
+                Flow(FlowAction::RegistrationSubject(course)),
+            Flow(FlowAction::RegistrationSubjectsDone) =>
+                Flow(FlowAction::RegistrationSubjectsDone),
+            Flow(FlowAction::EnrollSubject(_)) => Flow(FlowAction::EnrollSubject(course)),
+            Flow(FlowAction::EnrollSubjectsDone) => Flow(FlowAction::EnrollSubjectsDone),
             Flow(FlowAction::AssignmentGroup(_)) => Flow(FlowAction::AssignmentGroup(group)),
             Flow(FlowAction::AssignmentGroupsDone) => Flow(FlowAction::AssignmentGroupsDone),
             Flow(FlowAction::MakeupAnswer(MakeupChoice::Credit(_))) =>

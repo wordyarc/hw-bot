@@ -204,6 +204,15 @@ pub(super) async fn show_profile(screen: ActorChat<'_>) -> HandlerResult {
                 lines.push(texts::profile_active_assignments(stats.assignments));
                 lines.push(texts::profile_pending(stats.pending));
             }
+            if let Some(subjects) =
+                optional_stat(services.users.subjects(actor).await, "student_subjects")
+            {
+                let names: Vec<_> = subjects
+                    .iter()
+                    .map(|subject| subject.name().as_str())
+                    .collect();
+                lines.push(texts::chosen_subjects(&names));
+            }
         }
         Role::Teacher | Role::Admin => {
             if let Some(stats) =

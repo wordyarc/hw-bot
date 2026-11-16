@@ -1,11 +1,12 @@
 use chrono::{Duration, SubsecRound, Utc};
 use hw_bot::db;
-use hw_bot::domain::{Assignment, StudentGroup, Subject, TeachingCourse, User};
+use hw_bot::domain::{Assignment, StudentGroup, Subject, TeachingCourse, TeachingCourseId, User};
 use hw_bot::test_support::{
     AssignmentBuilder, GROUP_CODE, SUBJECT_NAME, assignment, named_student, named_teacher,
     student_group, subject, teaching_course,
 };
-use sqlx::PgPool;
+use sqlx::{AssertSqlSafe, PgPool};
+use uuid::Uuid;
 
 /// HTTP-хендлер выставляет `submitted_at = Utc::now()`. Для таких сдач нужен дедлайн
 /// от текущего времени: срок, отсчитанный от `t0()`, к запуску теста уже мог пройти.
@@ -70,6 +71,33 @@ impl Fixture {
 
 pub async fn insert_user(pool: &PgPool, user: &User) {
     db::users::insert(pool, user).await.expect("insert user");
+    enroll(pool, "users.id = $1", user.id().as_uuid()).await;
+}
+
+async fn enroll(pool: &PgPool, scope: &'static str, id: Uuid) {
+    sqlx::query(AssertSqlSafe(format!(
+        "insert into teaching_course_students (teaching_course_id, student_id)
+         select course_groups.teaching_course_id, users.id
+         from users
+         join teaching_course_groups course_groups
+           on course_groups.student_group_id = users.student_group_id
+         join subjects on subjects.id = course_groups.subject_id
+         where users.role = 'student' and not subjects.sandbox and {scope}
+         on conflict do nothing"
+    )))
+    .bind(id)
+    .execute(pool)
+    .await
+    .expect("enroll students in the courses of their group");
+}
+
+pub async fn enroll_course_students(pool: &PgPool, course_id: TeachingCourseId) {
+    enroll(
+        pool,
+        "course_groups.teaching_course_id = $1",
+        course_id.as_uuid(),
+    )
+    .await;
 }
 
 pub async fn insert_group(pool: &PgPool, group: &StudentGroup) {
@@ -92,4 +120,5 @@ pub async fn insert_course(pool: &PgPool, course: &TeachingCourse) {
         .await
         .expect("insert teaching course");
     tx.commit().await.expect("commit transaction");
+    enroll_course_students(pool, course.id()).await;
 }

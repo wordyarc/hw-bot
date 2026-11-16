@@ -345,38 +345,44 @@ pub async fn find_by_id(
         .transpose()
 }
 
-pub async fn list_published_for_group(
+pub async fn list_published_for_student(
     executor: impl PgExecutor<'_>,
-    student_group_id: StudentGroupId,
+    student_id: UserId,
     page: PageRequest,
 ) -> DbResult<Vec<StudentAssignmentCard>> {
     fetch_assignment_cards!(
         executor,
-        " join assignment_groups issued
+        " join course_participants participant
+            on participant.teaching_course_id = assignments.teaching_course_id
+           and participant.student_id = $1
+          join assignment_groups issued
             on issued.assignment_id = assignments.id
-         where issued.student_group_id = $1
-           and assignments.status = 'published'
+           and issued.student_group_id = participant.student_group_id
+         where assignments.status = 'published'
          order by subjects.name, assignments.deadline_at, assignments.id limit $2 offset $3",
-        student_group_id.as_uuid(),
+        student_id.as_uuid(),
         page.fetch_limit(),
         page.offset(),
     )
 }
 
-pub async fn list_archived_for_group(
+pub async fn list_archived_for_student(
     executor: impl PgExecutor<'_>,
-    student_group_id: StudentGroupId,
+    student_id: UserId,
     page: PageRequest,
 ) -> DbResult<Vec<StudentAssignmentCard>> {
     fetch_assignment_cards!(
         executor,
-        " join assignment_groups issued
+        " join course_participants participant
+            on participant.teaching_course_id = assignments.teaching_course_id
+           and participant.student_id = $1
+          join assignment_groups issued
             on issued.assignment_id = assignments.id
-         where issued.student_group_id = $1
-           and assignments.status = 'archived'
+           and issued.student_group_id = participant.student_group_id
+         where assignments.status = 'archived'
            and assignments.published_at is not null
          order by subjects.name, assignments.published_at desc, assignments.id limit $2 offset $3",
-        student_group_id.as_uuid(),
+        student_id.as_uuid(),
         page.fetch_limit(),
         page.offset(),
     )

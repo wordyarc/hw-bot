@@ -166,8 +166,32 @@ pub fn registration_group_prompt(subject: &str) -> String {
     )
 }
 
-pub fn registration_prompt(subject: &str, group: &str) -> String {
-    format!("Предмет: {subject}.\nГруппа для регистрации: {group}.\n\nНапишите, как вас зовут.")
+pub fn registration_subjects_prompt(group: &str) -> String {
+    format!(
+        "Группа для регистрации: {group}.\n\nОтметьте предметы, на которые вы ходите, и нажмите «Продолжить». Отписаться от предмета самому потом нельзя."
+    )
+}
+
+pub fn registration_prompt(group: &str, subjects: &[&str]) -> String {
+    let subjects = match subjects {
+        [] => String::new(),
+        subjects => format!("\n{}", chosen_subjects(subjects)),
+    };
+    format!("Группа для регистрации: {group}.{subjects}\n\nНапишите, как вас зовут.")
+}
+
+pub fn chosen_subjects(subjects: &[&str]) -> String {
+    match subjects {
+        [] => "Предметы: не выбраны.".to_owned(),
+        subjects => format!("Предметы: {}.", subjects.join(", ")),
+    }
+}
+
+pub const SUBJECTS_REQUIRED: &str = "Отметьте хотя бы один предмет.";
+pub const ENROLLMENT_PROMPT: &str = "Вашей группе доступны ещё предметы. Отметьте те, на которые вы ходите, и нажмите «Продолжить». Отписаться от предмета самому потом нельзя.";
+
+pub fn enrollment_complete(subjects: &[&str]) -> String {
+    format!("✅ Вы записаны. {}", chosen_subjects(subjects))
 }
 
 pub fn groups_line(codes: &[&str]) -> String {
@@ -1048,8 +1072,16 @@ pub const ASSIGNMENT_GROUPS_REQUIRED: &str =
 pub const BUTTON_GROUPS_DONE: &str = "➡️ Продолжить";
 
 pub fn group_choice_button(code: &str, selected: bool) -> String {
+    checkbox_button(code, selected)
+}
+
+pub fn subject_choice_button(name: &str, selected: bool) -> String {
+    checkbox_button(name, selected)
+}
+
+fn checkbox_button(label: &str, selected: bool) -> String {
     let mark = if selected { "☑️" } else { "⬜" };
-    format!("{mark} {code}")
+    format!("{mark} {label}")
 }
 
 pub const BUTTON_OTHER_AMOUNT: &str = "✍️ Другое число";
@@ -1390,6 +1422,16 @@ mod tests {
 
     fn out_of(score: impl Display, max_score: impl Display) -> String {
         format!("{score} из {max_score}")
+    }
+
+    #[test]
+    fn the_name_question_repeats_the_group_and_the_chosen_subjects() {
+        let prompt = registration_prompt("B9122", &["Android", "Backend"]);
+
+        assert!(prompt.contains("B9122"), "{prompt}");
+        assert!(prompt.contains("Android"), "{prompt}");
+        assert!(prompt.contains("Backend"), "{prompt}");
+        assert!(!registration_prompt("B9122", &[]).contains(&chosen_subjects(&[])));
     }
 
     fn penalty(points: impl Display) -> String {

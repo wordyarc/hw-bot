@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select id, display_name\n        from users\n        where student_group_id = $1\n          and role = 'student'\n        order by display_name, id\n        limit $2 offset $3\n        ",
+  "query": "\n        select users.id, users.display_name\n        from course_participants participant\n        join users\n          on users.id = participant.student_id\n        where participant.teaching_course_id = $1\n          and participant.student_group_id = $2\n        order by users.display_name, users.id\n        limit $3 offset $4\n        ",
   "describe": {
     "columns": [
       {
@@ -29,6 +29,7 @@
     "parameters": {
       "Left": [
         "Uuid",
+        "Uuid",
         "Int8",
         "Int8"
       ]
@@ -38,5 +39,5 @@
       false
     ]
   },
-  "hash": "069b37a5de658c45a06e1b29a2ac06dd4ad98228e4b29f4a91466517fd54c765"
+  "hash": "a257146772c40ff2de541dd43b026f0451dea67608394d612279ce2762f7bf88"
 }

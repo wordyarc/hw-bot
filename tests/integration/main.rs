@@ -9,6 +9,7 @@ mod assignment_teacher_queries;
 mod assignments_api;
 mod attempts_api;
 mod bootstrap;
+mod course_enrollment;
 mod course_invites;
 mod course_roster;
 mod db_schema;

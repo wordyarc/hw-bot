@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into teaching_course_students (teaching_course_id, student_id)\n        select course_id, $1\n        from unnest($2::uuid[]) as chosen (course_id)\n        on conflict (teaching_course_id, student_id) do nothing\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "079c58ad3eb6475e83f05e44bc3b8a7f356c3c4f0f4e689000534636a438b0e6"
+}

@@ -5,8 +5,8 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
 
 use super::render::button_label;
 use crate::app::{
-    AssignmentStudentSummary, CourseStudent, PendingSubmission, StudentAssignment, SubjectQueue,
-    TeachingCourseDetails,
+    AssignmentStudentSummary, CourseStudent, OfferedCourse, PendingSubmission, StudentAssignment,
+    SubjectQueue, TeachingCourseDetails,
 };
 use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, TermsForm, TermsStep, TermsTarget,
@@ -1233,6 +1233,28 @@ pub(crate) fn assignment_groups_keyboard(
         texts::BUTTON_GROUPS_DONE,
         FlowAction::AssignmentGroupsDone.callback(),
     ));
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn subjects_keyboard(
+    courses: &[OfferedCourse],
+    selected: &BTreeSet<TeachingCourseId>,
+    toggle: fn(TeachingCourseId) -> FlowAction,
+    done: FlowAction,
+) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Row> = courses
+        .iter()
+        .map(|course| {
+            row(
+                button_label(&texts::subject_choice_button(
+                    course.subject.name().as_str(),
+                    selected.contains(&course.course_id),
+                )),
+                toggle(course.course_id).callback(),
+            )
+        })
+        .collect();
+    rows.push(row(texts::BUTTON_GROUPS_DONE, done.callback()));
     InlineKeyboardMarkup::new(rows)
 }
 

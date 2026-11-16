@@ -485,10 +485,13 @@ async fn course_grades(
     sqlx::query!(
         r#"
         with students_page as (
-            select id, display_name from users
-            where role = 'student' and student_group_id = $2
-              and ($5::uuid is null or id = $5)
-            order by display_name, id limit $3 offset $4
+            select users.id, users.display_name
+            from course_participants participant
+            join users on users.id = participant.student_id
+            where participant.teaching_course_id = $1
+              and participant.student_group_id = $2
+              and ($5::uuid is null or users.id = $5)
+            order by users.display_name, users.id limit $3 offset $4
         ), best as (
             select distinct on (s.student_id, s.assignment_id)
                 s.student_id, s.assignment_id, s.grade_max_score, s.work_score,

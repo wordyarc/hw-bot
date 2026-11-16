@@ -99,6 +99,34 @@ impl BotState {
         }
     }
 
+    pub(super) fn choosing_registration_subjects(
+        self,
+        message_id: MessageId,
+    ) -> Option<(VerifiedInvite, StudentGroupId, BTreeSet<TeachingCourseId>)> {
+        match self {
+            Self::Flow(FlowState::ChoosingRegistrationSubjects {
+                invite,
+                group_id,
+                message_id: current,
+                selected,
+            }) if current == message_id => Some((invite, group_id, selected)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn choosing_subjects(
+        self,
+        message_id: MessageId,
+    ) -> Option<BTreeSet<TeachingCourseId>> {
+        match self {
+            Self::Flow(FlowState::ChoosingSubjects {
+                message_id: current,
+                selected,
+            }) if current == message_id => Some(selected),
+            _ => None,
+        }
+    }
+
     pub(super) fn choosing_assignment_groups(
         self,
         message_id: MessageId,
@@ -498,9 +526,20 @@ pub(super) enum FlowState {
         invite: VerifiedInvite,
         message_id: MessageId,
     },
+    ChoosingRegistrationSubjects {
+        invite: VerifiedInvite,
+        group_id: StudentGroupId,
+        message_id: MessageId,
+        selected: BTreeSet<TeachingCourseId>,
+    },
     AwaitingRegistrationName {
         invite: VerifiedInvite,
         group_id: StudentGroupId,
+        courses: BTreeSet<TeachingCourseId>,
+    },
+    ChoosingSubjects {
+        message_id: MessageId,
+        selected: BTreeSet<TeachingCourseId>,
     },
     ConfirmingInviteRotation {
         message_id: MessageId,
@@ -588,7 +627,9 @@ pub(super) enum FlowState {
 impl FlowState {
     pub(super) fn abandon_notice(&self) -> Option<(&'static str, KeyboardMarkup)> {
         let notice = match self {
-            Self::AwaitingSubmission { .. } => (texts::ACTION_CANCELLED, student_keyboard()),
+            Self::AwaitingSubmission { .. } | Self::ChoosingSubjects { .. } => {
+                (texts::ACTION_CANCELLED, student_keyboard())
+            }
             Self::AwaitingAssignmentTitle { .. }
             | Self::AwaitingAssignmentBody { .. }
             | Self::ChoosingAssignmentGroups { .. }
@@ -601,6 +642,7 @@ impl FlowState {
             | Self::AwaitingAssignmentFile { .. }
             | Self::AwaitingAttemptAmount { .. } => (texts::ACTION_CANCELLED, teacher_keyboard()),
             Self::ChoosingRegistrationGroup { .. }
+            | Self::ChoosingRegistrationSubjects { .. }
             | Self::AwaitingRegistrationName { .. }
             | Self::ConfirmingInviteRotation { .. }
             | Self::ChoosingReviewDecision { .. }
@@ -641,6 +683,8 @@ impl BotState {
             Self::Flow(
                 FlowState::ConfirmingTermsExit { .. }
                 | FlowState::ChoosingRegistrationGroup { .. }
+                | FlowState::ChoosingRegistrationSubjects { .. }
+                | FlowState::ChoosingSubjects { .. }
                 | FlowState::ChoosingAssignmentGroups { .. },
             ) => Some(texts::CHOOSE_BUTTON),
             Self::Flow(FlowState::ChoosingStudent { .. }) => Some(texts::CHOOSE_STUDENT),

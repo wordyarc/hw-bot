@@ -89,6 +89,9 @@ pub(crate) async fn list_students_with_assignment_history(
         join assignment_groups issued
           on issued.assignment_id = $1
          and issued.student_group_id = users.student_group_id
+        join course_participants participant
+          on participant.teaching_course_id = issued.teaching_course_id
+         and participant.student_id = users.id
         join student_groups
           on student_groups.id = users.student_group_id
         left join history
@@ -121,10 +124,13 @@ pub async fn profile_statistics(
             (
                 select count(*)
                 from assignments
+                join course_participants participant
+                  on participant.teaching_course_id = assignments.teaching_course_id
+                 and participant.student_id = $1
                 join assignment_groups issued
                   on issued.assignment_id = assignments.id
-                where issued.student_group_id = $2
-                  and assignments.status = 'published'
+                 and issued.student_group_id = participant.student_group_id
+                where assignments.status = 'published'
             ) as "assignments!",
             (
                 select count(*)
@@ -135,7 +141,7 @@ pub async fn profile_statistics(
             (
                 select count(*)
                 from teaching_courses course
-                where $3 or exists (
+                where $2 or exists (
                     select 1
                     from teaching_course_teachers teacher
                     where teacher.teaching_course_id = course.id
@@ -144,7 +150,6 @@ pub async fn profile_statistics(
             ) as "courses!"
         "#,
         user.id().as_uuid(),
-        user.student_group_id().map(StudentGroupId::as_uuid),
         user.role().can_manage_all_teaching_courses(),
     )
     .fetch_one(executor)
@@ -159,18 +164,22 @@ pub async fn profile_statistics(
 
 pub async fn list_student_names(
     executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
     group_id: StudentGroupId,
     page: PageRequest,
 ) -> DbResult<Vec<CourseStudent>> {
     let rows = sqlx::query!(
         r#"
-        select id, display_name
-        from users
-        where student_group_id = $1
-          and role = 'student'
-        order by display_name, id
-        limit $2 offset $3
+        select users.id, users.display_name
+        from course_participants participant
+        join users
+          on users.id = participant.student_id
+        where participant.teaching_course_id = $1
+          and participant.student_group_id = $2
+        order by users.display_name, users.id
+        limit $3 offset $4
         "#,
+        course_id.as_uuid(),
         group_id.as_uuid(),
         page.fetch_limit(),
         page.offset(),
@@ -233,9 +242,10 @@ pub async fn course_roster(
             coalesce(accepted.assignments, 0) as "accepted!"
         from teaching_course_groups course_groups
         join student_groups on student_groups.id = course_groups.student_group_id
-        left join users
-          on users.student_group_id = student_groups.id
-         and users.role = 'student'
+        left join course_participants participant
+          on participant.teaching_course_id = course_groups.teaching_course_id
+         and participant.student_group_id = student_groups.id
+        left join users on users.id = participant.student_id
         left join accepted on accepted.student_id = users.id
         where course_groups.teaching_course_id = $1
         order by student_groups.code, users.display_name, users.id

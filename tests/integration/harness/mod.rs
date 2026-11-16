@@ -41,7 +41,7 @@ pub use response_gate::ResponseGate;
 
 pub use hw_bot::test_support::{invite_codec, out_of};
 
-use fixture::{insert_course, insert_group, insert_user};
+use fixture::{enroll_course_students, insert_course, insert_group, insert_user};
 
 pub struct TestApp {
     pub pool: PgPool,
@@ -433,6 +433,15 @@ impl TestApp {
         student
     }
 
+    pub async fn add_unenrolled_student(&self, display_name: &str) -> User {
+        let student = named_student(self.next_telegram_id(), display_name, &self.fixture.group);
+        db::users::insert(&self.pool, &student)
+            .await
+            .expect("insert user");
+
+        student
+    }
+
     pub async fn add_outsider_teacher(&self, display_name: &str) -> User {
         let teacher = named_teacher(self.next_telegram_id(), display_name);
         insert_user(&self.pool, &teacher).await;
@@ -509,6 +518,7 @@ impl TestApp {
         db::academic::add_teaching_course_group(&self.pool, course.id(), group.id())
             .await
             .expect("add the group to the course");
+        enroll_course_students(&self.pool, course.id()).await;
 
         group
     }

@@ -1,15 +1,18 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::postgres::PgExecutor;
 
+use crate::app::access::load_student;
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    DomainError, DomainResult, StaffRole, StudentGroup, StudentGroupId, Subject, TelegramUserId,
-    User, UserId,
+    DomainError, DomainResult, StaffRole, StudentGroup, StudentGroupId, Subject, TeachingCourseId,
+    TelegramUserId, User, UserId,
 };
 use crate::invites::VerifiedInvite;
-use crate::read_models::UserStatistics;
+use crate::read_models::{OfferedCourse, UserStatistics};
 
 pub(crate) async fn load_actor(
     executor: impl PgExecutor<'_>,
@@ -27,6 +30,7 @@ pub struct RegisterStudent {
     pub display_name: String,
     pub invite: VerifiedInvite,
     pub student_group_id: Option<StudentGroupId>,
+    pub courses: Option<BTreeSet<TeachingCourseId>>,
     pub registered_at: DateTime<Utc>,
 }
 
@@ -34,6 +38,12 @@ pub struct RegisterStudent {
 pub struct CourseInvitation {
     pub subject: Subject,
     pub groups: Vec<StudentGroup>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RegistrationOffer {
+    pub group: StudentGroup,
+    pub courses: Vec<OfferedCourse>,
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +90,8 @@ impl UserService {
         .await?
         .ok_or(AppError::InviteInvalid)?;
         let student_group = chosen_group(course.groups, command.student_group_id)?;
+        let offered = db::enrollments::offered_courses(&mut *tx, student_group.id(), None).await?;
+        let courses = chosen_courses(&offered, command.courses, command.invite.course_id())?;
 
         let student = User::new_student(
             UserId::new(),
@@ -90,6 +102,7 @@ impl UserService {
         )?;
 
         db::users::insert(&mut *tx, &student).await?;
+        db::enrollments::insert(&mut *tx, student.id(), &courses).await?;
 
         tx.commit().await?;
 
@@ -182,6 +195,89 @@ impl UserService {
             subject: course.subject,
             groups: course.groups,
         })
+    }
+
+    pub async fn registration_offer(
+        &self,
+        invite: VerifiedInvite,
+        group_id: StudentGroupId,
+    ) -> AppResult<RegistrationOffer> {
+        let invitation = self.resolve_course_invite(invite).await?;
+        let group = chosen_group(invitation.groups, Some(group_id))?;
+        let courses = db::enrollments::offered_courses(&self.pool, group.id(), None).await?;
+
+        Ok(RegistrationOffer { group, courses })
+    }
+
+    pub async fn enrollment_offer(
+        &self,
+        actor: Actor,
+        invite: VerifiedInvite,
+    ) -> AppResult<Option<Vec<OfferedCourse>>> {
+        let user = load_actor(&self.pool, actor, "user").await?;
+        let Some(group_id) = user.student_group_id() else {
+            return Ok(None);
+        };
+        let generation =
+            db::course_invites::find_generation(&self.pool, invite.course_id()).await?;
+        if generation != Some(invite.generation()) {
+            return Ok(None);
+        }
+
+        let offered =
+            db::enrollments::offered_courses(&self.pool, group_id, Some(user.id())).await?;
+        Ok(offered
+            .iter()
+            .any(|course| course.course_id == invite.course_id())
+            .then_some(offered))
+    }
+
+    pub async fn open_courses(&self, actor: Actor) -> AppResult<Vec<OfferedCourse>> {
+        let student = load_student(&self.pool, actor, "read courses to enroll in").await?;
+        let group_id = student.student_group_id().required("student group")?;
+
+        Ok(db::enrollments::offered_courses(&self.pool, group_id, Some(student.id())).await?)
+    }
+
+    pub async fn enroll(
+        &self,
+        actor: Actor,
+        courses: &BTreeSet<TeachingCourseId>,
+    ) -> AppResult<Vec<OfferedCourse>> {
+        let student = load_student(&self.pool, actor, "enroll in courses").await?;
+        let group_id = student.student_group_id().required("student group")?;
+
+        let chosen: Vec<_> = db::enrollments::offered_courses(&self.pool, group_id, None)
+            .await?
+            .into_iter()
+            .filter(|course| courses.contains(&course.course_id))
+            .collect();
+        if chosen.len() != courses.len() {
+            return Err(DomainError::CourseNotOfferedToStudentGroup.into());
+        }
+
+        let course_ids: Vec<_> = chosen.iter().map(|course| course.course_id).collect();
+        db::enrollments::insert(&self.pool, student.id(), &course_ids).await?;
+
+        Ok(chosen)
+    }
+
+    pub async fn subjects(&self, actor: Actor) -> AppResult<Vec<Subject>> {
+        Ok(db::enrollments::subjects_of_student(&self.pool, actor.user_id()).await?)
+    }
+}
+
+fn chosen_courses(
+    offered: &[OfferedCourse],
+    chosen: Option<BTreeSet<TeachingCourseId>>,
+    invited: TeachingCourseId,
+) -> DomainResult<Vec<TeachingCourseId>> {
+    let is_offered = |id: &TeachingCourseId| offered.iter().any(|course| course.course_id == *id);
+
+    match chosen {
+        Some(chosen) if chosen.iter().all(is_offered) => Ok(chosen.into_iter().collect()),
+        Some(_) => Err(DomainError::CourseNotOfferedToStudentGroup),
+        None => Ok(Some(invited).into_iter().filter(is_offered).collect()),
     }
 }
 

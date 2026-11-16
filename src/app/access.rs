@@ -2,10 +2,11 @@ use sqlx::postgres::PgExecutor;
 use sqlx::{PgConnection, PgPool};
 
 use crate::app::users::load_actor;
-use crate::app::{Actor, AppResult, Required};
+use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
-    AssignmentId, DomainError, StudentGroupId, TeachingCourse, TeachingCourseId, User, UserId,
+    AssignmentId, DomainError, Participation, StudentGroupId, TeachingCourse, TeachingCourseId,
+    User, UserId,
 };
 use crate::read_models::{TeachingCourseDetails, VersionedAssignment};
 
@@ -100,11 +101,11 @@ pub(crate) fn ensure_manages(
 }
 
 pub(crate) async fn load_course_student(
-    executor: impl PgExecutor<'_>,
+    connection: &mut PgConnection,
     course: &TeachingCourse,
     student_id: UserId,
 ) -> AppResult<(User, StudentGroupId)> {
-    db::users::find_by_id(executor, student_id)
+    let (student, group_id) = db::users::find_by_id(&mut *connection, student_id)
         .await?
         .and_then(|user| {
             let group_id = user
@@ -112,7 +113,14 @@ pub(crate) async fn load_course_student(
                 .filter(|&group_id| course.includes_group(group_id))?;
             Some((user, group_id))
         })
-        .required("student")
+        .required("student")?;
+
+    match db::enrollments::participation(connection, course.id(), student.id()).await? {
+        Participation::Participant => Ok((student, group_id)),
+        Participation::Outsider => Err(AppError::NotFound {
+            resource: "student",
+        }),
+    }
 }
 
 pub(crate) async fn load_student(

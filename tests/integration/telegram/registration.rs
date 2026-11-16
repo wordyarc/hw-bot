@@ -84,8 +84,8 @@ async fn a_link_of_a_course_of_one_group_names_the_subject_and_the_group_and_reg
         .and(body_json(json!({
             "chat_id": guest,
             "text": texts::input_prompt(&texts::registration_prompt(
-                app.fixture.subject.name().as_str(),
                 app.fixture.group.code().as_str(),
+                &[app.fixture.subject.name().as_str()],
             )),
             "reply_markup": { "remove_keyboard": true }
         })))
@@ -643,8 +643,8 @@ async fn a_link_of_a_course_of_several_groups_asks_for_the_group_before_the_name
             .collect();
     telegram.click(guest, &choice);
     let prompt = texts::input_prompt(&texts::registration_prompt(
-        app.fixture.subject.name().as_str(),
         second.code().as_str(),
+        &[app.fixture.subject.name().as_str()],
     ));
     wait_for_text(&telegram, guest, &prompt).await;
     telegram.message(guest, "Ivan");
@@ -708,8 +708,8 @@ async fn a_link_rotated_between_the_group_and_the_name_does_not_register() {
         .await;
     telegram.click(guest, &choice);
     let prompt = texts::input_prompt(&texts::registration_prompt(
-        app.fixture.subject.name().as_str(),
         second.code().as_str(),
+        &[app.fixture.subject.name().as_str()],
     ));
     wait_for_text(&telegram, guest, &prompt).await;
     hw_bot::db::course_invites::rotate(
@@ -741,8 +741,8 @@ async fn a_link_rotated_before_the_name_ends_the_name_step() {
 
     telegram.message(guest, &format!("/start {token}"));
     let prompt = texts::input_prompt(&texts::registration_prompt(
-        app.fixture.subject.name().as_str(),
         app.fixture.group.code().as_str(),
+        &[app.fixture.subject.name().as_str()],
     ));
     wait_for_text(&telegram, guest, &prompt).await;
     hw_bot::db::course_invites::rotate(
@@ -866,4 +866,415 @@ async fn a_registration_whose_user_cannot_be_read_again_still_opens_the_home_scr
         !replies.iter().any(|message| message["text"] == failure),
         "{replies:#?}"
     );
+}
+
+const SECOND_SUBJECT: &str = "Android";
+
+fn subject_button(course: &hw_bot::domain::TeachingCourse) -> String {
+    cb(
+        callbacks::REGISTRATION_SUBJECT_PREFIX,
+        course.id().as_uuid(),
+    )
+}
+
+fn labels(message: &serde_json::Value) -> Vec<String> {
+    message["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row.as_array().unwrap())
+        .map(|button| button["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+async fn subjects_of(app: &TestApp, user: i64) -> Vec<String> {
+    sqlx::query_scalar(
+        "select subjects.name
+         from teaching_course_students enrolled
+         join users on users.id = enrolled.student_id
+         join teaching_courses courses on courses.id = enrolled.teaching_course_id
+         join subjects on subjects.id = courses.subject_id
+         where users.telegram_user_id = $1
+         order by subjects.name",
+    )
+    .bind(user)
+    .fetch_all(&app.pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_group_with_several_subjects_marks_them_before_the_name_and_is_enrolled_in_the_marked() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course(SECOND_SUBJECT).await;
+    app.add_subject_course("Frontend").await;
+    let own = app.fixture.subject.name().as_str();
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let choice = telegram.button(guest, &subject_button(&second)).await;
+    let offered = labels(&telegram.message_by_id(guest, choice.message_id));
+    telegram.click(guest, &choice);
+    telegram
+        .button_with_text(guest, &texts::subject_choice_button(SECOND_SUBJECT, true))
+        .await;
+    let done = telegram
+        .button(guest, callbacks::REGISTRATION_SUBJECTS_DONE)
+        .await;
+    telegram.click(guest, &done);
+    let prompt = texts::input_prompt(&texts::registration_prompt(
+        app.fixture.group.code().as_str(),
+        &[SECOND_SUBJECT, own],
+    ));
+    wait_for_text(&telegram, guest, &prompt).await;
+    let registered_before_the_name = is_registered(&app, guest).await;
+    telegram.message(guest, "Ivan");
+    wait_for_group(&app.pool, guest).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        offered,
+        [
+            texts::subject_choice_button(SECOND_SUBJECT, false),
+            texts::subject_choice_button(own, true),
+            texts::subject_choice_button("Frontend", false),
+            texts::BUTTON_GROUPS_DONE.to_owned(),
+        ]
+    );
+    assert!(!registered_before_the_name);
+    assert_eq!(subjects_of(&app, guest).await, [SECOND_SUBJECT, own]);
+}
+
+#[tokio::test]
+async fn unmarking_the_subject_of_the_link_registers_without_it() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course(SECOND_SUBJECT).await;
+    let own = app.fixture.subject.name().as_str();
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let other = telegram.button(guest, &subject_button(&second)).await;
+    telegram.click(guest, &other);
+    telegram
+        .button_with_text(guest, &texts::subject_choice_button(SECOND_SUBJECT, true))
+        .await;
+    let linked = telegram
+        .button(guest, &subject_button(&app.fixture.course))
+        .await;
+    telegram.click(guest, &linked);
+    telegram
+        .button_with_text(guest, &texts::subject_choice_button(own, false))
+        .await;
+    let done = telegram
+        .button(guest, callbacks::REGISTRATION_SUBJECTS_DONE)
+        .await;
+    telegram.click(guest, &done);
+    let prompt = texts::input_prompt(&texts::registration_prompt(
+        app.fixture.group.code().as_str(),
+        &[SECOND_SUBJECT],
+    ));
+    wait_for_text(&telegram, guest, &prompt).await;
+    telegram.message(guest, "Ivan");
+    wait_for_group(&app.pool, guest).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(subjects_of(&app, guest).await, [SECOND_SUBJECT]);
+}
+
+#[tokio::test]
+async fn continuing_without_a_marked_subject_stays_on_the_subject_step() {
+    let app = TestApp::start().await;
+    app.add_subject_course(SECOND_SUBJECT).await;
+    let own = app.fixture.subject.name().as_str();
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let linked = telegram
+        .button(guest, &subject_button(&app.fixture.course))
+        .await;
+    telegram.click(guest, &linked);
+    telegram
+        .button_with_text(guest, &texts::subject_choice_button(own, false))
+        .await;
+    let done = telegram
+        .button(guest, callbacks::REGISTRATION_SUBJECTS_DONE)
+        .await;
+    telegram.click(guest, &done);
+    wait_for_text(&telegram, guest, texts::SUBJECTS_REQUIRED).await;
+    telegram.message(guest, "Ivan");
+    wait_for_text(&telegram, guest, texts::CHOOSE_BUTTON).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(!is_registered(&app, guest).await);
+}
+
+#[tokio::test]
+async fn a_group_with_one_subject_is_enrolled_in_it_without_a_choice() {
+    let app = TestApp::start().await;
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let prompt = texts::input_prompt(&texts::registration_prompt(
+        app.fixture.group.code().as_str(),
+        &[app.fixture.subject.name().as_str()],
+    ));
+    wait_for_text(&telegram, guest, &prompt).await;
+    telegram.message(guest, "Ivan");
+    wait_for_group(&app.pool, guest).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        subjects_of(&app, guest).await,
+        [app.fixture.subject.name().as_str()]
+    );
+}
+
+#[tokio::test]
+async fn a_sandbox_link_offers_the_subjects_of_the_group_unmarked_and_never_the_sandbox() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course(SECOND_SUBJECT).await;
+    let sandbox = app.add_sandbox_course().await;
+    let guest = app.next_telegram_id();
+    let token = app.invite_token(sandbox.id()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let choice = telegram.button(guest, &subject_button(&second)).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        labels(&telegram.message_by_id(guest, choice.message_id)),
+        [
+            texts::subject_choice_button(SECOND_SUBJECT, false),
+            texts::subject_choice_button(app.fixture.subject.name().as_str(), false),
+            texts::BUTTON_GROUPS_DONE.to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_subject_button_of_a_replaced_choice_is_stale() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course(SECOND_SUBJECT).await;
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let data = subject_button(&second);
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let replaced = telegram.button(guest, &data).await;
+    telegram.message(guest, &format!("/start {token}"));
+    telegram
+        .button_after(guest, &data, replaced.message_id)
+        .await;
+    telegram.click(guest, &replaced);
+    wait_for_text(&telegram, guest, texts::STALE_BUTTON).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(!is_registered(&app, guest).await);
+}
+
+#[tokio::test]
+async fn a_link_rotated_while_the_subjects_are_marked_ends_the_subject_step() {
+    let app = TestApp::start().await;
+    app.add_subject_course(SECOND_SUBJECT).await;
+    let guest = app.next_telegram_id();
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(guest, &format!("/start {token}"));
+    let done = telegram
+        .button(guest, callbacks::REGISTRATION_SUBJECTS_DONE)
+        .await;
+    hw_bot::db::course_invites::rotate(
+        &app.pool,
+        app.fixture.course.id(),
+        hw_bot::domain::InviteGeneration::FIRST,
+    )
+    .await
+    .unwrap();
+    telegram.click(guest, &done);
+    wait_for_text(
+        &telegram,
+        guest,
+        app_error_message(ErrorCode::InviteInvalid),
+    )
+    .await;
+    telegram.click(guest, &done);
+    wait_for_text(&telegram, guest, texts::STALE_BUTTON).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(!is_registered(&app, guest).await);
+}
+
+fn offers_of(telegram: &TelegramScenario, user: i64) -> usize {
+    telegram
+        .texts(user)
+        .iter()
+        .filter(|text| text.as_str() == texts::ENROLLMENT_PROMPT)
+        .count()
+}
+
+#[tokio::test]
+async fn a_registered_student_joins_a_new_subject_by_its_link_after_continuing() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course(SECOND_SUBJECT).await;
+    app.add_published_assignment(&second, &app.fixture.teacher, "Activity lifecycle")
+        .await;
+    sqlx::query("delete from teaching_course_students where teaching_course_id = $1")
+        .bind(second.id().as_uuid())
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let student = app.student();
+    let token = app.invite_token(second.id()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(student, &format!("/start {token}"));
+    let done = telegram
+        .button(student, callbacks::ENROLL_SUBJECTS_DONE)
+        .await;
+    let offered = labels(&telegram.message_by_id(student, done.message_id));
+    let enrolled_before_continuing = subjects_of(&app, student).await;
+    telegram.click(student, &done);
+    wait_for_text(
+        &telegram,
+        student,
+        &texts::enrollment_complete(&[SECOND_SUBJECT]),
+    )
+    .await;
+    stop_bot(cancellation, &mut task).await;
+
+    let own = app.fixture.subject.name().as_str();
+    assert_eq!(
+        offered,
+        [
+            texts::subject_choice_button(SECOND_SUBJECT, true),
+            texts::BUTTON_GROUPS_DONE.to_owned(),
+        ]
+    );
+    assert_eq!(enrolled_before_continuing, [own]);
+    assert_eq!(subjects_of(&app, student).await, [SECOND_SUBJECT, own]);
+    let visible = app
+        .application
+        .assignments
+        .list_for_student(
+            app.student_actor(),
+            hw_bot::pagination::PageRequest::default(),
+        )
+        .await
+        .unwrap()
+        .items;
+    assert!(
+        visible
+            .iter()
+            .any(|item| item.assignment.teaching_course_id() == second.id()),
+        "the assignment of the joined subject is listed"
+    );
+}
+
+#[tokio::test]
+async fn leaving_the_choice_of_subjects_enrolls_nowhere_and_stales_its_buttons() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course(SECOND_SUBJECT).await;
+    sqlx::query("delete from teaching_course_students where teaching_course_id = $1")
+        .bind(second.id().as_uuid())
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let student = app.student();
+    let token = app.invite_token(second.id()).await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(student, &format!("/start {token}"));
+    let done = telegram
+        .button(student, callbacks::ENROLL_SUBJECTS_DONE)
+        .await;
+    telegram.message(student, "/queue");
+    wait_for_text(&telegram, student, texts::ACTION_CANCELLED).await;
+    telegram.click(student, &done);
+    wait_for_text(&telegram, student, texts::STALE_BUTTON).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(
+        subjects_of(&app, student).await,
+        [app.fixture.subject.name().as_str()]
+    );
+}
+
+#[tokio::test]
+async fn a_link_that_opens_no_new_subject_gives_a_registered_student_only_the_home_screen() {
+    let app = TestApp::start().await;
+    let foreign = app.add_foreign_course().await.course;
+    let sandbox = app.add_sandbox_course().await;
+    let rotated = app.add_subject_course(SECOND_SUBJECT).await;
+    sqlx::query("delete from teaching_course_students where teaching_course_id = $1")
+        .bind(rotated.id().as_uuid())
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let rotated_token = app.invite_token(rotated.id()).await;
+    hw_bot::db::course_invites::rotate(
+        &app.pool,
+        rotated.id(),
+        hw_bot::domain::InviteGeneration::FIRST,
+    )
+    .await
+    .unwrap();
+    let tokens = [
+        app.course_invite_token().await,
+        app.invite_token(foreign.id()).await,
+        app.invite_token(sandbox.id()).await,
+        rotated_token,
+    ];
+    let student = app.student();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    for token in &tokens {
+        telegram.message(student, &format!("/start {token}"));
+        telegram.flush(student).await;
+    }
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(offers_of(&telegram, student), 0);
+    assert!(
+        !telegram
+            .texts(student)
+            .iter()
+            .any(|text| text.as_str() == app_error_message(ErrorCode::InviteInvalid)),
+        "{:#?}",
+        telegram.texts(student)
+    );
+}
+
+#[tokio::test]
+async fn a_teacher_opening_a_course_link_gets_only_the_home_screen() {
+    let app = TestApp::start().await;
+    let token = app.course_invite_token().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), &format!("/start {token}"));
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert_eq!(offers_of(&telegram, app.teacher()), 0);
 }

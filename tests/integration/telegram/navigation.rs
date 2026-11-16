@@ -600,3 +600,86 @@ async fn in_a_group_the_bot_answers_commands_only() {
     assert_eq!(sent.len(), 1, "{sent:#?}");
     assert_eq!(sent[0]["text"], texts::PRIVATE_CHATS_ONLY);
 }
+
+#[tokio::test]
+async fn the_profile_of_a_student_names_the_subjects_they_are_enrolled_in() {
+    let app = TestApp::start().await;
+    app.add_subject_course("Android").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/profile");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let profile = student_profile(&app, &telegram).expect("the profile is shown");
+    let subjects = texts::chosen_subjects(&["Android", app.fixture.subject.name().as_str()]);
+    assert!(profile.contains(&subjects), "{profile}");
+}
+
+#[tokio::test]
+async fn the_profile_of_a_student_without_subjects_says_none_is_chosen() {
+    let app = TestApp::start().await;
+    sqlx::query("delete from teaching_course_students")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/profile");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let profile = student_profile(&app, &telegram).expect("the profile is shown");
+    assert!(profile.contains(&texts::chosen_subjects(&[])), "{profile}");
+}
+
+#[tokio::test]
+async fn the_profile_of_a_teacher_lists_no_chosen_subjects() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.teacher(), "/profile");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.teacher());
+    assert!(
+        !sent
+            .iter()
+            .any(|text| text.contains(&texts::chosen_subjects(&[]))),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_whose_subjects_cannot_be_read_is_shown_without_them() {
+    let app = TestApp::start().await;
+    sqlx::query("alter table teaching_course_students rename to enrollments_unavailable")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+
+    telegram.message(app.student(), "/profile");
+    telegram.flush(app.student()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let sent = telegram.texts(app.student());
+    let profile = student_profile(&app, &telegram).unwrap_or_else(|| panic!("{sent:#?}"));
+    assert!(
+        !profile.contains(&texts::chosen_subjects(&[app
+            .fixture
+            .subject
+            .name()
+            .as_str()])),
+        "{profile}"
+    );
+    assert!(
+        !sent.contains(&app_error_message(ErrorCode::InternalError).to_owned()),
+        "{sent:#?}"
+    );
+}

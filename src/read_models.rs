@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::{
     Assignment, AssignmentId, Grading, StoredFileMetadata, StudentGroup, Subject, SubjectId,
-    SubmissionHistory, SubmissionId, SubmissionKind, TeachingCourse, User, UserId,
+    SubmissionHistory, SubmissionId, SubmissionKind, TeachingCourse, TeachingCourseId, User,
+    UserId,
 };
 
 #[derive(Clone, Debug)]
@@ -10,6 +11,12 @@ pub struct TeachingCourseDetails {
     pub course: TeachingCourse,
     pub subject: Subject,
     pub groups: Vec<StudentGroup>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OfferedCourse {
+    pub course_id: TeachingCourseId,
+    pub subject: Subject,
 }
 
 #[derive(Clone, Debug)]

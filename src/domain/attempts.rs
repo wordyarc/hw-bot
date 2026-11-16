@@ -1,6 +1,6 @@
 use crate::domain::assignment::MAX_ATTEMPTS;
 use crate::domain::{
-    Assignment, AssignmentId, DomainError, DomainResult, Submission, SubmissionKind,
+    Assignment, AssignmentId, DomainError, DomainResult, Participation, Submission, SubmissionKind,
     SubmissionStatus, TeachingCourse, User, UserId,
 };
 
@@ -12,14 +12,19 @@ pub struct StudentAssignmentProgress {
 }
 
 impl StudentAssignmentProgress {
-    pub fn new(assignment: &Assignment, student: &User, extra_attempts: u16) -> DomainResult<Self> {
+    pub fn new(
+        assignment: &Assignment,
+        student: &User,
+        participation: Participation,
+        extra_attempts: u16,
+    ) -> DomainResult<Self> {
         if !student.role().can_submit_homework() {
             return Err(DomainError::PermissionDenied {
                 action: "receive extra attempts",
             });
         }
 
-        if !assignment.is_issued_to(student) {
+        if !assignment.is_issued_to(student, participation) {
             return Err(DomainError::StudentDoesNotBelongToAssignmentGroup);
         }
 

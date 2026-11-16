@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -7,7 +9,9 @@ use uuid::Uuid;
 
 use crate::api::{Actor, ApiError, AppState, JsonBody, TelegramIdentity};
 use crate::app::{AppError, RegisterStaff, RegisterStudent, RegisteredUser};
-use crate::domain::{EducationLevel, StaffRole, StudentGroup, StudentGroupId, TelegramUserId};
+use crate::domain::{
+    EducationLevel, StaffRole, StudentGroup, StudentGroupId, TeachingCourseId, TelegramUserId,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +20,8 @@ pub struct RegisterStudentRequest {
     invite_token: String,
     #[serde(default)]
     student_group_id: Option<StudentGroupId>,
+    #[serde(default)]
+    teaching_course_ids: Option<BTreeSet<TeachingCourseId>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +90,7 @@ pub async fn register_student(
             .decode(&request.invite_token)
             .map_err(|_| AppError::InviteInvalid)?,
         student_group_id: request.student_group_id,
+        courses: request.teaching_course_ids,
         registered_at: Utc::now(),
     };
 

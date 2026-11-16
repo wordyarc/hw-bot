@@ -13,7 +13,9 @@ mod user;
 #[cfg(test)]
 mod tests;
 
-pub use academic::{EducationLevel, StudentGroup, StudyProgram, Subject, TeachingCourse};
+pub use academic::{
+    EducationLevel, Participation, StudentGroup, StudyProgram, Subject, TeachingCourse,
+};
 pub use assignment::{
     Assignment, AssignmentStatus, DeductedFrom, Grading, LATEST_TERM_YEAR, LatePenalty, LatePolicy,
     MAX_ATTEMPTS, MAX_LATE_PERIOD_DAYS, MAX_LATE_PERIODS, MAX_LATENESS_DAYS,
@@ -35,7 +37,7 @@ pub use makeup::{
 };
 pub use submission::{
     Grade, Resubmission, Review, ReviewDecision, ReviewScore, Submission, SubmissionHistory,
-    SubmissionKind, SubmissionStart, SubmissionStatus,
+    SubmissionKind, SubmissionStart, SubmissionStatus, Submitter,
 };
 pub use text::{
     ASSIGNMENT_TITLE_MAX_LEN, DISPLAY_NAME_MAX_LEN, NonEmptyString, STUDENT_GROUP_CODE_MAX_LEN,

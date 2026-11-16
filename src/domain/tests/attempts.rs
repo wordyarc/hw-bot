@@ -4,8 +4,8 @@ use proptest::prelude::*;
 use super::{Fixture, fixture};
 use crate::domain::{
     Assignment, AssignmentStatus, CourseMakeup, DeductedFrom, DomainError, MAX_ATTEMPTS,
-    MakeupRequest, StudentAssignmentProgress, Submission, SubmissionHistory, SubmissionStatus,
-    TeachingCourse, User,
+    MakeupRequest, Participation, StudentAssignmentProgress, Submission, SubmissionHistory,
+    SubmissionStatus, TeachingCourse, User,
 };
 use crate::test_support::{
     ReviewShortcuts, admin, assignment, course_for, history, student, submission, t0, teacher,
@@ -51,7 +51,8 @@ fn staff_receive_no_extra_attempts() {
 
     for staff in [&teacher, &admin(2)] {
         assert_eq!(
-            StudentAssignmentProgress::new(&assignment, staff, 0).unwrap_err(),
+            StudentAssignmentProgress::new(&assignment, staff, Participation::Participant, 0)
+                .unwrap_err(),
             DomainError::PermissionDenied {
                 action: "receive extra attempts"
             },
@@ -76,7 +77,9 @@ fn only_course_teacher_or_admin_can_grant_extra_attempts() {
         .published()
         .build();
 
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
     let result = progress.grant_extra_attempts(&assignment, &course, &other_teacher, 1);
 
     assert_eq!(
@@ -105,7 +108,9 @@ fn extra_attempts_extend_submission_limit() {
         .published()
         .build();
 
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
     progress
         .grant_extra_attempts(&assignment, &course, &teacher, 1)
         .unwrap();
@@ -315,7 +320,8 @@ fn extra_attempts_of_another_assignment_are_refused() {
     } = fixture();
     let another = assignment(&course, &teacher).build();
     let assignment = assignment(&course, &teacher).build();
-    let mut progress = StudentAssignmentProgress::new(&another, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&another, &student, Participation::Participant, 0).unwrap();
 
     assert_eq!(
         progress
@@ -335,7 +341,9 @@ fn extra_attempts_are_refused_through_a_foreign_course() {
     } = fixture();
     let foreign_course = course_for(&group, &teacher);
     let assignment = assignment(&course, &teacher).build();
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
 
     assert_eq!(
         progress
@@ -354,7 +362,9 @@ fn granting_zero_extra_attempts_is_rejected() {
         ..
     } = fixture();
     let assignment = assignment(&course, &teacher).build();
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
 
     assert_eq!(
         progress
@@ -375,7 +385,9 @@ fn extra_attempts_cannot_exceed_the_storage_limit() {
     let assignment = assignment(&course, &teacher)
         .max_attempts(MAX_ATTEMPTS - 1)
         .build();
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
 
     assert_eq!(
         progress
@@ -416,7 +428,9 @@ fn a_rejected_regular_submission_returns_one_attempt() {
     } = fixture();
     let assignment = assignment(&course, &teacher).published().build();
     let sent = rejected(&assignment, &course, &teacher, &student);
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 1).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 1)
+            .unwrap();
 
     progress
         .return_attempt(&sent, &assignment, &course, &teacher)
@@ -446,7 +460,9 @@ fn a_pending_or_accepted_submission_returns_no_attempt() {
             t0() + Duration::hours(2),
         )
         .unwrap();
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
 
     for sent in [pending, accepted] {
         assert_eq!(
@@ -490,7 +506,9 @@ fn a_rejected_makeup_returns_no_attempt() {
             t0() + Duration::days(9),
         )
         .unwrap();
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
 
     assert_eq!(
         progress.return_attempt(&makeup, &assignment, &course, &teacher),
@@ -512,8 +530,9 @@ fn an_attempt_is_returned_only_to_the_author_of_the_submission() {
     let classmate = student(3, &group);
 
     for mut progress in [
-        StudentAssignmentProgress::new(&assignment, &classmate, 0).unwrap(),
-        StudentAssignmentProgress::new(&other, &author, 0).unwrap(),
+        StudentAssignmentProgress::new(&assignment, &classmate, Participation::Participant, 0)
+            .unwrap(),
+        StudentAssignmentProgress::new(&other, &author, Participation::Participant, 0).unwrap(),
     ] {
         assert_eq!(
             progress.return_attempt(&sent, &assignment, &course, &teacher),
@@ -535,7 +554,9 @@ fn a_returned_attempt_respects_the_storage_limit() {
         .published()
         .build();
     let sent = rejected(&assignment, &course, &teacher, &student);
-    let mut progress = StudentAssignmentProgress::new(&assignment, &student, 0).unwrap();
+    let mut progress =
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+            .unwrap();
 
     assert_eq!(
         progress.return_attempt(&sent, &assignment, &course, &teacher),

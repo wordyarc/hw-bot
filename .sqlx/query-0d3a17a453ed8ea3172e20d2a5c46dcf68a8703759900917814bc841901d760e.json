@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select exists (\n            select 1\n            from course_participants\n            where teaching_course_id = $1\n              and student_id = $2\n        ) as \"participates!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "participates!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0d3a17a453ed8ea3172e20d2a5c46dcf68a8703759900917814bc841901d760e"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select subjects.id, subjects.name\n        from teaching_course_students enrolled\n        join users\n          on users.id = enrolled.student_id\n        join teaching_course_groups course_groups\n          on course_groups.teaching_course_id = enrolled.teaching_course_id\n         and course_groups.student_group_id = users.student_group_id\n        join subjects\n          on subjects.id = course_groups.subject_id\n        where enrolled.student_id = $1\n          and not subjects.sandbox\n        order by subjects.name, subjects.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "477f0b40878fe987c7e39ff920d9a7babe11b81578d32d61599d013410ab861d"
+}

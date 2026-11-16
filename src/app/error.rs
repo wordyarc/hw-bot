@@ -105,6 +105,7 @@ impl AppError {
                 | DomainError::AssignmentHasNoGroups
                 | DomainError::AssignmentGroupOutsideCourse
                 | DomainError::StudentGroupNotInCourse
+                | DomainError::CourseNotOfferedToStudentGroup
                 | DomainError::StudentGroupChoiceRequired => ErrorCode::InvalidInput,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }

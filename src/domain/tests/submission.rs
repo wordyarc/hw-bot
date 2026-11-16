@@ -2,8 +2,8 @@ use chrono::Duration;
 
 use super::{Fixture, fixture};
 use crate::domain::{
-    DomainError, MakeupRequest, StudentAssignmentProgress, Submission, SubmissionHistory,
-    SubmissionId,
+    DomainError, MakeupRequest, Participation, StudentAssignmentProgress, Submission,
+    SubmissionHistory, SubmissionId, Submitter,
 };
 use crate::test_support::{
     OTHER_GROUP_CODE, PULL_REQUEST_URL, SUBJECT_NAME, admin, assignment, history, student,
@@ -112,11 +112,35 @@ fn only_a_student_of_an_issued_group_submits_and_receives_extra_attempts() {
             "submission of {code}"
         );
         assert_eq!(
-            StudentAssignmentProgress::new(&assignment, &student, 0).map(drop),
+            StudentAssignmentProgress::new(&assignment, &student, Participation::Participant, 0)
+                .map(drop),
             expected,
             "extra attempts of {code}"
         );
     }
+}
+
+#[test]
+fn a_student_of_an_issued_group_outside_the_course_neither_submits_nor_receives_extra_attempts() {
+    let Fixture {
+        teacher,
+        course,
+        student,
+        ..
+    } = fixture();
+    let assignment = assignment(&course, &teacher).published().build();
+
+    assert_eq!(
+        submission(&assignment, &student)
+            .participation(Participation::Outsider)
+            .try_build()
+            .map(drop),
+        Err(DomainError::StudentDoesNotBelongToAssignmentGroup)
+    );
+    assert_eq!(
+        StudentAssignmentProgress::new(&assignment, &student, Participation::Outsider, 0).map(drop),
+        Err(DomainError::StudentDoesNotBelongToAssignmentGroup)
+    );
 }
 
 #[test]
@@ -233,7 +257,10 @@ fn submission_content_is_trimmed() {
     let submission = Submission::submit(
         SubmissionId::new(),
         &assignment,
-        &student,
+        Submitter {
+            student: &student,
+            participation: Participation::Participant,
+        },
         SubmissionHistory::default(),
         format!("  {PULL_REQUEST_URL}  "),
         t0(),

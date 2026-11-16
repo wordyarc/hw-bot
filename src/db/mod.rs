@@ -11,6 +11,7 @@ pub mod attempts;
 mod bootstrap;
 mod convert;
 pub mod course_invites;
+pub mod enrollments;
 mod enums;
 pub(crate) mod error;
 pub mod files;

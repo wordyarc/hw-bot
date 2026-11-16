@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use hw_bot::app::{Actor, ErrorCode, GrantExtraAttempts};
 use hw_bot::db;
-use hw_bot::domain::{StudentAssignmentProgress, UserId};
+use hw_bot::domain::{Participation, StudentAssignmentProgress, UserId};
 use serde_json::json;
 
 use crate::harness::{TestApp, submission_id, wait_for_blocked_connection};
@@ -169,9 +169,13 @@ async fn concurrent_grants_are_not_lost() {
         db::attempts::lock_or_create(&mut concurrent, app.fixture.assignment.id(), student_id)
             .await
             .expect("lock the student progress");
-    let mut progress =
-        StudentAssignmentProgress::new(&app.fixture.assignment, &app.fixture.student, extra)
-            .unwrap();
+    let mut progress = StudentAssignmentProgress::new(
+        &app.fixture.assignment,
+        &app.fixture.student,
+        Participation::Participant,
+        extra,
+    )
+    .unwrap();
     progress
         .grant_extra_attempts(
             &app.fixture.assignment,

@@ -8,7 +8,7 @@ use crate::app::{Actor, AppResult, Required, StudentAssignment};
 use crate::db;
 use crate::domain::{
     Acceptance, AssignmentId, MakeupBalance, MakeupRequest, Resubmission, Submission, SubmissionId,
-    SubmissionKind,
+    SubmissionKind, Submitter,
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::QueuePlace;
@@ -82,8 +82,19 @@ impl SubmissionService {
             consent: command.allow_makeup,
             balance: MakeupBalance::default(),
         };
-        let acceptance =
-            Submission::admit(&assignment, &student, history, command.submitted_at, makeup)?;
+        let participation =
+            db::enrollments::participation(&mut *tx, course_id, student.id()).await?;
+        let submitter = Submitter {
+            student: &student,
+            participation,
+        };
+        let acceptance = Submission::admit(
+            &assignment,
+            submitter,
+            history,
+            command.submitted_at,
+            makeup,
+        )?;
         if acceptance != Acceptance::Regular {
             db::makeup::lock_or_create_pool(&mut tx, course_id, student.id()).await?;
             let pool = db::makeup::pool_for_student(&mut *tx, course_id, student.id()).await?;
@@ -94,7 +105,7 @@ impl SubmissionService {
         let submission = Submission::submit(
             SubmissionId::new(),
             &assignment,
-            &student,
+            submitter,
             history,
             command.content,
             command.submitted_at,

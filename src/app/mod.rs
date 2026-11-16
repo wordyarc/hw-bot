@@ -32,13 +32,16 @@ pub use review::{
 pub use submissions::{
     SubmissionService, SubmitHomework, SubmittedHomework, WithdrawSubmission, WithdrawalPreview,
 };
-pub use users::{CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser, UserService};
+pub use users::{
+    CourseInvitation, RegisterStaff, RegisterStudent, RegisteredUser, RegistrationOffer,
+    UserService,
+};
 
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
     AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradebookScore,
-    PendingSubmission, QueuePlace, RosterGroup, RosterStudent, SubjectQueue, TeachingCourseDetails,
-    UndecidedAssignment, UserStatistics, VersionedAssignment,
+    OfferedCourse, PendingSubmission, QueuePlace, RosterGroup, RosterStudent, SubjectQueue,
+    TeachingCourseDetails, UndecidedAssignment, UserStatistics, VersionedAssignment,
 };
 
 fn on_conflict<T>(result: DbResult<T>, conflict: AppError) -> AppResult<T> {

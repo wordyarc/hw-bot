@@ -317,6 +317,7 @@ async fn register_with(
             display_name: "Ivan".to_owned(),
             invite,
             student_group_id,
+            courses: None,
             registered_at: Utc::now(),
         })
         .await

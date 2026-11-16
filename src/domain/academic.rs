@@ -122,6 +122,12 @@ impl Subject {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Participation {
+    Participant,
+    Outsider,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TeachingCourse {
     id: TeachingCourseId,

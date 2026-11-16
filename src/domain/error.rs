@@ -184,6 +184,9 @@ pub enum DomainError {
     #[error("the invited course has several student groups, one must be chosen")]
     StudentGroupChoiceRequired,
 
+    #[error("teaching course is not offered to the student group")]
+    CourseNotOfferedToStudentGroup,
+
     #[error("invite generation must be positive, got {value}")]
     InvalidInviteGeneration { value: u32 },
 

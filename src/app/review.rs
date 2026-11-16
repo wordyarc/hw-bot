@@ -405,10 +405,16 @@ async fn return_attempt(
     let student = db::users::find_by_id(&mut **tx, submission.student_id())
         .await?
         .required("student")?;
+    let participation =
+        db::enrollments::participation(&mut **tx, context.course.id(), student.id()).await?;
     let extra_attempts =
         db::attempts::lock_or_create(tx, submission.assignment_id(), student.id()).await?;
-    let mut progress =
-        StudentAssignmentProgress::new(&context.assignment, &student, extra_attempts)?;
+    let mut progress = StudentAssignmentProgress::new(
+        &context.assignment,
+        &student,
+        participation,
+        extra_attempts,
+    )?;
     progress.return_attempt(submission, &context.assignment, &context.course, reviewer)?;
     db::attempts::update(tx, &progress).await?;
 

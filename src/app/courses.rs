@@ -233,7 +233,7 @@ impl CourseService {
         Ok(GradebookEntry::Students {
             group_id: group.id(),
             students: Page::from_rows(
-                db::users::list_student_names(&self.pool, group.id(), page).await?,
+                db::users::list_student_names(&self.pool, course_id, group.id(), page).await?,
                 page,
             ),
         })
@@ -249,7 +249,7 @@ impl CourseService {
         self.ensure_course_group(actor, course_id, group_id, "read course students")
             .await?;
         Ok(Page::from_rows(
-            db::users::list_student_names(&self.pool, group_id, page).await?,
+            db::users::list_student_names(&self.pool, course_id, group_id, page).await?,
             page,
         ))
     }
@@ -455,7 +455,7 @@ impl CourseService {
 
         let (_, course) =
             load_managed_course_on(&mut tx, actor, course_id, "grant makeup attempt").await?;
-        let (student, _) = load_course_student(&mut *tx, &course, student_id).await?;
+        let (student, _) = load_course_student(&mut tx, &course, student_id).await?;
         let makeup = db::makeup::find_course(&mut *tx, course_id)
             .await?
             .ok_or(DomainError::MakeupNotOffered)?;
@@ -484,8 +484,9 @@ impl CourseService {
         student_id: UserId,
         action: &'static str,
     ) -> AppResult<(TeachingCourse, User, StudentGroupId)> {
-        let (_, course) = load_managed_course(&self.pool, actor, course_id, action).await?;
-        let (student, group_id) = load_course_student(&self.pool, &course, student_id).await?;
+        let mut connection = self.pool.acquire().await?;
+        let (_, course) = load_managed_course_on(&mut connection, actor, course_id, action).await?;
+        let (student, group_id) = load_course_student(&mut connection, &course, student_id).await?;
 
         Ok((course, student, group_id))
     }

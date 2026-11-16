@@ -10,10 +10,10 @@ pub mod telegram;
 use crate::bot::BotTimezone;
 use crate::domain::{
     Assignment, AssignmentId, DeductedFrom, DomainResult, EducationLevel, Grading, LatePolicy,
-    MakeupRequest, MakeupTerms, NewAssignment, Review, ReviewDecision, ReviewScore, Role,
-    StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission, SubmissionHistory,
-    SubmissionHistoryParts, SubmissionId, TeachingCourse, TeachingCourseId, TelegramUserId, User,
-    UserId,
+    MakeupRequest, MakeupTerms, NewAssignment, Participation, Review, ReviewDecision, ReviewScore,
+    Role, StudentGroup, StudentGroupId, StudyProgram, Subject, SubjectId, Submission,
+    SubmissionHistory, SubmissionHistoryParts, SubmissionId, Submitter, TeachingCourse,
+    TeachingCourseId, TelegramUserId, User, UserId,
 };
 use crate::invites::{CourseInviteCodec, InviteSigningSecret};
 
@@ -373,6 +373,7 @@ pub fn submission<'a>(assignment: &'a Assignment, student: &'a User) -> Submissi
     SubmissionBuilder {
         assignment,
         student,
+        participation: Participation::Participant,
         history: SubmissionHistory::default(),
         content: PULL_REQUEST_URL.to_owned(),
         submitted_at: assignment.created_at() + Duration::hours(1),
@@ -383,6 +384,7 @@ pub fn submission<'a>(assignment: &'a Assignment, student: &'a User) -> Submissi
 pub struct SubmissionBuilder<'a> {
     assignment: &'a Assignment,
     student: &'a User,
+    participation: Participation,
     history: SubmissionHistory,
     content: String,
     submitted_at: DateTime<Utc>,
@@ -390,6 +392,11 @@ pub struct SubmissionBuilder<'a> {
 }
 
 impl<'a> SubmissionBuilder<'a> {
+    pub fn participation(mut self, value: Participation) -> Self {
+        self.participation = value;
+        self
+    }
+
     pub fn history(mut self, value: SubmissionHistory) -> Self {
         self.history = value;
         self
@@ -419,7 +426,10 @@ impl<'a> SubmissionBuilder<'a> {
         Submission::submit(
             SubmissionId::new(),
             self.assignment,
-            self.student,
+            Submitter {
+                student: self.student,
+                participation: self.participation,
+            },
             self.history,
             self.content,
             self.submitted_at,

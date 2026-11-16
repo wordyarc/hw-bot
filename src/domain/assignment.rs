@@ -4,8 +4,8 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 
 use crate::domain::{
     ASSIGNMENT_TITLE_MAX_LEN, Acceptance, AssignmentId, CourseMakeup, DomainError, DomainResult,
-    Grade, MakeupTerms, NonEmptyString, ReviewScore, StudentGroupId, SubjectId, TeachingCourse,
-    TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
+    Grade, MakeupTerms, NonEmptyString, Participation, ReviewScore, StudentGroupId, SubjectId,
+    TeachingCourse, TeachingCourseId, USER_TEXT_MAX_LEN, User, UserId,
 };
 use crate::string_enum::str_enum;
 
@@ -578,10 +578,11 @@ impl Assignment {
         &self.groups
     }
 
-    pub fn is_issued_to(&self, student: &User) -> bool {
-        student
-            .student_group_id()
-            .is_some_and(|group_id| self.groups.contains(&group_id))
+    pub fn is_issued_to(&self, student: &User, participation: Participation) -> bool {
+        participation == Participation::Participant
+            && student
+                .student_group_id()
+                .is_some_and(|group_id| self.groups.contains(&group_id))
     }
 
     pub fn ensure_belongs_to_course(&self, teaching_course: &TeachingCourse) -> DomainResult<()> {
@@ -1022,8 +1023,8 @@ mod tests {
         let issued = assignment(&course, &teacher).build();
 
         assert_eq!(issued.groups(), course.group_ids());
-        assert!(issued.is_issued_to(&student(2, &first)));
-        assert!(issued.is_issued_to(&student(3, &second)));
+        assert!(issued.is_issued_to(&student(2, &first), Participation::Participant));
+        assert!(issued.is_issued_to(&student(3, &second), Participation::Participant));
     }
 
     #[test]
@@ -1035,9 +1036,21 @@ mod tests {
         let issued = assignment(&course, &teacher).groups([&second]).build();
 
         assert_eq!(issued.groups(), &BTreeSet::from([second.id()]));
-        assert!(issued.is_issued_to(&student(2, &second)));
-        assert!(!issued.is_issued_to(&student(3, &first)));
-        assert!(!issued.is_issued_to(&teacher));
+        assert!(issued.is_issued_to(&student(2, &second), Participation::Participant));
+        assert!(!issued.is_issued_to(&student(3, &first), Participation::Participant));
+        assert!(!issued.is_issued_to(&teacher, Participation::Participant));
+    }
+
+    #[test]
+    fn an_assignment_is_not_issued_to_a_student_outside_its_course() {
+        let teacher = teacher(1);
+        let group = student_group("group");
+        let course = course_for(&group, &teacher);
+        let issued = assignment(&course, &teacher).build();
+        let student = student(2, &group);
+
+        assert!(issued.is_issued_to(&student, Participation::Participant));
+        assert!(!issued.is_issued_to(&student, Participation::Outsider));
     }
 
     #[test]

@@ -326,6 +326,7 @@ fn a_registration_group_comes_from_the_current_group_choice() {
     let naming = BotState::Flow(FlowState::AwaitingRegistrationName {
         invite,
         group_id: StudentGroupId::new(),
+        courses: BTreeSet::new(),
     });
 
     assert_eq!(
@@ -334,6 +335,64 @@ fn a_registration_group_comes_from_the_current_group_choice() {
     );
     assert!(state.choosing_registration_group(MessageId(11)).is_none());
     assert!(naming.choosing_registration_group(MessageId(10)).is_none());
+}
+
+#[test]
+fn registration_subjects_are_toggled_on_the_current_subject_choice() {
+    let invite = invite();
+    let group_id = StudentGroupId::new();
+    let selected = BTreeSet::from([TeachingCourseId::new()]);
+    let state = || {
+        BotState::Flow(FlowState::ChoosingRegistrationSubjects {
+            invite,
+            group_id,
+            message_id: MessageId(10),
+            selected: selected.clone(),
+        })
+    };
+    let enrolling = BotState::Flow(FlowState::ChoosingSubjects {
+        message_id: MessageId(10),
+        selected: selected.clone(),
+    });
+
+    assert_eq!(
+        state().choosing_registration_subjects(MessageId(10)),
+        Some((invite, group_id, selected.clone()))
+    );
+    assert!(
+        state()
+            .choosing_registration_subjects(MessageId(11))
+            .is_none()
+    );
+    assert!(
+        enrolling
+            .choosing_registration_subjects(MessageId(10))
+            .is_none()
+    );
+}
+
+#[test]
+fn enrollment_subjects_are_toggled_on_the_current_subject_choice() {
+    let selected = BTreeSet::from([TeachingCourseId::new()]);
+    let state = || {
+        BotState::Flow(FlowState::ChoosingSubjects {
+            message_id: MessageId(10),
+            selected: selected.clone(),
+        })
+    };
+    let registering = BotState::Flow(FlowState::ChoosingRegistrationSubjects {
+        invite: invite(),
+        group_id: StudentGroupId::new(),
+        message_id: MessageId(10),
+        selected: selected.clone(),
+    });
+
+    assert_eq!(
+        state().choosing_subjects(MessageId(10)),
+        Some(selected.clone())
+    );
+    assert!(state().choosing_subjects(MessageId(11)).is_none());
+    assert!(registering.choosing_subjects(MessageId(10)).is_none());
 }
 
 #[test]
@@ -749,6 +808,19 @@ fn abandoning_a_submission_prompt_restores_the_student_menu() {
 }
 
 #[test]
+fn abandoning_the_choice_of_subjects_cancels_it_with_the_student_menu() {
+    let flow = FlowState::ChoosingSubjects {
+        message_id: MessageId(10),
+        selected: BTreeSet::new(),
+    };
+
+    assert_eq!(
+        flow.abandon_notice(),
+        Some((texts::ACTION_CANCELLED, student_keyboard()))
+    );
+}
+
+#[test]
 fn abandoning_assignment_creation_discards_the_draft() {
     let course_id = TeachingCourseId::new();
     let flows = [
@@ -831,9 +903,16 @@ fn registration_review_decisions_confirmations_and_forms_are_abandoned_silently(
             invite: invite(),
             message_id: MessageId(10),
         },
+        FlowState::ChoosingRegistrationSubjects {
+            invite: invite(),
+            group_id: StudentGroupId::new(),
+            message_id: MessageId(10),
+            selected: BTreeSet::new(),
+        },
         FlowState::AwaitingRegistrationName {
             invite: invite(),
             group_id: StudentGroupId::new(),
+            courses: BTreeSet::new(),
         },
         FlowState::ConfirmingInviteRotation {
             message_id: MessageId(10),
@@ -972,6 +1051,22 @@ fn typed_text_on_a_button_screen_is_answered_with_a_hint_naming_its_buttons() {
             texts::CHOOSE_BUTTON,
         ),
         (
+            BotState::Flow(FlowState::ChoosingRegistrationSubjects {
+                invite: invite(),
+                group_id: StudentGroupId::new(),
+                message_id: MessageId(10),
+                selected: BTreeSet::new(),
+            }),
+            texts::CHOOSE_BUTTON,
+        ),
+        (
+            BotState::Flow(FlowState::ChoosingSubjects {
+                message_id: MessageId(10),
+                selected: BTreeSet::new(),
+            }),
+            texts::CHOOSE_BUTTON,
+        ),
+        (
             BotState::Flow(FlowState::ChoosingStudent {
                 message_id: MessageId(10),
                 purpose: StudentListPurpose::Grades { course_id },
@@ -994,6 +1089,7 @@ fn idle_and_typed_input_states_have_no_button_hint() {
         BotState::Flow(FlowState::AwaitingRegistrationName {
             invite: invite(),
             group_id: StudentGroupId::new(),
+            courses: BTreeSet::new(),
         }),
         BotState::Flow(FlowState::AwaitingSubmission {
             assignment_id: AssignmentId::new(),

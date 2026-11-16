@@ -146,3 +146,72 @@ async fn a_student_registered_over_http_can_submit_right_away() {
 
     assert_eq!(body["attempt_number"], json!(1));
 }
+
+fn listed_titles(body: &Value) -> Vec<&str> {
+    body.as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["assignment"]["title"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_registration_without_course_ids_enrolls_in_the_course_of_the_invite() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course("Android").await;
+    app.add_published_assignment(&second, &app.fixture.teacher, "Activity lifecycle")
+        .await;
+    let token = app.course_invite_token().await;
+
+    app.register_student(2001, "Ivan", &token).await.created();
+
+    let body = app.student_assignments(2001).await.ok();
+    assert_eq!(
+        listed_titles(&body),
+        [app.fixture.assignment.title().as_str()]
+    );
+}
+
+#[tokio::test]
+async fn a_registration_with_course_ids_enrolls_in_exactly_those_courses() {
+    let app = TestApp::start().await;
+    let second = app.add_subject_course("Android").await;
+    app.add_published_assignment(&second, &app.fixture.teacher, "Activity lifecycle")
+        .await;
+    let token = app.course_invite_token().await;
+
+    app.post_as(
+        "/students",
+        2001,
+        json!({
+            "display_name": "Ivan",
+            "invite_token": token,
+            "teaching_course_ids": [second.id().as_uuid()],
+        }),
+    )
+    .await
+    .created();
+
+    let body = app.student_assignments(2001).await.ok();
+    assert_eq!(listed_titles(&body), ["Activity lifecycle"]);
+}
+
+#[tokio::test]
+async fn a_course_outside_the_group_among_the_course_ids_is_invalid_input() {
+    let app = TestApp::start().await;
+    let foreign = app.add_foreign_course().await.course;
+    let token = app.course_invite_token().await;
+
+    app.post_as(
+        "/students",
+        2001,
+        json!({
+            "display_name": "Ivan",
+            "invite_token": token,
+            "teaching_course_ids": [foreign.id().as_uuid()],
+        }),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+    app.get_as("/me", 2001).await.not_found();
+}

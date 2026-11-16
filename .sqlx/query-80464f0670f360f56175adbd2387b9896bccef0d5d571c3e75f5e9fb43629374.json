@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select course_groups.teaching_course_id, subjects.id as subject_id, subjects.name\n        from teaching_course_groups course_groups\n        join subjects\n          on subjects.id = course_groups.subject_id\n        where course_groups.student_group_id = $1\n          and not subjects.sandbox\n          and (\n              $2::uuid is null\n              or not exists (\n                  select 1\n                  from teaching_course_students enrolled\n                  where enrolled.teaching_course_id = course_groups.teaching_course_id\n                    and enrolled.student_id = $2\n              )\n          )\n        order by subjects.name, course_groups.teaching_course_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "teaching_course_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "teaching_course_groups",
+            "name": "teaching_course_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "80464f0670f360f56175adbd2387b9896bccef0d5d571c3e75f5e9fb43629374"
+}

@@ -255,9 +255,13 @@ impl AssignmentService {
             .await?
             .required("student")?;
 
+        let participation =
+            db::enrollments::participation(&mut *tx, course.id(), student.id()).await?;
+
         let extra_attempts =
             db::attempts::lock_or_create(&mut tx, assignment.id(), student.id()).await?;
-        let mut progress = StudentAssignmentProgress::new(&assignment, &student, extra_attempts)?;
+        let mut progress =
+            StudentAssignmentProgress::new(&assignment, &student, participation, extra_attempts)?;
 
         progress.grant_extra_attempts(&assignment, &course, &actor, command.amount)?;
 
@@ -272,8 +276,8 @@ impl AssignmentService {
         actor: Actor,
         page: PageRequest,
     ) -> AppResult<Page<StudentAssignment>> {
-        self.list_for_group(actor, page, |group_id| {
-            db::assignments::list_published_for_group(&self.pool, group_id, page)
+        self.list_cards(actor, page, |student_id| {
+            db::assignments::list_published_for_student(&self.pool, student_id, page)
         })
         .await
     }
@@ -283,25 +287,24 @@ impl AssignmentService {
         actor: Actor,
         page: PageRequest,
     ) -> AppResult<Page<StudentAssignment>> {
-        self.list_for_group(actor, page, |group_id| {
-            db::assignments::list_archived_for_group(&self.pool, group_id, page)
+        self.list_cards(actor, page, |student_id| {
+            db::assignments::list_archived_for_student(&self.pool, student_id, page)
         })
         .await
     }
 
-    async fn list_for_group<F>(
+    async fn list_cards<F>(
         &self,
         actor: Actor,
         page: PageRequest,
-        fetch: impl FnOnce(StudentGroupId) -> F,
+        fetch: impl FnOnce(UserId) -> F,
     ) -> AppResult<Page<StudentAssignment>>
     where
         F: Future<Output = db::DbResult<Vec<db::assignments::StudentAssignmentCard>>>,
     {
         let student = self.student(actor).await?;
-        let group_id = student.student_group_id().required("student group")?;
 
-        let assignments = fetch(group_id).await?;
+        let assignments = fetch(student.id()).await?;
         self.with_student_histories(assignments, student.id())
             .await
             .map(|items| Page::from_rows(items, page))
@@ -555,7 +558,9 @@ pub(crate) async fn load_visible_assignment_for_student(
             resource: "assignment",
         });
     }
-    if !assignment.is_issued_to(&student) {
+    let participation =
+        db::enrollments::participation(pool, assignment.teaching_course_id(), student.id()).await?;
+    if !assignment.is_issued_to(&student, participation) {
         return Err(DomainError::StudentDoesNotBelongToAssignmentGroup.into());
     }
 

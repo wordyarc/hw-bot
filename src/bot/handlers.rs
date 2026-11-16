@@ -237,8 +237,12 @@ pub(super) async fn handle_message(
             BotState::Screen(ScreenState::Guest) => {
                 home::send_guest_hint(&bot, message.chat.id).await?;
             }
-            BotState::Flow(FlowState::AwaitingRegistrationName { invite, group_id }) => {
-                registration::submit_name(step, invite, group_id).await?;
+            BotState::Flow(FlowState::AwaitingRegistrationName {
+                invite,
+                group_id,
+                courses,
+            }) => {
+                registration::submit_name(step, invite, group_id, courses).await?;
             }
             BotState::Flow(FlowState::AwaitingSubmission {
                 assignment_id,
@@ -448,8 +452,20 @@ pub(super) async fn handle_callback(
             }
             abandon_flow(&bot, chat_id, &state).await?;
         }
-        if let CallbackAction::Flow(FlowAction::RegistrationGroup(group_id)) = action {
-            return registration::choose_group(chat, message.id, group_id, &state).await;
+        match action {
+            CallbackAction::Flow(FlowAction::RegistrationGroup(group_id)) => {
+                return registration::choose_group(chat, message.id, group_id, &state).await;
+            }
+            CallbackAction::Flow(FlowAction::RegistrationSubject(course_id)) => {
+                return registration::toggle_registration_subject(
+                    chat, message.id, course_id, state,
+                )
+                .await;
+            }
+            CallbackAction::Flow(FlowAction::RegistrationSubjectsDone) => {
+                return registration::finish_registration_subjects(chat, message.id, state).await;
+            }
+            _ => {}
         }
         let Some(screen) = chat.resolve(telegram_user_id).await? else {
             return Ok(());
@@ -676,6 +692,19 @@ async fn handle_flow_action(
         FlowAction::RegistrationGroup(group_id) => {
             registration::choose_group(screen.chat(), message_id, group_id, &state).await?;
         }
+        FlowAction::RegistrationSubject(course_id) => {
+            registration::toggle_registration_subject(screen.chat(), message_id, course_id, state)
+                .await?;
+        }
+        FlowAction::RegistrationSubjectsDone => {
+            registration::finish_registration_subjects(screen.chat(), message_id, state).await?;
+        }
+        FlowAction::EnrollSubject(course_id) => {
+            registration::toggle_enrollment_subject(screen, message_id, course_id, state).await?;
+        }
+        FlowAction::EnrollSubjectsDone => {
+            registration::finish_enrollment(screen, message_id, state).await?;
+        }
         FlowAction::AssignmentGroup(group_id) => {
             teacher::toggle_assignment_group(screen, message_id, group_id, state).await?;
         }
@@ -810,9 +839,9 @@ mod tests {
             registration_groups_keyboard, reopen_assignment_keyboard, review_decision_keyboard,
             review_hub_keyboard, review_list_keyboard, review_score_keyboard, roster_keyboard,
             sandbox_keyboard, student_assignment_keyboard, student_assignments_keyboard,
-            student_grades_keyboard, student_keyboard, submission_history_keyboard,
-            teacher_keyboard, terms_exit_keyboard, terms_form_view, terms_keyboard,
-            withdrawal_confirmation_keyboard, withdrawal_hint_keyboard,
+            student_grades_keyboard, student_keyboard, subjects_keyboard,
+            submission_history_keyboard, teacher_keyboard, terms_exit_keyboard, terms_form_view,
+            terms_keyboard, withdrawal_confirmation_keyboard, withdrawal_hint_keyboard,
         };
         use crate::domain::{
             CourseMakeup, DeductedFrom, FilePresentation, Grading, StoredFileId,
@@ -846,6 +875,10 @@ mod tests {
             subject: subject("Single"),
             history: history().build(),
             makeup_pool: None,
+        };
+        let offered_course = crate::app::OfferedCourse {
+            course_id: course.id(),
+            subject: subject("Single"),
         };
         let course_student = CourseStudent {
             student_id: UserId::new(),
@@ -1039,6 +1072,18 @@ mod tests {
             gradebook_students_keyboard(course.id(), &[course_student]),
             gradebook_groups_keyboard(stream.course.id(), &stream.groups),
             registration_groups_keyboard(&stream.groups),
+            subjects_keyboard(
+                std::slice::from_ref(&offered_course),
+                &std::collections::BTreeSet::from([course.id()]),
+                FlowAction::RegistrationSubject,
+                FlowAction::RegistrationSubjectsDone,
+            ),
+            subjects_keyboard(
+                std::slice::from_ref(&offered_course),
+                &std::collections::BTreeSet::new(),
+                FlowAction::EnrollSubject,
+                FlowAction::EnrollSubjectsDone,
+            ),
             assignment_groups_keyboard(
                 &stream.groups,
                 &std::collections::BTreeSet::from([group.id()]),
