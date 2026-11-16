@@ -15,6 +15,7 @@ use super::telegram::{
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 4096;
 const MESSAGE_TOO_LONG: &str = "Bad Request: message is too long";
+const IDLE_POLL_DELAY: Duration = Duration::from_millis(5);
 
 fn bad_request(description: &str) -> ResponseTemplate {
     ResponseTemplate::new(400).set_body_json(json!({
@@ -154,9 +155,13 @@ impl TelegramScenario {
                     })
                     .cloned()
                     .collect();
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(20))
-                    .set_body_json(json!({"ok": true, "result": updates}))
+                let response = ResponseTemplate::new(200)
+                    .set_body_json(json!({"ok": true, "result": updates}));
+                if updates.is_empty() {
+                    response.set_delay(IDLE_POLL_DELAY)
+                } else {
+                    response
+                }
             })
             .mount(&server)
             .await;

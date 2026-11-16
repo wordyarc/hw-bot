@@ -19,7 +19,7 @@ use crate::harness::{ResponseGate, TestApp};
 
 pub(crate) use hw_bot::test_support::{VLADIVOSTOK, vladivostok};
 
-const POLL_STEP: Duration = Duration::from_millis(10);
+const POLL_STEP: Duration = Duration::from_millis(2);
 
 pub(crate) async fn wait_until<F, Fut>(timeout: Duration, mut probe: F) -> bool
 where
