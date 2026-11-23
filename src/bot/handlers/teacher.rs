@@ -9,6 +9,7 @@ mod courses;
 mod creation;
 mod deadline;
 mod form;
+mod grade_sheet;
 mod gradebook;
 mod invites;
 mod makeup;
@@ -32,6 +33,7 @@ pub(super) use creation::submit_title;
 pub(super) use creation::{finish_assignment_groups, toggle_assignment_group};
 pub(super) use deadline::handle_deadline;
 pub(super) use form::detach;
+pub(super) use grade_sheet::send_grade_sheet;
 pub(super) use gradebook::{
     send_student_grades, show_gradebook, show_gradebook_page, show_student_grades_page,
 };

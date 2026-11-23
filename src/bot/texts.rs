@@ -7,8 +7,10 @@ use crate::domain::{
 };
 
 mod admin;
+mod grade_sheet;
 
 pub use admin::*;
+pub use grade_sheet::*;
 
 pub const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
 pub const BUTTON_ARCHIVE: &str = "🗄 Архив";
@@ -392,6 +394,7 @@ pub fn teacher_help() -> String {
         Работы по предмету-песочнице в очередь не попадают: их список открывает «{BUTTON_SANDBOX}». Работу можно проверить по одной или ответить всем сразу кнопкой «{BUTTON_ACCEPT_ALL}» или «{BUTTON_REJECT_ALL}» с одним комментарием. Такое решение касается работ, отправленных до открытия списка. При принятии оценочные задания получают максимальный балл с учётом штрафа за опоздание.\n\n\
         Досдача включается на экране предмета кнопкой «🩹 Досдача»: укажите последний день досдачи и сколько досдач положено каждому студенту на весь предмет. Бот спросит, на сколько баллов засчитывать досдачу заданий каждой шкалы. Досдачи не попадают в общую очередь: их открывает кнопка досдач на экране «{BUTTON_REVIEW}». Досдачу можно только засчитать на этот балл или отклонить. Отклонённая досдача попытку не возвращает: добавить попытку студенту можно сразу после отклонения или в «{BUTTON_GRADEBOOK}».\n\n\
         Список студентов предмета открывает «{BUTTON_COURSES} → Предмет → {BUTTON_ROSTER}»: группы с числом студентов, а у каждого студента — сколько выданных его группе заданий принято. Ноль у группы значит, что из неё ещё никто не зарегистрировался по ссылке «{BUTTON_COURSE_INVITE}».\n\n\
+        Файл Excel со всеми студентами и заданиями присылает «{BUTTON_COURSES} → Предмет → {BUTTON_GRADE_SHEET}»: каждая группа на своём листе. Это снимок на момент выгрузки, поэтому после новых проверок выгрузите ведомость заново.\n\n\
         Кнопка «{BUTTON_STUDENT_CONTACT}» есть под работой и в «{BUTTON_COURSES} → Предмет → {BUTTON_GRADEBOOK} → Студент». Она сохраняет текущий шаг. Нажмите «{BUTTON_OPEN_TELEGRAM}», чтобы написать со своего личного аккаунта; доступность перехода зависит от Telegram. Если адрес изменился, нажмите «{BUTTON_REFRESH_CONTACT}».\n\n\
         Чтобы изменить условия, воспользуйтесь кнопкой «{BUTTON_EDIT_DATES}» в задании. Перенос срока также сдвигает конец приёма, поэтому перед сохранением сверьте новую дату. Команда /cancel во время настройки возвращает к предыдущему шагу. На первом шаге она завершает настройку."
     )
@@ -1688,6 +1691,23 @@ mod tests {
             courses.is_some_and(|courses| courses < paragraph.find(BUTTON_ROSTER).unwrap()),
             "{paragraph}"
         );
+    }
+
+    #[test]
+    fn the_teacher_help_leads_to_the_grade_sheet_and_calls_it_a_snapshot() {
+        let help = teacher_help();
+        let paragraph = help
+            .split("\n\n")
+            .find(|paragraph| paragraph.contains(BUTTON_GRADE_SHEET))
+            .unwrap_or_else(|| panic!("{help}"));
+
+        assert!(
+            paragraph.contains(&format!(
+                "{BUTTON_COURSES} → Предмет → {BUTTON_GRADE_SHEET}"
+            )),
+            "{paragraph}"
+        );
+        assert!(paragraph.contains("снимок"), "{paragraph}");
     }
 
     #[test]

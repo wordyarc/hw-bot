@@ -585,6 +585,10 @@ pub(crate) fn course_assignments_keyboard(
             ReplayableAction::Gradebook(course_id).callback(),
         ),
         row(
+            texts::BUTTON_GRADE_SHEET,
+            InformationalAction::GradeSheet { course_id }.callback(),
+        ),
+        row(
             texts::BUTTON_ROSTER,
             ReplayableAction::Page(PageTarget::Roster(course_id), 0).callback(),
         ),

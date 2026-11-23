@@ -6,6 +6,13 @@ use crate::domain::{
     UserId,
 };
 
+mod grade_sheet;
+
+pub use grade_sheet::{
+    AcceptedWork, GradeSheet, GradeSheetCell, GradeSheetColumn, GradeSheetGroup, GradeSheetRow,
+    GradeSheetStudent, LateMark, ScoreCell, SubmissionStates,
+};
+
 #[derive(Clone, Debug)]
 pub struct TeachingCourseDetails {
     pub course: TeachingCourse,

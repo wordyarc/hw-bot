@@ -105,6 +105,30 @@ async fn listing_teacher_courses_does_not_query_per_course() {
 }
 
 #[tokio::test]
+async fn reading_the_grade_sheet_does_not_query_per_student_or_assignment() {
+    let app = TestApp::start().await;
+    let (log, _capture) = QueryLog::capture();
+    let read = || {
+        app.application
+            .courses
+            .grade_sheet(app.teacher_actor(), app.fixture.course.id())
+    };
+    let (sheet, small) = log.during(read()).await;
+    assert_eq!(sheet.unwrap().unwrap().groups[0].students.len(), 1);
+    add_submitted_assignments(&app, 6).await;
+    for name in ["Anna", "Boris", "Vera"] {
+        app.add_student(name).await;
+    }
+
+    let (sheet, large) = log.during(read()).await;
+
+    let sheet = sheet.unwrap().unwrap();
+    assert_eq!(sheet.groups[0].students.len(), 4);
+    assert_eq!(sheet.groups[0].columns.len(), 7);
+    assert_same_count(&small, &large);
+}
+
+#[tokio::test]
 async fn an_idle_notification_poll_is_a_single_statement() {
     let app = TestApp::start().await;
     let settings = NotificationWorkerSettings {

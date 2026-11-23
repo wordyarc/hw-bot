@@ -5,6 +5,7 @@ mod creation;
 mod failures;
 mod files;
 mod flows;
+mod grade_sheet;
 mod makeup;
 mod navigation;
 mod registration;

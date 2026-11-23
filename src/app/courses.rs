@@ -14,7 +14,7 @@ use crate::domain::{
 };
 use crate::pagination::{Page, PageRequest};
 use crate::read_models::{
-    AssignmentGrade, CourseRoster, CourseStudent, RosterGroup, TeachingCourseDetails,
+    AssignmentGrade, CourseRoster, CourseStudent, GradeSheet, RosterGroup, TeachingCourseDetails,
     UndecidedAssignment, VersionedAssignment,
 };
 
@@ -294,6 +294,19 @@ impl CourseService {
             page: rows.page,
             next_page: rows.next_page,
         })
+    }
+
+    pub async fn grade_sheet(
+        &self,
+        actor: Actor,
+        course_id: TeachingCourseId,
+    ) -> AppResult<Option<GradeSheet>> {
+        let details =
+            load_managed_course_details(&self.pool, actor, course_id, "read course grade sheet")
+                .await?;
+        let rows = db::grade_sheet::course_rows(&self.pool, course_id).await?;
+
+        Ok(GradeSheet::assemble(details.subject, rows))
     }
 
     pub async fn student_grades(

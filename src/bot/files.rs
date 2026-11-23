@@ -28,6 +28,9 @@ pub(super) enum TransferError {
     #[error("Telegram file download failed")]
     Download(#[source] reqwest::Error),
 
+    #[error("generated file build failed")]
+    Build(#[source] anyhow::Error),
+
     #[error(transparent)]
     Telegram(#[from] RequestError),
 
@@ -58,6 +61,12 @@ pub(super) struct FileTransfer<'a> {
     bot: &'a Bot,
     _permit: SemaphorePermit<'a>,
     deadline: Instant,
+}
+
+#[derive(Debug)]
+pub(super) struct GeneratedFile {
+    pub filename: String,
+    pub content: Vec<u8>,
 }
 
 pub(super) struct IncomingFile {
@@ -128,6 +137,20 @@ impl FileTransfers {
         }
         Ok(())
     }
+
+    pub async fn send_generated<F>(
+        &self,
+        chat_id: ChatId,
+        produce: impl FnOnce() -> F,
+    ) -> Result<bool, TransferError>
+    where
+        F: Future<Output = Result<Option<GeneratedFile>, TransferError>>,
+    {
+        self.acquire()
+            .await?
+            .upload_generated(chat_id, produce)
+            .await
+    }
 }
 
 impl FileTransfer<'_> {
@@ -167,6 +190,25 @@ impl FileTransfer<'_> {
             let input =
                 InputFile::memory(read().await?).file_name(metadata.filename().as_str().to_owned());
             send_file(self.bot, chat_id, metadata.presentation(), input).await
+        })
+        .await
+    }
+
+    async fn upload_generated<F>(
+        &self,
+        chat_id: ChatId,
+        produce: impl FnOnce() -> F,
+    ) -> Result<bool, TransferError>
+    where
+        F: Future<Output = Result<Option<GeneratedFile>, TransferError>>,
+    {
+        within(self.deadline, async {
+            let Some(file) = produce().await? else {
+                return Ok(false);
+            };
+            let input = InputFile::memory(file.content).file_name(file.filename);
+            send_file(self.bot, chat_id, FilePresentation::Document, input).await?;
+            Ok(true)
         })
         .await
     }
@@ -312,6 +354,91 @@ mod tests {
         ));
         drop(first);
         assert!(transfers.acquire().await.is_ok());
+    }
+
+    fn generated() -> GeneratedFile {
+        GeneratedFile {
+            filename: "sheet.xlsx".to_owned(),
+            content: b"sheet-content".to_vec(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_generated_file_is_not_built_when_no_slot_frees_up_in_time() {
+        let transfers = FileTransfers::new(Bot::new("test-token"), 1, Duration::from_millis(50));
+        let busy = transfers.acquire().await.unwrap();
+        let built = std::sync::atomic::AtomicBool::new(false);
+
+        let result = transfers
+            .send_generated(ChatId(1), || async {
+                built.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(Some(generated()))
+            })
+            .await;
+
+        assert!(matches!(result, Err(TransferError::Deadline)));
+        assert!(!built.load(std::sync::atomic::Ordering::Relaxed));
+        drop(busy);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn building_a_generated_file_counts_toward_the_transfer_deadline() {
+        let transfers = FileTransfers::new(Bot::new("test-token"), 1, Duration::from_millis(50));
+
+        let result = transfers
+            .send_generated(ChatId(1), || async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(Some(generated()))
+            })
+            .await;
+
+        assert!(matches!(result, Err(TransferError::Deadline)));
+        assert!(transfers.acquire().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn nothing_to_generate_sends_nothing_and_frees_the_slot() {
+        use wiremock::MockServer;
+        let server = MockServer::start().await;
+        let transfers = FileTransfers::new(
+            Bot::new("test-token").set_api_url(server.uri().parse().unwrap()),
+            1,
+            Duration::from_secs(5),
+        );
+
+        let sent = transfers
+            .send_generated(ChatId(1), || async { Ok(None) })
+            .await
+            .unwrap();
+
+        assert!(!sent);
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(transfers.acquire().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_generated_file_with_an_unknown_send_outcome_is_not_sent_again() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bottest-token/SendDocument"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let transfers = FileTransfers::new(
+            Bot::new("test-token").set_api_url(server.uri().parse().unwrap()),
+            1,
+            Duration::from_secs(5),
+        );
+
+        let result = transfers
+            .send_generated(ChatId(1), || async { Ok(Some(generated())) })
+            .await;
+
+        assert!(matches!(result, Err(TransferError::Telegram(_))));
+        server.verify().await;
     }
 
     #[tokio::test]

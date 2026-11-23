@@ -1,0 +1,222 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with issued as (\n            select issued.student_group_id, assignments.id, assignments.title,\n                   assignments.deadline_at, assignments.max_score, assignments.late_deducted_from\n            from assignment_groups issued\n            join assignments on assignments.id = issued.assignment_id\n            where issued.teaching_course_id = $1\n              and assignments.published_at is not null\n        ), course_submissions as (\n            select submissions.student_id, submissions.assignment_id, submissions.status,\n                   submissions.kind, submissions.raw_score, submissions.grade_max_score,\n                   submissions.late_periods, submissions.penalty,\n                   submissions.penalty_deducted_from, submissions.work_score,\n                   submissions.course_total_penalty\n            from submissions\n            join assignments on assignments.id = submissions.assignment_id\n            where assignments.teaching_course_id = $1\n        ), best as (\n            select distinct on (student_id, assignment_id)\n                student_id, assignment_id, kind, raw_score, grade_max_score, late_periods,\n                penalty, penalty_deducted_from, work_score, course_total_penalty\n            from course_submissions\n            where status = 'accepted'\n            order by student_id, assignment_id,\n                     work_score - course_total_penalty desc nulls last,\n                     kind = 'regular' desc\n        ), states as (\n            select student_id, assignment_id,\n                   bool_or(status = 'pending_review') as pending,\n                   bool_or(status = 'rejected') as rejected\n            from course_submissions\n            group by student_id, assignment_id\n        )\n        select\n            student_groups.id as \"group_id!\",\n            student_groups.code as \"group_code!\",\n            users.id as \"student_id!\",\n            users.display_name as \"display_name!\",\n            issued.id as \"assignment_id?\",\n            issued.title as \"title?\",\n            issued.max_score as \"max_score?\",\n            issued.late_deducted_from as \"late_deducted_from?\",\n            best.kind as \"kind?\",\n            best.raw_score as \"raw_score?\",\n            best.grade_max_score as \"grade_max_score?\",\n            best.late_periods as \"late_periods?\",\n            best.penalty as \"penalty?\",\n            best.penalty_deducted_from as \"penalty_deducted_from?\",\n            best.work_score as \"work_score?\",\n            best.course_total_penalty as \"course_total_penalty?\",\n            coalesce(states.pending, false) as \"pending!\",\n            coalesce(states.rejected, false) as \"rejected!\"\n        from course_participants participant\n        join users on users.id = participant.student_id\n        join student_groups on student_groups.id = participant.student_group_id\n        left join issued on issued.student_group_id = participant.student_group_id\n        left join best on best.student_id = users.id and best.assignment_id = issued.id\n        left join states on states.student_id = users.id and states.assignment_id = issued.id\n        where participant.teaching_course_id = $1\n        order by student_groups.code, users.display_name, users.id,\n                 issued.max_score is null, issued.deadline_at, issued.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "group_code!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "student_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "assignment_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "title?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "max_score?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "late_deducted_from?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "kind?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "raw_score?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "raw_score"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "grade_max_score?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "grade_max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "late_periods?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "late_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "penalty?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "penalty_deducted_from?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "work_score?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "work_score"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "course_total_penalty?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "course_total_penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "pending!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "rejected!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "c5a89ba2232ff418434f96b3bd33cfccf11664daa58ebeb3c9c0a1128616fb8f"
+}

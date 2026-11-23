@@ -33,6 +33,7 @@ mod context;
 mod errors;
 mod files;
 mod form;
+mod grade_sheet;
 mod handlers;
 mod invites;
 mod makeup_form;

@@ -35,6 +35,7 @@ pub const ASSIGNMENT_STUDENTS_PREFIX: &str = "attempts:";
 pub const INVITE_PREFIX: &str = "invite:";
 pub const GRADES_PREFIX: &str = "grades:";
 pub const CONTACT_PREFIX: &str = "contact:";
+pub const GRADE_SHEET_PREFIX: &str = "grade-sheet:";
 pub const MAKEUP_PREFIX: &str = "makeup:";
 pub const PUBLISH_PREFIX: &str = "publish:";
 pub const ARCHIVE_PREFIX: &str = "archive:";
@@ -144,6 +145,9 @@ pub(super) enum InformationalAction {
         course_id: TeachingCourseId,
         student_id: UserId,
     },
+    GradeSheet {
+        course_id: TeachingCourseId,
+    },
 }
 
 impl InformationalAction {
@@ -157,6 +161,9 @@ impl InformationalAction {
                 encode_id(course_id.as_uuid()),
                 encode_id(student_id.as_uuid()),
             ),
+            Self::GradeSheet { course_id } => {
+                format!("{GRADE_SHEET_PREFIX}{}", encode_id(course_id.as_uuid()))
+            }
         }
     }
 }
@@ -177,6 +184,16 @@ fn parse_contact(data: &str) -> Option<InformationalAction> {
     Some(InformationalAction::StudentContact {
         course_id: TeachingCourseId::from_uuid(decode_id(course)?),
         student_id: UserId::from_uuid(decode_id(student)?),
+    })
+}
+
+fn parse_grade_sheet(data: &str) -> Option<InformationalAction> {
+    if data.len() > 64 {
+        return None;
+    }
+    let course = data.strip_prefix(GRADE_SHEET_PREFIX)?;
+    Some(InformationalAction::GradeSheet {
+        course_id: TeachingCourseId::from_uuid(decode_id(course)?),
     })
 }
 
@@ -1047,6 +1064,9 @@ fn parse_prefixed(data: &str) -> Option<CallbackAction> {
     if data.starts_with(CONTACT_PREFIX) {
         return parse_contact(data).map(Informational);
     }
+    if data.starts_with(GRADE_SHEET_PREFIX) {
+        return parse_grade_sheet(data).map(Informational);
+    }
     if data.starts_with(PAGE_PREFIX) {
         return parse_page(data).map(Replayable);
     }
@@ -1168,6 +1188,32 @@ mod tests {
             format!("{CONTACT_PREFIX}{}:{id}", URL_SAFE_NO_PAD.encode([1; 15])),
             format!("{CONTACT_PREFIX}{id}:{}", URL_SAFE_NO_PAD.encode([1; 17])),
             format!("{CONTACT_PREFIX}{id}:{}", "A".repeat(65)),
+        ] {
+            assert_eq!(parse(&invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn the_grade_sheet_is_informational_and_fits_the_callback_limit() {
+        let target = InformationalAction::GradeSheet {
+            course_id: TeachingCourseId::new(),
+        };
+        let data = target.callback();
+
+        assert!(data.len() <= 64, "{data}");
+        assert_eq!(parse(&data), Some(Informational(target)));
+    }
+
+    #[test]
+    fn malformed_grade_sheet_targets_are_rejected() {
+        let id = encode_id(Uuid::new_v4());
+        for invalid in [
+            GRADE_SHEET_PREFIX.to_owned(),
+            format!("{GRADE_SHEET_PREFIX}{id}:"),
+            format!("{GRADE_SHEET_PREFIX}{id}=="),
+            format!("{GRADE_SHEET_PREFIX}!invalid!"),
+            format!("{GRADE_SHEET_PREFIX}{}", URL_SAFE_NO_PAD.encode([1; 15])),
+            format!("{GRADE_SHEET_PREFIX}{}", "A".repeat(65)),
         ] {
             assert_eq!(parse(&invalid), None, "{invalid}");
         }
@@ -1492,6 +1538,8 @@ mod tests {
                     course_id: course,
                     student_id: student,
                 }),
+            Informational(InformationalAction::GradeSheet { .. }) =>
+                Informational(InformationalAction::GradeSheet { course_id: course }),
             CallbackAction::Noop => CallbackAction::Noop,
             Replayable(ReplayableAction::Page(PageTarget::ClosedCourses, _)) =>
                 page(PageTarget::ClosedCourses, last),

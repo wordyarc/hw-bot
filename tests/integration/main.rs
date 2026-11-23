@@ -15,6 +15,7 @@ mod course_enrollment;
 mod course_invites;
 mod course_roster;
 mod db_schema;
+mod grade_sheet;
 mod grading_api;
 mod health_api;
 mod makeup;

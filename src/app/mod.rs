@@ -45,10 +45,11 @@ pub use users::{
 
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
-    AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradebookScore,
-    OfferedCourse, PendingSubmission, QueuePlace, RosterGroup, RosterStudent, StoredSubject,
-    StudentEnrollment, StudentListItem, SubjectQueue, TeachingCourseDetails, UndecidedAssignment,
-    UserStatistics, VersionedAssignment,
+    AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradeSheet,
+    GradeSheetCell, GradeSheetColumn, GradeSheetGroup, GradeSheetStudent, GradebookScore, LateMark,
+    OfferedCourse, PendingSubmission, QueuePlace, RosterGroup, RosterStudent, ScoreCell,
+    StoredSubject, StudentEnrollment, StudentListItem, SubjectQueue, TeachingCourseDetails,
+    UndecidedAssignment, UserStatistics, VersionedAssignment,
 };
 
 fn on_conflict<T>(result: DbResult<T>, conflict: AppError) -> AppResult<T> {

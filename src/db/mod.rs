@@ -15,6 +15,7 @@ pub mod enrollments;
 mod enums;
 pub(crate) mod error;
 pub mod files;
+pub mod grade_sheet;
 pub mod makeup;
 pub mod notifications;
 pub mod submissions;

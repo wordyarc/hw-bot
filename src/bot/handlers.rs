@@ -525,6 +525,9 @@ pub(super) async fn handle_callback(
                 course_id,
                 student_id,
             }) => contact::show(screen, message_id, course_id, student_id).await,
+            CallbackAction::Informational(InformationalAction::GradeSheet { course_id }) => {
+                teacher::send_grade_sheet(screen, course_id).await
+            }
             CallbackAction::Noop => Ok(()),
         }
     }

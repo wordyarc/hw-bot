@@ -23,6 +23,7 @@ hmac = "0.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+rust_xlsxwriter = "0.104"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros"] }
 teloxide = { version = "0.17.0", default-features = false, features = ["macros", "rustls", "cache-me"] }
@@ -42,3 +43,4 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 testcontainers = { version = "0.28.0", features = ["reusable-containers"] }
 tower = { version = "0.5.2", features = ["util"] }
 wiremock = "0.6.5"
+calamine = "0.38.0"
