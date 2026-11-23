@@ -10,7 +10,7 @@ use hw_bot::config::{
     AppConfig, DatabaseConfig, LogRotation, LoggingConfig, LoggingFormat, ValidatedAppConfig,
     millis,
 };
-use hw_bot::db;
+use hw_bot::db::{self, BootstrapOutcome};
 use hw_bot::health::{CriticalComponent, HealthState};
 use hw_bot::invites::CourseInviteCodec;
 use hw_bot::supervision::{CriticalTask, Supervisor};
@@ -155,15 +155,15 @@ async fn prepare_database(database: &DatabaseConfig) -> anyhow::Result<PgPool> {
 
 async fn bootstrap(pool: &PgPool, file: &Path) -> anyhow::Result<()> {
     tracing::info!(path = %file.display(), "running database bootstrap");
-    let data = tokio::fs::read_to_string(file)
+    let outcome = db::run_bootstrap_file(pool, file)
         .await
-        .with_context(|| format!("failed to read bootstrap file {}", file.display()))?;
-    let seed = serde_json::from_str(&data)
-        .with_context(|| format!("failed to parse bootstrap file {}", file.display()))?;
-    db::run_bootstrap(pool, &seed)
-        .await
-        .context("failed to run database bootstrap")?;
-    tracing::info!("database bootstrap completed");
+        .with_context(|| format!("failed to run database bootstrap from {}", file.display()))?;
+    match outcome {
+        BootstrapOutcome::Applied => tracing::info!("database bootstrap completed"),
+        BootstrapOutcome::AlreadyPopulated => {
+            tracing::warn!("database already has users, bootstrap skipped");
+        }
+    }
     Ok(())
 }
 

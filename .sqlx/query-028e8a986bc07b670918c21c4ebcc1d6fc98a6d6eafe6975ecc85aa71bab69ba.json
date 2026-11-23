@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select count(*) as \"pending!\"\n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            where submissions.status = 'pending_review'\n              and exists (\n                  select 1\n                  from teaching_course_teachers\n                  where teaching_course_teachers.teaching_course_id\n                        = assignments.teaching_course_id\n                    and teaching_course_teachers.teacher_id = $1\n              )\n              and subjects.sandbox = $2\n              and ($3::text is null or submissions.kind = $3)\n              and ($4::timestamptz is null or submissions.submitted_at <= $4)\n              and ($5::uuid is null or assignments.subject_id = $5)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pending!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "028e8a986bc07b670918c21c4ebcc1d6fc98a6d6eafe6975ecc85aa71bab69ba"
+}

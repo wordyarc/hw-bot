@@ -2,7 +2,7 @@ use chrono::Duration;
 
 use super::{Fixture, fixture};
 use crate::domain::{AssignmentStatus, DomainError, Grading};
-use crate::test_support::{admin, assignment, t0, teacher};
+use crate::test_support::{admin, assignment, closed_course, t0, teacher};
 
 #[test]
 fn only_teacher_or_admin_can_create_assignment() {
@@ -18,6 +18,63 @@ fn only_teacher_or_admin_can_create_assignment() {
             action: "create assignment"
         }
     );
+}
+
+#[test]
+fn an_assignment_cannot_be_created_in_a_closed_course() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let closed = closed_course(&course);
+
+    assert_eq!(
+        assignment(&closed, &teacher).try_build().unwrap_err(),
+        DomainError::CourseClosed
+    );
+}
+
+#[test]
+fn a_draft_cannot_be_published_in_a_closed_course() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let mut draft = assignment(&course, &teacher).build();
+
+    let result = draft.publish(&closed_course(&course), &teacher, t0());
+
+    assert_eq!(result.unwrap_err(), DomainError::CourseClosed);
+    assert_eq!(draft.status(), AssignmentStatus::Draft);
+}
+
+#[test]
+fn an_archived_assignment_cannot_be_republished_in_a_closed_course() {
+    let Fixture {
+        teacher, course, ..
+    } = fixture();
+    let mut archived = assignment(&course, &teacher).published().build();
+    archived.archive(&course, &teacher).unwrap();
+
+    let result = archived.publish(&closed_course(&course), &teacher, t0());
+
+    assert_eq!(result.unwrap_err(), DomainError::CourseClosed);
+    assert_eq!(archived.status(), AssignmentStatus::Archived);
+}
+
+#[test]
+fn a_foreign_teacher_is_refused_before_the_closed_course_is_mentioned() {
+    let Fixture {
+        teacher: course_teacher,
+        course,
+        ..
+    } = fixture();
+    let mut draft = assignment(&course, &course_teacher).build();
+
+    let result = draft.publish(&closed_course(&course), &teacher(2), t0());
+
+    assert!(matches!(
+        result.unwrap_err(),
+        DomainError::PermissionDenied { .. }
+    ));
 }
 
 #[test]

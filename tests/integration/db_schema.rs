@@ -944,14 +944,12 @@ async fn a_group_belongs_to_at_most_one_course_of_a_subject() {
             .await
             .unwrap_err();
 
-    let db::DbError::Database(error) = error else {
-        panic!("a constraint violation, got {error:?}");
-    };
-    let database = error.as_database_error().unwrap();
-    assert_eq!(database.code().as_deref(), Some("23505"), "{error}");
-    assert_eq!(
-        database.constraint(),
-        Some("teaching_course_groups_subject_id_student_group_id_key")
+    assert!(
+        matches!(
+            error,
+            db::DbError::RuleViolation(hw_bot::domain::DomainError::GroupInSubjectCourse)
+        ),
+        "{error:?}"
     );
 }
 

@@ -9,11 +9,11 @@ use super::callbacks::ReplayableAction;
 use super::form::InputMode;
 use super::makeup_form::{MakeupForm, MakeupStep};
 use super::texts;
-use super::views::{MenuAction, student_keyboard, teacher_keyboard};
+use super::views::{MenuAction, admin_keyboard, student_keyboard, teacher_keyboard};
 use crate::domain::{
-    AssignmentId, Grading, InviteGeneration, LatePenalty, MaxScore, ReviewDecision, ReviewScore,
-    StoredFileId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId, TelegramUserId,
-    UserId,
+    AssignmentId, EducationLevel, Grading, InviteGeneration, LatePenalty, MaxScore, ReviewDecision,
+    ReviewScore, StoredFileId, StudentGroupId, SubjectId, SubmissionId, TeachingCourseId,
+    TelegramUserId, UserId,
 };
 use crate::invites::VerifiedInvite;
 
@@ -380,6 +380,46 @@ impl BotState {
         }
     }
 
+    pub(super) fn admin_choice(self, message_id: MessageId) -> Option<AdminFlow> {
+        match self {
+            Self::Flow(FlowState::Admin(flow)) if flow.message_id() == Some(message_id) => {
+                Some(flow)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn admin_search(&self, message_id: MessageId) -> Option<&str> {
+        match self {
+            Self::Screen(ScreenState::AdminSearch {
+                message_id: current,
+                query,
+            }) if *current == message_id => Some(query),
+            _ => None,
+        }
+    }
+
+    pub(super) fn admin_course(&self, message_id: MessageId) -> Option<TeachingCourseId> {
+        match self {
+            Self::Screen(ScreenState::AdminCourse {
+                message_id: current,
+                course_id,
+            }) if *current == message_id => Some(*course_id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn admin_teacher_courses(&self, message_id: MessageId) -> Option<(UserId, u32)> {
+        match self {
+            Self::Screen(ScreenState::AdminTeacherCourses {
+                message_id: current,
+                teacher_id,
+                page,
+            }) if *current == message_id => Some((*teacher_id, *page)),
+            _ => None,
+        }
+    }
+
     pub(super) fn makeup_grant(&self, message_id: MessageId) -> Option<MakeupGrant> {
         let (current, course_id, student_id, origin) = match self {
             Self::Screen(ScreenState::MakeupFollowup {
@@ -500,6 +540,143 @@ pub(super) enum ScreenState {
         student_id: UserId,
         list: Option<StudentList>,
     },
+    AdminSearch {
+        message_id: MessageId,
+        query: String,
+    },
+    AdminCourse {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+    },
+    AdminTeacherCourses {
+        message_id: MessageId,
+        teacher_id: UserId,
+        page: u32,
+    },
+}
+
+#[derive(Clone)]
+pub(super) enum AdminFlow {
+    AwaitingStudentQuery,
+    AwaitingStudentName {
+        student_id: UserId,
+    },
+    ChoosingStudentGroup {
+        message_id: MessageId,
+        student_id: UserId,
+    },
+    ChoosingStudentCourses {
+        message_id: MessageId,
+        student_id: UserId,
+        group_id: StudentGroupId,
+        selected: BTreeSet<TeachingCourseId>,
+    },
+    ConfirmingUnenroll {
+        message_id: MessageId,
+        student_id: UserId,
+        course_id: TeachingCourseId,
+    },
+    AwaitingTeacherUser,
+    AwaitingTeacherName {
+        telegram_user_id: TelegramUserId,
+        suggested: Option<String>,
+        message_id: Option<MessageId>,
+    },
+    AwaitingGroupCode,
+    ChoosingGroupLevel {
+        message_id: MessageId,
+        code: String,
+    },
+    ChoosingGroupYear {
+        message_id: MessageId,
+        code: String,
+        level: EducationLevel,
+    },
+    AwaitingGroupRename {
+        group_id: StudentGroupId,
+    },
+    ChoosingGroupNewYear {
+        message_id: MessageId,
+        group_id: StudentGroupId,
+    },
+    AwaitingSubjectName,
+    AwaitingSubjectRename {
+        subject_id: SubjectId,
+    },
+    ChoosingCourseSubject {
+        message_id: MessageId,
+    },
+    ChoosingCourseGroups {
+        message_id: MessageId,
+        subject_id: SubjectId,
+        selected: BTreeSet<StudentGroupId>,
+        page: u32,
+    },
+    ChoosingCourseTeachers {
+        message_id: MessageId,
+        subject_id: SubjectId,
+        group_ids: BTreeSet<StudentGroupId>,
+        selected: BTreeSet<UserId>,
+        page: u32,
+    },
+    ChoosingGroupToAdd {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+    },
+    ConfirmingCourseClose {
+        message_id: MessageId,
+        course_id: TeachingCourseId,
+        published: u32,
+        pending: u32,
+    },
+}
+
+impl AdminFlow {
+    pub(super) fn message_id(&self) -> Option<MessageId> {
+        match self {
+            Self::ChoosingStudentGroup { message_id, .. }
+            | Self::ChoosingStudentCourses { message_id, .. }
+            | Self::ConfirmingUnenroll { message_id, .. }
+            | Self::ChoosingGroupLevel { message_id, .. }
+            | Self::ChoosingGroupYear { message_id, .. }
+            | Self::ChoosingGroupNewYear { message_id, .. }
+            | Self::ChoosingCourseSubject { message_id }
+            | Self::ChoosingCourseGroups { message_id, .. }
+            | Self::ChoosingCourseTeachers { message_id, .. }
+            | Self::ChoosingGroupToAdd { message_id, .. }
+            | Self::ConfirmingCourseClose { message_id, .. } => Some(*message_id),
+            Self::AwaitingTeacherName { message_id, .. } => *message_id,
+            Self::AwaitingStudentQuery
+            | Self::AwaitingStudentName { .. }
+            | Self::AwaitingTeacherUser
+            | Self::AwaitingGroupCode
+            | Self::AwaitingGroupRename { .. }
+            | Self::AwaitingSubjectName
+            | Self::AwaitingSubjectRename { .. } => None,
+        }
+    }
+
+    pub(super) fn button_only(&self) -> bool {
+        !matches!(
+            self,
+            Self::AwaitingStudentQuery
+                | Self::AwaitingStudentName { .. }
+                | Self::AwaitingTeacherUser
+                | Self::AwaitingTeacherName { .. }
+                | Self::AwaitingGroupCode
+                | Self::AwaitingGroupRename { .. }
+                | Self::AwaitingSubjectName
+                | Self::AwaitingSubjectRename { .. }
+        )
+    }
+
+    fn hides_bottom_menu(&self) -> bool {
+        !self.button_only()
+            || matches!(
+                self,
+                Self::ChoosingGroupLevel { .. } | Self::ChoosingGroupYear { .. }
+            )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -622,6 +799,7 @@ pub(super) enum FlowState {
         assignment_id: AssignmentId,
         student_id: UserId,
     },
+    Admin(AdminFlow),
 }
 
 impl FlowState {
@@ -641,6 +819,10 @@ impl FlowState {
             | Self::AwaitingBulkReviewComment { .. }
             | Self::AwaitingAssignmentFile { .. }
             | Self::AwaitingAttemptAmount { .. } => (texts::ACTION_CANCELLED, teacher_keyboard()),
+            Self::Admin(flow) if flow.hides_bottom_menu() => {
+                (texts::ACTION_CANCELLED, admin_keyboard())
+            }
+            Self::Admin(_) => return None,
             Self::ChoosingRegistrationGroup { .. }
             | Self::ChoosingRegistrationSubjects { .. }
             | Self::AwaitingRegistrationName { .. }
@@ -669,7 +851,10 @@ impl BotState {
                 ScreenState::CourseInvite { .. }
                 | ScreenState::SandboxSubmissions { .. }
                 | ScreenState::MakeupFollowup { .. }
-                | ScreenState::StudentGrades { .. },
+                | ScreenState::StudentGrades { .. }
+                | ScreenState::AdminSearch { .. }
+                | ScreenState::AdminCourse { .. }
+                | ScreenState::AdminTeacherCourses { .. },
             )
             | Self::Flow(FlowState::ConfirmingInviteRotation { .. }) => {
                 Some(texts::CHOOSE_ACTION_ABOVE)
@@ -704,7 +889,8 @@ impl BotState {
                 | FlowState::AwaitingMaxScore { .. }
                 | FlowState::ConfiguringTerms(_)
                 | FlowState::ConfiguringMakeup(_)
-                | FlowState::AwaitingAttemptAmount { .. },
+                | FlowState::AwaitingAttemptAmount { .. }
+                | FlowState::Admin(_),
             ) => None,
         }
     }

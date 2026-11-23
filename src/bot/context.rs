@@ -1,15 +1,17 @@
 use chrono::{DateTime, Utc};
-use teloxide::types::{ChatId, Message, MessageId};
+use teloxide::types::{ChatId, KeyboardMarkup, Message, MessageId};
 
 use super::Bot;
 use super::HandlerResult;
 use super::clock::Clock;
+use super::errors::optional_stat;
 use super::files::FileTransfers;
 use super::invites::BotInvites;
 use super::state::BotDialogue;
 use super::timezone::BotTimezone;
-use crate::app::{Actor, AppError, ApplicationContainer, ErrorCode};
-use crate::domain::TelegramUserId;
+use super::views::{main_keyboard, teacher_keyboard};
+use crate::app::{Actor, AppError, AppResult, ApplicationContainer, ErrorCode};
+use crate::domain::{TelegramUserId, User};
 
 #[derive(Clone)]
 pub(super) struct BotContext {
@@ -84,6 +86,10 @@ impl<'a> Chat<'a> {
         }
     }
 
+    pub async fn menu_keyboard(self, telegram_user_id: TelegramUserId) -> KeyboardMarkup {
+        staff_menu(self.services().users.find_user(telegram_user_id).await)
+    }
+
     pub async fn stale(self) -> HandlerResult {
         super::views::send_stale_button(self.bot, self.chat_id).await
     }
@@ -146,6 +152,16 @@ impl<'a> ActorChat<'a> {
 
     pub fn transfers(&self) -> &'a FileTransfers {
         self.chat.transfers()
+    }
+
+    pub async fn menu_keyboard(self) -> KeyboardMarkup {
+        let user = self
+            .services()
+            .users
+            .find_registered_by_actor(self.actor)
+            .await
+            .map(|registered| registered.user);
+        staff_menu(user)
     }
 
     pub async fn stale(self) -> HandlerResult {
@@ -223,4 +239,13 @@ impl<'a> TextStep<'a> {
     pub async fn resolve(self) -> HandlerResult<Option<ActorChat<'a>>> {
         self.chat().resolve(self.telegram_user_id).await
     }
+
+    pub async fn menu_keyboard(self) -> KeyboardMarkup {
+        self.chat().menu_keyboard(self.telegram_user_id).await
+    }
+}
+
+fn staff_menu(user: AppResult<User>) -> KeyboardMarkup {
+    optional_stat(user, "menu_keyboard_role")
+        .map_or_else(teacher_keyboard, |user| main_keyboard(user.role()))
 }

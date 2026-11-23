@@ -3,8 +3,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
 
-#[cfg(test)]
-pub(crate) mod logs;
+pub mod logs;
 pub mod telegram;
 
 use crate::bot::BotTimezone;
@@ -211,8 +210,20 @@ pub fn teaching_course(
     groups: &[&StudentGroup],
     teacher: &User,
 ) -> TeachingCourse {
-    TeachingCourse::new(TeachingCourseId::new(), subject, groups, teacher, t0())
+    TeachingCourse::new(TeachingCourseId::new(), subject, groups, &[teacher], t0())
         .expect("valid teaching course")
+}
+
+pub fn closed_course(course: &TeachingCourse) -> TeachingCourse {
+    TeachingCourse::restore(
+        course.id(),
+        course.subject_id(),
+        course.group_ids().clone(),
+        course.teacher_ids().clone(),
+        course.created_at(),
+        Some(t0()),
+    )
+    .expect("valid closed course")
 }
 
 pub fn course_for(group: &StudentGroup, teacher: &User) -> TeachingCourse {

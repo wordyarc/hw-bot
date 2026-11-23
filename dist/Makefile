@@ -1,5 +1,6 @@
 compose := sh bin/compose.sh
 wait := --wait --wait-timeout 120
+psql_value := $(compose) exec -T database psql -U hw_bot -d hw_bot -Atc
 
 .PHONY: help status logs docker-logs psql queues backup prune restart bootstrap deploy restore cron
 
@@ -12,7 +13,7 @@ help:
 	@echo 'make backup        dump the database into backups/'
 	@echo 'make prune         delete backups older than 14 days, old releases and images'
 	@echo 'make restart       recreate the app with the deployed image'
-	@echo 'make bootstrap     apply config/bootstrap.json'
+	@echo 'make bootstrap     first installation: apply config/bootstrap.json to an empty database'
 	@echo 'make deploy DIR=releases/<version>'
 	@echo 'make restore DUMP=backups/<file>.dump CONFIRM=yes'
 	@echo 'make cron          nightly backup and prune at 17:00 server time'
@@ -46,11 +47,20 @@ restart:
 	$(compose) up -d --no-deps --force-recreate $(wait) app
 
 bootstrap:
-	chgrp 10001 config/production.toml config/bootstrap.json
-	chmod 640 config/production.toml config/bootstrap.json
 	$(compose) up -d --no-recreate $(wait) database
-	$(compose) -f compose.bootstrap.yml up -d --no-deps --force-recreate $(wait) app
-	$(compose) up -d --no-deps --force-recreate $(wait) app
+	@set -e; \
+	populated=$$($(psql_value) "select to_regclass('public.users') is not null"); \
+	if [ "$$populated" = t ]; then \
+		populated=$$($(psql_value) 'select exists (select 1 from users)'); \
+	fi; \
+	if [ "$$populated" = t ]; then \
+		echo 'Database already has users, bootstrap skipped'; \
+	else \
+		chgrp 10001 config/production.toml config/bootstrap.json; \
+		chmod 640 config/production.toml config/bootstrap.json; \
+		$(compose) -f compose.bootstrap.yml up -d --no-deps --force-recreate $(wait) app; \
+		$(compose) up -d --no-deps --force-recreate $(wait) app; \
+	fi
 
 deploy:
 	$(if $(DIR),,$(error usage: make deploy DIR=releases/<version>))

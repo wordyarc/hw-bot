@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select users.id, users.display_name, student_groups.code as group_code\n        from users\n        join student_groups\n          on student_groups.id = users.student_group_id\n        where users.role = 'student'\n          and replace(lower(users.display_name), 'ё', 'е') like $1 escape '\\'\n        order by users.display_name, users.id\n        limit $2 offset $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "group_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "student_groups",
+            "name": "code"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b88156f902cee86984913585fe74eb3507d45740a60ad9f2c7fce77f1cec16aa"
+}

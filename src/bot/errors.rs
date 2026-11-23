@@ -124,6 +124,17 @@ pub fn app_error_message(code: ErrorCode) -> &'static str {
         ErrorCode::FileLimitReached => {
             "Лимит вложений достигнут. Удалите одно, прежде чем добавить новое."
         }
+        ErrorCode::CourseClosed => {
+            "Предмет завершён. Вернуть его может администратор в разделе «🛠 Админ»."
+        }
+        ErrorCode::StudentHasSubmissions => {
+            "У студента уже есть сдачи, поэтому это действие недоступно."
+        }
+        ErrorCode::LastCourseTeacher => {
+            "Это последний преподаватель предмета. Сначала назначьте другого."
+        }
+        ErrorCode::NameTaken => "Такое название уже занято.",
+        ErrorCode::GroupInSubjectCourse => "Эта группа уже проходит этот предмет в другом потоке.",
         ErrorCode::Overloaded => "Бот сейчас перегружен. Попробуйте снова через минуту.",
     }
 }

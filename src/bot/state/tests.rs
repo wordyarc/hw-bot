@@ -1147,3 +1147,26 @@ fn idle_and_typed_input_states_have_no_button_hint() {
         assert_eq!(state.button_hint(), None, "{index}");
     }
 }
+
+#[test]
+fn an_abandoned_admin_step_returns_the_menu_only_if_it_was_hidden() {
+    let message_id = MessageId(1);
+    let hidden = [
+        AdminFlow::AwaitingStudentQuery,
+        AdminFlow::AwaitingTeacherUser,
+        AdminFlow::AwaitingGroupCode,
+        AdminFlow::ChoosingGroupLevel {
+            message_id,
+            code: "G-1".to_owned(),
+        },
+    ];
+    for flow in hidden {
+        assert_eq!(
+            FlowState::Admin(flow).abandon_notice(),
+            Some((texts::ACTION_CANCELLED, crate::bot::views::admin_keyboard()))
+        );
+    }
+
+    let kept = FlowState::Admin(AdminFlow::ChoosingCourseSubject { message_id });
+    assert_eq!(kept.abandon_notice(), None);
+}

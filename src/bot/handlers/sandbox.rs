@@ -10,9 +10,7 @@ use crate::bot::context::{ActorChat, TextStep};
 use crate::bot::errors::optional_stat;
 use crate::bot::state::{BotState, FlowState, ScreenState};
 use crate::bot::texts;
-use crate::bot::views::{
-    list_text, sandbox_keyboard, send_message_chunks, teacher_keyboard, teacher_menu,
-};
+use crate::bot::views::{list_text, sandbox_keyboard, send_message_chunks, teacher_menu};
 use crate::domain::{ReviewDecision, USER_TEXT_MAX_LEN};
 use crate::pagination::PageRequest;
 
@@ -128,7 +126,7 @@ pub(super) async fn submit_comment(
 
     reset_dialogue(step.dialogue()).await?;
     bot.send_message(chat_id, texts::bulk_review_saved(decision, reviewed))
-        .reply_markup(teacher_keyboard())
+        .reply_markup(step.menu_keyboard().await)
         .await?;
     Ok(())
 }

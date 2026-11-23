@@ -8,7 +8,7 @@ use tracing::subscriber::{DefaultGuard, NoSubscriber};
 static SECOND_DISPATCHER: LazyLock<Dispatch> = LazyLock::new(|| Dispatch::new(NoSubscriber::new()));
 
 #[derive(Clone, Default)]
-pub(crate) struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+pub struct LogBuffer(Arc<Mutex<Vec<u8>>>);
 
 impl Write for LogBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -22,14 +22,14 @@ impl Write for LogBuffer {
 }
 
 impl LogBuffer {
-    pub(crate) fn of(log: impl FnOnce()) -> Self {
+    pub fn of(log: impl FnOnce()) -> Self {
         let buffer = Self::default();
         let _capture = buffer.capture();
         log();
         buffer
     }
 
-    pub(crate) fn capture(&self) -> DefaultGuard {
+    pub fn capture(&self) -> DefaultGuard {
         LazyLock::force(&SECOND_DISPATCHER);
         let writer = self.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -41,11 +41,11 @@ impl LogBuffer {
         tracing::subscriber::set_default(subscriber)
     }
 
-    pub(crate) fn text(&self) -> String {
+    pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
 
-    pub(crate) fn events(&self) -> Vec<Value> {
+    pub fn events(&self) -> Vec<Value> {
         serde_json::Deserializer::from_slice(&self.0.lock().unwrap())
             .into_iter::<Value>()
             .map(Result::unwrap)

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update teaching_courses set closed_at = $2 where id = $1 and closed_at is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5978e925aab10306d4e14d8bbdd06ea8be5c38a2ead84cdba0315977601daffb"
+}

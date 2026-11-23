@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use chrono::Utc;
-use hw_bot::app::{ChangeTerms, ErrorCode, ReviewSubmission};
+use hw_bot::app::{Actor, ChangeTerms, ErrorCode, ReviewCounters, ReviewSubmission};
 use hw_bot::db;
 use hw_bot::domain::{
     Assignment, MakeupTerms, ReviewDecision, Submission, SubmissionId, SubmissionStatus,
@@ -9,7 +9,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::harness::{
-    TestApp, insert_assignment, submission_id, wait_for_blocked_connection, wall_clock_assignment,
+    CourseFixture, TestApp, insert_assignment, submission_id, wait_for_blocked_connection,
+    wall_clock_assignment,
 };
 
 #[tokio::test]
@@ -197,33 +198,97 @@ async fn second_course_teacher_shares_the_queue() {
     assert_eq!(submission_id(&body["submission"]), submission);
 }
 
-#[tokio::test]
-async fn admin_reviews_every_course() {
-    let app = TestApp::start().await;
+async fn foreign_pending_submission(app: &TestApp) -> (CourseFixture, Assignment, Uuid) {
     let foreign = app.add_foreign_course().await;
-    let foreign_student = app
+    let student = app
         .add_student_to_group("Foreign student", &foreign.group)
         .await;
-    let foreign_assignment = app
+    let assignment = app
         .add_published_assignment(&foreign.course, &foreign.teacher, "Foreign assignment")
         .await;
+    let body = app
+        .submit(
+            assignment.id().as_uuid(),
+            student.telegram_user_id().as_i64(),
+            "pull/1",
+        )
+        .await
+        .created();
 
-    app.submit(
-        foreign_assignment.id().as_uuid(),
-        foreign_student.telegram_user_id().as_i64(),
-        "pull/1",
+    (foreign, assignment, submission_id(&body))
+}
+
+#[tokio::test]
+async fn an_unassigned_admin_has_no_foreign_work_in_the_queue() {
+    let app = TestApp::start().await;
+    foreign_pending_submission(&app).await;
+    let admin = app.add_admin().await;
+    let telegram_id = admin.telegram_user_id().as_i64();
+    let actor = Actor::new(admin.id());
+
+    app.take_next(telegram_id).await.no_content();
+    let size = app.review_queue_size(telegram_id).await.ok();
+    assert_eq!(size["pending"], json!(0));
+    let reviews = &app.application.reviews;
+    assert_eq!(
+        reviews.counters(actor).await.unwrap(),
+        ReviewCounters {
+            queue: 0,
+            makeups: 0,
+            sandbox: 0
+        }
+    );
+    assert!(reviews.queue_by_subject(actor).await.unwrap().is_empty());
+    let page = reviews.list_page(actor, Default::default()).await.unwrap();
+    assert!(page.items.is_empty());
+}
+
+#[tokio::test]
+async fn an_admin_assigned_to_a_course_gets_its_work() {
+    let app = TestApp::start().await;
+    let (foreign, assignment, _) = foreign_pending_submission(&app).await;
+    let admin = app.add_admin().await;
+    app.attach_course_teacher(&foreign.course, &admin).await;
+
+    let body = app.take_next(admin.telegram_user_id().as_i64()).await.ok();
+
+    assert_eq!(body["assignment"]["id"], json!(assignment.id().as_uuid()));
+}
+
+#[tokio::test]
+async fn an_unassigned_admin_still_decides_a_specific_submission() {
+    let app = TestApp::start().await;
+    let (_, _, submission) = foreign_pending_submission(&app).await;
+    let admin = app.add_admin().await;
+
+    app.review(
+        submission,
+        admin.telegram_user_id().as_i64(),
+        "accept",
+        "Принято",
+    )
+    .await
+    .ok();
+
+    let saved = db::submissions::find_by_id(&app.pool, SubmissionId::from_uuid(submission))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.status(), SubmissionStatus::Accepted);
+}
+
+#[tokio::test]
+async fn an_unassigned_admin_still_manages_a_foreign_course() {
+    let app = TestApp::start().await;
+    let (foreign, _, _) = foreign_pending_submission(&app).await;
+    let admin = app.add_admin().await;
+
+    app.create_assignment(
+        foreign.course.id().as_uuid(),
+        admin.telegram_user_id().as_i64(),
     )
     .await
     .created();
-
-    let admin = app.add_admin().await;
-    let body = app.take_next(admin.telegram_user_id().as_i64()).await.ok();
-
-    assert_eq!(
-        body["assignment"]["id"],
-        json!(foreign_assignment.id().as_uuid()),
-        "an admin reviews courses they do not teach"
-    );
 }
 
 #[tokio::test]

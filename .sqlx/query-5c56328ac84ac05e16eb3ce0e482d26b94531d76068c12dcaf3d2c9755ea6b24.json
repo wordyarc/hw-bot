@@ -1,0 +1,251 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            select\n                id, teaching_course_id, subject_id,\n                array(\n                    select student_group_id\n                    from assignment_groups\n                    where assignment_id = assignments.id\n                ) as \"group_ids!: Vec<Uuid>\",\n                title, body, max_attempts, max_score, late_period_days, late_penalty_per_period,\n                late_max_periods, late_deducted_from, makeup_offered, makeup_credit, status,\n                created_by, created_at, deadline_at, published_at\n            , revision \n        from assignments\n        where teaching_course_id = $1\n          and status = 'published'\n        order by id\n        for update\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "teaching_course_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "teaching_course_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "subject_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "subject_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "body",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "max_attempts",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "max_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "max_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "late_period_days",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_period_days"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "late_penalty_per_period",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_penalty_per_period"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "late_max_periods",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_max_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "late_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "late_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "makeup_offered",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "makeup_offered"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "makeup_credit",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "makeup_credit"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "deadline_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "deadline_at"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "published_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "published_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "revision"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "5c56328ac84ac05e16eb3ce0e482d26b94531d76068c12dcaf3d2c9755ea6b24"
+}

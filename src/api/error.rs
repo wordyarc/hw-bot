@@ -106,7 +106,12 @@ fn app_error_status(code: ErrorCode) -> StatusCode {
         | ErrorCode::SubmissionAlreadyWithdrawn
         | ErrorCode::AlreadyRegistered
         | ErrorCode::ConcurrentModification
-        | ErrorCode::FileLimitReached => StatusCode::CONFLICT,
+        | ErrorCode::FileLimitReached
+        | ErrorCode::CourseClosed
+        | ErrorCode::StudentHasSubmissions
+        | ErrorCode::LastCourseTeacher
+        | ErrorCode::NameTaken
+        | ErrorCode::GroupInSubjectCourse => StatusCode::CONFLICT,
         ErrorCode::FileTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::PermissionDenied | ErrorCode::InviteInvalid => StatusCode::FORBIDDEN,
         ErrorCode::Overloaded => StatusCode::SERVICE_UNAVAILABLE,

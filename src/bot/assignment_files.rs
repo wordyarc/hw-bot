@@ -9,7 +9,7 @@ use super::state::{BotState, FileDeletion, FlowState, ScreenState};
 use super::texts;
 use super::views::{
     AssignmentFilesButtons, assignment_files_keyboard, confirm_file_deletion_keyboard,
-    send_message_chunks, teacher_keyboard,
+    send_message_chunks,
 };
 use crate::app::{AddAssignmentFile, AssignmentFiles, DeleteAssignmentFile, ErrorCode};
 use crate::domain::{AssignmentId, AssignmentStatus, StoredFileMetadata};
@@ -89,13 +89,13 @@ pub(super) async fn submit_file(
     match result {
         Ok(card) => {
             bot.send_message(chat_id, texts::FILE_ADDED)
-                .reply_markup(teacher_keyboard())
+                .reply_markup(screen.menu_keyboard().await)
                 .await?;
             render(screen, &card, creation_flow).await?;
         }
         Err(error) if error.code() == ErrorCode::ConcurrentModification => {
             bot.send_message(chat_id, app_error_message(error.code()))
-                .reply_markup(teacher_keyboard())
+                .reply_markup(screen.menu_keyboard().await)
                 .await?;
             show(screen, assignment_id, creation_flow).await?;
         }

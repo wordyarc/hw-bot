@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update student_groups set code = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f6eca11cac7e90add0f52454e6d02541e3c9add0da3643e3dc56b682dfba35d"
+}

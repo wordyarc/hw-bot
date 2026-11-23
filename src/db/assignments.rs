@@ -333,6 +333,52 @@ pub async fn find_versioned_by_id(
     .transpose()
 }
 
+pub(crate) async fn lock_published_for_course(
+    executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
+) -> DbResult<Vec<VersionedAssignment>> {
+    select_assignments!(
+        ", revision ",
+        r#"
+        from assignments
+        where teaching_course_id = $1
+          and status = 'published'
+        order by id
+        for update
+        "#,
+        course_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(VersionedAssignment {
+            assignment: Assignment::try_from(assignment_row!(row))?,
+            revision: row.revision,
+        })
+    })
+    .collect()
+}
+
+pub(crate) async fn count_published_for_course(
+    executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
+) -> DbResult<u32> {
+    let published = sqlx::query_scalar!(
+        r#"
+        select count(*) as "published!"
+        from assignments
+        where teaching_course_id = $1
+          and status = 'published'
+        "#,
+        course_id.as_uuid(),
+    )
+    .fetch_one(executor)
+    .await?;
+
+    checked_num_cast("admin.published_assignments", published)
+}
+
 pub async fn find_by_id(
     executor: impl PgExecutor<'_>,
     id: AssignmentId,

@@ -62,9 +62,23 @@ async fn a_teacher_does_not_see_courses_they_do_not_teach() {
 }
 
 #[tokio::test]
-async fn an_admin_sees_every_course() {
+async fn an_admin_lists_only_assigned_courses() {
     let app = TestApp::start().await;
-    app.add_foreign_course().await;
+    let foreign = app.add_foreign_course().await;
+    let admin = app.add_admin().await;
+    app.attach_course_teacher(&foreign.course, &admin).await;
+
+    let body = app
+        .teacher_courses(admin.telegram_user_id().as_i64())
+        .await
+        .ok();
+
+    assert_eq!(ids(&body), vec![foreign.course.id().as_uuid().to_string()]);
+}
+
+#[tokio::test]
+async fn an_unassigned_admin_has_an_empty_course_list() {
+    let app = TestApp::start().await;
     let admin = app.add_admin().await;
 
     let body = app
@@ -72,7 +86,7 @@ async fn an_admin_sees_every_course() {
         .await
         .ok();
 
-    assert_eq!(ids(&body).len(), 2);
+    assert!(ids(&body).is_empty());
 }
 
 #[tokio::test]

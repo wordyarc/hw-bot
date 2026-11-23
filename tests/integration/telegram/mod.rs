@@ -1,3 +1,4 @@
+mod admin;
 mod admission;
 mod contacts;
 mod creation;

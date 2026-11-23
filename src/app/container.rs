@@ -1,8 +1,8 @@
 use sqlx::PgPool;
 
 use crate::app::{
-    AssignmentService, CourseService, FilePolicy, FileService, ReviewService, SubmissionService,
-    UserService,
+    AdminService, AssignmentService, CourseService, FilePolicy, FileService, ReviewService,
+    SubmissionService, UserService,
 };
 
 #[derive(Clone, Debug)]
@@ -13,6 +13,7 @@ pub struct ApplicationContainer {
     pub submissions: SubmissionService,
     pub courses: CourseService,
     pub reviews: ReviewService,
+    pub admin: AdminService,
 }
 
 impl ApplicationContainer {
@@ -23,7 +24,8 @@ impl ApplicationContainer {
             files: FileService::new(pool.clone(), file_policy),
             submissions: SubmissionService::new(pool.clone()),
             courses: CourseService::new(pool.clone()),
-            reviews: ReviewService::new(pool),
+            reviews: ReviewService::new(pool.clone()),
+            admin: AdminService::new(pool),
         }
     }
 }

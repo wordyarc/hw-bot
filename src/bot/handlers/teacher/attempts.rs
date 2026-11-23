@@ -13,7 +13,7 @@ use crate::bot::state::{BotState, FlowState, StudentListPurpose};
 use crate::bot::texts;
 use crate::bot::views::{
     assignment_students_keyboard, attempts_keyboard, list_text, paginated_keyboard,
-    send_message_chunks, teacher_keyboard,
+    send_message_chunks,
 };
 use crate::domain::{AssignmentId, MAX_ATTEMPTS, UserId};
 use crate::pagination::PageRequest;
@@ -178,7 +178,7 @@ async fn grant_attempts(
             screen.chat_id(),
             texts::attempts_granted(amount, progress.extra_attempts()),
         )
-        .reply_markup(teacher_keyboard())
+        .reply_markup(screen.menu_keyboard().await)
         .await?;
     show_students_page(screen, assignment_id, PageRequest::default()).await?;
     Ok(())

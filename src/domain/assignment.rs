@@ -376,6 +376,7 @@ impl Assignment {
                 action: "create assignment",
             });
         }
+        teaching_course.ensure_open()?;
 
         let groups = match input.groups {
             None => teaching_course.group_ids().clone(),
@@ -415,6 +416,7 @@ impl Assignment {
         published_at: DateTime<Utc>,
     ) -> DomainResult<()> {
         self.ensure_managed_by(teaching_course, actor, "publish assignment")?;
+        teaching_course.ensure_open()?;
 
         if self.status == AssignmentStatus::Published {
             return Err(DomainError::AssignmentStatusTransitionNotAllowed {

@@ -702,6 +702,27 @@ async fn pending_queue_places(
     .collect()
 }
 
+pub(crate) async fn count_pending_for_course(
+    executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
+) -> DbResult<u32> {
+    let pending = sqlx::query_scalar!(
+        r#"
+        select count(*) as "pending!"
+        from submissions
+        join assignments
+          on assignments.id = submissions.assignment_id
+        where assignments.teaching_course_id = $1
+          and submissions.status = 'pending_review'
+        "#,
+        course_id.as_uuid(),
+    )
+    .fetch_one(executor)
+    .await?;
+
+    checked_num_cast("admin.pending_submissions", pending)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum ReviewStream {
     Main { subject: Option<SubjectId> },
@@ -747,19 +768,18 @@ macro_rules! reviewer_scope {
             join subjects
               on subjects.id = assignments.subject_id
             where submissions.status = 'pending_review'
-              and ($1 or exists (
+              and exists (
                   select 1
                   from teaching_course_teachers
                   where teaching_course_teachers.teaching_course_id
                         = assignments.teaching_course_id
-                    and teaching_course_teachers.teacher_id = $2
-              ))
-              and subjects.sandbox = $3
-              and ($4::text is null or submissions.kind = $4)
-              and ($5::timestamptz is null or submissions.submitted_at <= $5)
-              and ($6::uuid is null or assignments.subject_id = $6)
+                    and teaching_course_teachers.teacher_id = $1
+              )
+              and subjects.sandbox = $2
+              and ($3::text is null or submissions.kind = $3)
+              and ($4::timestamptz is null or submissions.submitted_at <= $4)
+              and ($5::uuid is null or assignments.subject_id = $5)
             "# + $tail,
-            $reviewer.role().can_manage_all_teaching_courses(),
             $reviewer.id().as_uuid(),
             $stream.sandbox(),
             $stream.kind(),
@@ -869,7 +889,7 @@ pub async fn pending_page_for_reviewer(
         "#,
         r#"
         order by submissions.submitted_at, submissions.id
-        limit $7 offset $8
+        limit $6 offset $7
         "#,
         reviewer,
         stream,

@@ -1,5 +1,6 @@
 mod access;
 mod actor;
+mod admin;
 mod assignments;
 mod container;
 mod courses;
@@ -10,6 +11,11 @@ mod submissions;
 mod users;
 
 pub use actor::Actor;
+pub use admin::{
+    AdminCourseCard, AdminService, ChangeStudentGroup, ClosePreview, ClosedCourse, CreateCourse,
+    CreateStudentGroup, GroupChangeOffer, MIN_STUDENT_SEARCH_LEN, RegisterTeacher, StudentCard,
+    TeacherCard,
+};
 pub use assignments::{
     AssignmentService, AssignmentStudents, AssignmentSubmissionHistory, ChangeDeadline,
     ChangeGrading, ChangeTerms, CreateAssignment, GrantExtraAttempts, StudentAssignment,
@@ -40,8 +46,9 @@ pub use users::{
 use crate::db::{DbError, DbResult};
 pub use crate::read_models::{
     AssignmentGrade, AssignmentStudentSummary, CourseRoster, CourseStudent, GradebookScore,
-    OfferedCourse, PendingSubmission, QueuePlace, RosterGroup, RosterStudent, SubjectQueue,
-    TeachingCourseDetails, UndecidedAssignment, UserStatistics, VersionedAssignment,
+    OfferedCourse, PendingSubmission, QueuePlace, RosterGroup, RosterStudent, StoredSubject,
+    StudentEnrollment, StudentListItem, SubjectQueue, TeachingCourseDetails, UndecidedAssignment,
+    UserStatistics, VersionedAssignment,
 };
 
 fn on_conflict<T>(result: DbResult<T>, conflict: AppError) -> AppResult<T> {

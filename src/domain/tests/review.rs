@@ -21,6 +21,7 @@ fn a_second_course_teacher_can_review_assignment() {
         single.group_ids().clone(),
         HashSet::from([course_teacher.id(), reviewer.id()]),
         single.created_at(),
+        None,
     )
     .unwrap();
     let assignment = assignment(&course, &course_teacher).published().build();

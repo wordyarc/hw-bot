@@ -97,7 +97,8 @@ pub(super) async fn send_help(chat: Chat<'_>, telegram_user_id: TelegramUserId) 
 fn help_for(role: Option<Role>) -> String {
     match role {
         Some(Role::Student { .. }) => texts::student_help(),
-        Some(Role::Teacher | Role::Admin) => texts::teacher_help(),
+        Some(Role::Teacher) => texts::teacher_help(),
+        Some(Role::Admin) => format!("{}\n\n{}", texts::teacher_help(), texts::ADMIN_HELP),
         None => texts::GUEST_NEEDS_INVITE.to_owned(),
     }
 }
@@ -255,7 +256,12 @@ mod tests {
             teacher,
             ["menu", "review", "courses", "profile", "cancel", "help"]
         );
-        assert_eq!(names(scoped_commands(Some(Role::Admin))), teacher);
+        assert_eq!(
+            names(scoped_commands(Some(Role::Admin))),
+            [
+                "menu", "review", "courses", "admin", "profile", "cancel", "help"
+            ]
+        );
         assert_eq!(names(default_commands()), ["start", "help"]);
     }
 
@@ -290,6 +296,7 @@ mod tests {
         let offered: Vec<_> = [
             scoped_commands(None),
             scoped_commands(Some(Role::Teacher)),
+            scoped_commands(Some(Role::Admin)),
             scoped_commands(Some(Role::Student {
                 student_group_id: StudentGroupId::new(),
             })),

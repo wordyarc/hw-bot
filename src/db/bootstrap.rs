@@ -1,21 +1,33 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgPool;
 use thiserror::Error;
-use uuid::Uuid;
 
-use crate::db::{DbError, academic, course_invites};
+use crate::db::{DbError, academic, users};
 use crate::domain::{
     DomainError, EducationLevel, Role, StudentGroup, StudentGroupId, StudyProgram, Subject,
-    SubjectId, TeachingCourseId, TelegramUserId, User, UserId,
+    SubjectId, TeachingCourse, TeachingCourseId, TelegramUserId, User, UserId,
 };
 
 const BOOTSTRAP_LOCK: &str = "hw-bot/bootstrap/v1";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootstrapOutcome {
+    Applied,
+    AlreadyPopulated,
+}
+
 #[derive(Debug, Error)]
 pub enum BootstrapError {
+    #[error("bootstrap: failed to read {}: {source}", path.display())]
+    File {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
     #[error("bootstrap: invalid JSON data: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -94,7 +106,27 @@ struct ValidatedCourse {
     teacher_telegram_user_ids: Vec<TelegramUserId>,
 }
 
-pub async fn run_bootstrap(pool: &PgPool, value: &serde_json::Value) -> Result<(), BootstrapError> {
+pub async fn run_bootstrap_file(
+    pool: &PgPool,
+    file: &Path,
+) -> Result<BootstrapOutcome, BootstrapError> {
+    if users::any_exist(pool).await? {
+        return Ok(BootstrapOutcome::AlreadyPopulated);
+    }
+
+    let data = tokio::fs::read_to_string(file)
+        .await
+        .map_err(|source| BootstrapError::File {
+            path: file.to_owned(),
+            source,
+        })?;
+    run_bootstrap(pool, &serde_json::from_str(&data)?).await
+}
+
+pub async fn run_bootstrap(
+    pool: &PgPool,
+    value: &serde_json::Value,
+) -> Result<BootstrapOutcome, BootstrapError> {
     let seed = validate_seed(Seed::deserialize(value)?)?;
     let mut transaction = pool.begin().await?;
 
@@ -105,48 +137,52 @@ pub async fn run_bootstrap(pool: &PgPool, value: &serde_json::Value) -> Result<(
     .execute(&mut *transaction)
     .await?;
 
-    let mut staff_ids = HashMap::with_capacity(seed.staff.len());
-    for staff in &seed.staff {
-        let id = ensure_staff(&mut transaction, staff).await?;
-        staff_ids.insert(staff.telegram_user_id(), id);
+    if users::any_exist(&mut *transaction).await? {
+        return Ok(BootstrapOutcome::AlreadyPopulated);
     }
 
-    let mut group_ids = HashMap::with_capacity(seed.student_groups.len());
+    let mut staff = HashMap::with_capacity(seed.staff.len());
+    for user in &seed.staff {
+        users::insert(&mut *transaction, user).await?;
+        staff.insert(user.telegram_user_id(), user);
+    }
+
+    let mut groups = HashMap::with_capacity(seed.student_groups.len());
     for group in &seed.student_groups {
-        let id = ensure_student_group(&mut transaction, group).await?;
-        group_ids.insert(group.code().as_str(), id);
+        academic::insert_student_group(&mut *transaction, group).await?;
+        groups.insert(group.code().as_str(), group);
     }
 
-    let mut subject_ids = HashMap::with_capacity(seed.subjects.len());
-    for subject in &seed.subjects {
-        let id = ensure_subject(&mut transaction, subject).await?;
-        subject_ids.insert(subject.subject.name().as_str(), id);
+    let mut subjects = HashMap::with_capacity(seed.subjects.len());
+    for ValidatedSubject { subject, sandbox } in &seed.subjects {
+        academic::insert_subject(&mut *transaction, subject, *sandbox).await?;
+        subjects.insert(subject.name().as_str(), subject);
     }
 
-    let mut course_ids = HashSet::with_capacity(seed.courses.len());
+    let now = Utc::now();
     for course in &seed.courses {
-        let subject_id = subject_ids[course.subject_name.as_str()];
-        let student_group_ids: Vec<Uuid> = course
+        let course_groups: Vec<&StudentGroup> = course
             .student_group_codes
             .iter()
-            .map(|code| group_ids[code.as_str()])
+            .map(|code| groups[code.as_str()])
             .collect();
-        let course_id = ensure_course(&mut transaction, subject_id, &student_group_ids).await?;
-        if !course_ids.insert(course_id) {
-            return Err(invalid(format!(
-                "two courses of subject {} resolve to one stored course",
-                course.subject_name
-            )));
-        }
-
-        for telegram_user_id in &course.teacher_telegram_user_ids {
-            ensure_course_teacher(&mut transaction, course_id, staff_ids[telegram_user_id]).await?;
-        }
+        let teachers: Vec<&User> = course
+            .teacher_telegram_user_ids
+            .iter()
+            .map(|id| staff[id])
+            .collect();
+        let course = TeachingCourse::new(
+            TeachingCourseId::new(),
+            subjects[course.subject_name.as_str()],
+            &course_groups,
+            &teachers,
+            now,
+        )?;
+        academic::insert_teaching_course(&mut transaction, &course).await?;
     }
 
-    validate_stored_courses(&mut transaction).await?;
     transaction.commit().await?;
-    Ok(())
+    Ok(BootstrapOutcome::Applied)
 }
 
 fn validate_seed(seed: Seed) -> Result<ValidatedSeed, BootstrapError> {
@@ -275,268 +311,6 @@ fn make_staff(
         seed.display_name,
         registered_at,
     )
-}
-
-async fn ensure_staff(connection: &mut PgConnection, user: &User) -> Result<Uuid, BootstrapError> {
-    sqlx::query!(
-        r#"
-        insert into users (id, telegram_user_id, role, display_name, registered_at)
-        values ($1, $2, $3, $4, $5)
-        on conflict (telegram_user_id) do nothing
-        "#,
-        user.id().as_uuid(),
-        user.telegram_user_id().as_i64(),
-        user.role().as_str(),
-        user.display_name().as_str(),
-        user.registered_at(),
-    )
-    .execute(&mut *connection)
-    .await?;
-
-    let row = sqlx::query!(
-        r#"
-        select id, role, display_name, student_group_id
-        from users
-        where telegram_user_id = $1
-        for share
-        "#,
-        user.telegram_user_id().as_i64(),
-    )
-    .fetch_one(connection)
-    .await?;
-
-    if row.role != user.role().as_str()
-        || row.display_name != user.display_name().as_str()
-        || row.student_group_id.is_some()
-    {
-        return Err(invalid(format!(
-            "existing user {} conflicts with requested staff data",
-            user.telegram_user_id().as_i64()
-        )));
-    }
-
-    Ok(row.id)
-}
-
-async fn ensure_student_group(
-    connection: &mut PgConnection,
-    group: &StudentGroup,
-) -> Result<Uuid, BootstrapError> {
-    sqlx::query!(
-        r#"
-        insert into student_groups (id, code, education_level, study_year)
-        values ($1, $2, $3, $4)
-        on conflict (code) do nothing
-        "#,
-        group.id().as_uuid(),
-        group.code().as_str(),
-        group.program().education_level().as_str(),
-        i16::from(group.program().year()),
-    )
-    .execute(&mut *connection)
-    .await?;
-
-    let row = sqlx::query!(
-        r#"
-        select id, education_level, study_year
-        from student_groups
-        where code = $1
-        for share
-        "#,
-        group.code().as_str(),
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-
-    if row.education_level != group.program().education_level().as_str()
-        || row.study_year != i16::from(group.program().year())
-    {
-        return Err(invalid(format!(
-            "existing student group {} conflicts with requested data",
-            group.code().as_str()
-        )));
-    }
-
-    Ok(row.id)
-}
-
-async fn ensure_subject(
-    connection: &mut PgConnection,
-    seed: &ValidatedSubject,
-) -> Result<Uuid, BootstrapError> {
-    let subject = &seed.subject;
-    sqlx::query!(
-        r#"
-        insert into subjects (id, name, sandbox)
-        values ($1, $2, $3)
-        on conflict (name) do nothing
-        "#,
-        subject.id().as_uuid(),
-        subject.name().as_str(),
-        seed.sandbox,
-    )
-    .execute(&mut *connection)
-    .await?;
-
-    let row = sqlx::query!(
-        r#"
-        select id, sandbox
-        from subjects
-        where name = $1
-        for share
-        "#,
-        subject.name().as_str(),
-    )
-    .fetch_one(connection)
-    .await?;
-
-    if row.sandbox != seed.sandbox {
-        return Err(invalid(format!(
-            "existing subject {} conflicts with requested data",
-            subject.name().as_str()
-        )));
-    }
-
-    Ok(row.id)
-}
-
-async fn ensure_course(
-    connection: &mut PgConnection,
-    subject_id: Uuid,
-    student_group_ids: &[Uuid],
-) -> Result<Uuid, BootstrapError> {
-    let mut stored = sqlx::query_scalar!(
-        r#"
-        select teaching_course_id
-        from teaching_course_groups
-        where subject_id = $1 and student_group_id = any($2)
-        for share
-        "#,
-        subject_id,
-        student_group_ids,
-    )
-    .fetch_all(&mut *connection)
-    .await?;
-    stored.sort_unstable();
-    stored.dedup();
-
-    let course_id = match stored[..] {
-        [] => {
-            let course_id = TeachingCourseId::new();
-            sqlx::query!(
-                r#"
-                insert into teaching_courses (id, subject_id)
-                values ($1, $2)
-                "#,
-                course_id.as_uuid(),
-                subject_id,
-            )
-            .execute(&mut *connection)
-            .await?;
-            course_id
-        }
-        [course_id] => TeachingCourseId::from_uuid(course_id),
-        _ => {
-            return Err(invalid(
-                "a course of the seed joins student groups of different stored courses",
-            ));
-        }
-    };
-
-    for &student_group_id in student_group_ids {
-        academic::add_teaching_course_group(
-            &mut *connection,
-            course_id,
-            StudentGroupId::from_uuid(student_group_id),
-        )
-        .await?;
-    }
-    course_invites::ensure(connection, course_id).await?;
-
-    Ok(course_id.as_uuid())
-}
-
-async fn ensure_course_teacher(
-    connection: &mut PgConnection,
-    teaching_course_id: Uuid,
-    teacher_id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"
-        insert into teaching_course_teachers (teaching_course_id, teacher_id)
-        values ($1, $2)
-        on conflict (teaching_course_id, teacher_id) do nothing
-        "#,
-        teaching_course_id,
-        teacher_id,
-    )
-    .execute(connection)
-    .await?;
-    Ok(())
-}
-
-async fn validate_stored_courses(connection: &mut PgConnection) -> Result<(), BootstrapError> {
-    let has_student_teacher = sqlx::query_scalar!(
-        r#"
-        select exists (
-            select 1
-            from teaching_course_teachers course_teacher
-            join users teacher on teacher.id = course_teacher.teacher_id
-            where teacher.role = 'student'
-        ) as "exists!"
-        "#,
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    if has_student_teacher {
-        return Err(invalid("a course teacher assignment references a student"));
-    }
-
-    let has_course_without_teacher = sqlx::query_scalar!(
-        r#"
-        select exists (
-            select 1
-            from teaching_courses course
-            where not exists (
-                select 1
-                from teaching_course_teachers course_teacher
-                join users teacher on teacher.id = course_teacher.teacher_id
-                where course_teacher.teaching_course_id = course.id
-                  and teacher.role in ('teacher', 'admin')
-            )
-        ) as "exists!"
-        "#,
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    if has_course_without_teacher {
-        return Err(invalid(
-            "every teaching course must have at least one teacher",
-        ));
-    }
-
-    let has_course_without_group = sqlx::query_scalar!(
-        r#"
-        select exists (
-            select 1
-            from teaching_courses course
-            where not exists (
-                select 1
-                from teaching_course_groups course_group
-                where course_group.teaching_course_id = course.id
-            )
-        ) as "exists!"
-        "#,
-    )
-    .fetch_one(connection)
-    .await?;
-    if has_course_without_group {
-        return Err(invalid(
-            "every teaching course must have at least one student group",
-        ));
-    }
-
-    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> BootstrapError {

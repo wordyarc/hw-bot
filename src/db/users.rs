@@ -8,7 +8,9 @@ use crate::domain::{
     AssignmentId, Role, StudentGroupId, TeachingCourseId, TelegramUserId, User, UserId,
 };
 use crate::pagination::PageRequest;
-use crate::read_models::{AssignmentStudentSummary, CourseStudent, RosterStudent, UserStatistics};
+use crate::read_models::{
+    AssignmentStudentSummary, CourseStudent, RosterStudent, StudentListItem, UserStatistics,
+};
 
 pub async fn insert(executor: impl PgExecutor<'_>, user: &User) -> DbResult<()> {
     sqlx::query!(
@@ -31,6 +33,14 @@ pub async fn insert(executor: impl PgExecutor<'_>, user: &User) -> DbResult<()> 
     Ok(())
 }
 
+pub async fn any_exist(executor: impl PgExecutor<'_>) -> DbResult<bool> {
+    Ok(
+        sqlx::query_scalar!(r#"select exists (select 1 from users) as "exists!""#)
+            .fetch_one(executor)
+            .await?,
+    )
+}
+
 pub async fn find_by_id(executor: impl PgExecutor<'_>, id: UserId) -> DbResult<Option<User>> {
     let row = sqlx::query_as!(
         UserRow,
@@ -45,6 +55,183 @@ pub async fn find_by_id(executor: impl PgExecutor<'_>, id: UserId) -> DbResult<O
     .await?;
 
     row.map(User::try_from).transpose()
+}
+
+pub(crate) async fn find_for_key_share(
+    executor: impl PgExecutor<'_>,
+    id: UserId,
+) -> DbResult<Option<User>> {
+    let row = sqlx::query_as!(
+        UserRow,
+        r#"
+        select id, telegram_user_id, role, display_name, student_group_id, registered_at
+        from users
+        where id = $1
+        for key share
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(User::try_from).transpose()
+}
+
+pub(crate) async fn find_for_update(
+    executor: impl PgExecutor<'_>,
+    id: UserId,
+) -> DbResult<Option<User>> {
+    let row = sqlx::query_as!(
+        UserRow,
+        r#"
+        select id, telegram_user_id, role, display_name, student_group_id, registered_at
+        from users
+        where id = $1
+        for update
+        "#,
+        id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    row.map(User::try_from).transpose()
+}
+
+pub(crate) async fn update_display_name(
+    executor: impl PgExecutor<'_>,
+    id: UserId,
+    display_name: &str,
+) -> DbResult<()> {
+    sqlx::query!(
+        "update users set display_name = $2 where id = $1",
+        id.as_uuid(),
+        display_name,
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn update_student_group(
+    executor: impl PgExecutor<'_>,
+    id: UserId,
+    group_id: StudentGroupId,
+) -> DbResult<()> {
+    sqlx::query!(
+        "update users set student_group_id = $2 where id = $1 and role = 'student'",
+        id.as_uuid(),
+        group_id.as_uuid(),
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn count_blocking_submissions(
+    executor: impl PgExecutor<'_>,
+    student_id: UserId,
+    course_id: Option<TeachingCourseId>,
+) -> DbResult<u32> {
+    let blocking = sqlx::query_scalar!(
+        r#"
+        select count(*) as "blocking!"
+        from submissions
+        join assignments
+          on assignments.id = submissions.assignment_id
+        where submissions.student_id = $1
+          and submissions.status <> 'withdrawn'
+          and ($2::uuid is null or assignments.teaching_course_id = $2)
+        "#,
+        student_id.as_uuid(),
+        course_id.map(TeachingCourseId::as_uuid),
+    )
+    .fetch_one(executor)
+    .await?;
+
+    checked_num_cast("admin.blocking_submissions", blocking)
+}
+
+pub(crate) async fn search_students(
+    executor: impl PgExecutor<'_>,
+    pattern: &str,
+    page: PageRequest,
+) -> DbResult<Vec<StudentListItem>> {
+    let rows = sqlx::query!(
+        r#"
+        select users.id, users.display_name, student_groups.code as group_code
+        from users
+        join student_groups
+          on student_groups.id = users.student_group_id
+        where users.role = 'student'
+          and replace(lower(users.display_name), 'ё', 'е') like $1 escape '\'
+        order by users.display_name, users.id
+        limit $2 offset $3
+        "#,
+        pattern,
+        page.fetch_limit(),
+        page.offset(),
+    )
+    .fetch_all(executor)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| StudentListItem {
+            student_id: UserId::from_uuid(row.id),
+            display_name: row.display_name,
+            group_code: row.group_code,
+        })
+        .collect())
+}
+
+pub(crate) async fn list_staff(
+    executor: impl PgExecutor<'_>,
+    page: PageRequest,
+) -> DbResult<Vec<User>> {
+    sqlx::query_as!(
+        UserRow,
+        r#"
+        select id, telegram_user_id, role, display_name, student_group_id, registered_at
+        from users
+        where role in ('teacher', 'admin')
+        order by display_name, id
+        limit $1 offset $2
+        "#,
+        page.fetch_limit(),
+        page.offset(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(User::try_from)
+    .collect()
+}
+
+pub(crate) async fn list_course_teachers(
+    executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
+) -> DbResult<Vec<User>> {
+    sqlx::query_as!(
+        UserRow,
+        r#"
+        select
+            users.id, users.telegram_user_id, users.role, users.display_name,
+            users.student_group_id, users.registered_at
+        from teaching_course_teachers course_teacher
+        join users
+          on users.id = course_teacher.teacher_id
+        where course_teacher.teaching_course_id = $1
+        order by users.display_name, users.id
+        "#,
+        course_id.as_uuid(),
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(User::try_from)
+    .collect()
 }
 
 pub async fn find_by_telegram_user_id(
@@ -140,17 +327,11 @@ pub async fn profile_statistics(
             ) as "pending!",
             (
                 select count(*)
-                from teaching_courses course
-                where $2 or exists (
-                    select 1
-                    from teaching_course_teachers teacher
-                    where teacher.teaching_course_id = course.id
-                      and teacher.teacher_id = $1
-                )
+                from teaching_course_teachers teacher
+                where teacher.teacher_id = $1
             ) as "courses!"
         "#,
         user.id().as_uuid(),
-        user.role().can_manage_all_teaching_courses(),
     )
     .fetch_one(executor)
     .await?;

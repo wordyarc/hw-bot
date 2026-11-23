@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update subjects set name = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e97d9e56922b9cdc6c1cf4c7a01188769b291103c2ca5ca11c0d8fa07a469956"
+}

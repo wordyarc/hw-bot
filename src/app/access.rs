@@ -128,7 +128,35 @@ pub(crate) async fn load_student(
     actor: Actor,
     action: &'static str,
 ) -> AppResult<User> {
-    let student = load_actor(executor, actor, "student").await?;
+    ensure_student(load_actor(executor, actor, "student").await?, action)
+}
+
+pub(crate) async fn load_admin(
+    executor: impl PgExecutor<'_>,
+    actor: Actor,
+    action: &'static str,
+) -> AppResult<User> {
+    let admin = load_actor(executor, actor, "admin").await?;
+    if !admin.role().can_manage_users() {
+        return Err(DomainError::PermissionDenied { action }.into());
+    }
+
+    Ok(admin)
+}
+
+pub(crate) async fn lock_student(
+    executor: impl PgExecutor<'_>,
+    actor: Actor,
+    action: &'static str,
+) -> AppResult<User> {
+    let student = db::users::find_for_key_share(executor, actor.user_id())
+        .await?
+        .required("student")?;
+
+    ensure_student(student, action)
+}
+
+fn ensure_student(student: User, action: &'static str) -> AppResult<User> {
     if !student.role().can_submit_homework() {
         return Err(DomainError::PermissionDenied { action }.into());
     }

@@ -1,4 +1,4 @@
-use teloxide::types::ChatId;
+use teloxide::types::{ChatId, KeyboardMarkup};
 
 use crate::bot::context::ActorChat;
 use crate::bot::state::ActiveForm;
@@ -21,6 +21,7 @@ pub(super) use attempts::show_students_page;
 pub(super) use attempts::submit_attempt_amount;
 pub(super) use courses::show_assignment;
 pub(super) use courses::{archive_assignment, publish_assignment};
+pub(super) use courses::{ensure_course_open, show_closed_courses_page};
 pub(super) use courses::{show_course_assignments_page, show_courses_page};
 pub(super) use creation::handle_grading;
 pub(super) use creation::handle_max_attempts;
@@ -30,6 +31,7 @@ pub(super) use creation::submit_max_score;
 pub(super) use creation::submit_title;
 pub(super) use creation::{finish_assignment_groups, toggle_assignment_group};
 pub(super) use deadline::handle_deadline;
+pub(super) use form::detach;
 pub(super) use gradebook::{
     send_student_grades, show_gradebook, show_gradebook_page, show_student_grades_page,
 };
@@ -49,10 +51,11 @@ pub(super) async fn abandon_form(
     bot: &Bot,
     chat_id: ChatId,
     form: ActiveForm<'_>,
+    menu: KeyboardMarkup,
 ) -> HandlerResult {
     match form {
-        ActiveForm::Terms(form) => form::abandon(bot, chat_id, form).await,
-        ActiveForm::Makeup(form) => form::abandon(bot, chat_id, form).await,
+        ActiveForm::Terms(form) => form::abandon(bot, chat_id, form, menu).await,
+        ActiveForm::Makeup(form) => form::abandon(bot, chat_id, form, menu).await,
     }
 }
 

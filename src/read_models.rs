@@ -19,6 +19,20 @@ pub struct OfferedCourse {
     pub subject: Subject,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StudentListItem {
+    pub student_id: UserId,
+    pub display_name: String,
+    pub group_code: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StudentEnrollment {
+    pub course_id: TeachingCourseId,
+    pub subject_name: String,
+    pub blocking_submissions: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct CourseStudent {
     pub student_id: UserId,
@@ -28,6 +42,7 @@ pub struct CourseStudent {
 #[derive(Clone, Debug)]
 pub struct CourseRoster {
     pub subject: Subject,
+    pub closed: bool,
     pub groups: Vec<RosterGroup>,
     pub page: u32,
     pub next_page: Option<u32>,

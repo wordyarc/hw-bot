@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select count(*) as \"pending!\"\n        from submissions\n        join assignments\n          on assignments.id = submissions.assignment_id\n        where assignments.teaching_course_id = $1\n          and submissions.status = 'pending_review'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pending!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a3e37b693bdc5469efc0b30aa832718c200024b7b83dc8bd7d7d3bc82ee74b47"
+}

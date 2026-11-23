@@ -12,9 +12,9 @@ use crate::bot::assignment_form::{
     AssignmentTerms, CompleteTerms, TermsForm, TermsStep, TermsTarget,
 };
 use crate::bot::callbacks::{
-    AmountChoice, CallbackAction, DeadlineAction, FlowAction, GradingChoice, InformationalAction,
-    LatePolicyChoice, MakeupChoice, MakeupFormAction, PageTarget, ReplayableAction, ScreenAction,
-    TermsAction,
+    AdminNav, AmountChoice, CallbackAction, DeadlineAction, FlowAction, GradingChoice,
+    InformationalAction, LatePolicyChoice, MakeupChoice, MakeupFormAction, PageTarget,
+    ReplayableAction, ScreenAction, TermsAction,
 };
 use crate::bot::form::{Form, InputMode};
 use crate::bot::makeup_form::{MakeupForm, MakeupStep};
@@ -26,13 +26,13 @@ use crate::domain::{
     SubmissionId, SubmissionKind, TeachingCourseId, UserId,
 };
 
-type Row = Vec<InlineKeyboardButton>;
+pub(super) type Row = Vec<InlineKeyboardButton>;
 
-fn button(label: impl Into<String>, data: impl Into<String>) -> InlineKeyboardButton {
+pub(super) fn button(label: impl Into<String>, data: impl Into<String>) -> InlineKeyboardButton {
     InlineKeyboardButton::callback(label, data)
 }
 
-fn row(label: impl Into<String>, data: impl Into<String>) -> Row {
+pub(super) fn row(label: impl Into<String>, data: impl Into<String>) -> Row {
     vec![button(label, data)]
 }
 
@@ -56,6 +56,7 @@ pub(crate) enum MenuAction {
     Review,
     Courses,
     Sandbox,
+    Admin,
     Profile,
     Help,
 }
@@ -68,6 +69,7 @@ pub(crate) fn menu_action(text: &str) -> Option<MenuAction> {
         texts::BUTTON_REVIEW => Some(MenuAction::Review),
         texts::BUTTON_COURSES => Some(MenuAction::Courses),
         texts::BUTTON_SANDBOX => Some(MenuAction::Sandbox),
+        texts::BUTTON_ADMIN => Some(MenuAction::Admin),
         texts::BUTTON_PROFILE => Some(MenuAction::Profile),
         texts::BUTTON_HELP => Some(MenuAction::Help),
         _ => None,
@@ -77,14 +79,23 @@ pub(crate) fn menu_action(text: &str) -> Option<MenuAction> {
 pub(crate) fn main_keyboard(role: Role) -> KeyboardMarkup {
     match role {
         Role::Student { .. } => student_keyboard(),
-        Role::Teacher | Role::Admin => teacher_keyboard(),
+        Role::Teacher => teacher_keyboard(),
+        Role::Admin => admin_keyboard(),
     }
 }
 
 pub(crate) fn main_menu(role: Role, pending: Option<u32>) -> InlineKeyboardMarkup {
     match role {
         Role::Student { .. } => student_menu(),
-        Role::Teacher | Role::Admin => teacher_menu(pending),
+        Role::Teacher => teacher_menu(pending),
+        Role::Admin => {
+            let mut menu = teacher_menu(pending);
+            menu.inline_keyboard.push(row(
+                texts::BUTTON_ADMIN,
+                ReplayableAction::Admin(AdminNav::Home).callback(),
+            ));
+            menu
+        }
     }
 }
 
@@ -113,6 +124,21 @@ pub(crate) fn teacher_keyboard() -> KeyboardMarkup {
             KeyboardButton::new(texts::BUTTON_SANDBOX),
             KeyboardButton::new(texts::BUTTON_HELP),
         ],
+    ])
+}
+
+pub(crate) fn admin_keyboard() -> KeyboardMarkup {
+    bottom_menu(vec![
+        vec![KeyboardButton::new(texts::BUTTON_REVIEW)],
+        vec![
+            KeyboardButton::new(texts::BUTTON_COURSES),
+            KeyboardButton::new(texts::BUTTON_ADMIN),
+        ],
+        vec![
+            KeyboardButton::new(texts::BUTTON_SANDBOX),
+            KeyboardButton::new(texts::BUTTON_PROFILE),
+        ],
+        vec![KeyboardButton::new(texts::BUTTON_HELP)],
     ])
 }
 
@@ -497,18 +523,35 @@ pub(crate) fn sandbox_keyboard(
     keyboard
 }
 
+pub(crate) fn course_label(course: &TeachingCourseDetails) -> String {
+    let subject = course.subject.name().as_str();
+    match course.groups.as_slice() {
+        [group] => texts::course_button(subject, group.code().as_str()),
+        groups => texts::course_groups_button(subject, groups.len()),
+    }
+}
+
 pub(crate) fn courses_keyboard(courses: &[TeachingCourseDetails]) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(courses.iter().map(|course| {
-        let subject = course.subject.name().as_str();
-        let label = match course.groups.as_slice() {
-            [group] => texts::course_button(subject, group.code().as_str()),
-            groups => texts::course_groups_button(subject, groups.len()),
-        };
         row(
-            button_label(&label),
+            button_label(&course_label(course)),
             ReplayableAction::Page(PageTarget::Course(course.course.id()), 0).callback(),
         )
     }))
+}
+
+pub(crate) fn closed_courses_row() -> Row {
+    row(
+        texts::BUTTON_CLOSED_COURSES,
+        ReplayableAction::Page(PageTarget::ClosedCourses, 0).callback(),
+    )
+}
+
+pub(crate) fn back_to_courses_row() -> Row {
+    row(
+        texts::BUTTON_BACK_TO_COURSES,
+        ReplayableAction::Page(PageTarget::Courses, 0).callback(),
+    )
 }
 
 pub(crate) fn course_assignments_keyboard(
@@ -516,6 +559,7 @@ pub(crate) fn course_assignments_keyboard(
     assignments: &[Assignment],
     makeup: Option<CourseMakeup>,
     timezone: &BotTimezone,
+    closed: bool,
 ) -> InlineKeyboardMarkup {
     let mut rows: Vec<Row> = assignments
         .iter()
@@ -529,11 +573,13 @@ pub(crate) fn course_assignments_keyboard(
             )
         })
         .collect();
-    rows.extend([
-        row(
+    if !closed {
+        rows.push(row(
             texts::BUTTON_CREATE_ASSIGNMENT,
             ReplayableAction::StartAssignmentCreation(course_id).callback(),
-        ),
+        ));
+    }
+    rows.extend([
         row(
             texts::BUTTON_GRADEBOOK,
             ReplayableAction::Gradebook(course_id).callback(),
@@ -542,6 +588,15 @@ pub(crate) fn course_assignments_keyboard(
             texts::BUTTON_ROSTER,
             ReplayableAction::Page(PageTarget::Roster(course_id), 0).callback(),
         ),
+    ]);
+    if closed {
+        rows.push(row(
+            texts::BUTTON_BACK_TO_COURSES,
+            ReplayableAction::Page(PageTarget::ClosedCourses, 0).callback(),
+        ));
+        return InlineKeyboardMarkup::new(rows);
+    }
+    rows.extend([
         row(
             makeup.map_or_else(
                 || texts::BUTTON_MAKEUP_OFF.to_owned(),
@@ -567,7 +622,10 @@ pub(crate) fn course_assignments_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(crate) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyboardMarkup {
+pub(crate) fn assignment_actions_keyboard(
+    assignment: &Assignment,
+    course_closed: bool,
+) -> InlineKeyboardMarkup {
     let assignment_id = assignment.id();
     let publish = |label| row(label, ScreenAction::Publish(assignment_id).callback());
     let archive = || {
@@ -577,10 +635,12 @@ pub(crate) fn assignment_actions_keyboard(assignment: &Assignment) -> InlineKeyb
         )
     };
 
-    let mut rows = match assignment.status() {
-        AssignmentStatus::Draft => vec![publish(texts::BUTTON_PUBLISH), archive()],
-        AssignmentStatus::Published => vec![archive()],
-        AssignmentStatus::Archived => vec![publish(texts::BUTTON_PUBLISH_AGAIN)],
+    let mut rows = match (assignment.status(), course_closed) {
+        (AssignmentStatus::Draft, false) => vec![publish(texts::BUTTON_PUBLISH), archive()],
+        (AssignmentStatus::Draft, true) => vec![archive()],
+        (AssignmentStatus::Published, _) => vec![archive()],
+        (AssignmentStatus::Archived, false) => vec![publish(texts::BUTTON_PUBLISH_AGAIN)],
+        (AssignmentStatus::Archived, true) => Vec::new(),
     };
     if assignment.status() != AssignmentStatus::Archived {
         rows.push(row(
@@ -1258,21 +1318,21 @@ pub(crate) fn subjects_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub(crate) fn roster_keyboard(course_id: TeachingCourseId) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![
-        row(
-            texts::BUTTON_GRADEBOOK,
-            ReplayableAction::Gradebook(course_id).callback(),
-        ),
+pub(crate) fn roster_keyboard(course_id: TeachingCourseId, closed: bool) -> InlineKeyboardMarkup {
+    let invite = (!closed).then(|| {
         row(
             texts::BUTTON_COURSE_INVITE,
             ReplayableAction::CourseInvite(course_id).callback(),
-        ),
-        row(
-            texts::BUTTON_BACK_TO_COURSE,
-            ReplayableAction::Page(PageTarget::Course(course_id), 0).callback(),
-        ),
-    ])
+        )
+    });
+    let gradebook = row(
+        texts::BUTTON_GRADEBOOK,
+        ReplayableAction::Gradebook(course_id).callback(),
+    );
+    InlineKeyboardMarkup::new([gradebook].into_iter().chain(invite).chain([row(
+        texts::BUTTON_BACK_TO_COURSE,
+        ReplayableAction::Page(PageTarget::Course(course_id), 0).callback(),
+    )]))
 }
 
 pub(crate) fn gradebook_groups_keyboard(

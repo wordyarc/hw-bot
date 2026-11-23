@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::postgres::PgExecutor;
 
-use crate::app::access::load_student;
+use crate::app::access::{load_student, lock_student};
 use crate::app::{Actor, AppError, AppResult, Required};
 use crate::db;
 use crate::domain::{
@@ -244,10 +244,12 @@ impl UserService {
         actor: Actor,
         courses: &BTreeSet<TeachingCourseId>,
     ) -> AppResult<Vec<OfferedCourse>> {
-        let student = load_student(&self.pool, actor, "enroll in courses").await?;
+        let mut tx = self.pool.begin().await?;
+
+        let student = lock_student(&mut *tx, actor, "enroll in courses").await?;
         let group_id = student.student_group_id().required("student group")?;
 
-        let chosen: Vec<_> = db::enrollments::offered_courses(&self.pool, group_id, None)
+        let chosen: Vec<_> = db::enrollments::offered_courses(&mut *tx, group_id, None)
             .await?
             .into_iter()
             .filter(|course| courses.contains(&course.course_id))
@@ -257,7 +259,9 @@ impl UserService {
         }
 
         let course_ids: Vec<_> = chosen.iter().map(|course| course.course_id).collect();
-        db::enrollments::insert(&self.pool, student.id(), &course_ids).await?;
+        db::enrollments::insert(&mut *tx, student.id(), &course_ids).await?;
+
+        tx.commit().await?;
 
         Ok(chosen)
     }

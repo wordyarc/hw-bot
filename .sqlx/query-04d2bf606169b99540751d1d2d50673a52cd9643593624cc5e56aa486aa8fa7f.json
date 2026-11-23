@@ -1,0 +1,248 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            submissions.id, submissions.assignment_id, submissions.student_id,\n            submissions.kind, submissions.attempt_number, submissions.content,\n            submissions.status, submissions.submitted_at, submissions.reviewed_by,\n            submissions.reviewed_at, submissions.review_comment, submissions.withdrawn_at,\n            submissions.raw_score, submissions.grade_max_score, submissions.late_periods,\n            submissions.penalty, submissions.penalty_deducted_from, submissions.work_score,\n            submissions.course_total_penalty\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            where submissions.status = 'pending_review'\n              and exists (\n                  select 1\n                  from teaching_course_teachers\n                  where teaching_course_teachers.teaching_course_id\n                        = assignments.teaching_course_id\n                    and teaching_course_teachers.teacher_id = $1\n              )\n              and subjects.sandbox = $2\n              and ($3::text is null or submissions.kind = $3)\n              and ($4::timestamptz is null or submissions.submitted_at <= $4)\n              and ($5::uuid is null or assignments.subject_id = $5)\n            \n        order by submissions.submitted_at, submissions.id\n        for update of submissions\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "student_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "student_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "attempt_number",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "attempt_number"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "content",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "content"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "submitted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "submitted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "reviewed_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "reviewed_by"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "reviewed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "reviewed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "review_comment",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "review_comment"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "withdrawn_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "raw_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "raw_score"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "grade_max_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "grade_max_score"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "late_periods",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "late_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "penalty_deducted_from",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "penalty_deducted_from"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "work_score",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "work_score"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "course_total_penalty",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "course_total_penalty"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "04d2bf606169b99540751d1d2d50673a52cd9643593624cc5e56aa486aa8fa7f"
+}

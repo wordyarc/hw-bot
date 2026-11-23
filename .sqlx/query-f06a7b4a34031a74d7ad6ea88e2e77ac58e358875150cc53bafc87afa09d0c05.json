@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select count(*) as \"blocking!\"\n        from submissions\n        join assignments\n          on assignments.id = submissions.assignment_id\n        where submissions.student_id = $1\n          and submissions.status <> 'withdrawn'\n          and ($2::uuid is null or assignments.teaching_course_id = $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blocking!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f06a7b4a34031a74d7ad6ea88e2e77ac58e358875150cc53bafc87afa09d0c05"
+}

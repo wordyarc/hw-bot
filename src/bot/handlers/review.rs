@@ -21,7 +21,7 @@ use crate::bot::views::{
     MakeupFollowupButtons, ReviewButtons, SCORE_BUTTONS_LIMIT, list_followup_keyboard, list_text,
     makeup_followup_keyboard, queue_followup_keyboard, review_decision_keyboard,
     review_hub_keyboard, review_keyboard, review_list_keyboard, review_score_keyboard,
-    send_message_chunks, teacher_keyboard, teacher_menu,
+    send_message_chunks, teacher_menu,
 };
 use crate::domain::{
     DomainError, Grade, Grading, LatePenalty, MaxScore, ReviewDecision, ReviewScore, SubjectId,
@@ -389,7 +389,7 @@ pub(super) async fn submit_comment(step: TextStep<'_>, pending: PendingComment) 
         Ok(reviewed) => {
             reset_dialogue(dialogue).await?;
             bot.send_message(chat_id, saved_text(&reviewed))
-                .reply_markup(teacher_keyboard())
+                .reply_markup(screen.menu_keyboard().await)
                 .await?;
             let submission = &reviewed.submission;
             match submission.kind() {
@@ -765,7 +765,7 @@ async fn restart_with(
     screen
         .bot()
         .send_message(screen.chat_id(), reason)
-        .reply_markup(teacher_keyboard())
+        .reply_markup(screen.menu_keyboard().await)
         .await?;
     show_item(screen, item, origin).await
 }
@@ -860,7 +860,7 @@ pub(super) async fn change_decision(
     screen
         .bot()
         .send_message(screen.chat_id(), texts::REVIEW_DECISION_RESET)
-        .reply_markup(teacher_keyboard())
+        .reply_markup(screen.menu_keyboard().await)
         .await?;
     screen
         .bot()

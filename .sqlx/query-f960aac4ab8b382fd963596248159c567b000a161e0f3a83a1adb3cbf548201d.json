@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update users set student_group_id = $2 where id = $1 and role = 'student'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f960aac4ab8b382fd963596248159c567b000a161e0f3a83a1adb3cbf548201d"
+}

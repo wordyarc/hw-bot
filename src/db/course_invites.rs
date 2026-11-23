@@ -42,6 +42,25 @@ pub async fn find_generation(
     .transpose()
 }
 
+pub(crate) async fn lock_generation(
+    executor: impl PgExecutor<'_>,
+    course_id: TeachingCourseId,
+) -> DbResult<Option<InviteGeneration>> {
+    sqlx::query_scalar!(
+        r#"
+        select generation
+        from teaching_course_invites
+        where teaching_course_id = $1
+        for update
+        "#,
+        course_id.as_uuid(),
+    )
+    .fetch_optional(executor)
+    .await?
+    .map(restore_generation)
+    .transpose()
+}
+
 pub async fn rotate(
     executor: impl PgExecutor<'_>,
     course_id: TeachingCourseId,

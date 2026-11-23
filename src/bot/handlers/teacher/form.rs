@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
-use teloxide::types::{ChatId, InlineKeyboardMarkup, MessageId};
+use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardMarkup, MessageId};
 use teloxide::{ApiError, RequestError};
 
 use super::deadline::{DateChoice, choose_date};
@@ -16,6 +16,7 @@ use crate::bot::timezone::BotTimezone;
 use crate::bot::views::teacher_keyboard;
 use crate::bot::{Bot, HandlerResult, texts};
 use crate::domain::DomainError;
+use crate::domain::TelegramUserId;
 
 pub(super) trait FormScreen: Form + Sized {
     fn view(
@@ -157,17 +158,23 @@ pub(super) async fn back<F: FormScreen>(screen: ActorChat<'_>, mut form: F) -> H
 
 pub(super) async fn cancel<F: FormScreen>(screen: ActorChat<'_>, form: F) -> HandlerResult {
     reset_dialogue(screen.dialogue()).await?;
-    abandon(screen.bot(), screen.chat_id(), &form).await?;
+    let menu = screen.menu_keyboard().await;
+    abandon(screen.bot(), screen.chat_id(), &form, menu).await?;
     match form.cancelled_to() {
         Some(action) => handle_replayable_action(screen, action, Shown::at(screen.now())).await,
         None => Ok(()),
     }
 }
 
-pub(super) async fn abandon<F: FormScreen>(bot: &Bot, chat_id: ChatId, form: &F) -> HandlerResult {
+pub(super) async fn abandon<F: FormScreen>(
+    bot: &Bot,
+    chat_id: ChatId,
+    form: &F,
+    menu: KeyboardMarkup,
+) -> HandlerResult {
     detach(bot, chat_id, form.message_id()).await?;
     bot.send_message(chat_id, form.abandoned_text())
-        .reply_markup(teacher_keyboard())
+        .reply_markup(menu)
         .await?;
     Ok(())
 }
@@ -177,7 +184,11 @@ pub(super) async fn abandon<F: FormScreen>(bot: &Bot, chat_id: ChatId, form: &F)
 pub(super) async fn discard<F: FormScreen>(chat: Chat<'_>, form: F) -> HandlerResult {
     tracing::error!(step = ?form.step(), "form does not hold what its step needs");
     reset_dialogue(chat.dialogue()).await?;
-    abandon(chat.bot(), chat.chat_id(), &form).await
+    let menu = match TelegramUserId::new(chat.chat_id().0) {
+        Ok(user) => chat.menu_keyboard(user).await,
+        Err(_) => teacher_keyboard(),
+    };
+    abandon(chat.bot(), chat.chat_id(), &form, menu).await
 }
 
 pub(super) async fn finish(
@@ -190,7 +201,7 @@ pub(super) async fn finish(
     screen
         .bot()
         .send_message(screen.chat_id(), notice)
-        .reply_markup(teacher_keyboard())
+        .reply_markup(screen.menu_keyboard().await)
         .await?;
     Ok(())
 }
@@ -232,7 +243,7 @@ async fn show_step(
     Ok(())
 }
 
-pub(super) async fn detach(
+pub(crate) async fn detach(
     bot: &Bot,
     chat_id: ChatId,
     message_id: Option<MessageId>,

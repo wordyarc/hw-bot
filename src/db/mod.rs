@@ -20,7 +20,7 @@ pub mod notifications;
 pub mod submissions;
 pub mod users;
 
-pub use bootstrap::{BootstrapError, run_bootstrap};
+pub use bootstrap::{BootstrapError, BootstrapOutcome, run_bootstrap, run_bootstrap_file};
 pub use error::{DbError, DbResult};
 
 pub(crate) use convert::checked_num_cast;

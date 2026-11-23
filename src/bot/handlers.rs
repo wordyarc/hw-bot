@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{CallbackQuery, ChatId, Message, MessageId, MessageKind, User};
+use teloxide::types::{CallbackQuery, Message, MessageId, MessageKind, User};
 use teloxide::utils::command::BotCommands;
 
 use super::Bot;
@@ -11,18 +11,19 @@ use super::HandlerResult;
 use super::assignment_files;
 use super::assignment_form::TermsStep;
 use super::callbacks::{
-    self, CallbackAction, FlowAction, InformationalAction, PageTarget, ReplayableAction,
+    self, AdminNav, CallbackAction, FlowAction, InformationalAction, PageTarget, ReplayableAction,
     ScreenAction,
 };
 use super::context::{ActorChat, BotContext, Chat, Deps, TextStep};
 use super::errors::{BotError, finish_handler};
 use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ReviewOrigin, ScreenState};
 use super::texts;
-use super::views::{MenuAction, menu_action, send_stale_button};
+use super::views::{MenuAction, menu_action, send_stale_button, teacher_keyboard};
 use crate::domain::{Role, TelegramUserId};
 use crate::pagination::{PageRequest, ROSTER_PAGE_SIZE};
 use crate::telegram::is_invalid_token;
 
+mod admin;
 mod contact;
 pub(super) mod home;
 pub(super) mod input;
@@ -30,7 +31,7 @@ mod registration;
 mod review;
 mod sandbox;
 mod student;
-mod teacher;
+pub(super) mod teacher;
 
 use home::{send_help, show_home, show_profile};
 use registration::start_registration;
@@ -52,6 +53,8 @@ pub(super) enum Command {
     Review,
     #[command(description = "📘 мои предметы")]
     Courses,
+    #[command(description = "🛠 раздел администратора")]
+    Admin,
     #[command(description = "👤 профиль")]
     Profile,
     #[command(description = "❌ отменить текущее действие")]
@@ -70,6 +73,7 @@ impl Command {
             Self::Archive => "archive",
             Self::Review => "review",
             Self::Courses => "courses",
+            Self::Admin => "admin",
             Self::Profile => "profile",
             Self::Cancel => "cancel",
             Self::Help => "help",
@@ -83,19 +87,31 @@ impl Command {
             Self::Menu | Self::Profile | Self::Cancel => role.is_some(),
             Self::Tasks | Self::Queue | Self::Archive => matches!(role, Some(Role::Student { .. })),
             Self::Review | Self::Courses => matches!(role, Some(Role::Teacher | Role::Admin)),
+            Self::Admin => matches!(role, Some(Role::Admin)),
         }
     }
 }
 
-async fn abandon_flow(bot: &Bot, chat_id: ChatId, state: &BotState) -> HandlerResult {
+async fn abandon_flow(
+    chat: Chat<'_>,
+    telegram_user_id: TelegramUserId,
+    state: &BotState,
+) -> HandlerResult {
+    let (bot, chat_id) = (chat.bot(), chat.chat_id());
     if let Some(form) = state.active_form() {
-        return teacher::abandon_form(bot, chat_id, form).await;
+        let menu = chat.menu_keyboard(telegram_user_id).await;
+        return teacher::abandon_form(bot, chat_id, form, menu).await;
     }
     let BotState::Flow(flow) = state else {
         return Ok(());
     };
     let Some((text, keyboard)) = flow.abandon_notice() else {
         return Ok(());
+    };
+    let keyboard = if keyboard == teacher_keyboard() {
+        chat.menu_keyboard(telegram_user_id).await
+    } else {
+        keyboard
     };
     bot.send_message(chat_id, text)
         .reply_markup(keyboard)
@@ -144,7 +160,7 @@ pub(super) async fn handle_command(
         }
         if !matches!(command, Command::Help | Command::Cancel) {
             reset_dialogue(&dialogue).await?;
-            abandon_flow(&bot, chat_id, &state).await?;
+            abandon_flow(chat, telegram_user_id, &state).await?;
         }
 
         if let Some(action) = menu_action_for(&command) {
@@ -175,6 +191,7 @@ fn menu_action_for(command: &Command) -> Option<MenuAction> {
         Command::Archive => Some(MenuAction::Archive),
         Command::Review => Some(MenuAction::Review),
         Command::Courses => Some(MenuAction::Courses),
+        Command::Admin => Some(MenuAction::Admin),
         Command::Profile => Some(MenuAction::Profile),
         Command::Start(_) | Command::Menu | Command::Cancel | Command::Help => None,
     }
@@ -190,9 +207,19 @@ pub(super) async fn handle_message(
     let chat_id = message.chat.id;
     let result = async {
         tracing::Span::current().record("action", "input");
-        if !message.chat.is_private()
-            || !matches!(message.kind, MessageKind::Common(_) | MessageKind::Dice(_))
-        {
+        if !message.chat.is_private() {
+            return Ok(());
+        }
+        if let Some(shared) = message.shared_users() {
+            let telegram_user_id = message_sender_id(&message)?;
+            let deps = Deps {
+                context: &context,
+                dialogue: &dialogue,
+            };
+            let step = TextStep::new(&bot, &message, telegram_user_id, deps);
+            return admin::users_shared(step, shared, &state).await;
+        }
+        if !matches!(message.kind, MessageKind::Common(_) | MessageKind::Dice(_)) {
             return Ok(());
         }
 
@@ -223,7 +250,7 @@ pub(super) async fn handle_message(
                 return send_help(step.chat(), telegram_user_id).await;
             }
             reset_dialogue(&dialogue).await?;
-            abandon_flow(&bot, chat_id, &state).await?;
+            abandon_flow(step.chat(), telegram_user_id, &state).await?;
             return run_menu_action(step.chat(), telegram_user_id, action).await;
         }
 
@@ -322,6 +349,7 @@ pub(super) async fn handle_message(
             }) => {
                 teacher::submit_attempt_amount(step, message_id, assignment_id, student_id).await?;
             }
+            BotState::Flow(FlowState::Admin(flow)) => admin::submit_text(step, flow).await?,
             state => {
                 if let Some(hint) = state.button_hint() {
                     bot.send_message(chat_id, hint).await?;
@@ -386,6 +414,7 @@ fn menu_target(action: MenuAction) -> Option<ReplayableAction> {
         MenuAction::Review => ReplayableAction::ReviewHub,
         MenuAction::Courses => ReplayableAction::Page(PageTarget::Courses, 0),
         MenuAction::Sandbox => ReplayableAction::Page(PageTarget::Sandbox, 0),
+        MenuAction::Admin => ReplayableAction::Admin(AdminNav::Home),
         MenuAction::Profile => ReplayableAction::Profile,
         MenuAction::Help => return None,
     })
@@ -446,11 +475,11 @@ pub(super) async fn handle_callback(
                 let restarted =
                     replay(chat, telegram_user_id, replayable, Shown::of(message)).await;
                 if let Err(BotError::App(_)) = restarted {
-                    abandon_flow(&bot, chat_id, &state).await?;
+                    abandon_flow(chat, telegram_user_id, &state).await?;
                 }
                 return restarted;
             }
-            abandon_flow(&bot, chat_id, &state).await?;
+            abandon_flow(chat, telegram_user_id, &state).await?;
         }
         match action {
             CallbackAction::Flow(FlowAction::RegistrationGroup(group_id)) => {
@@ -505,6 +534,7 @@ async fn handle_replayable_action(
                 PageTarget::Archive => student::show_archive_page(screen, page).await,
                 PageTarget::QueuePlaces => student::show_queue_page(screen, page).await,
                 PageTarget::Courses => teacher::show_courses_page(screen, page).await,
+                PageTarget::ClosedCourses => teacher::show_closed_courses_page(screen, page).await,
                 PageTarget::Sandbox => sandbox::show_page(screen, page).await,
                 PageTarget::ReviewList => review::show_list(screen, page).await,
                 PageTarget::Course(id) => {
@@ -532,7 +562,10 @@ async fn handle_replayable_action(
         ReplayableAction::NextMakeupReview => {
             review::show_next(screen, review::Queue::Makeup).await
         }
-        ReplayableAction::CourseMakeup(course_id) => teacher::open_makeup(screen, course_id).await,
+        ReplayableAction::CourseMakeup(course_id) => {
+            teacher::ensure_course_open(screen, course_id).await?;
+            teacher::open_makeup(screen, course_id).await
+        }
         ReplayableAction::Assignment(assignment_id) => {
             student::show_assignment(screen, assignment_id).await
         }
@@ -540,6 +573,7 @@ async fn handle_replayable_action(
             teacher::show_assignment(screen, assignment_id).await
         }
         ReplayableAction::StartAssignmentCreation(course_id) => {
+            teacher::ensure_course_open(screen, course_id).await?;
             screen
                 .dialogue()
                 .update(BotState::Flow(FlowState::AwaitingAssignmentTitle {
@@ -570,6 +604,7 @@ async fn handle_replayable_action(
         ReplayableAction::PickReview(submission_id) => {
             review::open(screen, submission_id, ReviewOrigin::List).await
         }
+        ReplayableAction::Admin(nav) => admin::open(screen, nav).await,
     }
 }
 
@@ -613,6 +648,9 @@ async fn handle_screen_action(
         }
         ScreenAction::GrantMakeupAttempt => {
             review::grant_makeup_attempt(screen, message_id, &state).await
+        }
+        ScreenAction::Admin(action) => {
+            admin::handle_screen(screen, message_id, action, &state).await
         }
     }
 }
@@ -724,6 +762,7 @@ async fn handle_flow_action(
         FlowAction::MakeupForm(action) => {
             teacher::handle_makeup_form(screen, message_id, action, state).await?;
         }
+        FlowAction::Admin(step) => admin::handle_step(screen, message_id, step, state).await?,
     }
 
     Ok(())
@@ -815,6 +854,114 @@ mod tests {
             assert_eq!(callbacks::parse(&target.callback(0)), expected, "{command}");
             assert_eq!(menu_target(menu).unwrap().callback(), legacy);
         }
+    }
+
+    fn admin_section_keyboards() -> Vec<teloxide::types::InlineKeyboardMarkup> {
+        use std::collections::BTreeSet;
+
+        use crate::app::{
+            AdminCourseCard, OfferedCourse, StoredSubject, StudentCard, StudentEnrollment,
+            StudentListItem, TeachingCourseDetails,
+        };
+        use crate::bot::views::{
+            admin_add_group_keyboard, admin_close_keyboard, admin_course_groups_keyboard,
+            admin_course_keyboard, admin_course_subjects_keyboard, admin_course_teachers_keyboard,
+            admin_courses_keyboard, admin_group_keyboard, admin_groups_keyboard,
+            admin_home_keyboard, admin_keep_name_keyboard, admin_levels_keyboard,
+            admin_search_keyboard, admin_student_courses_keyboard, admin_student_groups_keyboard,
+            admin_student_keyboard, admin_subject_keyboard, admin_subjects_keyboard,
+            admin_teacher_courses_keyboard, admin_teacher_keyboard, admin_teachers_keyboard,
+            admin_unenroll_keyboard, admin_years_keyboard, closed_courses_row,
+        };
+        use crate::domain::EducationLevel;
+        use crate::pagination::Page;
+        use crate::test_support::{
+            closed_course, student, student_group, subject, teacher, teaching_course,
+        };
+
+        fn paged<T>(items: Vec<T>) -> Page<T> {
+            Page {
+                items,
+                page: 1,
+                next_page: Some(2),
+            }
+        }
+
+        let teacher = teacher(1);
+        let group = student_group("group");
+        let other = student_group("other");
+        let learner = student(2, &group);
+        let subject = subject("Предмет");
+        let open = teaching_course(&subject, &[&group], &teacher);
+        let closed = closed_course(&open);
+        let details = |course: &crate::domain::TeachingCourse| TeachingCourseDetails {
+            course: course.clone(),
+            subject: subject.clone(),
+            groups: vec![group.clone()],
+        };
+        let card =
+            |course: &crate::domain::TeachingCourse, sandbox, actor_teaches| AdminCourseCard {
+                details: details(course),
+                sandbox,
+                teachers: vec![teacher.clone()],
+                actor_teaches,
+            };
+        let student_card = StudentCard {
+            student: learner.clone(),
+            group: group.clone(),
+            enrollments: vec![StudentEnrollment {
+                course_id: open.id(),
+                subject_name: "Предмет".to_owned(),
+                blocking_submissions: 0,
+            }],
+            blocking_submissions: 0,
+        };
+        let found = paged(vec![StudentListItem {
+            student_id: learner.id(),
+            display_name: "Студент".to_owned(),
+            group_code: "group".to_owned(),
+        }]);
+        let offered = [OfferedCourse {
+            course_id: open.id(),
+            subject: subject.clone(),
+        }];
+        let stored = paged(vec![StoredSubject {
+            subject: subject.clone(),
+            sandbox: false,
+        }]);
+        let groups = paged(vec![group.clone(), other.clone()]);
+        let staff = paged(vec![teacher.clone()]);
+        let courses = paged(vec![details(&open), details(&closed)]);
+
+        vec![
+            admin_home_keyboard(),
+            admin_search_keyboard(&found),
+            admin_student_keyboard(&student_card),
+            admin_student_groups_keyboard(learner.id(), &groups, group.id()),
+            admin_student_courses_keyboard(&offered, &BTreeSet::from([open.id()])),
+            admin_unenroll_keyboard(learner.id()),
+            admin_teachers_keyboard(&staff),
+            admin_teacher_keyboard(teacher.id()),
+            admin_keep_name_keyboard("Имя"),
+            admin_teacher_courses_keyboard(teacher.id(), &courses),
+            admin_groups_keyboard(&groups),
+            admin_group_keyboard(group.id()),
+            admin_levels_keyboard(),
+            admin_years_keyboard(EducationLevel::Specialist, AdminNav::Group(group.id())),
+            admin_subjects_keyboard(&stored),
+            admin_subject_keyboard(subject.id()),
+            admin_courses_keyboard(&courses, false),
+            admin_courses_keyboard(&courses, true),
+            admin_course_keyboard(&card(&open, false, false)),
+            admin_course_keyboard(&card(&open, true, true)),
+            admin_course_keyboard(&card(&closed, false, false)),
+            admin_course_subjects_keyboard(&stored),
+            admin_course_groups_keyboard(&groups, &BTreeSet::from([group.id()])),
+            admin_course_teachers_keyboard(&staff, &BTreeSet::from([teacher.id()])),
+            admin_add_group_keyboard(open.id(), &groups),
+            admin_close_keyboard(open.id()),
+            teloxide::types::InlineKeyboardMarkup::new([closed_courses_row()]),
+        ]
     }
 
     #[test]
@@ -1020,6 +1167,14 @@ mod tests {
                 std::slice::from_ref(&assignment),
                 None,
                 &timezone,
+                false,
+            ),
+            course_assignments_keyboard(
+                course.id(),
+                std::slice::from_ref(&assignment),
+                None,
+                &timezone,
+                true,
             ),
             course_assignments_keyboard(
                 course.id(),
@@ -1033,14 +1188,17 @@ mod tests {
                     .unwrap(),
                 ),
                 &timezone,
+                false,
             ),
             makeup_attempts_keyboard(),
             makeup_answer_keyboard(Grading::scored(10).unwrap(), Some(6)),
             makeup_answer_keyboard(Grading::scored(20).unwrap(), Some(12)),
             makeup_answer_keyboard(Grading::PassFail, None),
-            assignment_actions_keyboard(&draft),
-            assignment_actions_keyboard(&assignment),
-            assignment_actions_keyboard(&archived),
+            assignment_actions_keyboard(&draft, false),
+            assignment_actions_keyboard(&assignment, false),
+            assignment_actions_keyboard(&archived, false),
+            assignment_actions_keyboard(&draft, true),
+            assignment_actions_keyboard(&archived, true),
             attempts_keyboard(FlowAction::MaxAttempts),
             attempts_keyboard(FlowAction::ExtraAttempts),
             grading_keyboard(),
@@ -1092,11 +1250,12 @@ mod tests {
             confirm_invite_rotation_keyboard(),
             sandbox_keyboard(std::slice::from_ref(&sandbox_submission), 1, Some(2)),
             paginated_keyboard(
-                roster_keyboard(course.id()),
+                roster_keyboard(course.id(), false),
                 PageTarget::Roster(course.id()),
                 1,
                 Some(2),
             ),
+            roster_keyboard(course.id(), true),
         ];
 
         let opened = CourseMakeup::open(
@@ -1168,6 +1327,7 @@ mod tests {
             keyboards.push(keyboard);
         }
 
+        keyboards.extend(admin_section_keyboards());
         for keyboard in keyboards {
             for button in keyboard.inline_keyboard.into_iter().flatten() {
                 use teloxide::types::InlineKeyboardButtonKind;

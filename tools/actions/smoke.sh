@@ -53,7 +53,12 @@ jq -n --arg image "$image" '{version: "0.0.0", commit: "smoke", image: $image, d
     > "$installation/current-release.json"
 
 make -C "$installation" bootstrap
-make -C "$installation" bootstrap
+export HW_BOT_IMAGE="$image"
+app_container=$(compose ps -q app)
+make -C "$installation" bootstrap > "$tmp/second-bootstrap.log"
+cat "$tmp/second-bootstrap.log"
+grep -q 'bootstrap skipped' "$tmp/second-bootstrap.log"
+[ "$(compose ps -q app)" = "$app_container" ]
 ls "$installation"/logs/hw-bot.*.log > /dev/null
 
 make -C "$installation" backup

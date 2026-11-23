@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            subjects.id as subject_id,\n            subjects.name as subject_name,\n            count(*) as \"pending!\"\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            where submissions.status = 'pending_review'\n              and exists (\n                  select 1\n                  from teaching_course_teachers\n                  where teaching_course_teachers.teaching_course_id\n                        = assignments.teaching_course_id\n                    and teaching_course_teachers.teacher_id = $1\n              )\n              and subjects.sandbox = $2\n              and ($3::text is null or submissions.kind = $3)\n              and ($4::timestamptz is null or submissions.submitted_at <= $4)\n              and ($5::uuid is null or assignments.subject_id = $5)\n            \n        group by subjects.id, subjects.name\n        order by subjects.name, subjects.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "subject_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "pending!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "0cbcef333cfa4f8b9e20dacf7e88d084f073559e78cd540484611e50c90a7646"
+}

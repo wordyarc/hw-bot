@@ -138,6 +138,7 @@ impl AssignmentService {
     pub async fn create(&self, command: CreateAssignment) -> AppResult<Assignment> {
         let mut tx = self.pool.begin().await?;
 
+        db::academic::lock_course_for_share(&mut *tx, command.teaching_course_id).await?;
         let (author, teaching_course) = load_managed_course_on(
             &mut tx,
             command.actor,
@@ -488,6 +489,7 @@ impl AssignmentService {
     {
         let mut tx = self.pool.begin().await?;
 
+        db::academic::lock_course_of_assignment_for_share(&mut *tx, assignment_id).await?;
         let ManagedAssignment {
             actor,
             course: teaching_course,

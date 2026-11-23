@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            submissions.id,\n            submissions.kind,\n            submissions.submitted_at,\n            subjects.name as subject_name,\n            assignments.title as assignment_title,\n            (select display_name from users where users.id = submissions.student_id)\n                as \"student_name!\"\n        \n            from submissions\n            join assignments\n              on assignments.id = submissions.assignment_id\n            join subjects\n              on subjects.id = assignments.subject_id\n            where submissions.status = 'pending_review'\n              and exists (\n                  select 1\n                  from teaching_course_teachers\n                  where teaching_course_teachers.teaching_course_id\n                        = assignments.teaching_course_id\n                    and teaching_course_teachers.teacher_id = $1\n              )\n              and subjects.sandbox = $2\n              and ($3::text is null or submissions.kind = $3)\n              and ($4::timestamptz is null or submissions.submitted_at <= $4)\n              and ($5::uuid is null or assignments.subject_id = $5)\n            \n        order by submissions.submitted_at, submissions.id\n        limit $6 offset $7\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "submitted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "submitted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "assignment_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "student_name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Timestamptz",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "ade0bb378f4007b3345391c18ccb4695ec8e4e726a80f93d85b8e4649c5a9b41"
+}

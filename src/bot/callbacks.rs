@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use super::handlers::input::parse_u16;
 use crate::domain::{
-    AssignmentId, DeductedFrom, DomainResult, Grading, MakeupTerms, ReviewDecision, StudentGroupId,
-    SubjectId, SubmissionId, SubmissionKind, TeachingCourseId, UserId,
+    AssignmentId, DeductedFrom, DomainResult, EducationLevel, Grading, MakeupTerms, ReviewDecision,
+    StudentGroupId, SubjectId, SubmissionId, SubmissionKind, TeachingCourseId, UserId,
 };
 
 use CallbackAction::{Flow, Informational, Replayable, Screen};
@@ -114,6 +114,7 @@ pub const DEADLINE_OPTIONS: &str = "dl:options";
 pub const CALENDAR_PICK_PREFIX: &str = "cal:pick:";
 pub const CALENDAR_MONTH_PREFIX: &str = "cal:";
 pub const CALENDAR_NOOP: &str = "cal:noop";
+pub const ADMIN_PREFIX: &str = "adm:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CallbackAction {
@@ -197,6 +198,7 @@ pub(super) enum ReplayableAction {
     PickReview(SubmissionId),
     StartWithdrawal(SubmissionId),
     ConfirmWithdrawal(SubmissionId),
+    Admin(AdminNav),
 }
 
 impl ReplayableAction {
@@ -236,6 +238,7 @@ impl ReplayableAction {
             Self::PickReview(id) => format!("{REVIEW_PICK_PREFIX}{}", id.as_uuid()),
             Self::StartWithdrawal(id) => format!("{WITHDRAW_PREFIX}{}", id.as_uuid()),
             Self::ConfirmWithdrawal(id) => format!("{WITHDRAW_CONFIRM_PREFIX}{}", id.as_uuid()),
+            Self::Admin(action) => action.callback(),
         }
     }
 }
@@ -246,6 +249,7 @@ pub(super) enum PageTarget {
     Archive,
     QueuePlaces,
     Courses,
+    ClosedCourses,
     Sandbox,
     ReviewList,
     Course(TeachingCourseId),
@@ -264,6 +268,7 @@ impl PageTarget {
             Self::Archive => "ar".to_owned(),
             Self::QueuePlaces => "q".to_owned(),
             Self::Courses => "c".to_owned(),
+            Self::ClosedCourses => "cx".to_owned(),
             Self::Sandbox => "sb".to_owned(),
             Self::ReviewList => "rq".to_owned(),
             Self::Course(course) => format!("ca:{}", id(course.as_uuid())),
@@ -296,6 +301,7 @@ fn parse_page(data: &str) -> Option<ReplayableAction> {
         "ar" => PageTarget::Archive,
         "q" => PageTarget::QueuePlaces,
         "c" => PageTarget::Courses,
+        "cx" => PageTarget::ClosedCourses,
         "sb" => PageTarget::Sandbox,
         "rq" => PageTarget::ReviewList,
         "ca" => PageTarget::Course(TeachingCourseId::from_uuid(id()?)),
@@ -329,6 +335,7 @@ pub(super) enum ScreenAction {
     RotateCourseInvite,
     BulkReview(ReviewDecision),
     GrantMakeupAttempt,
+    Admin(AdminScreen),
 }
 
 impl ScreenAction {
@@ -345,6 +352,7 @@ impl ScreenAction {
             Self::BulkReview(ReviewDecision::Accept) => SANDBOX_ACCEPT_ALL.to_owned(),
             Self::BulkReview(ReviewDecision::Reject) => SANDBOX_REJECT_ALL.to_owned(),
             Self::GrantMakeupAttempt => MAKEUP_GRANT.to_owned(),
+            Self::Admin(action) => action.callback(),
         }
     }
 }
@@ -386,6 +394,7 @@ pub(super) enum FlowAction {
     MakeupAnswer(MakeupChoice),
     MakeupAttempts(AmountChoice),
     MakeupForm(MakeupFormAction),
+    Admin(AdminStep),
 }
 
 impl FlowAction {
@@ -435,8 +444,236 @@ impl FlowAction {
             Self::MakeupAnswer(choice) => choice.callback(),
             Self::MakeupAttempts(choice) => choice.callback(MAKEUP_ATTEMPTS_PREFIX),
             Self::MakeupForm(action) => action.callback().to_owned(),
+            Self::Admin(action) => action.callback(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AdminNav {
+    Home,
+    SearchStudents,
+    Student(UserId),
+    RenameStudent(UserId),
+    ChangeGroup(UserId, u32),
+    Unenroll(UserId, TeachingCourseId),
+    Teachers(u32),
+    Teacher(UserId),
+    NewTeacher,
+    TeacherCourses(UserId, u32),
+    Groups(u32),
+    Group(StudentGroupId),
+    NewGroup,
+    RenameGroup(StudentGroupId),
+    GroupYear(StudentGroupId),
+    Subjects(u32),
+    Subject(SubjectId),
+    NewSubject,
+    RenameSubject(SubjectId),
+    Courses(u32),
+    ClosedCourses(u32),
+    Course(TeachingCourseId),
+    NewCourse(u32),
+    AddCourseGroup(TeachingCourseId, u32),
+    CloseCourse(TeachingCourseId),
+}
+
+impl AdminNav {
+    pub fn callback(self) -> String {
+        let id = encode_id;
+        let tail = match self {
+            Self::Home => "h".to_owned(),
+            Self::SearchStudents => "ss".to_owned(),
+            Self::Student(student) => format!("s:{}", id(student.as_uuid())),
+            Self::RenameStudent(student) => format!("sn:{}", id(student.as_uuid())),
+            Self::ChangeGroup(student, page) => format!("sg:{}:{page}", id(student.as_uuid())),
+            Self::Unenroll(student, course) => {
+                format!("su:{}:{}", id(student.as_uuid()), id(course.as_uuid()))
+            }
+            Self::Teachers(page) => format!("t:{page}"),
+            Self::Teacher(teacher) => format!("tc:{}", id(teacher.as_uuid())),
+            Self::NewTeacher => "tn".to_owned(),
+            Self::TeacherCourses(teacher, page) => format!("ta:{}:{page}", id(teacher.as_uuid())),
+            Self::Groups(page) => format!("g:{page}"),
+            Self::Group(group) => format!("gc:{}", id(group.as_uuid())),
+            Self::NewGroup => "gn".to_owned(),
+            Self::RenameGroup(group) => format!("gr:{}", id(group.as_uuid())),
+            Self::GroupYear(group) => format!("gy:{}", id(group.as_uuid())),
+            Self::Subjects(page) => format!("b:{page}"),
+            Self::Subject(subject) => format!("bc:{}", id(subject.as_uuid())),
+            Self::NewSubject => "bn".to_owned(),
+            Self::RenameSubject(subject) => format!("br:{}", id(subject.as_uuid())),
+            Self::Courses(page) => format!("c:{page}"),
+            Self::ClosedCourses(page) => format!("cx:{page}"),
+            Self::Course(course) => format!("cc:{}", id(course.as_uuid())),
+            Self::NewCourse(page) => format!("cn:{page}"),
+            Self::AddCourseGroup(course, page) => format!("ca:{}:{page}", id(course.as_uuid())),
+            Self::CloseCourse(course) => format!("cz:{}", id(course.as_uuid())),
+        };
+        format!("{ADMIN_PREFIX}{tail}")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AdminScreen {
+    SearchPage(u32),
+    ToggleTeacherCourse(TeachingCourseId),
+    AssignSelf,
+    Reopen,
+}
+
+impl AdminScreen {
+    pub fn callback(self) -> String {
+        let tail = match self {
+            Self::SearchPage(page) => format!("p:{page}"),
+            Self::ToggleTeacherCourse(course) => format!("t:{}", encode_id(course.as_uuid())),
+            Self::AssignSelf => "self".to_owned(),
+            Self::Reopen => "reopen".to_owned(),
+        };
+        format!("{ADMIN_PREFIX}x:{tail}")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AdminStep {
+    StudentGroup(StudentGroupId),
+    StudentCourse(TeachingCourseId),
+    StudentCoursesDone,
+    ConfirmUnenroll,
+    KeepSuggestedName,
+    Level(EducationLevel),
+    Year(u8),
+    CourseSubject(SubjectId),
+    CourseGroup(StudentGroupId),
+    CourseGroupsDone,
+    CourseTeacher(UserId),
+    CourseTeachersDone,
+    ListPage(u32),
+    AddGroup(StudentGroupId),
+    ConfirmClose,
+}
+
+impl AdminStep {
+    pub fn callback(self) -> String {
+        let id = encode_id;
+        let tail = match self {
+            Self::StudentGroup(group) => format!("sg:{}", id(group.as_uuid())),
+            Self::StudentCourse(course) => format!("sc:{}", id(course.as_uuid())),
+            Self::StudentCoursesDone => "scd".to_owned(),
+            Self::ConfirmUnenroll => "uy".to_owned(),
+            Self::KeepSuggestedName => "kn".to_owned(),
+            Self::Level(level) => format!("l:{}", level.as_str()),
+            Self::Year(year) => format!("y:{year}"),
+            Self::CourseSubject(subject) => format!("cs:{}", id(subject.as_uuid())),
+            Self::CourseGroup(group) => format!("cg:{}", id(group.as_uuid())),
+            Self::CourseGroupsDone => "cgd".to_owned(),
+            Self::CourseTeacher(teacher) => format!("ct:{}", id(teacher.as_uuid())),
+            Self::CourseTeachersDone => "ctd".to_owned(),
+            Self::ListPage(page) => format!("p:{page}"),
+            Self::AddGroup(group) => format!("ag:{}", id(group.as_uuid())),
+            Self::ConfirmClose => "cl".to_owned(),
+        };
+        format!("{ADMIN_PREFIX}f:{tail}")
+    }
+}
+
+struct AdminParts<'a>(std::str::Split<'a, char>);
+
+impl AdminParts<'_> {
+    fn id(&mut self) -> Option<Uuid> {
+        decode_id(self.0.next()?)
+    }
+
+    fn number<T: std::str::FromStr>(&mut self) -> Option<T> {
+        let value = self.0.next()?;
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        value.parse().ok()
+    }
+
+    fn finished(&mut self) -> bool {
+        self.0.next().is_none()
+    }
+}
+
+fn parse_admin(data: &str) -> Option<CallbackAction> {
+    if data.len() > 64 {
+        return None;
+    }
+    let mut parts = AdminParts(data.strip_prefix(ADMIN_PREFIX)?.split(':'));
+    let kind = parts.0.next()?;
+    let action = match kind {
+        "x" => Screen(ScreenAction::Admin(parse_admin_screen(&mut parts)?)),
+        "f" => Flow(FlowAction::Admin(parse_admin_step(&mut parts)?)),
+        kind => Replayable(ReplayableAction::Admin(parse_admin_nav(kind, &mut parts)?)),
+    };
+    parts.finished().then_some(action)
+}
+
+fn parse_admin_nav(kind: &str, parts: &mut AdminParts<'_>) -> Option<AdminNav> {
+    Some(match kind {
+        "h" => AdminNav::Home,
+        "ss" => AdminNav::SearchStudents,
+        "s" => AdminNav::Student(UserId::from_uuid(parts.id()?)),
+        "sn" => AdminNav::RenameStudent(UserId::from_uuid(parts.id()?)),
+        "sg" => AdminNav::ChangeGroup(UserId::from_uuid(parts.id()?), parts.number()?),
+        "su" => AdminNav::Unenroll(
+            UserId::from_uuid(parts.id()?),
+            TeachingCourseId::from_uuid(parts.id()?),
+        ),
+        "t" => AdminNav::Teachers(parts.number()?),
+        "tc" => AdminNav::Teacher(UserId::from_uuid(parts.id()?)),
+        "tn" => AdminNav::NewTeacher,
+        "ta" => AdminNav::TeacherCourses(UserId::from_uuid(parts.id()?), parts.number()?),
+        "g" => AdminNav::Groups(parts.number()?),
+        "gc" => AdminNav::Group(StudentGroupId::from_uuid(parts.id()?)),
+        "gn" => AdminNav::NewGroup,
+        "gr" => AdminNav::RenameGroup(StudentGroupId::from_uuid(parts.id()?)),
+        "gy" => AdminNav::GroupYear(StudentGroupId::from_uuid(parts.id()?)),
+        "b" => AdminNav::Subjects(parts.number()?),
+        "bc" => AdminNav::Subject(SubjectId::from_uuid(parts.id()?)),
+        "bn" => AdminNav::NewSubject,
+        "br" => AdminNav::RenameSubject(SubjectId::from_uuid(parts.id()?)),
+        "c" => AdminNav::Courses(parts.number()?),
+        "cx" => AdminNav::ClosedCourses(parts.number()?),
+        "cc" => AdminNav::Course(TeachingCourseId::from_uuid(parts.id()?)),
+        "cn" => AdminNav::NewCourse(parts.number()?),
+        "ca" => AdminNav::AddCourseGroup(TeachingCourseId::from_uuid(parts.id()?), parts.number()?),
+        "cz" => AdminNav::CloseCourse(TeachingCourseId::from_uuid(parts.id()?)),
+        _ => return None,
+    })
+}
+
+fn parse_admin_screen(parts: &mut AdminParts<'_>) -> Option<AdminScreen> {
+    Some(match parts.0.next()? {
+        "p" => AdminScreen::SearchPage(parts.number()?),
+        "t" => AdminScreen::ToggleTeacherCourse(TeachingCourseId::from_uuid(parts.id()?)),
+        "self" => AdminScreen::AssignSelf,
+        "reopen" => AdminScreen::Reopen,
+        _ => return None,
+    })
+}
+
+fn parse_admin_step(parts: &mut AdminParts<'_>) -> Option<AdminStep> {
+    Some(match parts.0.next()? {
+        "sg" => AdminStep::StudentGroup(StudentGroupId::from_uuid(parts.id()?)),
+        "sc" => AdminStep::StudentCourse(TeachingCourseId::from_uuid(parts.id()?)),
+        "scd" => AdminStep::StudentCoursesDone,
+        "uy" => AdminStep::ConfirmUnenroll,
+        "kn" => AdminStep::KeepSuggestedName,
+        "l" => AdminStep::Level(EducationLevel::parse_str(parts.0.next()?)?),
+        "y" => AdminStep::Year(parts.number()?),
+        "cs" => AdminStep::CourseSubject(SubjectId::from_uuid(parts.id()?)),
+        "cg" => AdminStep::CourseGroup(StudentGroupId::from_uuid(parts.id()?)),
+        "cgd" => AdminStep::CourseGroupsDone,
+        "ct" => AdminStep::CourseTeacher(UserId::from_uuid(parts.id()?)),
+        "ctd" => AdminStep::CourseTeachersDone,
+        "p" => AdminStep::ListPage(parts.number()?),
+        "ag" => AdminStep::AddGroup(StudentGroupId::from_uuid(parts.id()?)),
+        "cl" => AdminStep::ConfirmClose,
+        _ => return None,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -800,6 +1037,9 @@ const INDEX_ROUTES: &[Route<usize, ScreenAction>] = &[
 ];
 
 fn parse_prefixed(data: &str) -> Option<CallbackAction> {
+    if data.starts_with(ADMIN_PREFIX) {
+        return parse_admin(data);
+    }
     if data.starts_with(CONTACT_PREFIX) {
         return parse_contact(data).map(Informational);
     }
@@ -958,6 +1198,7 @@ mod tests {
             PageTarget::Archive,
             PageTarget::QueuePlaces,
             PageTarget::Courses,
+            PageTarget::ClosedCourses,
             PageTarget::Sandbox,
             PageTarget::ReviewList,
             PageTarget::Course(TeachingCourseId::new()),
@@ -1244,6 +1485,102 @@ mod tests {
                     student_id: student,
                 }),
             CallbackAction::Noop => CallbackAction::Noop,
+            Replayable(ReplayableAction::Page(PageTarget::ClosedCourses, _)) =>
+                page(PageTarget::ClosedCourses, last),
+            Replayable(ReplayableAction::Admin(AdminNav::Home)) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Home)),
+            Replayable(ReplayableAction::Admin(AdminNav::SearchStudents)) =>
+                Replayable(ReplayableAction::Admin(AdminNav::SearchStudents)),
+            Replayable(ReplayableAction::Admin(AdminNav::Student(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Student(student))),
+            Replayable(ReplayableAction::Admin(AdminNav::RenameStudent(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::RenameStudent(student))),
+            Replayable(ReplayableAction::Admin(AdminNav::ChangeGroup(..))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::ChangeGroup(student, last))),
+            Replayable(ReplayableAction::Admin(AdminNav::Unenroll(..))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Unenroll(student, course))),
+            Replayable(ReplayableAction::Admin(AdminNav::Teachers(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Teachers(last))),
+            Replayable(ReplayableAction::Admin(AdminNav::Teacher(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Teacher(student))),
+            Replayable(ReplayableAction::Admin(AdminNav::NewTeacher)) =>
+                Replayable(ReplayableAction::Admin(AdminNav::NewTeacher)),
+            Replayable(ReplayableAction::Admin(AdminNav::TeacherCourses(..))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::TeacherCourses(student, last))),
+            Replayable(ReplayableAction::Admin(AdminNav::Groups(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Groups(last))),
+            Replayable(ReplayableAction::Admin(AdminNav::Group(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Group(group))),
+            Replayable(ReplayableAction::Admin(AdminNav::NewGroup)) =>
+                Replayable(ReplayableAction::Admin(AdminNav::NewGroup)),
+            Replayable(ReplayableAction::Admin(AdminNav::RenameGroup(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::RenameGroup(group))),
+            Replayable(ReplayableAction::Admin(AdminNav::GroupYear(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::GroupYear(group))),
+            Replayable(ReplayableAction::Admin(AdminNav::Subjects(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Subjects(last))),
+            Replayable(ReplayableAction::Admin(AdminNav::Subject(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Subject(subject))),
+            Replayable(ReplayableAction::Admin(AdminNav::NewSubject)) =>
+                Replayable(ReplayableAction::Admin(AdminNav::NewSubject)),
+            Replayable(ReplayableAction::Admin(AdminNav::RenameSubject(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::RenameSubject(subject))),
+            Replayable(ReplayableAction::Admin(AdminNav::Courses(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Courses(last))),
+            Replayable(ReplayableAction::Admin(AdminNav::ClosedCourses(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::ClosedCourses(last))),
+            Replayable(ReplayableAction::Admin(AdminNav::Course(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::Course(course))),
+            Replayable(ReplayableAction::Admin(AdminNav::NewCourse(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::NewCourse(last))),
+            Replayable(ReplayableAction::Admin(AdminNav::AddCourseGroup(..))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::AddCourseGroup(course, last))),
+            Replayable(ReplayableAction::Admin(AdminNav::CloseCourse(_))) =>
+                Replayable(ReplayableAction::Admin(AdminNav::CloseCourse(course))),
+            Screen(ScreenAction::Admin(AdminScreen::SearchPage(_))) =>
+                Screen(ScreenAction::Admin(AdminScreen::SearchPage(last))),
+            Screen(ScreenAction::Admin(AdminScreen::ToggleTeacherCourse(_))) =>
+                Screen(ScreenAction::Admin(AdminScreen::ToggleTeacherCourse(course))),
+            Screen(ScreenAction::Admin(AdminScreen::AssignSelf)) =>
+                Screen(ScreenAction::Admin(AdminScreen::AssignSelf)),
+            Screen(ScreenAction::Admin(AdminScreen::Reopen)) =>
+                Screen(ScreenAction::Admin(AdminScreen::Reopen)),
+            Flow(FlowAction::Admin(AdminStep::StudentGroup(_))) =>
+                Flow(FlowAction::Admin(AdminStep::StudentGroup(group))),
+            Flow(FlowAction::Admin(AdminStep::StudentCourse(_))) =>
+                Flow(FlowAction::Admin(AdminStep::StudentCourse(course))),
+            Flow(FlowAction::Admin(AdminStep::StudentCoursesDone)) =>
+                Flow(FlowAction::Admin(AdminStep::StudentCoursesDone)),
+            Flow(FlowAction::Admin(AdminStep::ConfirmUnenroll)) =>
+                Flow(FlowAction::Admin(AdminStep::ConfirmUnenroll)),
+            Flow(FlowAction::Admin(AdminStep::KeepSuggestedName)) =>
+                Flow(FlowAction::Admin(AdminStep::KeepSuggestedName)),
+            Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Bachelor))) =>
+                Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Bachelor))),
+            Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Master))) =>
+                Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Master))),
+            Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Specialist))) =>
+                Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Specialist))),
+            Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Postgraduate))) =>
+                Flow(FlowAction::Admin(AdminStep::Level(EducationLevel::Postgraduate))),
+            Flow(FlowAction::Admin(AdminStep::Year(_))) =>
+                Flow(FlowAction::Admin(AdminStep::Year(u8::MAX))),
+            Flow(FlowAction::Admin(AdminStep::CourseSubject(_))) =>
+                Flow(FlowAction::Admin(AdminStep::CourseSubject(subject))),
+            Flow(FlowAction::Admin(AdminStep::CourseGroup(_))) =>
+                Flow(FlowAction::Admin(AdminStep::CourseGroup(group))),
+            Flow(FlowAction::Admin(AdminStep::CourseGroupsDone)) =>
+                Flow(FlowAction::Admin(AdminStep::CourseGroupsDone)),
+            Flow(FlowAction::Admin(AdminStep::CourseTeacher(_))) =>
+                Flow(FlowAction::Admin(AdminStep::CourseTeacher(student))),
+            Flow(FlowAction::Admin(AdminStep::CourseTeachersDone)) =>
+                Flow(FlowAction::Admin(AdminStep::CourseTeachersDone)),
+            Flow(FlowAction::Admin(AdminStep::ListPage(_))) =>
+                Flow(FlowAction::Admin(AdminStep::ListPage(last))),
+            Flow(FlowAction::Admin(AdminStep::AddGroup(_))) =>
+                Flow(FlowAction::Admin(AdminStep::AddGroup(group))),
+            Flow(FlowAction::Admin(AdminStep::ConfirmClose)) =>
+                Flow(FlowAction::Admin(AdminStep::ConfirmClose)),
         ]
     }
 

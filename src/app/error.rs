@@ -27,6 +27,11 @@ str_enum! {
         InviteInvalid => "invite_invalid",
         FileTooLarge => "file_too_large",
         FileLimitReached => "file_limit_reached",
+        CourseClosed => "course_closed",
+        StudentHasSubmissions => "student_has_submissions",
+        LastCourseTeacher => "last_course_teacher",
+        NameTaken => "name_taken",
+        GroupInSubjectCourse => "group_in_subject_course",
         Overloaded => "overloaded"
     }
 }
@@ -106,7 +111,17 @@ impl AppError {
                 | DomainError::AssignmentGroupOutsideCourse
                 | DomainError::StudentGroupNotInCourse
                 | DomainError::CourseNotOfferedToStudentGroup
+                | DomainError::CourseTeacherMustBeStaff
+                | DomainError::CourseNotClosed
+                | DomainError::CourseCompositionEmpty
+                | DomainError::SandboxCourseCannotBeClosed
+                | DomainError::SearchQueryTooShort { .. }
                 | DomainError::StudentGroupChoiceRequired => ErrorCode::InvalidInput,
+                DomainError::CourseClosed => ErrorCode::CourseClosed,
+                DomainError::StudentHasSubmissions => ErrorCode::StudentHasSubmissions,
+                DomainError::LastCourseTeacher => ErrorCode::LastCourseTeacher,
+                DomainError::NameTaken => ErrorCode::NameTaken,
+                DomainError::GroupInSubjectCourse => ErrorCode::GroupInSubjectCourse,
                 DomainError::AssignmentIsNotPublished
                 | DomainError::AssignmentStatusTransitionNotAllowed { .. }
                 | DomainError::AssignmentIsArchived => ErrorCode::AssignmentUnavailable,
@@ -245,6 +260,34 @@ mod tests {
         let error = AppError::from(DbError::Overloaded);
 
         assert_eq!(error.code(), ErrorCode::Overloaded);
+    }
+
+    #[test]
+    fn administration_rules_have_their_own_codes() {
+        for (rule, code) in [
+            (DomainError::CourseClosed, ErrorCode::CourseClosed),
+            (
+                DomainError::StudentHasSubmissions,
+                ErrorCode::StudentHasSubmissions,
+            ),
+            (DomainError::LastCourseTeacher, ErrorCode::LastCourseTeacher),
+            (DomainError::NameTaken, ErrorCode::NameTaken),
+            (
+                DomainError::GroupInSubjectCourse,
+                ErrorCode::GroupInSubjectCourse,
+            ),
+            (DomainError::CourseNotClosed, ErrorCode::InvalidInput),
+            (
+                DomainError::SandboxCourseCannotBeClosed,
+                ErrorCode::InvalidInput,
+            ),
+            (
+                DomainError::SearchQueryTooShort { min: 2 },
+                ErrorCode::InvalidInput,
+            ),
+        ] {
+            assert_eq!(AppError::from(rule).code(), code);
+        }
     }
 
     #[test]

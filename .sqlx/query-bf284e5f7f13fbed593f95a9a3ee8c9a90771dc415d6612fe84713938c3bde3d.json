@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            enrolled.teaching_course_id,\n            subjects.name as subject_name,\n            (\n                select count(*)\n                from submissions\n                join assignments\n                  on assignments.id = submissions.assignment_id\n                where submissions.student_id = enrolled.student_id\n                  and submissions.status <> 'withdrawn'\n                  and assignments.teaching_course_id = enrolled.teaching_course_id\n            ) as \"blocking!\"\n        from teaching_course_students enrolled\n        join teaching_courses\n          on teaching_courses.id = enrolled.teaching_course_id\n        join subjects\n          on subjects.id = teaching_courses.subject_id\n        where enrolled.student_id = $1\n        order by subjects.name, enrolled.teaching_course_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "teaching_course_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "teaching_course_students",
+            "name": "teaching_course_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "subjects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "blocking!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "bf284e5f7f13fbed593f95a9a3ee8c9a90771dc415d6612fe84713938c3bde3d"
+}

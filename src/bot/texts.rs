@@ -6,6 +6,10 @@ use crate::domain::{
     ReviewDecision, Role, SubmissionKind, SubmissionStatus,
 };
 
+mod admin;
+
+pub use admin::*;
+
 pub const BUTTON_ASSIGNMENTS: &str = "📚 Мои задания";
 pub const BUTTON_ARCHIVE: &str = "🗄 Архив";
 pub const BUTTON_QUEUE: &str = "⏳ Очередь проверки";
@@ -776,6 +780,9 @@ pub fn bulk_review_saved(decision: ReviewDecision, count: usize) -> String {
 
 pub const NO_COURSES: &str = "📘 У вас пока нет предметов.";
 pub const CHOOSE_COURSE: &str = "📘 Выберите предмет:";
+pub const COURSE_IS_CLOSED: &str = "🏁 Предмет завершён: новые задания, досдача и ссылка закрыты.";
+pub const CHOOSE_CLOSED_COURSE: &str = "🏁 Завершённые предметы:";
+pub const NO_CLOSED_COURSES: &str = "🏁 Завершённых предметов нет.";
 pub const NO_COURSE_ASSIGNMENTS: &str = "По этому предмету пока нет заданий.";
 pub const COURSE_ASSIGNMENTS_HEADER: &str = "Задания по предмету:";
 pub const CHOOSE_ASSIGNMENT: &str = "Выберите задание или создайте новое:";

@@ -4,6 +4,8 @@
 
 mod harness;
 
+mod admin_service;
+mod administration;
 mod assignment_files;
 mod assignment_teacher_queries;
 mod assignments_api;

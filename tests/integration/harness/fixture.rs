@@ -42,7 +42,7 @@ impl Fixture {
             .expect("insert student group");
 
         let subject = subject(SUBJECT_NAME);
-        db::academic::insert_subject(pool, &subject)
+        db::academic::insert_subject(pool, &subject, false)
             .await
             .expect("insert subject");
 

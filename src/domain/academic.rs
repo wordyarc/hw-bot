@@ -135,6 +135,7 @@ pub struct TeachingCourse {
     group_ids: BTreeSet<StudentGroupId>,
     teacher_ids: HashSet<UserId>,
     created_at: DateTime<Utc>,
+    closed_at: Option<DateTime<Utc>>,
 }
 
 impl TeachingCourse {
@@ -144,6 +145,7 @@ impl TeachingCourse {
         group_ids: BTreeSet<StudentGroupId>,
         teacher_ids: HashSet<UserId>,
         created_at: DateTime<Utc>,
+        closed_at: Option<DateTime<Utc>>,
     ) -> DomainResult<Self> {
         if group_ids.is_empty() {
             return Err(DomainError::TeachingCourseHasNoGroups);
@@ -159,6 +161,7 @@ impl TeachingCourse {
             group_ids,
             teacher_ids,
             created_at,
+            closed_at,
         })
     }
 
@@ -166,21 +169,23 @@ impl TeachingCourse {
         id: TeachingCourseId,
         subject: &Subject,
         groups: &[&StudentGroup],
-        teacher: &User,
+        teachers: &[&User],
         created_at: DateTime<Utc>,
     ) -> DomainResult<Self> {
-        if !teacher.role().can_manage_assignments() {
-            return Err(DomainError::PermissionDenied {
-                action: "create teaching course",
-            });
+        if teachers
+            .iter()
+            .any(|teacher| !teacher.role().can_manage_assignments())
+        {
+            return Err(DomainError::CourseTeacherMustBeStaff);
         }
 
         Self::restore(
             id,
             subject.id(),
             groups.iter().map(|group| group.id()).collect(),
-            HashSet::from([teacher.id()]),
+            teachers.iter().map(|teacher| teacher.id()).collect(),
             created_at,
+            None,
         )
     }
 
@@ -212,12 +217,30 @@ impl TeachingCourse {
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
+
+    pub fn closed_at(&self) -> Option<DateTime<Utc>> {
+        self.closed_at
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed_at.is_some()
+    }
+
+    pub fn ensure_open(&self) -> DomainResult<()> {
+        if self.is_closed() {
+            return Err(DomainError::CourseClosed);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{student_group, subject, t0, teacher, teaching_course};
+    use crate::test_support::{
+        named_student, student_group, subject, t0, teacher, teaching_course,
+    };
 
     #[test]
     fn study_program_validates_year_by_education_level() {
@@ -240,6 +263,7 @@ mod tests {
                 BTreeSet::from([StudentGroupId::new()]),
                 HashSet::new(),
                 t0(),
+                None,
             )
             .unwrap_err(),
             DomainError::TeachingCourseHasNoTeachers
@@ -255,6 +279,7 @@ mod tests {
                 BTreeSet::new(),
                 HashSet::from([UserId::new()]),
                 t0(),
+                None,
             )
             .unwrap_err(),
             DomainError::TeachingCourseHasNoGroups
@@ -275,6 +300,50 @@ mod tests {
         assert!(course.includes_group(second.id()));
         assert!(!course.includes_group(foreign.id()));
         assert_eq!(course.group_ids().len(), 2);
+    }
+
+    #[test]
+    fn a_new_course_is_open() {
+        let teacher = teacher(1);
+        let course = teaching_course(&subject("Backend"), &[&student_group("G-1")], &teacher);
+
+        assert!(!course.is_closed());
+        assert_eq!(course.ensure_open(), Ok(()));
+    }
+
+    #[test]
+    fn a_closed_course_reports_course_closed() {
+        let course = TeachingCourse::restore(
+            TeachingCourseId::new(),
+            SubjectId::new(),
+            BTreeSet::from([StudentGroupId::new()]),
+            HashSet::from([UserId::new()]),
+            t0(),
+            Some(t0()),
+        )
+        .unwrap();
+
+        assert!(course.is_closed());
+        assert_eq!(course.closed_at(), Some(t0()));
+        assert_eq!(course.ensure_open(), Err(DomainError::CourseClosed));
+    }
+
+    #[test]
+    fn a_student_cannot_be_a_course_teacher() {
+        let group = student_group("G-1");
+        let student = named_student(2, "Student", &group);
+
+        assert_eq!(
+            TeachingCourse::new(
+                TeachingCourseId::new(),
+                &subject("Backend"),
+                &[&group],
+                &[&student],
+                t0(),
+            )
+            .unwrap_err(),
+            DomainError::CourseTeacherMustBeStaff
+        );
     }
 
     #[test]

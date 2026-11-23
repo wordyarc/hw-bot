@@ -137,6 +137,23 @@ impl CourseService {
         actor: Actor,
         page: PageRequest,
     ) -> AppResult<Page<TeachingCourseDetails>> {
+        self.list_assigned(actor, false, page).await
+    }
+
+    pub async fn list_closed_for_teacher(
+        &self,
+        actor: Actor,
+        page: PageRequest,
+    ) -> AppResult<Page<TeachingCourseDetails>> {
+        self.list_assigned(actor, true, page).await
+    }
+
+    async fn list_assigned(
+        &self,
+        actor: Actor,
+        closed: bool,
+        page: PageRequest,
+    ) -> AppResult<Page<TeachingCourseDetails>> {
         let actor = load_actor(&self.pool, actor, "teacher").await?;
 
         if !actor.role().can_manage_assignments() {
@@ -147,7 +164,8 @@ impl CourseService {
         }
 
         Ok(Page::from_rows(
-            db::academic::list_teaching_courses_for_teacher(&self.pool, &actor, page).await?,
+            db::academic::list_teaching_courses_for_teacher(&self.pool, &actor, closed, page)
+                .await?,
             page,
         ))
     }
@@ -167,6 +185,7 @@ impl CourseService {
     ) -> AppResult<CourseInviteState> {
         let details =
             load_managed_course_details(&self.pool, actor, course_id, "read course invite").await?;
+        details.course.ensure_open()?;
         let generation = db::course_invites::find_generation(&self.pool, course_id)
             .await?
             .required("course invite")?;
@@ -187,6 +206,7 @@ impl CourseService {
         let details =
             load_managed_course_details(&self.pool, actor, course_id, "rotate course invite")
                 .await?;
+        details.course.ensure_open()?;
         let generation = super::on_conflict(
             db::course_invites::rotate(&self.pool, course_id, expected).await,
             AppError::CourseInviteChangedConcurrently,
@@ -268,6 +288,7 @@ impl CourseService {
         );
 
         Ok(CourseRoster {
+            closed: details.course.is_closed(),
             subject: details.subject,
             groups: roster_groups(rows.items),
             page: rows.page,
@@ -400,6 +421,7 @@ impl CourseService {
             "configure course makeup",
         )
         .await?;
+        course.ensure_open()?;
         let settings = command
             .settings
             .map(|settings| {

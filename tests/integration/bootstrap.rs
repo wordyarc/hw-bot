@@ -1,6 +1,7 @@
+use std::path::Path;
 use std::time::Duration;
 
-use hw_bot::db;
+use hw_bot::db::{self, BootstrapOutcome};
 use hw_bot::test_support::bootstrap_seed as seed;
 use serde_json::json;
 use sqlx::PgPool;
@@ -91,142 +92,97 @@ async fn a_course_of_five_groups_is_one_course_with_one_invite() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn a_group_added_to_a_stored_course_keeps_its_invite_and_assignments() -> anyhow::Result<()> {
-    let pool = migrated_database().await;
-    db::run_bootstrap(&pool, &seed_with_groups(&["g1"])).await?;
-    sqlx::query("update teaching_course_invites set generation = 7")
-        .execute(&pool)
-        .await?;
-    sqlx::query(
-        r#"
-        with issued as (
-            insert into assignments (
-                teaching_course_id, subject_id, title, body, max_attempts, status, created_by,
-                deadline_at
-            )
-            select teaching_courses.id, teaching_courses.subject_id, 'Lab', 'Body', 1, 'draft',
-                   users.id, now() + interval '7 days'
-            from teaching_courses, users
-            where users.telegram_user_id = 100000002
-            returning id, teaching_course_id
-        )
-        insert into assignment_groups (assignment_id, teaching_course_id, student_group_id)
-        select issued.id, issued.teaching_course_id, student_groups.id
-        from issued, student_groups
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    db::run_bootstrap(&pool, &seed_with_groups(&["g1", "g2"])).await?;
-
-    assert_eq!(count(&pool, "teaching_courses").await?, 1);
-    assert_eq!(count(&pool, "teaching_course_groups").await?, 2);
-    let generation: i64 = sqlx::query_scalar("select generation from teaching_course_invites")
-        .fetch_one(&pool)
-        .await?;
-    assert_eq!(generation, 7);
-    let issued: Vec<String> = sqlx::query_scalar(
-        "select student_groups.code from assignment_groups
-         join student_groups on student_groups.id = assignment_groups.student_group_id",
-    )
-    .fetch_all(&pool)
-    .await?;
-    assert_eq!(issued, vec!["g1".to_owned()]);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_seed_joining_two_stored_courses_of_a_subject_is_rolled_back() -> anyhow::Result<()> {
-    let pool = migrated_database().await;
-    let mut split = seed_with_groups(&["g1", "g2"]);
-    split["courses"] = json!([
-        {
-            "subject_name": "Backend Development",
-            "student_group_codes": ["g1"],
-            "teacher_telegram_user_ids": [100000002]
-        },
-        {
-            "subject_name": "Backend Development",
-            "student_group_codes": ["g2"],
-            "teacher_telegram_user_ids": [100000002]
-        }
-    ]);
-    db::run_bootstrap(&pool, &split).await?;
-    let mut joined = seed_with_groups(&["g1", "g2", "g3"]);
-    joined["courses"][0]["student_group_codes"] = json!(["g1", "g2"]);
-
-    let error = db::run_bootstrap(&pool, &joined).await.unwrap_err();
-
-    assert!(
-        matches!(&error, db::BootstrapError::InvalidData(_)),
-        "{error}"
-    );
-    assert_eq!(count(&pool, "teaching_courses").await?, 2);
-    assert_eq!(count(&pool, "student_groups").await?, 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_seed_splitting_a_stored_course_is_rolled_back() -> anyhow::Result<()> {
-    let pool = migrated_database().await;
-    db::run_bootstrap(&pool, &seed_with_groups(&["g1", "g2"])).await?;
-    let mut split = seed_with_groups(&["g1", "g2"]);
-    split["courses"] = json!([
-        {
-            "subject_name": "Backend Development",
-            "student_group_codes": ["g1"],
-            "teacher_telegram_user_ids": [100000002]
-        },
-        {
-            "subject_name": "Backend Development",
-            "student_group_codes": ["g2"],
-            "teacher_telegram_user_ids": [100000001]
-        }
-    ]);
-
-    let error = db::run_bootstrap(&pool, &split).await.unwrap_err();
-
-    assert!(
-        matches!(&error, db::BootstrapError::InvalidData(_)),
-        "{error}"
-    );
-    assert_eq!(count(&pool, "teaching_course_teachers").await?, 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_repeated_bootstrap_never_resets_a_rotated_invite() -> anyhow::Result<()> {
+async fn a_repeated_bootstrap_changes_nothing() -> anyhow::Result<()> {
     let pool = migrated_database().await;
     let seed = seed();
-    db::run_bootstrap(&pool, &seed).await?;
+    assert_eq!(
+        db::run_bootstrap(&pool, &seed).await?,
+        BootstrapOutcome::Applied
+    );
     sqlx::query("update teaching_course_invites set generation = 7")
         .execute(&pool)
         .await?;
 
-    db::run_bootstrap(&pool, &seed).await?;
+    let outcome = db::run_bootstrap(&pool, &seed).await?;
 
-    let generation: i64 = sqlx::query_scalar("select generation from teaching_course_invites")
-        .fetch_one(&pool)
-        .await?;
-
-    assert_eq!(generation, 7);
-    Ok(())
-}
-
-#[tokio::test]
-async fn bootstrap_can_be_repeated_without_duplicates() -> anyhow::Result<()> {
-    let pool = migrated_database().await;
-    let seed = seed();
-
-    db::run_bootstrap(&pool, &seed).await?;
-    db::run_bootstrap(&pool, &seed).await?;
-
+    assert_eq!(outcome, BootstrapOutcome::AlreadyPopulated);
     assert_eq!(count(&pool, "student_groups").await?, 1);
     assert_eq!(count(&pool, "subjects").await?, 1);
     assert_eq!(count(&pool, "users").await?, 2);
     assert_eq!(count(&pool, "teaching_courses").await?, 1);
-    assert_eq!(count(&pool, "teaching_course_teachers").await?, 1);
+    let generation: i64 = sqlx::query_scalar("select generation from teaching_course_invites")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(generation, 7);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_group_renamed_in_the_bot_is_not_created_again() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    let seed = seed();
+    db::run_bootstrap(&pool, &seed).await?;
+    sqlx::query("update student_groups set code = 'renamed'")
+        .execute(&pool)
+        .await?;
+
+    db::run_bootstrap(&pool, &seed).await?;
+
+    let codes: Vec<String> = sqlx::query_scalar("select code from student_groups")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(codes, vec!["renamed".to_owned()]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_missing_file_on_a_populated_database_is_skipped() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    db::run_bootstrap(&pool, &seed()).await?;
+
+    let outcome = db::run_bootstrap_file(&pool, Path::new("/nonexistent/bootstrap.json")).await?;
+
+    assert_eq!(outcome, BootstrapOutcome::AlreadyPopulated);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_broken_file_on_a_populated_database_is_skipped() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    db::run_bootstrap(&pool, &seed()).await?;
+    let not_json = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+
+    let outcome = db::run_bootstrap_file(&pool, not_json).await?;
+
+    assert_eq!(outcome, BootstrapOutcome::AlreadyPopulated);
+    assert_eq!(count(&pool, "users").await?, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_missing_file_on_an_empty_database_is_an_error() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+
+    let error = db::run_bootstrap_file(&pool, Path::new("/nonexistent/bootstrap.json"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, db::BootstrapError::File { .. }), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_file_of_an_empty_database_is_applied() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    let file = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/config/bootstrap.json"
+    ));
+
+    let outcome = db::run_bootstrap_file(&pool, file).await?;
+
+    assert_eq!(outcome, BootstrapOutcome::Applied);
+    assert!(count(&pool, "users").await? > 0);
     Ok(())
 }
 
@@ -256,120 +212,66 @@ async fn a_subject_without_the_sandbox_field_is_regular() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn a_conflicting_sandbox_flag_aborts_the_whole_bootstrap() -> anyhow::Result<()> {
+async fn a_failure_on_an_empty_database_rolls_back_the_whole_seed() -> anyhow::Result<()> {
     let pool = migrated_database().await;
-    db::run_bootstrap(&pool, &seed()).await?;
-    let mut changed = seed();
-    changed["subjects"][0]["sandbox"] = json!(true);
-    changed["student_groups"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "code": "m9241-09.04.03",
-            "education_level": "master",
-            "study_year": 1
-        }));
-
-    let error = db::run_bootstrap(&pool, &changed).await.unwrap_err();
-
-    assert!(
-        matches!(&error, db::BootstrapError::InvalidData(message) if message.contains("Backend Development")),
-        "{error}"
-    );
-    assert!(!is_sandbox(&pool, "Backend Development").await?);
-    assert_eq!(count(&pool, "student_groups").await?, 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn conflicting_existing_staff_aborts_without_partial_seed() -> anyhow::Result<()> {
-    let pool = migrated_database().await;
-
-    sqlx::query(
-        r#"
-        with seed_group as (
-            insert into student_groups (code, education_level, study_year)
-            values ('existing', 'bachelor', 1)
-            returning id
-        )
-        insert into users (telegram_user_id, role, display_name, student_group_id)
-        select 100000002, 'student', 'Existing Student', id
-        from seed_group
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    let error = db::run_bootstrap(&pool, &seed()).await.unwrap_err();
-
-    assert!(
-        matches!(&error, db::BootstrapError::InvalidData(message) if message.contains("100000002")),
-        "{error}"
-    );
-    let users: Vec<i64> = sqlx::query_scalar("select telegram_user_id from users")
-        .fetch_all(&pool)
+    sqlx::query("insert into subjects (name) values ('Backend Development')")
+        .execute(&pool)
         .await?;
-    assert_eq!(
-        users,
-        vec![100_000_002],
-        "the admin seeded before the conflict is rolled back"
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "select count(*) from student_groups where code = 'b9122-02.03.21'"
-        )
-        .fetch_one(&pool)
-        .await?,
-        0
-    );
-    assert_eq!(count(&pool, "subjects").await?, 0);
+
+    db::run_bootstrap(&pool, &seed()).await.unwrap_err();
+
+    assert_eq!(count(&pool, "users").await?, 0);
+    assert_eq!(count(&pool, "student_groups").await?, 0);
     assert_eq!(count(&pool, "teaching_courses").await?, 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn bootstrap_rejects_a_manually_seeded_course_without_teacher() -> anyhow::Result<()> {
+async fn a_seed_with_two_courses_of_one_group_and_subject_is_rejected() -> anyhow::Result<()> {
     let pool = migrated_database().await;
+    let mut conflicting = seed_with_groups(&["g1"]);
+    let course = conflicting["courses"][0].clone();
+    conflicting["courses"].as_array_mut().unwrap().push(course);
 
-    sqlx::query(
-        r#"
-        with seed_group as (
-            insert into student_groups (code, education_level, study_year)
-            values ('manual-group', 'master', 1)
-            returning id
-        ), seed_subject as (
-            insert into subjects (name)
-            values ('Manual Subject')
-            returning id
-        ), seed_course as (
-            insert into teaching_courses (subject_id)
-            select id from seed_subject
-            returning id, subject_id
-        )
-        insert into teaching_course_groups (teaching_course_id, subject_id, student_group_id)
-        select seed_course.id, seed_course.subject_id, seed_group.id
-        from seed_course, seed_group
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    let error = db::run_bootstrap(&pool, &seed()).await.unwrap_err();
+    let error = db::run_bootstrap(&pool, &conflicting).await.unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("every teaching course must have at least one teacher"),
+        matches!(&error, db::BootstrapError::InvalidData(_)),
         "{error}"
     );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "select count(*) from subjects where name = 'Backend Development'"
-        )
-        .fetch_one(&pool)
-        .await?,
-        0
-    );
+    assert_eq!(count(&pool, "users").await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_second_of_two_parallel_bootstraps_changes_nothing() -> anyhow::Result<()> {
+    let pool = migrated_database().await;
+    let mut lock_connection = pool.acquire().await?;
+    let blocker = sqlx::query_scalar("select pg_backend_pid()")
+        .fetch_one(&mut *lock_connection)
+        .await?;
+    sqlx::query("select pg_advisory_lock(hashtextextended($1, 0))")
+        .bind(BOOTSTRAP_LOCK)
+        .execute(&mut *lock_connection)
+        .await?;
+
+    let (first_pool, second_pool) = (pool.clone(), pool.clone());
+    let first = tokio::spawn(async move { db::run_bootstrap(&first_pool, &seed()).await });
+    let second = tokio::spawn(async move { db::run_bootstrap(&second_pool, &seed()).await });
+    wait_for_blocked_connection(&pool, blocker).await;
+
+    sqlx::query("select pg_advisory_unlock(hashtextextended($1, 0))")
+        .bind(BOOTSTRAP_LOCK)
+        .execute(&mut *lock_connection)
+        .await?;
+    let timeout = Duration::from_secs(5);
+    let first = tokio::time::timeout(timeout, first).await???;
+    let second = tokio::time::timeout(timeout, second).await???;
+
+    let mut outcomes = [first, second].map(|outcome| outcome == BootstrapOutcome::Applied);
+    outcomes.sort_unstable();
+    assert_eq!(outcomes, [false, true]);
+    assert_eq!(count(&pool, "users").await?, 2);
     assert_eq!(count(&pool, "teaching_courses").await?, 1);
     Ok(())
 }

@@ -501,6 +501,14 @@ impl TestApp {
         .expect("rename a table after the next write");
     }
 
+    pub async fn mark_course_closed(&self, course: &TeachingCourse) {
+        sqlx::query("update teaching_courses set closed_at = now() where id = $1")
+            .bind(course.id().as_uuid())
+            .execute(&self.pool)
+            .await
+            .expect("mark the course as closed");
+    }
+
     pub async fn add_admin(&self) -> User {
         let admin = named_admin(self.next_telegram_id(), "Admin");
         insert_user(&self.pool, &admin).await;
@@ -638,14 +646,9 @@ impl TestApp {
 
     pub async fn add_sandbox_subject(&self) -> Subject {
         let subject = subject("Sandbox");
-        db::academic::insert_subject(&self.pool, &subject)
+        db::academic::insert_subject(&self.pool, &subject, true)
             .await
             .expect("insert subject");
-        sqlx::query("update subjects set sandbox = true where id = $1")
-            .bind(subject.id().as_uuid())
-            .execute(&self.pool)
-            .await
-            .expect("mark the subject as a sandbox");
 
         subject
     }
@@ -665,7 +668,7 @@ impl TestApp {
 
     pub async fn add_subject_course(&self, subject_name: &str) -> TeachingCourse {
         let subject = subject(subject_name);
-        db::academic::insert_subject(&self.pool, &subject)
+        db::academic::insert_subject(&self.pool, &subject, false)
             .await
             .expect("insert subject");
 

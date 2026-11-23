@@ -117,20 +117,26 @@ fn unique_violation(error: &sqlx::Error) -> Option<DbError> {
         return None;
     }
 
-    let rule = |rule| Some(DbError::RuleViolation(rule));
+    unique_constraint_rule(database_error.constraint()?).map(DbError::RuleViolation)
+}
 
-    match database_error.constraint()? {
-        "users_telegram_user_id_key" => rule(DomainError::UserAlreadyRegistered),
+fn unique_constraint_rule(constraint: &str) -> Option<DomainError> {
+    match constraint {
+        "users_telegram_user_id_key" => Some(DomainError::UserAlreadyRegistered),
         "submissions_one_pending_per_student_assignment_idx" => {
-            rule(DomainError::SubmissionAlreadyPendingReview)
+            Some(DomainError::SubmissionAlreadyPendingReview)
         }
         "submissions_one_accepted_per_student_assignment_kind_idx" => {
-            rule(DomainError::SubmissionAlreadyAccepted)
+            Some(DomainError::SubmissionAlreadyAccepted)
         }
         // При двойном тапе первым срабатывает этот ключ, не индекс по pending.
         // Конкурирующая сдача только что создана и ещё находится на проверке.
         "submissions_assignment_id_student_id_attempt_number_key" => {
-            rule(DomainError::SubmissionAlreadyPendingReview)
+            Some(DomainError::SubmissionAlreadyPendingReview)
+        }
+        "student_groups_code_key" | "subjects_name_key" => Some(DomainError::NameTaken),
+        "teaching_course_groups_subject_id_student_group_id_key" => {
+            Some(DomainError::GroupInSubjectCourse)
         }
         _ => None,
     }
@@ -146,6 +152,29 @@ mod tests {
             DbError::from(sqlx::Error::RowNotFound),
             DbError::Database(_)
         ));
+    }
+
+    #[test]
+    fn taken_names_are_a_rule_violation() {
+        for constraint in ["student_groups_code_key", "subjects_name_key"] {
+            assert_eq!(
+                unique_constraint_rule(constraint),
+                Some(DomainError::NameTaken)
+            );
+        }
+    }
+
+    #[test]
+    fn a_group_in_a_second_course_of_a_subject_is_a_rule_violation() {
+        assert_eq!(
+            unique_constraint_rule("teaching_course_groups_subject_id_student_group_id_key"),
+            Some(DomainError::GroupInSubjectCourse)
+        );
+    }
+
+    #[test]
+    fn an_unknown_constraint_has_no_rule() {
+        assert_eq!(unique_constraint_rule("some_other_key"), None);
     }
 
     #[test]

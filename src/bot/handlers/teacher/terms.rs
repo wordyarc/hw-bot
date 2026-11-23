@@ -228,7 +228,13 @@ pub(crate) async fn handle_terms(
             TermsAction::Stay => stay_in_terms(screen, form).await,
             TermsAction::Exit => {
                 reset_dialogue(screen.dialogue()).await?;
-                abandon(screen.bot(), screen.chat_id(), &form).await?;
+                abandon(
+                    screen.bot(),
+                    screen.chat_id(),
+                    &form,
+                    screen.menu_keyboard().await,
+                )
+                .await?;
                 run_menu_action(screen.chat(), telegram_user_id, menu).await
             }
             _ => screen.stale().await,

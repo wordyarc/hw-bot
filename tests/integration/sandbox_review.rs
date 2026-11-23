@@ -16,6 +16,7 @@ const COMMENT: &str = "Учебная сдача";
 struct TwoSandboxCourses {
     own: Assignment,
     foreign: Assignment,
+    foreign_course: TeachingCourse,
     foreign_student: User,
 }
 
@@ -32,6 +33,7 @@ async fn two_sandbox_courses(app: &TestApp) -> TwoSandboxCourses {
         foreign: app
             .add_published_assignment(&foreign.course, &foreign.teacher, "Foreign trial")
             .await,
+        foreign_course: foreign.course,
         foreign_student,
     }
 }
@@ -104,16 +106,57 @@ async fn the_sandbox_list_holds_only_sandbox_submissions_of_own_courses() {
 }
 
 #[tokio::test]
-async fn an_admin_sees_every_sandbox_course_from_the_earliest() {
+async fn an_unassigned_admin_sees_no_sandbox_work() {
     let app = TestApp::start().await;
     let courses = two_sandbox_courses(&app).await;
-    let first = submit(&app, &courses.foreign, &courses.foreign_student).await;
-    let second = submit(&app, &courses.own, &app.fixture.student).await;
+    submit(&app, &courses.foreign, &courses.foreign_student).await;
+    submit(&app, &courses.own, &app.fixture.student).await;
     let admin = app.add_admin().await;
 
+    assert!(sandbox_ids(&app, Actor::new(admin.id())).await.is_empty());
+}
+
+#[tokio::test]
+async fn an_assigned_admin_sees_the_sandbox_of_that_course_only() {
+    let app = TestApp::start().await;
+    let courses = two_sandbox_courses(&app).await;
+    let foreign = submit(&app, &courses.foreign, &courses.foreign_student).await;
+    submit(&app, &courses.own, &app.fixture.student).await;
+    let admin = app.add_admin().await;
+    app.attach_course_teacher(&courses.foreign_course, &admin)
+        .await;
+
+    assert_eq!(sandbox_ids(&app, Actor::new(admin.id())).await, [foreign]);
+}
+
+#[tokio::test]
+async fn a_bulk_decision_of_an_admin_leaves_foreign_sandboxes_undecided() {
+    let app = TestApp::start().await;
+    let courses = two_sandbox_courses(&app).await;
+    let foreign = submit(&app, &courses.foreign, &courses.foreign_student).await;
+    let own = submit(&app, &courses.own, &app.fixture.student).await;
+    let admin = app.add_admin().await;
+    app.attach_course_teacher(&courses.foreign_course, &admin)
+        .await;
+
+    let reviewed = app
+        .application
+        .reviews
+        .review_sandbox(ReviewSandbox {
+            actor: Actor::new(admin.id()),
+            ..decide_all(&app, ReviewDecision::Reject, Utc::now())
+        })
+        .await
+        .expect("the bulk decision succeeds");
+
+    assert_eq!(reviewed, 1);
     assert_eq!(
-        sandbox_ids(&app, Actor::new(admin.id())).await,
-        [first, second]
+        find(&app, foreign).await.status(),
+        SubmissionStatus::Rejected
+    );
+    assert_eq!(
+        find(&app, own).await.status(),
+        SubmissionStatus::PendingReview
     );
 }
 

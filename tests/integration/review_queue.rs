@@ -160,7 +160,7 @@ async fn a_subject_without_pending_work_is_absent_from_the_counts() {
 async fn a_foreign_subject_hands_out_nothing() {
     let app = TestApp::start().await;
     let android = subject("Android");
-    db::academic::insert_subject(&app.pool, &android)
+    db::academic::insert_subject(&app.pool, &android, false)
         .await
         .expect("insert subject");
     let foreign = app.add_foreign_course_for(&android).await;

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select teaching_courses.id\n        from teaching_courses\n        join assignments\n          on assignments.teaching_course_id = teaching_courses.id\n        where assignments.id = $1\n        for share of teaching_courses\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "teaching_courses",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ca9c4cd60cfc9d26b30525ab58612043187ace320bc08afa44750cf86b5e013c"
+}

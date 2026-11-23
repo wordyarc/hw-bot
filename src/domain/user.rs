@@ -144,6 +144,16 @@ impl User {
         )
     }
 
+    pub fn renamed(&self, display_name: impl Into<String>) -> DomainResult<Self> {
+        Self::new(
+            self.id,
+            self.telegram_user_id,
+            self.role,
+            display_name,
+            self.registered_at,
+        )
+    }
+
     pub fn id(&self) -> UserId {
         self.id
     }

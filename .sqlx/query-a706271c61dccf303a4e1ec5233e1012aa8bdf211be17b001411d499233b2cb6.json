@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        delete from teaching_course_students\n        where student_id = $1\n          and teaching_course_id <> all($2::uuid[])\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a706271c61dccf303a4e1ec5233e1012aa8bdf211be17b001411d499233b2cb6"
+}

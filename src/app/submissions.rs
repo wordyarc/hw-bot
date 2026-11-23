@@ -65,7 +65,9 @@ impl SubmissionService {
     pub async fn submit_homework(&self, command: SubmitHomework) -> AppResult<SubmittedHomework> {
         let mut tx = self.pool.begin().await?;
 
-        let student = load_actor(&mut *tx, command.actor, "student").await?;
+        let student = db::users::find_for_key_share(&mut *tx, command.actor.user_id())
+            .await?
+            .required("student")?;
 
         let assignment = db::assignments::find_by_id(&mut *tx, command.assignment_id)
             .await?

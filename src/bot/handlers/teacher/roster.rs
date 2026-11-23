@@ -21,7 +21,7 @@ pub(crate) async fn show_roster_page(
 
     let text = roster_text(&roster);
     let keyboard = paginated_keyboard(
-        roster_keyboard(course_id),
+        roster_keyboard(course_id, roster.closed),
         PageTarget::Roster(course_id),
         roster.page,
         roster.next_page,
@@ -79,6 +79,7 @@ mod tests {
     fn every_group_is_a_section_under_its_header_with_progress_only_where_assignments_exist() {
         let roster = CourseRoster {
             subject: subject("Rust"),
+            closed: false,
             groups: vec![
                 group("ИВТ-21", 3, &[("Анна", 1), ("Борис", 3)]),
                 group("ИВТ-22", 0, &[("Вера", 0)]),

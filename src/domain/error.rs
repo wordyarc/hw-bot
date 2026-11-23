@@ -73,6 +73,9 @@ pub enum DomainError {
     #[error("teaching course has no student groups")]
     TeachingCourseHasNoGroups,
 
+    #[error("a course teacher must be a teacher or an admin")]
+    CourseTeacherMustBeStaff,
+
     #[error("assignment must be issued to at least one student group")]
     AssignmentHasNoGroups,
 
@@ -192,6 +195,33 @@ pub enum DomainError {
 
     #[error("invite generation cannot be rotated any further")]
     InviteGenerationExhausted,
+
+    #[error("teaching course is closed")]
+    CourseClosed,
+
+    #[error("teaching course is not closed")]
+    CourseNotClosed,
+
+    #[error("a sandbox course cannot be closed")]
+    SandboxCourseCannotBeClosed,
+
+    #[error("a course needs at least one student group and one teacher")]
+    CourseCompositionEmpty,
+
+    #[error("student has submissions that block this change")]
+    StudentHasSubmissions,
+
+    #[error("the last teacher of a course cannot be removed")]
+    LastCourseTeacher,
+
+    #[error("this name is already taken")]
+    NameTaken,
+
+    #[error("student group already belongs to a course of this subject")]
+    GroupInSubjectCourse,
+
+    #[error("search query must be at least {min} characters")]
+    SearchQueryTooShort { min: usize },
 
     #[error("permission denied for {action}")]
     PermissionDenied { action: &'static str },
