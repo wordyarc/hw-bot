@@ -19,7 +19,7 @@ use super::errors::{BotError, finish_handler};
 use super::state::{ActiveForm, BotDialogue, BotState, FlowState, ReviewOrigin, ScreenState};
 use super::texts;
 use super::views::{MenuAction, menu_action, send_stale_button, teacher_keyboard};
-use crate::domain::{Role, TelegramUserId};
+use crate::domain::{Role, SubmissionKind, TelegramUserId};
 use crate::pagination::{PageRequest, ROSTER_PAGE_SIZE};
 use crate::telegram::is_invalid_token;
 
@@ -382,20 +382,23 @@ async fn run_menu_action(
     replay(chat, telegram_user_id, target, Shown::at(chat.now())).await
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Shown<'a> {
-    at: DateTime<Utc>,
+    at: Option<DateTime<Utc>>,
     text: Option<&'a str>,
 }
 
 impl<'a> Shown<'a> {
     fn at(at: DateTime<Utc>) -> Self {
-        Self { at, text: None }
+        Self {
+            at: Some(at),
+            text: None,
+        }
     }
 
     fn of(message: &'a Message) -> Self {
         Self {
-            at: message.date,
+            at: Some(message.date),
             text: message.text(),
         }
     }
@@ -452,13 +455,15 @@ pub(super) async fn handle_callback(
         );
     }
 
-    let Some(message) = query.regular_message() else {
+    let Some(origin) = query.message.as_ref() else {
         return Ok(());
     };
-    if !message.chat.is_private() {
+    if !origin.chat().is_private() {
         return Ok(());
     }
-    let chat_id = message.chat.id;
+    let chat_id = origin.chat().id;
+    let message_id = origin.id();
+    let shown = query.regular_message().map(Shown::of).unwrap_or_default();
     let result = async {
         let telegram_user_id = sender_id(&query.from)?;
         if query.data.is_none() {
@@ -479,8 +484,7 @@ pub(super) async fn handle_callback(
         if let CallbackAction::Replayable(replayable) = action {
             reset_dialogue(&dialogue).await?;
             if state.is_restarted_by(replayable) {
-                let restarted =
-                    replay(chat, telegram_user_id, replayable, Shown::of(message)).await;
+                let restarted = replay(chat, telegram_user_id, replayable, shown).await;
                 if let Err(BotError::App(_)) = restarted {
                     abandon_flow(chat, telegram_user_id, &state).await?;
                 }
@@ -490,16 +494,16 @@ pub(super) async fn handle_callback(
         }
         match action {
             CallbackAction::Flow(FlowAction::RegistrationGroup(group_id)) => {
-                return registration::choose_group(chat, message.id, group_id, &state).await;
+                return registration::choose_group(chat, message_id, group_id, &state).await;
             }
             CallbackAction::Flow(FlowAction::RegistrationSubject(course_id)) => {
                 return registration::toggle_registration_subject(
-                    chat, message.id, course_id, state,
+                    chat, message_id, course_id, state,
                 )
                 .await;
             }
             CallbackAction::Flow(FlowAction::RegistrationSubjectsDone) => {
-                return registration::finish_registration_subjects(chat, message.id, state).await;
+                return registration::finish_registration_subjects(chat, message_id, state).await;
             }
             _ => {}
         }
@@ -509,18 +513,18 @@ pub(super) async fn handle_callback(
 
         match action {
             CallbackAction::Replayable(action) => {
-                handle_replayable_action(screen, action, Shown::of(message)).await
+                handle_replayable_action(screen, action, shown).await
             }
             CallbackAction::Screen(action) => {
-                handle_screen_action(screen, message.id, action, state).await
+                handle_screen_action(screen, message_id, action, state).await
             }
             CallbackAction::Flow(action) => {
-                handle_flow_action(screen, telegram_user_id, message.id, action, state).await
+                handle_flow_action(screen, telegram_user_id, message_id, action, state).await
             }
             CallbackAction::Informational(InformationalAction::StudentContact {
                 course_id,
                 student_id,
-            }) => contact::show(screen, message.id, course_id, student_id).await,
+            }) => contact::show(screen, message_id, course_id, student_id).await,
             CallbackAction::Noop => Ok(()),
         }
     }
@@ -590,7 +594,11 @@ async fn handle_replayable_action(
             screen.ask(texts::ASSIGNMENT_TITLE_PROMPT).await
         }
         ReplayableAction::StartSubmission(assignment_id, button) => {
-            student::start_submission(screen, assignment_id, button, shown.at).await
+            let (button, shown_at) = match shown.at {
+                Some(at) => (button, at),
+                None => (SubmissionKind::Regular, screen.now()),
+            };
+            student::start_submission(screen, assignment_id, button, shown_at).await
         }
         ReplayableAction::AssignmentFiles(assignment_id) => {
             assignment_files::show(screen, assignment_id, false).await

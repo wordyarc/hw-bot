@@ -30,6 +30,27 @@ async fn help_command_answers_with_the_help_of_the_registered_role() {
 }
 
 #[tokio::test]
+async fn a_replayable_button_of_an_inaccessible_message_opens_its_screen() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let student = app.student();
+    telegram.message(student, "/tasks");
+    telegram.flush(student).await;
+    let open = telegram
+        .button(student, &cb(callbacks::ASSIGNMENT_PREFIX, app.assignment()))
+        .await;
+
+    telegram.click_inaccessible(student, &open);
+    telegram.flush(student).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let body = app.fixture.assignment.body().as_str();
+    let sent = telegram.texts(student);
+    assert!(sent.iter().any(|text| text == body), "{sent:#?}");
+}
+
+#[tokio::test]
 async fn the_bottom_menu_opens_a_screen_even_in_the_middle_of_a_dialogue() {
     let app = TestApp::start().await;
     let updates = vec![

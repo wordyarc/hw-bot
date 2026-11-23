@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -371,7 +371,7 @@ pub async fn create_assignment(
         late_policy: request.late_policy.parse()?,
         makeup: None,
         created_at: Utc::now(),
-        deadline_at: request.deadline_at,
+        deadline_at: request.deadline_at.trunc_subsecs(6),
     };
 
     let assignment = state.application.assignments.create(command).await?;
@@ -419,7 +419,7 @@ pub async fn change_deadline(
     let command = ChangeDeadline {
         assignment_id,
         actor,
-        deadline_at: request.deadline_at,
+        deadline_at: request.deadline_at.trunc_subsecs(6),
         expected_revision: None,
     };
 

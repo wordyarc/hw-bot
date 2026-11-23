@@ -170,9 +170,27 @@ async fn archiving_closes_the_assignment_for_submissions() {
 }
 
 #[tokio::test]
+async fn a_deadline_within_the_creation_microsecond_is_invalid_input() {
+    let app = TestApp::start().await;
+    let created_at = db::assignments::find_by_id(&app.pool, app.fixture.assignment.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .created_at();
+
+    app.change_deadline(
+        app.assignment(),
+        app.teacher(),
+        created_at + Duration::nanoseconds(1),
+    )
+    .await
+    .error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_input");
+}
+
+#[tokio::test]
 async fn a_moved_deadline_applies_to_the_next_submission() {
     let app = TestApp::start().await;
-    let past = Utc::now() - Duration::minutes(1);
+    let past = (Utc::now() - Duration::minutes(1)).trunc_subsecs(6);
 
     let body = app
         .change_deadline(app.assignment(), app.teacher(), past)

@@ -373,6 +373,18 @@ impl TelegramScenario {
         state.updates.push(update);
     }
 
+    pub fn click_inaccessible(&self, user: i64, button: &Button) {
+        let mut state = self.state.lock().unwrap();
+        let id = state.updates.len() as u32 + 1;
+        let mut update = callback_update(id, user, &button.data, button.message_id);
+        update["callback_query"]["message"] = json!({
+            "chat": button.message["chat"],
+            "message_id": button.message_id,
+            "date": 0,
+        });
+        state.updates.push(update);
+    }
+
     pub async fn click_button(&self, user: i64, data: &str) -> Button {
         let button = self.button(user, data).await;
         self.click(user, &button);

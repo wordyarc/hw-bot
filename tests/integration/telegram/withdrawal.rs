@@ -121,6 +121,27 @@ async fn a_confirmation_outdated_by_the_closing_withdraws_nothing_and_asks_again
 }
 
 #[tokio::test]
+async fn a_confirmation_in_an_inaccessible_message_withdraws_nothing_and_asks_again() {
+    let app = TestApp::start().await;
+    let submission = app.queued_submission(app.student(), "pull/1").await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    let student = app.student();
+    open_assignment(&app, &telegram, app.assignment()).await;
+    let start = start_button(&telegram, student, submission).await;
+    telegram.click(student, &start);
+    telegram.flush(student).await;
+    let confirm = confirm_button(&telegram, student, start.message_id).await;
+
+    telegram.click_inaccessible(student, &confirm);
+    telegram.flush(student).await;
+    confirm_button(&telegram, student, confirm.message_id).await;
+    stop_bot(cancellation, &mut task).await;
+
+    assert!(stored(&app, submission).await.is_pending_review());
+}
+
+#[tokio::test]
 async fn pressing_the_confirmation_twice_withdraws_once() {
     let app = TestApp::start().await;
     let submission = app.queued_submission(app.student(), "pull/1").await;

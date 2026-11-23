@@ -1078,6 +1078,33 @@ async fn work_sent_before_the_makeup_prompt_does_not_spend_the_pool() {
 }
 
 #[tokio::test]
+async fn a_makeup_button_of_an_inaccessible_message_gives_no_consent_before_the_prompt() {
+    let app = TestApp::start().await;
+    let closed = app.add_closed_assignment("Closed", 10, 6).await;
+    open_makeup(&app, 2).await;
+    let now = whole_seconds(Utc::now());
+
+    let (submission, sent) = work_handled_late(
+        &app,
+        &closed,
+        callbacks::SUBMIT_MAKEUP_PREFIX,
+        DateTime::UNIX_EPOCH,
+        BEFORE_PROMPT,
+        now,
+        now,
+    )
+    .await;
+
+    assert!(submission.is_none(), "{submission:#?}");
+    assert_eq!(pool_balance(&app).await, (2, 2));
+    let terms = texts::makeup_credit_text(Some((6, 10)));
+    assert!(
+        sent.contains(&texts::input_prompt(&texts::makeup_prompt(&terms, 2))),
+        "{sent:#?}"
+    );
+}
+
+#[tokio::test]
 async fn work_sent_after_the_makeup_prompt_spends_the_pool() {
     let app = TestApp::start().await;
     let work = closing_in_an_hour(&app).await;
