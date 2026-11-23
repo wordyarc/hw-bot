@@ -198,6 +198,7 @@ pub fn chosen_subjects(subjects: &[&str]) -> String {
 }
 
 pub const SUBJECTS_REQUIRED: &str = "Отметьте хотя бы один предмет.";
+pub const SUBJECTS_CHANGED: &str = "Список доступных предметов изменился.";
 pub const ENROLLMENT_PROMPT: &str = "Вашей группе доступны ещё предметы. Отметьте те, на которые вы ходите, и нажмите «Продолжить». Отписаться от предмета самому потом нельзя.";
 
 pub fn enrollment_complete(subjects: &[&str]) -> String {

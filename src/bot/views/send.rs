@@ -1,6 +1,6 @@
 use anyhow::Context;
 use teloxide::payloads::SendMessageSetters;
-use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardRemove, MessageId};
+use teloxide::types::{ChatId, InlineKeyboardMarkup, KeyboardRemove, MessageId, ReplyMarkup};
 
 use crate::bot::{Bot, HandlerResult, texts};
 use crate::telegram::text::{MESSAGE_LIMIT, utf16_prefix};
@@ -45,7 +45,7 @@ async fn send_chunks(
     bot: &Bot,
     chat_id: ChatId,
     text: &str,
-    mut keyboard: Option<InlineKeyboardMarkup>,
+    mut keyboard: Option<impl Into<ReplyMarkup>>,
 ) -> HandlerResult<Option<MessageId>> {
     let mut last = None;
     let mut chunks = message_chunks(text).peekable();
@@ -74,11 +74,14 @@ pub(crate) async fn ask_input_message(
     chat_id: ChatId,
     prompt: &str,
 ) -> HandlerResult<MessageId> {
-    let sent = bot
-        .send_message(chat_id, texts::input_prompt(prompt))
-        .reply_markup(KeyboardRemove::new())
-        .await?;
-    Ok(sent.id)
+    Ok(send_chunks(
+        bot,
+        chat_id,
+        &texts::input_prompt(prompt),
+        Some(KeyboardRemove::new()),
+    )
+    .await?
+    .context("an input prompt has no text")?)
 }
 
 pub(crate) async fn send_stale_button(bot: &Bot, chat_id: ChatId) -> HandlerResult {

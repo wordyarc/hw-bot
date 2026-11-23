@@ -6,8 +6,9 @@ use teloxide::types::MessageId;
 use super::home::send_home;
 use super::input::require_text_within;
 use super::reset_dialogue;
+use super::teacher::detach;
 use crate::app::{
-    Actor, CourseInvitation, ErrorCode, OfferedCourse, RegisterStudent, RegistrationOffer,
+    Actor, AppError, CourseInvitation, ErrorCode, OfferedCourse, RegisterStudent, RegistrationOffer,
 };
 use crate::bot::HandlerResult;
 use crate::bot::callbacks::FlowAction;
@@ -15,9 +16,12 @@ use crate::bot::context::{ActorChat, Chat, TextStep};
 use crate::bot::errors::send_error_code;
 use crate::bot::state::{BotState, FlowState};
 use crate::bot::texts;
-use crate::bot::views::{ask_input, registration_groups_keyboard, subjects_keyboard};
+use crate::bot::views::{
+    ask_input, registration_groups_keyboard, send_message_chunks, subjects_keyboard,
+};
 use crate::domain::{
-    DISPLAY_NAME_MAX_LEN, StudentGroup, StudentGroupId, TeachingCourseId, TelegramUserId, User,
+    DISPLAY_NAME_MAX_LEN, DomainError, StudentGroup, StudentGroupId, TeachingCourseId,
+    TelegramUserId, User,
 };
 use crate::invites::VerifiedInvite;
 
@@ -96,16 +100,38 @@ async fn ask_subjects(
     invite: VerifiedInvite,
     group_id: StudentGroupId,
 ) -> HandlerResult {
-    let RegistrationOffer { group, courses } = registration_offer(chat, invite, group_id).await?;
-    if courses.len() <= 1 {
-        return ask_name(chat, invite, &group, &courses).await;
+    let offer = registration_offer(chat, invite, group_id).await?;
+    if offer.courses.len() <= 1 {
+        return ask_name(chat, invite, &offer.group, &offer.courses).await;
     }
 
-    let selected: BTreeSet<_> = courses
-        .iter()
-        .map(|course| course.course_id)
-        .filter(|&course_id| course_id == invite.course_id())
-        .collect();
+    show_subjects(chat, invite, offer, BTreeSet::from([invite.course_id()])).await
+}
+
+async fn reoffer_subjects(
+    chat: Chat<'_>,
+    invite: VerifiedInvite,
+    group_id: StudentGroupId,
+    selected: BTreeSet<TeachingCourseId>,
+) -> HandlerResult {
+    let offer = registration_offer(chat, invite, group_id).await?;
+    chat.bot()
+        .send_message(chat.chat_id(), texts::SUBJECTS_CHANGED)
+        .await?;
+    if offer.courses.is_empty() {
+        return ask_name(chat, invite, &offer.group, &[]).await;
+    }
+
+    show_subjects(chat, invite, offer, selected).await
+}
+
+async fn show_subjects(
+    chat: Chat<'_>,
+    invite: VerifiedInvite,
+    RegistrationOffer { group, courses }: RegistrationOffer,
+    mut selected: BTreeSet<TeachingCourseId>,
+) -> HandlerResult {
+    retain_offered(&mut selected, &courses);
     let sent = chat
         .bot()
         .send_message(
@@ -117,7 +143,7 @@ async fn ask_subjects(
     chat.dialogue()
         .update(BotState::Flow(FlowState::ChoosingRegistrationSubjects {
             invite,
-            group_id,
+            group_id: group.id(),
             message_id: sent.id,
             selected,
         }))
@@ -174,6 +200,10 @@ pub(super) async fn finish_registration_subjects(
         .into_iter()
         .filter(|course| selected.contains(&course.course_id))
         .collect();
+    if chosen.len() != selected.len() {
+        detach(chat.bot(), chat.chat_id(), Some(message_id)).await?;
+        return reoffer_subjects(chat, invite, group_id, selected).await;
+    }
     chat.bot()
         .edit_message_reply_markup(chat.chat_id(), message_id)
         .await?;
@@ -230,10 +260,15 @@ fn toggle(
     if !courses.iter().any(|course| course.course_id == course_id) {
         return false;
     }
+    retain_offered(selected, courses);
     if !selected.remove(&course_id) {
         selected.insert(course_id);
     }
     true
+}
+
+fn retain_offered(selected: &mut BTreeSet<TeachingCourseId>, courses: &[OfferedCourse]) {
+    selected.retain(|id| courses.iter().any(|course| course.course_id == *id));
 }
 
 fn subject_names(courses: &[OfferedCourse]) -> Vec<&str> {
@@ -294,10 +329,18 @@ pub(super) async fn submit_name(
             display_name: text.trim().to_owned(),
             invite,
             student_group_id: Some(group_id),
-            courses: Some(courses),
+            courses: Some(courses.clone()),
             registered_at: step.now(),
         })
         .await;
+    if matches!(
+        registered,
+        Err(AppError::Domain(
+            DomainError::CourseNotOfferedToStudentGroup
+        ))
+    ) {
+        return reoffer_subjects(step.chat(), invite, group_id, courses).await;
+    }
     if let Err(error) = &registered
         && matches!(
             error.code(),
@@ -326,11 +369,18 @@ async fn offer_enrollment(chat: Chat<'_>, user: &User, payload: &str) -> Handler
         return Ok(());
     };
 
-    let selected = BTreeSet::from([invite.course_id()]);
+    show_enrollment(chat, &courses, BTreeSet::from([invite.course_id()])).await
+}
+
+async fn show_enrollment(
+    chat: Chat<'_>,
+    courses: &[OfferedCourse],
+    selected: BTreeSet<TeachingCourseId>,
+) -> HandlerResult {
     let sent = chat
         .bot()
         .send_message(chat.chat_id(), texts::ENROLLMENT_PROMPT)
-        .reply_markup(enrollment_subjects_keyboard(&courses, &selected))
+        .reply_markup(enrollment_subjects_keyboard(courses, &selected))
         .await?;
     chat.dialogue()
         .update(BotState::Flow(FlowState::ChoosingSubjects {
@@ -339,6 +389,25 @@ async fn offer_enrollment(chat: Chat<'_>, user: &User, payload: &str) -> Handler
         }))
         .await?;
     Ok(())
+}
+
+async fn refresh_enrollment(
+    screen: ActorChat<'_>,
+    message_id: MessageId,
+    mut selected: BTreeSet<TeachingCourseId>,
+) -> HandlerResult {
+    let courses = screen.services().users.open_courses(screen.actor()).await?;
+    detach(screen.bot(), screen.chat_id(), Some(message_id)).await?;
+    reset_dialogue(screen.dialogue()).await?;
+    screen
+        .bot()
+        .send_message(screen.chat_id(), texts::SUBJECTS_CHANGED)
+        .await?;
+    if courses.is_empty() {
+        return Ok(());
+    }
+    retain_offered(&mut selected, &courses);
+    show_enrollment(screen.chat(), &courses, selected).await
 }
 
 pub(super) async fn toggle_enrollment_subject(
@@ -389,18 +458,26 @@ pub(super) async fn finish_enrollment(
         .services()
         .users
         .enroll(screen.actor(), &selected)
-        .await?;
+        .await;
+    if matches!(
+        enrolled,
+        Err(AppError::Domain(
+            DomainError::CourseNotOfferedToStudentGroup
+        ))
+    ) {
+        return refresh_enrollment(screen, message_id, selected).await;
+    }
+    let enrolled = enrolled?;
     reset_dialogue(screen.dialogue()).await?;
     screen
         .bot()
         .edit_message_reply_markup(screen.chat_id(), message_id)
         .await?;
-    screen
-        .bot()
-        .send_message(
-            screen.chat_id(),
-            texts::enrollment_complete(&subject_names(&enrolled)),
-        )
-        .await?;
-    Ok(())
+    send_message_chunks(
+        screen.bot(),
+        screen.chat_id(),
+        &texts::enrollment_complete(&subject_names(&enrolled)),
+        None,
+    )
+    .await
 }
