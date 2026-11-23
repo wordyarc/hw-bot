@@ -4,7 +4,7 @@ use teloxide::dispatching::dialogue::InMemStorageError;
 use teloxide::payloads::AnswerCallbackQuerySetters;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::types::{CallbackQuery, Message, MessageId, MessageKind, User};
-use teloxide::utils::command::BotCommands;
+use teloxide::utils::command::{BotCommands, ParseError};
 
 use super::Bot;
 use super::HandlerResult;
@@ -39,7 +39,10 @@ use registration::start_registration;
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
 pub(super) enum Command {
-    #[command(description = "🏠 начать работу и открыть меню")]
+    #[command(
+        description = "🏠 начать работу и открыть меню",
+        parse_with = start_payload
+    )]
     Start(String),
     #[command(description = "🏠 главное меню")]
     Menu,
@@ -61,6 +64,10 @@ pub(super) enum Command {
     Cancel,
     #[command(description = "❓ помощь")]
     Help,
+}
+
+fn start_payload(payload: String) -> Result<(String,), ParseError> {
+    Ok((payload,))
 }
 
 impl Command {
@@ -819,6 +826,21 @@ mod tests {
             Command::parse("/cancel", "test_bot").unwrap(),
             Command::Cancel
         ));
+    }
+
+    #[test]
+    fn start_keeps_its_payload_as_sent() {
+        for (input, expected) in [
+            ("/start", ""),
+            ("/start abc_DEF-1", "abc_DEF-1"),
+            ("/start  two words ", " two words "),
+        ] {
+            let Command::Start(payload) = Command::parse(input, "test_bot").unwrap() else {
+                panic!("{input} is the start command");
+            };
+
+            assert_eq!(payload, expected, "{input}");
+        }
     }
 
     #[test]
