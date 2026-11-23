@@ -679,8 +679,8 @@ fn terms_buttons_require_the_current_form_message() {
 
 #[test]
 fn a_terms_form_waiting_for_typed_input_ignores_its_buttons() {
-    let form = terms_form(TermsStep::Period);
-    assert_eq!(form.mode, InputMode::Manual);
+    let mut form = terms_form(TermsStep::Penalty);
+    form.mode = InputMode::Manual;
 
     assert!(
         BotState::Flow(FlowState::ConfiguringTerms(form))

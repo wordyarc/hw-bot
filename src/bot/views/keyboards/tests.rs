@@ -45,6 +45,50 @@ fn preset_periods(keyboard: &InlineKeyboardMarkup) -> Vec<u16> {
         .collect()
 }
 
+fn period_presets(terms: AssignmentTerms) -> Vec<u16> {
+    use crate::bot::callbacks::{CallbackAction, FlowAction};
+    let form = TermsForm::new(terms, TermsStep::Period);
+    terms_form_keyboard(&form, &vladivostok(), t0())
+        .unwrap()
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .filter_map(|button| {
+            let teloxide::types::InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
+                panic!("expected a callback");
+            };
+            match crate::bot::callbacks::parse(data).expect("routable period button") {
+                CallbackAction::Flow(FlowAction::PeriodDays(AmountChoice::Preset(days))) => {
+                    Some(days)
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn both_period_presets_are_offered_within_the_lateness_horizon() {
+    let terms = AssignmentTerms {
+        period_days: 7,
+        max_periods: Some(4),
+        ..scored_terms()
+    };
+
+    assert_eq!(period_presets(terms), [7, 14]);
+}
+
+#[test]
+fn a_period_preset_beyond_the_lateness_horizon_is_hidden() {
+    let terms = AssignmentTerms {
+        period_days: 7,
+        max_periods: Some(30),
+        ..scored_terms()
+    };
+
+    assert_eq!(period_presets(terms), [7]);
+}
+
 #[test]
 fn duration_presets_count_whole_periods_from_the_deadline_moment() {
     let timezone = vladivostok();

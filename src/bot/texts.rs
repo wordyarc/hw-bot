@@ -154,6 +154,12 @@ pub const INVITE_ROTATION_CONFIRM: &str = "После перевыпуска с�
 pub const REVIEW_SAVED: &str =
     "✅ Проверка сохранена. Студент получит от бота результат вместе с вашим комментарием.";
 
+pub fn period_question() -> String {
+    format!(
+        "Выберите длину периода опоздания или отправьте число дней от 1 до {MAX_LATE_PERIOD_DAYS}."
+    )
+}
+
 pub fn period_prompt() -> String {
     format!("Укажите длину периода опоздания в днях: целое число от 1 до {MAX_LATE_PERIOD_DAYS}.")
 }
@@ -1141,6 +1147,10 @@ pub fn penalty_button(points: u16) -> String {
 
 pub fn period_button(period_days: u16) -> String {
     format!("Изменить период: {period_days} дн.")
+}
+
+pub fn period_days_button(days: u16) -> String {
+    format!("{days} {}", plural(u32::from(days), "день", "дня", "дней"))
 }
 
 pub fn period_summary(period_days: u16) -> String {

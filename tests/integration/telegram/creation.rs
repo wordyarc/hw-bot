@@ -707,6 +707,101 @@ async fn a_custom_penalty_period_and_amount_are_entered_separately() {
     assert_eq!((policy.period_days(), policy.penalty_per_period()), (14, 3));
 }
 
+#[tokio::test]
+async fn the_two_week_period_button_sets_a_fourteen_day_period() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_scored_creation(&app, &telegram, "Two week period", 5).await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::LATE_POLICY_PREFIX, "work_score"),
+        )
+        .await;
+    telegram
+        .click_preset(app.teacher(), texts::PRESET_WEEK)
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::PENALTY_PERIOD)
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::PERIOD_DAYS_PREFIX, 14))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::PENALTY_PREFIX, 2))
+        .await;
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::LATE_PERIODS_PREFIX, 2))
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::TERMS_SAVE)
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::FILE_FINISH)
+        .await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+    let policy = saved_policy(&app, "Two week period").await;
+    assert_eq!((policy.period_days(), policy.penalty_per_period()), (14, 2));
+}
+
+async fn open_period_step(app: &TestApp, telegram: &TelegramScenario, title: &str) {
+    open_scored_creation(app, telegram, title, 5).await;
+    telegram
+        .click_button(
+            app.teacher(),
+            &cb(callbacks::LATE_POLICY_PREFIX, "work_score"),
+        )
+        .await;
+    telegram
+        .click_preset(app.teacher(), texts::PRESET_WEEK)
+        .await;
+    telegram
+        .click_button(app.teacher(), callbacks::PENALTY_PERIOD)
+        .await;
+}
+
+#[tokio::test]
+async fn the_other_period_button_asks_for_days_with_the_cancel_hint() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_period_step(&app, &telegram, "Other period").await;
+
+    telegram
+        .click_button(app.teacher(), &cb(callbacks::PERIOD_DAYS_PREFIX, "manual"))
+        .await;
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let prompt = texts::input_prompt(&texts::period_prompt());
+    let shown = telegram.texts(app.teacher());
+    assert!(
+        shown.iter().any(|text| text.ends_with(&prompt)),
+        "{shown:#?}"
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_typed_period_repeats_the_question_with_the_cancel_hint() {
+    let app = TestApp::start().await;
+    let telegram = TelegramScenario::new().await;
+    let (cancellation, mut task) = start_bot(&app, &telegram.server);
+    open_period_step(&app, &telegram, "Invalid period").await;
+
+    telegram.message(app.teacher(), "400");
+    telegram.flush(app.teacher()).await;
+    stop_bot(cancellation, &mut task).await;
+
+    let prompt = texts::input_prompt(&texts::period_prompt());
+    let shown = telegram.texts(app.teacher());
+    assert!(
+        shown.iter().any(|text| text.ends_with(&prompt)),
+        "{shown:#?}"
+    );
+}
+
 async fn saved_policy(app: &TestApp, title: &str) -> hw_bot::domain::LatePolicy {
     let created = wait_for_created_assignment(&app.pool, title)
         .await

@@ -1106,7 +1106,27 @@ pub(super) fn terms_form_keyboard(
             }
         }
         TermsStep::Penalty => penalty_keyboard(terms.period_days),
-        TermsStep::Period => InlineKeyboardMarkup::default(),
+        TermsStep::Period => {
+            let presets: Row = [7, 14]
+                .into_iter()
+                .filter(|days| terms.admits_period(*days))
+                .map(|days| {
+                    button(
+                        texts::period_days_button(days),
+                        FlowAction::PeriodDays(AmountChoice::Preset(days)).callback(),
+                    )
+                })
+                .collect();
+            let mut rows = Vec::new();
+            if !presets.is_empty() {
+                rows.push(presets);
+            }
+            rows.push(row(
+                texts::BUTTON_OTHER_AMOUNT,
+                FlowAction::PeriodDays(AmountChoice::Manual).callback(),
+            ));
+            InlineKeyboardMarkup::new(rows)
+        }
         TermsStep::Periods => {
             let mut rows = Vec::new();
             if let Some(deadline) = terms.deadline_at {

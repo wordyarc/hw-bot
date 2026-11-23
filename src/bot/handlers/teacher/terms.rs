@@ -16,6 +16,7 @@ use crate::bot::callbacks::{
 };
 use crate::bot::context::{ActorChat, TextStep};
 use crate::bot::errors::send_error_code;
+use crate::bot::form::InputMode;
 use crate::bot::handlers::input::parse_step_number;
 use crate::bot::handlers::{reset_dialogue, run_menu_action};
 use crate::bot::state::{BotState, FlowState};
@@ -202,10 +203,18 @@ pub(crate) async fn submit_terms(step: TextStep<'_>, form: TermsForm) -> Handler
             }
             None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
         },
-        _ => match parse_step_number(&text) {
-            Some(value) => apply_number(screen, form, value).await,
-            None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
-        },
+        TermsStep::Period => {
+            form.mode = InputMode::Manual;
+            submit_number(screen, form, &text).await
+        }
+        _ => submit_number(screen, form, &text).await,
+    }
+}
+
+async fn submit_number(screen: ActorChat<'_>, form: TermsForm, text: &str) -> HandlerResult {
+    match parse_step_number(text) {
+        Some(value) => apply_number(screen, form, value).await,
+        None => render(screen.chat(), form, Some(texts::INTEGER_REQUIRED)).await,
     }
 }
 

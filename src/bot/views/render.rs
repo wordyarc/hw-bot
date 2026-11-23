@@ -67,7 +67,10 @@ pub(crate) fn terms_form_view(
                 terms.period_days
             )
         ),
-        TermsStep::Period => format!("{context}{}", texts::period_prompt()),
+        TermsStep::Period if form.mode == InputMode::Manual => {
+            format!("{context}{}", texts::period_prompt())
+        }
+        TermsStep::Period => format!("{context}{}", texts::period_question()),
         TermsStep::Periods => {
             let policy = terms.preview_policy(1)?;
             format!(

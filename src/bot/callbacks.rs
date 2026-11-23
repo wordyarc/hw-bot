@@ -48,6 +48,7 @@ pub const LATE_POLICY_PREFIX: &str = "late:";
 const STRICT_LATE_POLICY: &str = "none";
 pub const PENALTY_PREFIX: &str = "penalty:";
 pub const PENALTY_PERIOD: &str = "penalty:period";
+pub const PERIOD_DAYS_PREFIX: &str = "period-days:";
 pub const TERMS_SAVE: &str = "terms:save";
 pub const TERMS_DEADLINE: &str = "terms:deadline";
 pub const TERMS_PENALTY: &str = "terms:penalty";
@@ -372,6 +373,7 @@ pub(super) enum FlowAction {
     Periods(AmountChoice),
     DurationPeriods(u16),
     PenaltyPeriod,
+    PeriodDays(AmountChoice),
     Terms(TermsAction),
     ReviewScore {
         submission_id: SubmissionId,
@@ -417,6 +419,7 @@ impl FlowAction {
             Self::Periods(choice) => choice.callback(LATE_PERIODS_PREFIX),
             Self::DurationPeriods(periods) => format!("{TERMS_DURATION_PERIODS_PREFIX}{periods}"),
             Self::PenaltyPeriod => PENALTY_PERIOD.to_owned(),
+            Self::PeriodDays(choice) => choice.callback(PERIOD_DAYS_PREFIX),
             Self::Terms(action) => action.callback().to_owned(),
             Self::ReviewScore {
                 submission_id,
@@ -1028,6 +1031,7 @@ const AMOUNT_ROUTES: &[Route<AmountChoice, FlowAction>] = &[
     (EXTRA_ATTEMPTS_AMOUNT_PREFIX, FlowAction::ExtraAttempts),
     (PENALTY_PREFIX, FlowAction::Penalty),
     (LATE_PERIODS_PREFIX, FlowAction::Periods),
+    (PERIOD_DAYS_PREFIX, FlowAction::PeriodDays),
     (MAKEUP_ATTEMPTS_PREFIX, FlowAction::MakeupAttempts),
 ];
 
@@ -1397,6 +1401,10 @@ mod tests {
                 Flow(FlowAction::Periods(AmountChoice::Manual)),
             Flow(FlowAction::DurationPeriods(_)) => Flow(FlowAction::DurationPeriods(most)),
             Flow(FlowAction::PenaltyPeriod) => Flow(FlowAction::PenaltyPeriod),
+            Flow(FlowAction::PeriodDays(AmountChoice::Preset(_))) =>
+                Flow(FlowAction::PeriodDays(AmountChoice::Preset(most))),
+            Flow(FlowAction::PeriodDays(AmountChoice::Manual)) =>
+                Flow(FlowAction::PeriodDays(AmountChoice::Manual)),
             Flow(FlowAction::Terms(TermsAction::Save)) =>
                 Flow(FlowAction::Terms(TermsAction::Save)),
             Flow(FlowAction::Terms(TermsAction::Deadline)) =>

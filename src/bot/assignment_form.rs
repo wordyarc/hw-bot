@@ -180,6 +180,15 @@ impl AssignmentTerms {
         self.first_incomplete_step() == TermsStep::Summary && self.complete().is_none()
     }
 
+    pub fn admits_period(&self, period_days: u16) -> bool {
+        Self {
+            period_days,
+            ..self.clone()
+        }
+        .validate()
+        .is_ok()
+    }
+
     pub fn preview_policy(&self, max_periods: u16) -> Option<LatePolicy> {
         // Пока штраф не введён, это значение нужно лишь для превью и в сохранённые условия
         // не попадёт.
@@ -306,13 +315,6 @@ impl TermsStep {
             _ => None,
         }
     }
-
-    fn input_mode(self) -> InputMode {
-        match self {
-            Self::Period => InputMode::Manual,
-            _ => InputMode::Buttons,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -323,6 +325,7 @@ pub(super) struct TermsForm {
     pub mode: InputMode,
     pub return_to_summary: bool,
     pub previous_closes_at: Option<DateTime<Utc>>,
+    period_from_penalty: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -340,9 +343,10 @@ impl TermsForm {
             terms,
             step,
             message_id: None,
-            mode: step.input_mode(),
+            mode: InputMode::Buttons,
             return_to_summary: false,
             previous_closes_at: None,
+            period_from_penalty: false,
         }
     }
 
@@ -355,7 +359,7 @@ impl TermsForm {
     }
 
     pub fn previous_step(&self) -> Option<TermsStep> {
-        if self.return_to_summary && self.step != TermsStep::Summary {
+        if self.return_to_summary && self.step != TermsStep::Summary && !self.period_from_penalty {
             Some(TermsStep::Summary)
         } else {
             self.step.previous(&self.terms)
@@ -363,6 +367,7 @@ impl TermsForm {
     }
 
     pub fn go(&mut self, step: TermsStep) {
+        self.period_from_penalty = self.step == TermsStep::Penalty && step == TermsStep::Period;
         self.step = if step == TermsStep::Summary {
             self.terms.first_incomplete_step()
         } else {
@@ -371,7 +376,7 @@ impl TermsForm {
         if self.step == TermsStep::Summary {
             self.return_to_summary = false;
         }
-        self.mode = self.step.input_mode();
+        self.mode = InputMode::Buttons;
     }
 
     pub fn advance(&mut self) {
@@ -509,10 +514,7 @@ impl Form for TermsForm {
 
     fn back(&mut self) -> bool {
         match (self.mode, self.step) {
-            (InputMode::Manual, step) if step != TermsStep::Period => {
-                self.mode = InputMode::Buttons
-            }
-            (InputMode::Calendar(_), _) => self.mode = InputMode::Buttons,
+            (InputMode::Manual | InputMode::Calendar(_), _) => self.mode = InputMode::Buttons,
             _ => {
                 let Some(step) = self.previous_step() else {
                     return false;
@@ -651,7 +653,7 @@ mod tests {
         let mut form = complete_form();
         let old_closing = form.terms.complete().unwrap().closes_at;
         assert!(form.edit_summary(TermsAction::Period));
-        assert_eq!(form.mode, InputMode::Manual);
+        assert_eq!(form.mode, InputMode::Buttons);
 
         form.apply_number(10).unwrap();
 
@@ -661,6 +663,32 @@ mod tests {
             Some(LatePolicy::new(10, 2, 4, DeductedFrom::WorkScore).unwrap())
         );
         assert_eq!(form.previous_closes_at, Some(old_closing));
+    }
+
+    #[test]
+    fn back_from_a_period_opened_on_the_penalty_step_keeps_a_new_policy() {
+        let mut terms = scored_terms();
+        terms.deadline_at = Some(t0() + Duration::days(7));
+        let mut form = TermsForm::new(terms, TermsStep::Summary);
+        assert!(form.edit_summary(TermsAction::Policy));
+        form.choose_policy(Some(DeductedFrom::CourseTotal)).unwrap();
+        assert_eq!(form.step, TermsStep::Penalty);
+        form.go(TermsStep::Period);
+
+        assert!(form.step_back());
+
+        assert_eq!(form.step, TermsStep::Penalty);
+        assert_eq!(form.terms.deducted_from, Some(DeductedFrom::CourseTotal));
+    }
+
+    #[test]
+    fn back_from_a_period_opened_on_the_summary_returns_to_the_summary() {
+        let mut form = complete_form();
+        assert!(form.edit_summary(TermsAction::Period));
+
+        assert!(form.step_back());
+
+        assert_eq!(form.step, TermsStep::Summary);
     }
 
     #[test]

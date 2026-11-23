@@ -707,6 +707,10 @@ async fn handle_flow_action(
             teacher::handle_duration_periods(screen, message_id, periods, state).await?
         }
         FlowAction::PenaltyPeriod => teacher::handle_period(screen, message_id, state).await?,
+        FlowAction::PeriodDays(choice) => {
+            teacher::handle_terms_amount(screen, message_id, choice, state, TermsStep::Period)
+                .await?
+        }
         FlowAction::Terms(action) => {
             teacher::handle_terms(screen, message_id, action, state).await?
         }
